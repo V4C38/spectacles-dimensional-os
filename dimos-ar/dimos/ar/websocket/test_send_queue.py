@@ -207,6 +207,23 @@ async def test_interaction_snapshots_coalesce_but_decisions_remain_fifo(domain: 
     assert [f["revision"] for f in frames if f["type"] == f"{domain}_state"] == [3]
 
 
+def test_control_queue_is_bounded_by_bytes_before_item_count() -> None:
+    failures = []
+    outbound = ClientSendQueue(_FakeWebSocket(), on_failure=failures.append)
+    text = json.dumps({"type": "agent_message", "text": "x" * 15_000}) + "\n"
+    for _ in range(20):
+        outbound.enqueue(text)
+    assert failures == ["outbound control byte queue overflow"]
+    assert outbound._queue.qsize() < OUTBOUND_FIFO_MAXSIZE
+    assert not outbound.pending
+
+
+def test_oversized_control_record_fails_closed() -> None:
+    outbound = ClientSendQueue(_FakeWebSocket())
+    outbound.enqueue(json.dumps({"type": "state", "unexpected": "x" * 16_384}))
+    assert outbound.failure_reason == "outbound control record exceeds byte budget"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("preview_first", [True, False])
 async def test_preview_reply_never_coalesces_with_active_goal(preview_first: bool) -> None:

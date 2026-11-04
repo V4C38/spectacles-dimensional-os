@@ -18,6 +18,7 @@ export const CAPABILITY_NAMES = [
   "estop",
   "agent",
   "manipulation",
+  "object_detection",
 ] as const;
 export type CapabilityName = (typeof CAPABILITY_NAMES)[number];
 
@@ -37,8 +38,8 @@ export type NavigationCapability = Capability & {
 };
 
 export type Capabilities = {
-  [K in Exclude<CapabilityName, "navigation" | "manipulation">]: Capability;
-} & { navigation: NavigationCapability; manipulation?: Capability };
+  [K in Exclude<CapabilityName, "navigation" | "manipulation" | "object_detection">]: Capability;
+} & { navigation: NavigationCapability; manipulation?: Capability; object_detection?: Capability };
 
 export interface TimeSync {
   ts_client: number;
@@ -61,7 +62,10 @@ export interface ServerInfo {
 }
 
 export interface Hello {
-  protocol_version: 2;
+  protocol_version: 3;
+  bulk_url: string;
+  bulk_token: string;
+  bulk_epoch: string;
   /** Stable for the server odometry reference, including across socket reconnects. */
   odom_reference_id?: string;
   server_info?: ServerInfo;
@@ -142,6 +146,7 @@ export interface LocalizationStatus extends MapContext {
   ts?: number;
 }
 export interface CaptureEpisodeIdentity {
+  capture_id?: string;
   episode_id?: string;
   purpose?: "robot" | "headset";
 }
@@ -208,6 +213,17 @@ export type Outbound =
   | Lidar
   | AgentMessage
   | AgentSkill;
+
+export interface ClientError {
+  type: "client_error";
+  message_type: string;
+  detail: string;
+  excerpt: string;
+  ts: number;
+  message_ts?: number;
+  request_id?: string;
+  suppressed_count?: number;
+}
 
 export interface HelloRequest {
   type: "hello_request";
@@ -299,6 +315,7 @@ export interface LocalizationObservations {
 }
 
 export type Inbound =
+  | ClientError
   | HelloRequest
   | StateRequest
   | LocalizationStartRequest

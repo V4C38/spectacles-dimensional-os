@@ -40,6 +40,8 @@ function stubOptionalModules(): Plugin {
 }
 
 const arModuleProxy = {
+  "/bulk": { target: `ws://127.0.0.1:${AR_MODULE_CLIENT_CONFIG.port}`, ws: true },
+  "/ws/bulk": { target: `ws://127.0.0.1:${AR_MODULE_CLIENT_CONFIG.port}`, ws: true },
   "/ar": {
     target: `ws://127.0.0.1:${AR_MODULE_CLIENT_CONFIG.port}`,
     ws: true,

@@ -42,8 +42,8 @@ def page(number, title, subtitle):
     text(42, 476, subtitle, 11)
     C.setStrokeColor(HexColor("#D5DDDA"))
     C.line(42, 55, 800, 55)
-    text(42, 35, "multi-client branch / development foundation / selective manipulation integration", 9)
-    text(759, 35, f"{number} / 5", 10)
+    text(42, 35, "multi-client / experimental integration / authority, responsiveness and bounded traffic", 9)
+    text(759, 35, f"{number} / 6", 10)
 
 
 def box(x, y, width, height, title, body=(), color=TEAL):
@@ -160,10 +160,10 @@ arrow(280, 377, 302, 377)
 arrow(540, 377, 562, 377)
 text(42, 284, "T_odom_client = (T_odom_base x T_base_tag) x inverse(T_client_camera x T_camera_tag)", 13, PURPLE, True)
 box(42, 133, 366, 115, "Implemented corrections", [
-    "Reject Specs pose brackets farther than 100 ms.",
-    "Bound deliberate realignment capture recovery.",
+    "Keep existing bracket interpolation acceptance.",
+    "100 ms applies only to nearest-sample fallback.",
     "Keep canonical targets in odom; reproject on correction.",
-    "Reference resets fence old commands and captures.",
+    "Reference resets and capture IDs fence stale work.",
 ])
 box(434, 133, 366, 115, "Physical checks still required", [
     "Verify tag size and rigid robot mount by measurement.",
@@ -177,17 +177,51 @@ lines(42, 99, [
 ], 11)
 C.showPage()
 
-page(5, "Test the races, then verify on devices.",
+page(5, "Keep bulk data away from control.",
+     "Compact state, cached geometry and bounded workers protect interaction responsiveness.")
+box(42, 324, 224, 110, "Control channel", [
+    "Authority, Stop, targets and replies.", "Small revision references, not full plans.",
+    "Bounded reliable queue; snapshots coalesce.", "Owner input renders without an ACK wait.",
+])
+box(309, 324, 224, 110, "Paired bulk channel", [
+    "Model / route / trajectory by revision.", "JPEG uploads and latest-only LiDAR.",
+    "Small records and incremental decoding.", "Download budget; timely image uploads.",
+], PURPLE)
+box(576, 324, 224, 110, "Bounded native work", [
+    "Latest-only sensor and costmap inputs.", "Control stays off perception worker lanes.",
+    "Hung work cannot spawn replacements.", "Late results are generation-fenced.",
+], AMBER)
+arrow(266, 370, 309, 370); arrow(533, 370, 576, 370)
+text(42, 309, "Arm-state bytes / update: synthetic 6 joints, 1,000 trajectory points", 10)
+for y, label, width, color in [(289, "Before: 149,384 B", 320, AMBER), (273, "After: 839 B", 2, TEAL)]:
+    text(42, y, label, 10, color, True)
+    C.setFillColor(HexColor(color)); C.rect(230, y, width, 8, fill=1, stroke=0)
+text(42, 250, "Release frees editing; the server finishes motion.", 17, bold=True)
+box(42, 130, 366, 107, "Takeoverable finishing", [
+    "Continue toward the last validated arm target.", "No former-client 30 Hz finishing stream.",
+    "A new grab replaces the native motion generation.", "Server loss, Stop or last disconnect ends the tail.",
+])
+box(434, 130, 366, 107, "Preserved presentation", [
+    "Observers use the existing 100 ms target buffer.", "Measured robot feedback remains separate from intent.",
+    "Cache model/path geometry; update transforms per frame.", "Execute and reset retain exclusive operation ownership.",
+], PURPLE)
+lines(42, 96, [
+    "Five peers at 10 Hz: arm-state application traffic falls from 7.47 MB/s to 41.95 KB/s in this workload.",
+    "Loopback control ACK p95: about 2.5 ms during bulk transfer. Synthetic Mac evidence; not Wi-Fi or headset results.",
+], 10)
+C.showPage()
+
+page(6, "Test the races, then verify on devices.",
      "Automated coverage exercises shared state and native boundaries; hardware remains a separate acceptance step.")
 box(42, 275, 238, 158, "Unit / deterministic clocks", [
     "Competing grabs; delayed grants.", "Lease expiry; renew; cancellation.",
     "Epoch / sequence / revision fences.", "Predicted and interpolated targets.",
-    "Native plan / execute late results.", "Exposure timestamps and alignment.",
+    "Native plan / execute late results.", "Exposure timestamps and alignment.", "Late assets / delayed disconnect cleanup.",
 ])
 box(302, 275, 238, 158, "Integration / production owners", [
-    "Real multi-socket ARModule tests.", "Two browser contexts, one server.",
+    "Real multi-socket ARModule tests.", "Five browser contexts, one server.",
     "Shared preview and grey cross.", "Confirm / handover / disconnect.",
-    "Native ports simulated explicitly.", "Existing browser suite retained.",
+    "Native ports simulated explicitly.", "Native Specs compiler checked.", "Release / accepted-motion races.",
 ], PURPLE)
 box(562, 275, 238, 158, "Device / acceptance", [
     "Specs + Quest concurrent session.", "Moving tags, occlusion, relocalize.",
@@ -197,11 +231,12 @@ box(562, 275, 238, 158, "Device / acceptance", [
 text(42, 235, "Repository validation", 16, bold=True)
 lines(42, 207, [VALIDATION], 10)
 lines(42, 173, [
+    "Native Preview scenarios remain pending: the external CLAD/MCP installation is unavailable.",
     "Native agent turns cannot be forcibly cancelled; a running turn may issue later skills after a software stop.",
     "Manual admission waits for confirmed turn/navigation/following quiescence. Validate hardware stop behavior.",
     "Native goal-monitor races can still stop a newer goal; source-correlated transport cannot repair that algorithm.",
     "No finite test suite proves every scenario. Physical safety, alignment and visual latency need device evidence.",
-], 11)
+], 10)
 text(42, 94, "Implementation map", 11, TEAL, True)
 text(42, 76, "dimos/ar/replication | ClientCore/replication | both host replication folders | PROTOCOL.md", 10)
 C.save()

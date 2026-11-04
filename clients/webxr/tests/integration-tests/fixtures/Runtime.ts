@@ -1,3 +1,4 @@
+import { V3BulkPeer } from "./V3BulkPeer";
 import { expect, type Page, type WebSocketRoute } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
@@ -21,16 +22,45 @@ export const shared = JSON.parse(
 export async function bootstrap(
   page: Page,
   mode: "hand" | "controller" = "hand",
-  options: { unavailable?: boolean } = {},
+  options: { unavailable?: boolean; manipulation?: boolean; planDelayMs?: number } = {},
 ) {
   const commands: any[] = [];
+  const bulk = new V3BulkPeer(); await bulk.install(page);
+  const arm = options.manipulation ? JSON.parse(readFileSync(new URL("./OpenYAM.json", import.meta.url), "utf8")) : null;
+  let armTimer: ReturnType<typeof setInterval> | undefined;
+  let armClockBase = 0, armClockStarted = 0;
+  const armNow = () => armClockBase + (performance.now() - armClockStarted) / 1000;
+  let following = false, plan: any = null, owner: string | null = null;
+  let followingTail: any = null, validatedTarget: any = null;
+  let execution = "idle", operationId: string | null = null, settledAt: number | null = null;
+  let armStopped = false;
+  let ikFailure: { code: string; failed_joints?: string[] } | null = null;
+  let planSequence = 0;
+  const delayedReplies: ReturnType<typeof setTimeout>[] = [];
+  const armState = () => {
+    if (!arm) return;
+    if (followingTail) {
+      for (const [joint, value] of Object.entries(followingTail.joints as Record<string, number>))
+        arm.joints[joint] += (value - arm.joints[joint]) * 0.5;
+      arm.pose = { position: followingTail.position, orientation: followingTail.orientation };
+      const arrived = Object.entries(followingTail.joints as Record<string, number>).every(([joint, value]) => Math.abs(arm.joints[joint] - value) < 0.02);
+      if (arrived) settledAt ??= armNow(); else settledAt = null;
+      if (settledAt !== null && armNow() - settledAt >= 0.5) followingTail = null;
+    }
+    send({ type: "manipulation_state", available: true, ts: armNow(), root_pose: { position: [1,0,0.8], orientation: [0,0,0,1] }, model: arm.model,
+      groups: [{ id: "manipulator", joint_names: Object.keys(arm.joints), base_frame: "base", tip_frame: "gripper_tip", has_gripper: true, following: true }],
+      observations: { manipulator: { joints: arm.joints, measured_at: armNow(), pose: arm.pose, gripper: 0 } },
+      execution, message: null, owner, following, following_tail: followingTail,
+      stopped: armStopped, stop_confirmed: true, plan, operation_id: operationId });
+  };
   let socket: WebSocketRoute | undefined;
   let revision = 0, interactionMode = "manual";
   let authority: any = null, target: any = null, preview: any = null, activeGoal: any = null;
   let previewAim: { position: number[]; orientation: number[] } | null = null;
   let joystickStops = 0;
   const interactionState = () => send({ type: "interaction_state", epoch: "fixture-epoch", revision: ++revision,
-    mode: interactionMode, authority, target, targets: target ? [target] : [], preview, active_goal: activeGoal });
+    mode: interactionMode, authority, target, targets: target ? [target] : [],
+    following_tail: followingTail, motion_busy: operationId !== null, preview, active_goal: activeGoal });
   let captureTs = 0;
   let acceptedCaptureTs = 0;
   let lidarSettings = {
@@ -49,7 +79,7 @@ export async function bootstrap(
   };
   const send = (value: object) => {
     if (!socket) throw new Error("Fixture WebSocket is not connected");
-    socket.send(JSON.stringify(value) + "\n");
+    bulk.send(socket, value);
   };
   await page.addInitScript({
     path: fileURLToPath(
@@ -63,8 +93,9 @@ export async function bootstrap(
     w.questDevice.installRuntime({ forceInstall: true });
   }, mode);
   await page.routeWebSocket("**/ar", (ws) => {
+    if (armTimer) clearInterval(armTimer);
     socket = ws;
-    ws.onMessage((raw) => {
+    const onMessage = (raw: string | Buffer) => {
       if (typeof raw !== "string") {
         const packet = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
         let offset = 6;
@@ -82,9 +113,11 @@ export async function bootstrap(
           ? "Unavailable in integration fixture"
           : null,
       };
+      const mobile = arm ? { available: false, reason: "Stationary arm" } : available;
       if (command.type === "hello_request") {
+        armClockBase = command.ts_client; armClockStarted = performance.now();
         send({
-          type: "hello", protocol_version: 2,
+          type: "hello", protocol_version: 3, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
           client_id: "integration",
           time_sync: {
             ts_client: command.ts_client,
@@ -95,21 +128,23 @@ export async function bootstrap(
             dimos_version: "0.4.0",
             armodule_version: "0.2.0",
           },
-          robot: shared.fixtures.robot,
+          robot: arm ? {...shared.fixtures.robot,display_name:"OpenYAM"} : shared.fixtures.robot,
           capabilities: {
-            lidar: available,
+            ...(options.manipulation ? { manipulation: {available: true, reason: null} } : {}),
+            lidar: mobile,
             localization: available,
             estop: available,
-            agent: available,
+            agent: mobile,
             navigation: {
-              ...available,
-              nav_goal: { ...available, preview: true },
-              nav_joystick: available,
+              ...mobile,
+              nav_goal: { ...mobile, preview: !arm },
+              nav_joystick: mobile,
             },
           },
         });
         state();
         interactionState();
+        if (arm) { armState(); armTimer = setInterval(armState, 100); armTimer.unref(); }
         send({
           type: "pose",
           position: shared.fixtures.pose,
@@ -120,11 +155,13 @@ export async function bootstrap(
       if (command.type === "interaction_request") {
         let status = "accepted", code = command.action;
         if (command.action === "acquire") {
-          if (authority || interactionMode !== "manual") { status = "busy"; code = "robot_busy"; }
+          if (authority || interactionMode !== "manual" || operationId) { status = "busy"; code = "robot_busy"; }
           else {
             authority = { client_id: "integration", source_id: command.source_id, acquisition_id: command.acquisition_id,
-              lease_id: `fixture-lease-${revision}`, kind: command.kind, held: true, expires_at: 1e9, sequence: -1 };
+              lease_id: `fixture-lease-${revision}`, kind: command.kind,
+              ...(command.group_id ? { group_id: command.group_id } : {}), held: true, expires_at: 1e9, sequence: -1 };
             preview = previewAim = null;
+            followingTail = null; settledAt = null; following = false; owner = null;
           }
         } else if (command.action === "mode") {
           if (authority) { status = "busy"; code = "robot_busy"; } else interactionMode = command.mode;
@@ -135,10 +172,15 @@ export async function bootstrap(
           status = "stale"; code = "not_owner";
         }
         if (status === "accepted" && command.position) {
-          const changed = !target || JSON.stringify([target.position, target.orientation])
-            !== JSON.stringify([command.position, command.orientation]);
-          target = { position: command.position, orientation: command.orientation, domain: "navigation", revision: changed ? revision + 1 : target.revision,
-            phase: authority?.kind === "navigation_planning" ? "draft" : "live", sample_ts: performance.now() / 1000,
+          const changed = !target || JSON.stringify([target.position, target.orientation, target.speed_scale, target.gripper])
+            !== JSON.stringify([command.position, command.orientation, command.speed_scale ?? target.speed_scale, command.gripper ?? target.gripper]);
+          const manipulation = String(authority?.kind ?? command.kind).startsWith("manipulation_");
+          target = { position: command.position, orientation: command.orientation,
+            domain: manipulation ? "manipulation" : "navigation",
+            ...(manipulation ? { group_id: command.group_id ?? authority?.group_id,
+              speed_scale: command.speed_scale ?? target?.speed_scale ?? 0.5,
+              ...(command.gripper === undefined ? {} : { gripper: command.gripper }) } : {}), revision: changed ? revision + 1 : target.revision,
+            phase: String(authority?.kind).endsWith("planning") ? "draft" : "live", sample_ts: performance.now() / 1000,
             sequence: command.sequence ?? -1 };
           if (authority) authority.sequence = command.sequence ?? -1;
           if (previewAimChanged(previewAim, target)) preview = previewAim = null;
@@ -147,13 +189,21 @@ export async function bootstrap(
           if (command.action === "release" && authority?.kind === "navigation_planning") authority.held = false;
           else {
             if (authority?.kind === "joystick") joystickStops++;
-            if (target && authority?.kind !== "joystick") {
+            if (authority?.kind === "manipulation_following" && following && validatedTarget) {
+              followingTail = { generation: revision + 1, group_id: authority.group_id,
+                target_revision: validatedTarget.target_revision, status: "finishing",
+                position: validatedTarget.position, orientation: validatedTarget.orientation,
+                speed_scale: validatedTarget.speed_scale, joints: validatedTarget.joints };
+              following = false; owner = null; settledAt = null;
+            }
+            if (target?.domain === "navigation" && authority?.kind !== "joystick") {
               target.phase = "committed";
               const [x, y, z] = target.position;
               activeGoal = { type: "nav_goal", pose: [x, y, z, 0], path_poses: [[2,0,0,0],[2.5,y/2,0,0],[x,y,z,0]], ts: performance.now() };
               send(activeGoal); state("following_path");
             }
             authority = null; preview = previewAim = null;
+            if (arm) armState();
           }
         }
         interactionState();
@@ -172,7 +222,7 @@ export async function bootstrap(
       }
       if (command.type === "localization_start_request")
         send({
-          type: "localization_observations_request",
+          type: "localization_observations_request", capture_id: "fixture-capture",
           capture_policy: "robot_los_required",
           observation_count: 1,
         });
@@ -197,8 +247,52 @@ export async function bootstrap(
         else { activeGoal = frame; interactionState(); }
         if (!command.preview) state("following_path");
       }
-      if (command.type === "estop_request") { authority = null; preview = previewAim = null; activeGoal = null; state("idle"); interactionState(); }
-    });
+      if (command.type === "estop_request") {
+        authority = null; preview = previewAim = null; activeGoal = null;
+        following = false; followingTail = null; owner = null; plan = null; operationId = null;
+        armStopped = true; execution = "aborted"; state("idle"); interactionState(); armState();
+      }
+      if (command.type === "manipulation_request" && arm) {
+        let result: any = {status: "completed"};
+        if (command.action === "evaluate") result = {status: "feasible", joints: {...arm.joints, yam_joint2: arm.joints.yam_joint2 + 0.2}, pose: command};
+        if (command.action === "plan") {
+          plan = {plan_id: `fixture-plan-${++planSequence}`, joint_names: Object.keys(arm.joints), duration: 2,
+            trajectory: [{time: 0, positions: Object.values(arm.joints)}, {time: 2, positions: Object.values(arm.joints).map((v: any, i) => i === 1 ? v + 0.2 : v)}]};
+          plan.target_revision = command.target_revision;
+          result = {status: "planned", ...plan};
+        }
+        if (command.action === "execute") {
+          const accepted = command.plan_id === plan?.plan_id && command.target_revision === target?.revision && plan?.target_revision === target?.revision;
+          result = { status: accepted ? "accepted" : "rejected", operation_id: accepted ? "fixture-operation" : null };
+          if (accepted) {
+            execution = "executing"; operationId = "fixture-operation";
+            delayedReplies.push(setTimeout(() => {
+              plan?.joint_names.forEach((name: string, i: number) => { arm.joints[name] = plan.trajectory.at(-1).positions[i]; });
+              execution = "completed"; operationId = null; plan = null; armState(); interactionState();
+            }, 1000));
+          }
+        }
+        if (command.action === "resume") { armStopped = false; execution = "idle"; result = {status: "resumed"}; }
+        if (command.action === "acquire") { followingTail = null; validatedTarget = null; following = true; owner = "integration"; result = {status: "acquired", token: "fixture-follow"}; }
+        if (command.action === "release" || command.action === "cancel") { following = false; followingTail = null; owner = null; plan = null; operationId = null; execution = "idle"; }
+        if (command.action === "update") {
+          result = {status:"feasible", sequence:command.sequence, joints:{...arm.joints,yam_joint6:arm.joints.yam_joint6+0.8}};
+          if (!ikFailure) {
+            arm.pose = { position: command.position, orientation: command.orientation };
+            validatedTarget = { ...command, joints: result.joints };
+          }
+        }
+        if (ikFailure && ["update", "evaluate", "plan"].includes(command.action)) {
+          result = { status: "infeasible", message: "Pink IK did not converge within the iteration budget", ...ikFailure,
+            ...(command.action === "update" ? { sequence: command.sequence } : {}) };
+        }
+        const reply = {type: "manipulation_result", request_id: command.request_id, action: command.action, group_id: command.group_id, ...result};
+        if (command.action === "plan" && options.planDelayMs) delayedReplies.push(setTimeout(()=>send(reply),options.planDelayMs));
+        else send(reply);
+        armState();
+      }
+    };
+    ws.onMessage(onMessage); bulk.onUpload = onMessage;
   });
   await page.goto("/?debug=1");
   await page.selectOption("#hmd", mode === "hand" ? "quest3s" : "quest3");
@@ -325,17 +419,18 @@ export async function bootstrap(
       data.writeFloatLE(-1 + Math.floor(i / 20) / 12, 20 + i * 12);
       data.writeFloatLE(0.1 + (i % 12) / 10, 24 + i * 12);
     }
-    socket!.send(data);
+    bulk.lidar(data);
   };
   return {
     send,
+    setIKFailure: (failure: typeof ikFailure) => { ikFailure = failure; },
     state,
     commands,
     get joystickStops() { return joystickStops; },
     localized,
     completeLocalization,
     lidar,
-    close: () => socket?.close(),
+    close: () => { delayedReplies.forEach(clearTimeout); if (armTimer) clearInterval(armTimer); socket?.close(); },
   };
 }
 export async function snapshot(page: Page): Promise<any> {

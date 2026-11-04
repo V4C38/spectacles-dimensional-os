@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { WorldMeshRenderer, circleMesh } from "../../Assets/Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer";
+import { AdaptiveStrokeRenderer, WorldMeshRenderer, circleMesh } from "../../Assets/Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer";
 
 function renderer() {
   const builder = { getVerticesCount: () => 0, getIndicesCount: () => 0,
@@ -29,4 +29,19 @@ it("reuses bounded cached circle geometry without rebuilding stable vertices", (
   expect((mesh as any).object.enabled).toBe(true);
   mesh.triangles(first.positions, first.indices, [1, 1, 1, 1]);
   expect(builder.updateMesh).toHaveBeenCalledTimes(2);
+});
+
+it("keeps the native stroke vertex contract while supporting arm color and pixel width", () => {
+  const upload = vi.fn();
+  const stroke = Object.assign(Object.create(AdaptiveStrokeRenderer.prototype), {
+    material: { mainPass: {} }, minimumPixels: 0.75, upload,
+  }) as AdaptiveStrokeRenderer;
+  stroke.segments([[10, 20, 30], [40, 50, 60]], 0.06, 0.8, 0.6, 1.8, false, [1, 0, 0]);
+  const [vertices, indices] = upload.mock.calls[0];
+  expect(vertices).toHaveLength(4 * 22);
+  expect(indices).toEqual([0, 1, 2, 2, 1, 3]);
+  expect(vertices.slice(6, 10)).toEqual([1, 0, 0, 0.8]);
+  expect(vertices.slice(12, 16)).toEqual([40, 50, 60, 0]);
+  expect(vertices.slice(19, 22)).toEqual([10, 20, 30]);
+  expect((stroke.material.mainPass as any).minimumPixels).toBe(0.75);
 });

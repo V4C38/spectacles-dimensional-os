@@ -101,11 +101,11 @@
                 </label>
               </fieldset>
               <label class="field" id="dimosPythonField">
-                <span>Path to DimOS Python (…/.venv/bin/python3)</span>
+                <span>DimOS installation folder (click to browse)</span>
                 <input
                   type="text"
                   id="dimosPython"
-                  placeholder="/path/to/dimos/.venv/bin/python3"
+                  placeholder="Select the DimOS folder"
                   autocomplete="off"
                 />
               </label>
@@ -123,6 +123,7 @@
                 </select>
               </label>
               <p class="hint hidden" id="dimosVersionHint"></p>
+              <p class="hint hidden" id="plannerStatus" role="status"></p>
               <button type="button" class="btn primary hidden" id="installBtn">
                 Install
               </button>
@@ -135,9 +136,31 @@
               <select id="blueprintSelect" aria-label="Blueprint">
                 <option value="unitree_go2_ar" selected>unitree_go2_ar</option>
                 <option value="unitree_go2_ar_agentic">unitree_go2_ar_agentic</option>
+                <option value="openyam_ar_planner">openyam_ar_planner</option>
               </select>
               <p class="blueprint-info" id="blueprintInfo"></p>
+              <label for="robotProfileSelect">Robot profile</label>
+              <select id="robotProfileSelect" aria-label="Robot profile"></select>
+              <input id="robotProfileName" aria-label="Profile name" maxlength="80" />
+              <div class="actions">
+                <button type="button" class="btn" id="newRobotProfile">New</button>
+                <button type="button" class="btn" id="duplicateRobotProfile">Duplicate</button>
+                <button type="button" class="btn" id="deleteRobotProfile">Delete</button>
+              </div>
+              <label><input type="checkbox" id="simulationEnabled" /> Mock hardware (OpenYAM)</label>
             </div>
+            <details class="card config-card hidden" id="canCard">
+              <summary class="config-summary">
+                <span class="deps-summary-collapsed">
+                  <span class="label">CAN setup</span>
+                  <span class="value" id="canSummary">checking…</span>
+                </span>
+              </summary>
+              <div class="config-body">
+                <p class="hint" id="canStatus" role="status">Checking can0…</p>
+                <button type="button" class="btn" id="canSetupBtn">Set up CAN</button>
+              </div>
+            </details>
             <div class="selector-group">
               <span class="selector-label">Client</span>
               <div class="tabs" role="group" aria-label="Client">

@@ -26,6 +26,8 @@ export interface WebSocketTransport {
   close(): void;
   sendText(text: string): void;
   sendBinary(data: Uint8Array): void;
+  bufferedAmount?(): number;
+  createSibling?(path: string): BindableWebSocketTransport;
 }
 
 export interface WebSocketTransportHandlers {

@@ -36,11 +36,11 @@ def _pose(ts: float, *, x: float = 0, yaw: float = 0) -> PoseStamped:
     )
 
 
-def test_pose_history_rejects_long_gaps_even_near_one_endpoint() -> None:
+def test_pose_history_preserves_baseline_bracket_interpolation() -> None:
     history = PoseBuffer()
     history.push(_pose(10), ts_server=10)
     history.push(_pose(15, x=5), ts_server=15)
-    assert history.at_server_ts(10.01) is None
+    assert history.at_server_ts(10.01).position[0] == pytest.approx(0.01)
 
 
 @pytest.mark.parametrize("timestamp", [float("nan"), float("inf"), 9.0])
@@ -284,7 +284,7 @@ def test_exact_pose_remains_usable_beside_a_history_gap() -> None:
     history.push(_pose(10))
     history.push(_pose(15, x=5))
     assert history.at_server_ts(10).position[0] == 0
-    assert history.at_server_ts(10.01) is None
+    assert history.at_server_ts(10.01).position[0] == pytest.approx(0.01)
 
 
 async def test_vendor_response_to_robot_and_headset_alignment_randomized() -> None:
@@ -412,3 +412,29 @@ async def test_anchor_expiring_during_headset_query_discards_final_result(change
         assert len(calls) == 2
     finally:
         coordinator._worker.close()
+
+
+@pytest.mark.asyncio
+async def test_camera_stream_drops_replaceable_work_while_native_worker_is_busy():
+    import threading
+
+    entered, release = threading.Event(), threading.Event()
+    worker = LocalizationWorker()
+    called = []
+
+    def native():
+        entered.set()
+        assert release.wait(2)
+        called.append("original")
+
+    active = asyncio.create_task(worker.run_if_idle(native))
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        for _ in range(100):
+            assert await worker.run_if_idle(lambda: called.append("stale-camera")) is None
+        release.set()
+        await active
+        assert called == ["original"]
+    finally:
+        release.set()
+        worker.close()

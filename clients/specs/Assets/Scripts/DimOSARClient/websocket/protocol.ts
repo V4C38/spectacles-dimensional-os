@@ -1,4 +1,5 @@
-import { decodeManipulation } from "../manipulation/ManipulationProtocol";
+import { utf8Bytes, validatedBulkArray } from "./BulkTransfer";
+import { decodeManipulation, decodeFollowingTail } from "../manipulation/ManipulationProtocol";
 import type { InteractionState, InteractionResult, InteractionAuthority, InteractionTarget, InteractionCredentials } from "../replication/CollaborationTypes";
 import {
   CAPABILITY_NAMES,
@@ -55,9 +56,11 @@ export class TextFramer {
   private buffer = "";
 
   push(chunk: string): string[] {
+    if (utf8Bytes(chunk) + utf8Bytes(this.buffer) > 32768) throw new Error("Control frame buffer exceeds budget");
     this.buffer += chunk;
     const lines = this.buffer.split("\n");
     this.buffer = lines.pop() ?? "";
+    if (utf8Bytes(this.buffer) > 16384 || lines.some(line => utf8Bytes(line) > 16384)) throw new Error("Control frame exceeds 16KiB");
     return lines.filter((line) => line.trim().length > 0);
   }
 }
@@ -65,6 +68,7 @@ export class TextFramer {
 export function encodeHelloRequest(request: { ts_client: number }): string {
   return encodeText({
     type: "hello_request",
+    protocol_version: 3,
     ts_client: finiteNumber(request.ts_client, "ts_client"),
   });
 }
@@ -198,6 +202,14 @@ export function encodeLocalizationObservations(
   return out;
 }
 
+export interface DecodeContext { message_type: string; message_ts?: number; request_id?: string }
+export class ProtocolDecodeError extends Error {
+  constructor(readonly context: DecodeContext, detail: string, readonly excerpt?: string) { super(detail); this.name = "ProtocolDecodeError"; }
+}
+export function encodeClientError(report: import("./protocolTypes").ClientError): string {
+  return encodeText(report);
+}
+
 export function decodeOutbound(text: string): Exclude<Outbound, Lidar> {
   let parsed: unknown;
   try {
@@ -205,9 +217,13 @@ export function decodeOutbound(text: string): Exclude<Outbound, Lidar> {
   } catch {
     throw new Error("Frame must be a JSON object");
   }
-  const data = asObject(parsed, "Frame");
+  return decodeOutboundObject(asObject(parsed, "Frame"));
+}
+
+export function decodeOutboundObject(data: Record<string, unknown>): Exclude<Outbound, Lidar> {
   const msgType = requireString(data, "type");
 
+  try {
   switch (msgType) {
     case "manipulation_state":
     case "manipulation_result": return decodeManipulation(data);
@@ -231,13 +247,27 @@ export function decodeOutbound(text: string): Exclude<Outbound, Lidar> {
     case "pose":
       return decodePose(data);
     case "nav_goal":
-      return decodeNavGoal(data);
+      return decodeNavGoal(data, data.route_ref !== undefined);
     case "agent_message":
       return decodeAgentMessage(data);
     case "agent_skill":
       return decodeAgentSkill(data);
     default:
       throw new Error(`Unknown outbound frame type: '${msgType}'`);
+  }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const field = detail.split(":")[0];
+    let section: string | undefined;
+    if (/^[a-zA-Z_][\w]*(?:\.[\w]+)+$/.test(field)) {
+      let value: unknown = data;
+      for (const part of field.split(".")) value = value && typeof value === "object" ? (value as Record<string, unknown>)[part] : undefined;
+      if (value !== undefined) section = JSON.stringify({ field, value });
+    }
+    throw new ProtocolDecodeError({ message_type: msgType,
+      ...(typeof data.ts === "number" && Number.isFinite(data.ts) ? { message_ts: data.ts } : {}),
+      ...(typeof data.request_id === "string" ? { request_id: data.request_id.slice(0, 128) } : {}) },
+      detail, section);
   }
 }
 
@@ -458,12 +488,15 @@ function decodeHello(data: Record<string, unknown>): Hello {
     ts_client: finiteField(timeSyncRaw, "ts_client"),
     ts_server: finiteField(timeSyncRaw, "ts_server"),
   };
-  if (data.protocol_version !== 2) {
-    throw new Error(`Incompatible ARModule protocol: expected version 2, received ${data.protocol_version ?? "missing"}. Update ARModule and the client together.`);
+  if (data.protocol_version !== 3) {
+    throw new Error(`Incompatible ARModule protocol: expected version 3, received ${data.protocol_version ?? "missing"}. Update ARModule and the client together.`);
   }
   return {
     type: "hello",
-    protocol_version: 2,
+    protocol_version: 3,
+    bulk_url: requireString(data, "bulk_url"),
+    bulk_token: requireString(data, "bulk_token"),
+    bulk_epoch: requireString(data, "bulk_epoch"),
     client_id: requireString(data, "client_id"),
     ...(data.odom_reference_id === undefined ? {} : { odom_reference_id: requireString(data, "odom_reference_id") }),
     ...(data.server_info === undefined ? {} : { server_info: decodeServerInfo(asObject(data.server_info, "server_info")) }),
@@ -500,7 +533,7 @@ function decodeRobot(data: Record<string, unknown>): RobotDescription {
 function decodeCapabilities(data: Record<string, unknown>): Capabilities {
   const capabilities = {} as Capabilities;
   for (const name of CAPABILITY_NAMES) {
-    if (name === "manipulation" && !(name in data)) continue;
+    if ((name === "manipulation" || name === "object_detection") && !(name in data)) continue;
     if (!(name in data)) {
       throw new Error(`Missing required field: capabilities.${name}`);
     }
@@ -633,7 +666,10 @@ function decodeLocalizationObservationsRequest(
     purpose: requireString(data, "purpose") as "robot" | "headset",
   };
   if ("purpose" in episode && episode.purpose !== "robot" && episode.purpose !== "headset") throw new Error("invalid capture purpose");
-  const resultTimeout = { ...episode, ...(resultTimeoutS === undefined ? {} : { result_timeout_s: resultTimeoutS }) };
+  const captureId = data.capture_id === undefined ? undefined : boundedString(data, "capture_id");
+  if (captureId !== undefined && !captureId.trim()) throw new Error("invalid capture_id");
+  const capture = captureId === undefined ? {} : { capture_id: captureId };
+  const resultTimeout = { ...episode, ...capture, ...(resultTimeoutS === undefined ? {} : { result_timeout_s: resultTimeoutS }) };
   const hasTimeout = Object.prototype.hasOwnProperty.call(data, "wait_timeout_s");
   if (capturePolicy === "robot_los_preferred") {
     if (!hasTimeout) {
@@ -749,7 +785,7 @@ function decodeNavGoal(data: Record<string, unknown>, acceptedEndpoint = false):
   if (!Array.isArray(pathRaw)) {
     throw new Error("Field 'path_poses' must be array");
   }
-  const path_poses = pathRaw.map((entry, i) => requireYawPoseValue(entry, `path_poses[${i}]`));
+  const path_poses = validatedBulkArray(pathRaw) ? pathRaw as YawPose[] : pathRaw.map((entry, i) => requireYawPoseValue(entry, `path_poses[${i}]`));
   const hasPose = Object.prototype.hasOwnProperty.call(data, "pose");
   if (path_poses.length === 0) {
     if (hasPose && acceptedEndpoint && !preview) {
@@ -957,6 +993,7 @@ function decodeInteractionState(data: Record<string, unknown>): InteractionState
   return { type: "interaction_state", epoch: requireString(data, "epoch"), revision: nonnegativeInteger(data, "revision"),
     mode, authority, target, ...(targets ? { targets } : {}), preview: data.preview == null ? null : decodeNavGoal(asObject(data.preview, "preview")),
     ...(data.motion_busy === undefined ? {} : { motion_busy: requireBoolean(data, "motion_busy") }),
+    ...(data.following_tail === undefined ? {} : { following_tail: decodeFollowingTail(data.following_tail) }),
     active_goal: data.active_goal == null ? null : decodeNavGoal(asObject(data.active_goal, "active_goal"), true) };
 }
 function decodeInteractionResult(data: Record<string, unknown>): InteractionResult {

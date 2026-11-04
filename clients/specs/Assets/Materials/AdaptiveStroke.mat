@@ -22,6 +22,9 @@
     PreviewEnabled:
       typeIdx: 0
       value: 0
+    nearWidthScale:
+      typeIdx: 1
+      value: 0.750000
     viewportHeightPx:
       typeIdx: 1
       value: 1024.000000

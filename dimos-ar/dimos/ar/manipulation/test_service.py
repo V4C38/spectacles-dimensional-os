@@ -1,4 +1,5 @@
 import asyncio
+import json
 import threading
 
 import pytest
@@ -87,7 +88,7 @@ async def test_readiness_is_emitted_once_and_polling_retires_before_stop():
 
 
 @pytest.mark.asyncio
-async def test_cancelled_rpc_unsubscribes_callback_and_ignores_late_reply():
+async def test_cancelled_rpc_keeps_actual_slot_until_late_reply():
     from types import SimpleNamespace
     from unittest.mock import Mock
 
@@ -104,9 +105,15 @@ async def test_cancelled_rpc_unsubscribes_callback_and_ignores_late_reply():
     await asyncio.sleep(0)
     task.cancel()
     await asyncio.gather(task, return_exceptions=True)
-    unsubscribe.assert_called_once()
+    unsubscribe.assert_not_called()
+    with pytest.raises(TimeoutError, match="still running"):
+        await service._rpc.call("ar_manipulation_snapshot")
+    assert len(callbacks) == 1
     callbacks[0]({"available": True})
     await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    unsubscribe.assert_called_once()
+    assert not service._rpc._inflight
 
 
 @pytest.mark.asyncio
@@ -254,3 +261,271 @@ async def test_close_tombstone_blocks_delayed_resume_from_before_close():
     assert await asyncio.to_thread(finished.wait, 2)
     assert stops == [("robot", 42)]
     assert not resumed
+
+
+@pytest.mark.asyncio
+async def test_native_bulk_assets_are_fetched_once_per_revision():
+    from unittest.mock import Mock
+
+    runtime = Mock(spec=["ar_manipulation_asset"])
+    runtime.ar_manipulation_asset.side_effect = lambda kind, revision: {"revision": revision}
+    service = ManipulationService(runtime, lambda *args: None, lambda _: None)
+    metadata = {
+        "available": True,
+        "model_revision": "model1",
+        "plan_revision": None,
+        "plan_metadata": None,
+    }
+    first = await service._materialize(metadata)
+    second = await service._materialize(metadata)
+    assert first["model"] is second["model"]
+    runtime.ar_manipulation_asset.assert_called_once_with("model", "model1")
+    changed = await service._materialize({**metadata, "model_revision": "model2"})
+    assert changed["model"]["revision"] == "model2"
+    assert runtime.ar_manipulation_asset.call_count == 2
+    service._quiescent = True
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_hung_snapshot_has_one_actual_call_and_stop_stays_independent():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    callbacks = {}
+    calls = []
+
+    def call(name, args, callback):
+        calls.append(name)
+        if name.endswith("ar_manipulation_stop"):
+            callback(None)
+        else:
+            callbacks[name] = callback
+        return Mock()
+
+    rpc = ManipulationService(
+        SimpleNamespace(rpc=SimpleNamespace(call=call), remote_name="Native"),
+        lambda *args: None,
+        lambda _: None,
+    )._rpc
+    with pytest.raises(TimeoutError):
+        await rpc.call("ar_manipulation_snapshot", timeout=0.01)
+    for _ in range(5):
+        with pytest.raises(TimeoutError):
+            await rpc.call("ar_manipulation_snapshot", timeout=0.01)
+    await rpc.call("ar_manipulation_stop", timeout=0.1)
+    assert calls == ["Native/ar_manipulation_snapshot", "Native/ar_manipulation_stop"]
+    callbacks["Native/ar_manipulation_snapshot"]({"available": False})
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert not rpc._inflight
+    rpc.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("snapshot_during_command", [False, True])
+async def test_old_idle_snapshot_cannot_retire_accepted_execution(snapshot_during_command):
+    from dimos.ar.test_module import (
+        _arm_grab,
+        _arm_module_with_two_clients,
+        _release_arm_grab,
+    )
+
+    module = _arm_module_with_two_clients()
+    command_entered, command_release = threading.Event(), threading.Event()
+    packing_entered, packing_release = asyncio.Event(), asyncio.Event()
+    accepted, moving, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    observed, published = [], []
+
+    class Runtime:
+        state = {"available": True, "execution": "idle", "operation_id": None}
+
+        def ar_manipulation_snapshot(self):
+            return dict(self.state)
+
+        def ar_manipulation_command(self, client_id, body):
+            command_entered.set()
+            assert command_release.wait(2)
+            self.state = {"available": True, "execution": "accepted", "operation_id": "move"}
+            return {"status": "accepted", "operation_id": "move"}
+
+        def ar_manipulation_revoke(self, *args):
+            pass
+
+    runtime = Runtime()
+
+    async def pack(body):
+        if body.get("type") == "manipulation_state" and body.get("execution") == "idle":
+            packing_entered.set()
+            await packing_release.wait()
+        return body
+
+    def on_snapshot(body):
+        observed.append(body)
+        module._on_manipulation_snapshot(body)
+        if body["execution"] == "accepted":
+            moving.set()
+        elif body["execution"] == "completed":
+            completed.set()
+
+    def on_result(request, body):
+        module._on_manipulation_result(request, body)
+        accepted.set()
+
+    service = ManipulationService(
+        runtime,
+        lambda *args: None,
+        lambda text: published.append(json.loads(text)),
+        on_snapshot=on_snapshot,
+        on_result=on_result,
+        prepare_outbound=pack,
+    )
+    module._manipulation_service = service
+    service.connect("a")
+    service.connect("b")
+    _arm_grab(module, "a", planning=True)
+    await asyncio.gather(*service._tasks)
+    request = ManipulationRequest("execute", "execute", "arm", {})
+    module._pending_arm_motion.add(request.request_id)
+    module._interaction.set_motion_busy(True)
+    try:
+        if snapshot_during_command:
+            service.submit(request, "a")
+            assert await asyncio.to_thread(command_entered.wait, 1)
+            service.start()
+        else:
+            service.start()
+        await asyncio.wait_for(packing_entered.wait(), 1)
+        if not snapshot_during_command:
+            service.submit(request, "a")
+            assert await asyncio.to_thread(command_entered.wait, 1)
+        command_release.set()
+        await asyncio.wait_for(accepted.wait(), 1)
+        packing_release.set()
+        await asyncio.wait_for(moving.wait(), 1)
+
+        assert all(body["execution"] != "idle" for body in observed)
+        assert all(body.get("execution") != "idle" for body in published)
+        _release_arm_grab(module)
+        _arm_grab(module, "b")
+        assert module._interaction.authority is None
+        assert module._interaction.motion_busy
+
+        runtime.state = {"available": True, "execution": "completed", "operation_id": None}
+        await asyncio.wait_for(completed.wait(), 1)
+        assert not module._interaction.motion_busy
+        _arm_grab(module, "b")
+        assert module._interaction.authority.client_id == "b"
+    finally:
+        command_release.set()
+        packing_release.set()
+        service._quiescent = True
+        await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["update", "evaluate", "plan", "gripper"])
+async def test_continuous_input_does_not_starve_snapshot_publication(action):
+    packing_entered, packing_release, published = (
+        asyncio.Event(), asyncio.Event(), asyncio.Event()
+    )
+    observed = []
+
+    class Runtime:
+        def ar_manipulation_snapshot(self):
+            return {"available": True, "sample": 1}
+
+        def ar_manipulation_command(self, client_id, body):
+            return {"status": "feasible"}
+
+    async def pack(body):
+        if body.get("type") == "manipulation_state":
+            packing_entered.set()
+            await packing_release.wait()
+        return body
+
+    def on_snapshot(body):
+        observed.append(body)
+        published.set()
+
+    service = ManipulationService(
+        Runtime(), lambda *args: None, lambda _: None,
+        on_snapshot=on_snapshot, prepare_outbound=pack,
+    )
+    service.start()
+    try:
+        await asyncio.wait_for(packing_entered.wait(), 1)
+        for sequence in range(3):
+            await service._dispatch(
+                ManipulationRequest(str(sequence), action, "arm", {"ts": 1, "sequence": sequence}),
+                "a", 0,
+            )
+        packing_release.set()
+        await asyncio.wait_for(published.wait(), 1)
+        assert observed[0]["sample"] == 1
+    finally:
+        packing_release.set()
+        service._quiescent = True
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_retired_optional_plan_preserves_fresh_feedback_and_availability():
+    published, observed = [], []
+    received = asyncio.Event()
+    observation = {"arm": {"joints": {"joint": 0.2}, "measured_at": 123.0}}
+
+    class Runtime:
+        plan_revision = "retired"
+
+        def ar_manipulation_snapshot(self):
+            return {
+                "available": True,
+                "observations": observation,
+                "plan_revision": self.plan_revision,
+                "plan_metadata": {"plan_id": self.plan_revision},
+            }
+
+        def ar_manipulation_asset(self, kind, revision):
+            assert kind == "plan"
+            if revision == "retired":
+                self.plan_revision = "replacement"
+                return None
+            return {"plan_id": revision, "trajectory": []}
+
+    def broadcast(text):
+        published.append(json.loads(text))
+        if len(published) == 2:
+            received.set()
+
+    service = ManipulationService(
+        Runtime(), lambda *args: None, broadcast, on_snapshot=observed.append,
+    )
+    service._assets["plan"] = ("older", {"plan_id": "older"})
+    service.start()
+    try:
+        await asyncio.wait_for(received.wait(), 1)
+        assert [body["available"] for body in published] == [True, True]
+        assert [body["observations"] for body in published] == [observation, observation]
+        assert published[0]["plan"] is None
+        assert published[1]["plan"]["plan_id"] == "replacement"
+        assert len(observed) == 2
+        assert service._assets["plan"][0] == "replacement"
+    finally:
+        service._quiescent = True
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_missing_required_model_asset_remains_an_error():
+    from unittest.mock import Mock
+
+    runtime = Mock(spec=["ar_manipulation_asset"])
+    runtime.ar_manipulation_asset.return_value = None
+    service = ManipulationService(runtime, lambda *args: None, lambda _: None)
+    try:
+        with pytest.raises(ValueError, match="native model asset retired"):
+            await service._materialize({"available": True, "model_revision": "missing"})
+    finally:
+        service._quiescent = True
+        await service.close()

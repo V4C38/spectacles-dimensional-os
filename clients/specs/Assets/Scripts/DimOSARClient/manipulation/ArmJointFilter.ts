@@ -3,6 +3,8 @@ import { jointDelta } from "./JointMotion";
 
 /** Presentation only. Never substitute these values for measured control feedback. */
 export class ArmJointFilter {
+  constructor(private readonly timeConstantS = 0.05) {}
+
   private values: Record<string, number> = {};
   private key = "";
   private time: number | null = null;
@@ -25,7 +27,7 @@ export class ArmJointFilter {
     const alpha =
       this.time == null
         ? 1
-        : 1 - Math.exp(-Math.max(0, now - this.time) / 0.05);
+        : 1 - Math.exp(-Math.max(0, now - this.time) / this.timeConstantS);
     this.time = now;
     const kinds = new Map(
       model.joints.map((joint) => [joint.name, joint.kind]),

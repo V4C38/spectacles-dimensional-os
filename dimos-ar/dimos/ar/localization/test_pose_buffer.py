@@ -86,6 +86,14 @@ def test_replay_fallback_preserves_interpolation_and_missing_history() -> None:
     assert sample is not None
     assert sample.position[0] == pytest.approx(1.0)
     assert buffer.at_server_ts(19.0, fallback_to_latest=True) is None
-    assert buffer.at_server_ts(20.5, fallback_to_latest=True) is None
+    assert buffer.at_server_ts(20.5, fallback_to_latest=True) is not None
     for timestamp in [float("nan"), float("inf"), -float("inf")]:
         assert buffer.at_server_ts(timestamp, fallback_to_latest=True) is None
+
+
+def test_bracket_interpolation_preserves_baseline_acceptance_beyond_nearest_gap():
+    buffer = PoseBuffer(max_gap_s=0.1)
+    buffer.push(_pose(10, 0), ts_server=20)
+    buffer.push(_pose(11, 2), ts_server=21)
+    assert buffer.at_server_ts(20.5).position[0] == pytest.approx(1)
+    assert buffer.at_server_ts(21.2) is None

@@ -83,7 +83,7 @@ for (const id of ids)
           ["robot_los_preferred", "mixed"],
         ]) {
           runtime.send({
-            type: "localization_observations_request",
+            type: "localization_observations_request", capture_id: "fixture-capture",
             capture_policy: policy,
             observation_count: 1,
             ...(policy === "robot_los_preferred"
@@ -116,7 +116,7 @@ for (const id of ids)
           };
         });
         runtime.send({
-          type: "localization_observations_request",
+          type: "localization_observations_request", capture_id: "fixture-capture",
           capture_policy: "any_angle",
           observation_count: 1,
         });

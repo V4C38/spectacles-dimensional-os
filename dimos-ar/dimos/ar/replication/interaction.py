@@ -80,7 +80,7 @@ class SharedTarget:
     sequence: int
     domain: Literal["navigation", "manipulation"] = "navigation"
     group_id: str | None = None
-    speed_scale: float = 0.2
+    speed_scale: float = 0.5
     gripper: float | None = None
 
     def wire(self) -> dict[str, Any]:
@@ -129,6 +129,8 @@ class InteractionCoordinator:
         self.active_goal: dict[str, Any] | None = None
         self.agent_busy = False
         self.motion_busy = False
+        self.following_tail: dict[str, Any] | None = None
+        self._tail_floor = 0
         self._clients: set[str] = set()
         self._requests: dict[str, OrderedDict[str, InteractionResult]] = {}
         self._cancelled: dict[str, OrderedDict[str, None]] = {}
@@ -158,6 +160,7 @@ class InteractionCoordinator:
             "epoch": self.epoch,
             "revision": self.revision,
             "motion_busy": self.motion_busy,
+            "following_tail": copy.deepcopy(self.following_tail),
             "mode": self.mode,
             "authority": self.authority.wire() if self.authority is not None else None,
             "target": self.target.wire() if self.target is not None else None,
@@ -181,12 +184,15 @@ class InteractionCoordinator:
         self._retire(reason)
         self.preview = None
         self.active_goal = None
+        self.following_tail = None
         self.revision += 1
+        self._tail_floor = self.revision
 
     def reset(self) -> None:
         self._retire("reference_reset")
         self.epoch = uuid4().hex
         self.target = None
+        self.following_tail = None
         self._targets.clear()
         self.preview = self.active_goal = None
         self._requests = {client: OrderedDict() for client in self._clients}
@@ -284,6 +290,36 @@ class InteractionCoordinator:
             and yaw_error < NAV_PREVIEW_YAW_TOLERANCE_RAD
         )
 
+    def set_following_tail(self, tail: dict[str, Any] | None) -> None:
+        import copy
+
+        if tail is not None and (
+            self.authority is not None or tail.get("generation", -1) < self._tail_floor
+        ):
+            return
+        if tail != self.following_tail:
+            # Keep the parked target at the endpoint the server will actually
+            # finish, including when the last local pointer sample was invalid.
+            target = self.target
+            if (tail is not None and target is not None
+                    and target.domain == "manipulation"
+                    and target.group_id == tail.get("group_id")):
+                position, orientation = tail.get("position"), tail.get("orientation")
+                if (isinstance(position, (list, tuple)) and len(position) == 3
+                        and isinstance(orientation, (list, tuple)) and len(orientation) == 4
+                        and all(isinstance(v, (int, float)) and math.isfinite(v)
+                                for v in (*position, *orientation))):
+                    p = (float(position[0]), float(position[1]), float(position[2]))
+                    q = (float(orientation[0]), float(orientation[1]),
+                         float(orientation[2]), float(orientation[3]))
+                    if p != target.position or q != target.orientation:
+                        self.target = replace(target, position=p, orientation=q,
+                                              revision=target.revision + 1,
+                                              sample_ts=self._clock(), phase="draft")
+                        self._targets[(target.domain, target.group_id)] = self.target
+            self.following_tail = copy.deepcopy(tail)
+            self.revision += 1
+
     def set_motion_busy(self, busy: bool) -> None:
         if busy != self.motion_busy:
             self.motion_busy = busy
@@ -342,7 +378,7 @@ class InteractionCoordinator:
     def _mode(self, request: InteractionRequest) -> InteractionResult:
         if request.mode not in ("manual", "agent"):
             return self._result(request, "rejected", "invalid_mode")
-        if self.authority is not None or self.agent_busy or self.motion_busy:
+        if self.authority is not None or self.agent_busy or self.motion_busy or self.following_tail:
             return self._result(request, "busy", "robot_busy")
         if self.mode != request.mode:
             self.mode = request.mode
@@ -374,6 +410,7 @@ class InteractionCoordinator:
         ):
             return self._result(request, "rejected", "invalid_kind")
         lease = uuid4().hex
+        self.following_tail = None
         self.authority = Authority(
             client_id,
             request.source_id or "default",
@@ -391,6 +428,7 @@ class InteractionCoordinator:
         elif request.kind != "joystick":
             domain = "manipulation" if request.kind.startswith("manipulation_") else "navigation"
             self.target = self._targets.get((domain, request.group_id))
+        self._tail_floor = self.revision
         return self._result(request, "accepted", "acquired", lease)
 
     def _owned(
@@ -466,7 +504,7 @@ class InteractionCoordinator:
             if request.speed_scale is not None
             else previous.speed_scale
             if previous is not None
-            else 0.2
+            else 0.5
         )
         gripper = (
             request.gripper

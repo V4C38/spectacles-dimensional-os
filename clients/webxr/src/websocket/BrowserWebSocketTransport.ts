@@ -35,6 +35,10 @@ export class BrowserWebSocketTransport implements WebSocketTransport {
   getUrl(): string {
     return this.url;
   }
+  createSibling(path: string): BrowserWebSocketTransport {
+    return new BrowserWebSocketTransport({ url: new URL(path, this.url).toString(), connectTimeoutS: this.connectTimeoutS, socketFactory: this.socketFactory });
+  }
+  bufferedAmount(): number { return this.socket?.bufferedAmount ?? 0; }
 
   setUrl(url: string): void {
     if (this.socket) {

@@ -78,7 +78,9 @@ def decode_request(data: dict[str, Any]) -> ManipulationRequest:
         payload["sequence"] = sequence
         payload["ts"] = number(data.get("ts"), "ts")
     if action in {"plan", "update", "reset_joints", "prepare_shutdown"}:
-        speed = number(data.get("speed_scale", 0.2), "speed_scale")
+        speed = number(
+            data.get("speed_scale", 0.2 if action == "prepare_shutdown" else 0.5), "speed_scale"
+        )
         if not 0 < speed <= 1:
             raise ValueError("speed_scale must be in (0, 1]")
         payload["speed_scale"] = speed

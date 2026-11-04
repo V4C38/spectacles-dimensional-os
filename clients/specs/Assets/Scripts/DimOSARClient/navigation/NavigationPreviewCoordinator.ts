@@ -28,7 +28,7 @@ export class NavigationPreviewCoordinator {
   private path: YawPose[] | null = null;
   private requestedTargetRevision: number | null = null;
 
-  constructor(private readonly session: Pick<ARModuleSession, "view" | "sendText"> & Partial<Pick<ARModuleSession, "collaboration">>) {}
+  constructor(private readonly session: Pick<ARModuleSession, "view" | "sendText"> & Partial<Pick<ARModuleSession, "collaboration" | "assetTransferDeadline">>) {}
 
   previewPath(): YawPose[] | null { return this.path; }
 
@@ -103,7 +103,7 @@ export class NavigationPreviewCoordinator {
     }
     if (shared?.ownsAuthority && shared.preview === null && this.lastAim &&
         (shared.rawTarget?.revision !== this.requestedTargetRevision || !this.pending)) this.queued = true;
-    if (this.pending && now >= this.pending.deadline) {
+    if (this.pending && now >= Math.max(this.pending.deadline, this.session.assetTransferDeadline?.(this.pending.id) ?? 0)) {
       this.pending = null;
       this.path = null;
       this.lastAim = null;

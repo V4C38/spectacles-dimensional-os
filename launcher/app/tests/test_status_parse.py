@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from armodule import (
     _RE_CHECK_OK,
     _RE_DIMOS_PYTHON,
@@ -134,3 +136,36 @@ def test_webxr_snapshot_hides_specs_pin(tmp_path: Path) -> None:
     mgr._parse_armodule_line("PIN: 123456")
     assert mgr.snapshot()["pin"] is None
     assert mgr.snapshot()["webxr_url"] == "https://192.168.1.9:5173"
+
+
+def test_unknown_shell_ip_does_not_erase_detected_address(tmp_path: Path) -> None:
+    mgr = ProcessManager(root=tmp_path)
+    mgr.status.host_ip = "192.168.1.42"
+    mgr._parse_armodule_line("Host IP:      unknown")
+    assert mgr.status.host_ip == "192.168.1.42"
+
+
+@pytest.mark.parametrize("ansi", [False, True])
+def test_vite_urls_recover_unknown_address(tmp_path: Path, ansi: bool) -> None:
+    mgr = ProcessManager(root=tmp_path)
+    mgr.status.host_ip = "unknown"
+    mgr._parse_webxr_line("  ➜  Local:   https://localhost:5173/")
+    line = "  ➜  Network: https://192.168.1.181:5173/"
+    if ansi:
+        line = "\x1b[32m" + line + "\x1b[0m"
+    mgr._parse_webxr_line(line)
+    assert mgr.status.webxr_url == "https://192.168.1.181:5173/"
+    assert mgr.status.webxr_local_url == "https://localhost:5173/"
+    assert mgr.status.host_ip == "192.168.1.181"
+    mgr._parse_webxr_line("  ➜  Network: https://172.17.0.1:5173/")
+    assert mgr.status.webxr_url == "https://192.168.1.181:5173/"
+
+
+def test_vite_urls_prefer_default_route_interface(tmp_path: Path) -> None:
+    mgr = ProcessManager(root=tmp_path)
+    mgr.status.host_ip = "192.168.1.42"
+    mgr.status.webxr_url = "https://192.168.1.42:5173"
+    mgr._parse_webxr_line("  ➜  Network: https://172.17.0.1:5173/")
+    assert mgr.status.webxr_url == "https://192.168.1.42:5173"
+    mgr._parse_webxr_line("  ➜  Network: https://192.168.1.42:5173/")
+    assert mgr.status.webxr_url == "https://192.168.1.42:5173/"

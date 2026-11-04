@@ -19,6 +19,7 @@ from dimos.ar.localization.coordinator import LocalizationOutcome
 from dimos.ar.localization.policy import EpisodeWork, LocalizationPolicy
 from dimos.ar.localization.pose_buffer import PoseBuffer
 from dimos.ar.localization.types import Intrinsics
+from dimos.ar.manipulation.protocol import ManipulationRequest
 from dimos.ar.module import (
     ARModule,
     ARModuleConfig,
@@ -56,6 +57,9 @@ class _FakeWs:
         self.state_sent: list[tuple[str, str]] = []
         self.interaction_broadcasts: list[str] = []
 
+    async def prepare_outbound_async(self, value):
+        return value
+
     def schedule_send_to_client(self, client_id: str, text: str) -> None:
         if json.loads(text).get("type", "").startswith("interaction_"):
             self.interaction_sent.append((client_id, text))
@@ -92,9 +96,11 @@ def _module_with_policy(
     agent_available: bool = False,
 ) -> ARModule:
     module = object.__new__(ARModule)
+    module.config = ARModuleConfig()
     module._interaction = InteractionCoordinator()
     module._lidar_subscriptions = {}
     module._native_sequences = {}
+    module._allow_unfenced_navigation = True
     module._pending_arm_motion = set()
     module._arm_native_busy = False
     module._arm_uncertain = False
@@ -1136,3 +1142,120 @@ def test_unwired_goal_does_not_mutate_navigation() -> None:
     )
     module._nav_goal_coordinator.submit_goal.assert_not_called()
     assert module._ws_server.broadcasts == []
+
+
+def _arm_module_with_two_clients() -> ARModule:
+    module = _module_with_policy([])
+    module._capabilities = CapabilitySet.from_supported(
+        frozenset(),
+        localization_available=False,
+        agent_available=False,
+        manipulation_available=True,
+    )
+    module._manipulation_service = Mock()
+    for client_id in ("a", "b"):
+        module._interaction.connect(client_id)
+    return module
+
+
+def _arm_grab(module: ARModule, client_id: str, *, planning: bool = False) -> None:
+    module._on_interaction_request(
+        InteractionRequest(
+            f"grab-{client_id}-{len(module._ws_server.interaction_sent)}",
+            "acquire",
+            module._interaction.epoch,
+            kind="manipulation_planning" if planning else "manipulation_following",
+            source_id="right-hand",
+            group_id="arm",
+            position=(0.1, 0.2, 0.3),
+            orientation=(0, 0, 0, 1),
+        ),
+        client_id,
+    )
+
+
+def _release_arm_grab(module: ARModule) -> None:
+    authority = module._interaction.authority
+    assert authority is not None
+    module._on_interaction_request(
+        InteractionRequest(
+            "release-a",
+            "release",
+            module._interaction.epoch,
+            lease_id=authority.lease_id,
+            sequence=0,
+            position=(0.1, 0.2, 0.3),
+            orientation=(0, 0, 0, 1),
+        ),
+        "a",
+    )
+
+
+def test_normal_arm_release_allows_takeover_before_native_handoff_poll() -> None:
+    module = _arm_module_with_two_clients()
+    _arm_grab(module, "a")
+    module._on_manipulation_snapshot(
+        {"available": True, "following": True, "execution": "idle", "operation_id": None}
+    )
+    _arm_grab(module, "b")
+    assert module._interaction.authority.client_id == "a"
+    _release_arm_grab(module)
+    assert module._interaction.authority is None
+
+    # There is deliberately no native following=False/tail snapshot here. The
+    # replacement grab must supersede the old native generation immediately.
+    _arm_grab(module, "b")
+    assert module._interaction.authority.client_id == "b"
+    calls = module._manipulation_service.revoke.call_args_list
+    assert calls[-2].args[3] == "released"
+    assert calls[-1].args[3] == "superseded"
+    assert calls[-1].args[2] >= calls[-2].args[2]
+
+
+@pytest.mark.parametrize("action", ["execute", "reset_joints", "prepare_shutdown"])
+def test_accepted_arm_operation_blocks_takeover_after_editing_release(action: str) -> None:
+    module = _arm_module_with_two_clients()
+    _arm_grab(module, "a", planning=True)
+    authority, target = module._interaction.authority, module._interaction.target
+    assert authority is not None and target is not None
+    request = ManipulationRequest(
+        "accepted-motion",
+        action,
+        "arm",
+        {
+            "epoch": module._interaction.epoch,
+            "lease_id": authority.lease_id,
+            "target_revision": target.revision,
+            "plan_id": "checked-plan",
+            "speed_scale": 0.5,
+        },
+    )
+    module._on_manipulation_request(request, "a", 0.0)
+    module._manipulation_service.submit.assert_called_once()
+    _release_arm_grab(module)
+    _arm_grab(module, "b")
+    assert module._interaction.authority is None
+    assert module._interaction.motion_busy
+    assert "accepted-motion" in module._pending_arm_motion
+
+
+@pytest.mark.parametrize("guard", ["_arm_uncertain", "_arm_stop_pending"])
+@pytest.mark.parametrize("stopped", [False, True])
+def test_following_snapshot_does_not_clear_unknown_or_stopping_motion(
+    guard: str, stopped: bool
+) -> None:
+    module = _arm_module_with_two_clients()
+    setattr(module, guard, True)
+    module._on_manipulation_snapshot(
+        {
+            "available": True,
+            "following": True,
+            "execution": "idle",
+            "operation_id": None,
+            "stopped": stopped,
+            "stop_confirmed": stopped,
+        }
+    )
+    _arm_grab(module, "b")
+    assert module._interaction.authority is None
+    assert module._interaction.motion_busy

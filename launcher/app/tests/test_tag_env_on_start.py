@@ -15,7 +15,9 @@ from tag_config import DEFAULT_MOUNT, armodule_config_from_ui
 
 def _scripts(tmp_path: Path) -> None:
     (tmp_path / "launcher" / "scripts").mkdir(parents=True)
-    (tmp_path / "launcher" / "scripts" / "start.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (tmp_path / "launcher" / "scripts" / "start.sh").write_text(
+        "#!/bin/sh\n", encoding="utf-8"
+    )
     (tmp_path / "launcher" / "scripts" / "configure-system.sh").write_text(
         "#!/bin/sh\nexit 0\n", encoding="utf-8"
     )
@@ -151,6 +153,7 @@ async def test_start_webxr_composes_local_and_network_urls(
         patch.object(mgr, "port_in_use", return_value=False),
         patch.object(mgr, "_configure_system_if_needed", new=AsyncMock()),
         patch.object(mgr, "_ensure_webxr_deps", new=AsyncMock()),
+        patch.object(mgr, "_build_webxr", new=AsyncMock()),
         patch.object(mgr, "_spawn_webxr", new=AsyncMock()),
         patch.object(mgr, "_spawn", new=fake_spawn),
     ):

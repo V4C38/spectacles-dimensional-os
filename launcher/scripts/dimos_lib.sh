@@ -7,6 +7,21 @@ python_has_dimos() {
   "${py}" -c "import dimos" >/dev/null 2>&1
 }
 
+# uv environments do not necessarily include pip. Install into the selected
+# interpreter without requiring pip to have been seeded when it was created.
+python_pip_install() {
+  local py="$1"
+  shift
+  if "${py}" -m pip --version >/dev/null 2>&1; then
+    "${py}" -m pip install "$@"
+  elif command -v uv >/dev/null 2>&1; then
+    uv pip install --python "${py}" "$@"
+  else
+    "${py}" -m ensurepip --upgrade
+    "${py}" -m pip install "$@"
+  fi
+}
+
 # Prints missing | stale | installed. Exit 0 only when DimOS can discover
 # dimos-ar blueprints via the dimos.blueprints entry points (import alone
 # is not enough — a stale editable install can import dimos.ar with empty
@@ -83,6 +98,14 @@ find_dimos_python() {
     "${root}/dimos-ar/.venv/bin/python3"
   )
 
+  # Also search ordinary project folders below the user's home directory. DimOS
+  # installs are often kept beside this repository, under a user-chosen parent.
+  if [[ -n "${HOME:-}" ]]; then
+    candidates+=("${HOME}"/*/.venv/bin/python3 "${HOME}"/*/.venv/bin/python)
+    candidates+=("${HOME}"/*/*/.venv/bin/python3 "${HOME}"/*/*/.venv/bin/python)
+    candidates+=("${HOME}"/*/*/*/.venv/bin/python3 "${HOME}"/*/*/*/.venv/bin/python)
+  fi
+
   for py in "${candidates[@]}"; do
     if python_has_dimos "${py}"; then
       resolve_abs_path "${py}"
@@ -125,8 +148,41 @@ detect_lan_ip() {
   local iface=""
   local ip=""
   local candidate=""
+  local probe_python="${DIMOS_PYTHON:-${PYTHON:-}}"
 
-  iface="$(route -n get default 2>/dev/null | awk '/interface:/{print $2}')"
+  # The UDP connect only asks the OS for its default-route source address;
+  # it sends no packets and works on both Linux and macOS.
+  if [[ -z "${probe_python}" ]]; then
+    probe_python="$(command -v python3 2>/dev/null || true)"
+  fi
+  if [[ -n "${probe_python}" ]]; then
+    ip="$("${probe_python}" - <<'PY' 2>/dev/null || true
+import socket
+
+try:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.connect(("8.8.8.8", 80))
+        address = sock.getsockname()[0]
+        if address and not address.startswith("127."):
+            print(address)
+except OSError:
+    pass
+PY
+)"
+    if [[ -n "${ip}" ]]; then
+      printf '%s\n' "${ip}"
+      return 0
+    fi
+  fi
+
+  # Native fallbacks for machines without an available Python route probe.
+  ip="$(ip -4 route get 8.8.8.8 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src") {print $(i+1); exit}}' || true)"
+  if [[ -n "${ip}" ]]; then
+    printf '%s\n' "${ip}"
+    return 0
+  fi
+
+  iface="$(route -n get default 2>/dev/null | awk '/interface:/{print $2}' || true)"
   if [[ -n "${iface}" ]]; then
     ip="$(ipconfig getifaddr "${iface}" 2>/dev/null || true)"
     if [[ -n "${ip}" ]]; then

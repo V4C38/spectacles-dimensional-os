@@ -3,13 +3,14 @@ import { DimOSSpecsClient } from "../Scripts/DimOSSpecsClient/DimOSSpecsClient";
 import { getFrameComponent } from "../Scripts/DimOSSpecsClient/presentation/UIKit";
 import { RUNTIME_LAYOUTS, RUNTIME_PANEL_SCALE, SETUP_LAYOUTS } from "../Scripts/DimOSSpecsClient/presentation/PanelLayout";
 import { specsToClientTrackingPoint, clientTrackingToSpecsPoint } from "../Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
-import { decodeOutbound, decodeLocalizationObservations, LIDAR_FOURCC } from "../Scripts/DimOSARClient/websocket/protocol";
+import { decodeLocalizationObservations, LIDAR_FOURCC } from "../Scripts/DimOSARClient/websocket/protocol";
 import { WristMenuController } from "../Scripts/DimOSSpecsClient/presentation/WristMenuController";
 import { SpecsNavigationInput } from "../Scripts/DimOSSpecsClient/navigation/SpecsNavigationInput";
 import { WorldMeshRenderer, circleMesh } from "../Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer";
 import { FLOOR_MARKER_STYLE, WORLD_DASH_STYLE } from "../Scripts/DimOSARClient/presentation/WorldVisualStyle";
 import { composeLidarPoint } from "../Scripts/DimOSSpecsClient/sensors/PointCloudRenderer";
 import { IntegrationInput } from "./IntegrationInput";
+import { IntegrationV3Fixture } from "./IntegrationV3Fixture";
 import { INTEGRATION_CATALOG as CATALOG } from "./IntegrationCatalog";
 const CAMERA_FIXTURE = requireAsset("./CameraFixture.png") as Texture;
 type Step = {
@@ -23,6 +24,7 @@ export class ReviewScenario extends BaseScriptComponent {
   @input
   profile = "golden";
   private root: any;
+  private peer!: IntegrationV3Fixture;
   private input: IntegrationInput | null = null;
   private steps: Step[] = [];
   private index = -1;
@@ -83,10 +85,11 @@ export class ReviewScenario extends BaseScriptComponent {
   }
   private after(delay: number, run: () => void): void { this.deferred.push({ at: this.clock + delay, run }); }
   private later(delay: number, test: () => boolean, caseId = this.activeCase): void { this.after(delay, () => this.check(caseId, test(), caseId)); }
-  private wire(value: unknown): void { const text = JSON.stringify(value); decodeOutbound(text); this.root.session.onTransportText(text + "\n"); }
+  private wire(value: Record<string, unknown>): void { this.peer.send(value); }
   private state(state = this.navState.state, outcome: string | null = this.navState.outcome): void {
     this.navState = { state, outcome };
     this.wire({ type: "state", server: { connected_clients: 1 }, lidar: this.lidarState, nav: this.navState, agent: { idle: true } });
+    if (state === "resolved") this.peer.clearGoal();
   }
   private findRoot(object: SceneObject): any {
     const root = object.getComponent(DimOSSpecsClient.getTypeName());
@@ -108,6 +111,12 @@ export class ReviewScenario extends BaseScriptComponent {
     if (!this.root)
       throw new Error("Production composition root missing");
     const root = this.root;
+    this.peer = new IntegrationV3Fixture(value => root.session.onTransportText(JSON.stringify(value) + "\n"), "native-integration", () => getTime());
+    this.peer.onUpload = data => {
+      this.batches.push(decodeLocalizationObservations(data));
+      if (this.autoLocalize) this.after(0.1, () => this.acceptLocalization());
+    };
+    this.peer.onGoal = target => this.navigationGoal(target, false);
     this.cameraPosition = root.cameraObject.getTransform().getWorldPosition();
     this.cameraRotation = root.cameraObject.getTransform().getWorldRotation();
     this.tracking = root.cameraObject.getComponent("Component.DeviceTracking") as DeviceTracking | null;
@@ -119,6 +128,7 @@ export class ReviewScenario extends BaseScriptComponent {
       navigation: { ...available, nav_goal: { ...available, preview: true }, nav_joystick: { available: false, reason: "Hand input only" } } };
     root.transport.connect = () => { };
     root.transport.close = () => { };
+    root.transport.createSibling = () => this.peer;
     root.transport.sendText = (text: string) => {
       for (const line of text.trim().split("\n")) {
         const message = JSON.parse(line);
@@ -126,12 +136,7 @@ export class ReviewScenario extends BaseScriptComponent {
         this.command(message);
       }
     };
-    root.transport.sendBinary = (data: Uint8Array) => {
-      const batch = decodeLocalizationObservations(data);
-      this.batches.push(batch);
-      if (this.autoLocalize)
-        this.after(0.1, () => this.acceptLocalization());
-    };
+    root.transport.sendBinary = () => { throw new Error("v3 control channel cannot carry binary data"); };
     root.cameraSource.start = () => { };
     root.cameraSource.stop = () => { };
     root.episode.capture = {
@@ -167,25 +172,32 @@ export class ReviewScenario extends BaseScriptComponent {
     this.elapsed = 999;
   }
   private command(message: any): void {
+    if (this.peer.command(message)) return;
     if (message.type === "lidar_settings_request") {
       this.lidarState = { enabled: message.enabled, min_height_m: message.min_height_m, max_height_m: message.max_height_m, max_range_m: message.max_range_m };
       this.after(0.05, () => this.state());
     }
-    if (message.type === "estop_request")
+    if (message.type === "estop_request") {
+      this.peer.clearGoal();
       this.after(0.05, () => this.state("idle", null));
+    }
     if (message.type === "localization_start_request")
       this.after(0.1, () => this.captureRequest());
     if (message.type === "nav_goal_request") {
-      this.after(0.1, () => {
-        const p = message.position, q = message.orientation;
-        const yaw = 2 * Math.atan2(q[2], q[3]);
-        const path = [[...CATALOG.fixtures.pose.slice(0, 2), 0, 0], [(p[0] + 2) / 2, p[1] / 2, 0, yaw], [p[0], p[1], p[2], yaw]];
-        this.wire({ type: "nav_goal", pose: [p[0], p[1], p[2], yaw], path_poses: path, ts: getTime(),
-          ...(message.preview ? { preview: true, preview_id: message.preview_id } : {}) });
-        if (!message.preview)
-          this.state("following_path", null);
-      });
+      if (!message.preview || !this.peer.previewOwner(message)) throw new Error("Unfenced native fixture navigation command");
+      const target = this.peer.canonical();
+      if (target) this.after(0.1, () => this.navigationGoal(target, true, message.preview_id, message.lease_id));
     }
+  }
+  private navigationGoal(target: any, preview: boolean, previewId?: string, leaseId?: string): void {
+    const p = target.position, q = target.orientation, yaw = 2 * Math.atan2(q[2], q[3]);
+    const path = [[...CATALOG.fixtures.pose.slice(0, 2), 0, 0], [(p[0] + 2) / 2, p[1] / 2, 0, yaw], [p[0], p[1], p[2], yaw]];
+    const goal = { type: "nav_goal", pose: [p[0], p[1], p[2], yaw], path_poses: path, ts: getTime(),
+      ...(preview ? { preview: true, preview_id: previewId } : {}) };
+    if (preview) this.peer.setPreview(goal, target, leaseId);
+    else this.peer.setGoal(goal);
+    this.wire(goal);
+    if (!preview) this.state("following_path", null);
   }
   private ready(capabilities = this.caps, reconnect = false): void {
     const session = this.root.session;
@@ -195,14 +207,15 @@ export class ReviewScenario extends BaseScriptComponent {
     if (!session.wantConnected) session.start();
     session.onTransportOpen();
     const request = [...this.sent].reverse().find(row => row.type === "hello_request");
-    this.wire({ type: "hello", protocol_version: 2, client_id: "native-integration", odom_reference_id: "native-fixture-odom", time_sync: { ts_client: request.ts_client, ts_server: getTime() },
+    this.wire({ type: "hello", protocol_version: 3, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "native-integration", odom_reference_id: "native-fixture-odom", time_sync: { ts_client: request.ts_client, ts_server: getTime() },
       robot: CATALOG.fixtures.robot, capabilities });
+    this.peer.reset();
     this.state("idle", null);
     this.pose(CATALOG.fixtures.pose);
   }
   private pose(position: readonly number[]): void { this.wire({ type: "pose", position, orientation: [0, 0, 0, 1], ts: getTime() }); }
   private captureRequest(policy = "any_angle"): void {
-    this.wire({ type: "localization_observations_request", capture_policy: policy, observation_count: 3,
+    this.wire({ type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: policy, observation_count: 3,
       ...(policy === "robot_los_preferred" ? { wait_timeout_s: 0.2 } : {}) });
   }
   private acceptLocalization(ts = this.captureTs): void {
@@ -424,11 +437,11 @@ export class ReviewScenario extends BaseScriptComponent {
         this.input!.unhover();
         break;
       case "navigation_preview": {
-        const before = this.count("nav_goal_request", row => !row.preview);
+        const before = this.count("interaction_request", row => row.action === "confirm");
         this.aim();
         this.after(0.2, () => this.input!.start(null));
         this.later(0.8, () => root.navigationController.isAiming() && root.navigationController.previewPath()?.length >= 2 &&
-          this.count("nav_goal_request", row => !row.preview) === before &&
+          this.count("interaction_request", row => row.action === "confirm") === before &&
           Math.abs(root.navigationController.draftCircleBounds().radius - FLOOR_MARKER_STYLE.radiusM * 100 * 1.15) < .01 &&
           Math.abs(this.measuredCircleRadius(root.navigationController.draftMarker.worldVisuals) - FLOOR_MARKER_STYLE.radiusM * 100 * 1.15) < .02 &&
           root.navigationController.draftMarker.worldVisuals.draftCircle.object.enabled &&
@@ -437,7 +450,7 @@ export class ReviewScenario extends BaseScriptComponent {
         break;
       }
       case "navigation_drag": {
-        const before = this.count("nav_goal_request", row => !row.preview);
+        const before = this.count("interaction_request", row => row.action === "confirm");
         const start = [...this.goal];
         this.aim(start);
         this.move = t => { this.goal = [start[0] + Math.min(0.3, t * 0.5), start[1], start[2]]; this.aim(); };
@@ -445,17 +458,17 @@ export class ReviewScenario extends BaseScriptComponent {
           this.input!.end();
           this.check(id, root.navigationController.ownsDraft(String(this.input!.actor.inputType)) &&
             Math.abs(root.navigationController.interaction.snapshot().draft.position[0] - (start[0] - this.origin[0])) > 0.05 &&
-            this.count("nav_goal_request", row => !row.preview) === before, id);
+            this.count("interaction_request", row => row.action === "confirm") === before, id);
         });
         break;
       }
       case "navigation_route": {
-        const before = this.count("nav_goal_request", row => !row.preview);
+        const before = this.count("interaction_request", row => row.action === "confirm");
         this.input!.start(root.robotPresenter.worldVisuals.interactable);
         this.after(0.3, () => this.input!.end());
         this.after(1, () => {
           this.input!.active = false;
-          this.check(id, this.count("nav_goal_request", row => !row.preview) === before + 1 &&
+          this.check(id, this.count("interaction_request", row => row.action === "confirm") === before + 1 &&
             root.selection.isSelected() && root.navigationController.activePath()?.length >= 2 && root.navGoalPresenter.ribbon.object.enabled, id);
         });
         break;
@@ -576,7 +589,7 @@ export class ReviewScenario extends BaseScriptComponent {
       const a = i * 2.39996323, r = 0.3 + i % 47 / 47 * 1.8;
       [robot[0] + Math.cos(a) * r, robot[1] + Math.sin(a) * r, robot[2] - 0.3 + i % 17 / 17 * 1.3].forEach((v, k) => view.setFloat32(16 + i * 12 + k * 4, v, true));
     }
-    this.root.session.onTransportBinary(bytes);
+    this.peer.lidar(bytes);
   }
   private captureBounds(id: string): {
     x: number;
@@ -688,21 +701,21 @@ export class ReviewScenario extends BaseScriptComponent {
         this.worldOnly();
         this.after(0.4, () => { if (!root.selection.isSelected())
           this.press(root.robotPresenter.worldVisuals); this.aim(); this.input!.start(null); });
-        const before = this.count("nav_goal_request", row => !row.preview);
+        const before = this.count("interaction_request", row => row.action === "confirm");
         let lost = false;
         this.after(0.9, () => { this.input!.active = false; this.input!.held = false; });
         this.after(1.2, () => { lost = !root.navigationController.isAiming(); this.aim(); this.input!.start(null); });
         this.after(1.5, () => this.input!.end());
-        this.later(1.8, () => lost && root.navigationController.isAiming() && this.count("nav_goal_request", row => !row.preview) === before);
+        this.later(1.8, () => lost && root.navigationController.isAiming() && this.count("interaction_request", row => row.action === "confirm") === before);
         this.after(2.2, () => { this.input!.active = false; this.input!.cancel(); });
         break;
       }
       case "interaction_safety": {
         this.runtime();
-        const before = this.count("nav_goal_request", row => !row.preview);
+        const before = this.count("interaction_request", row => row.action === "confirm");
         this.after(0.4, () => { this.input!.active = true; this.input!.hover(menu.robot.button.interactable); this.input!.start(); });
         this.after(0.9, () => this.input!.cancel());
-        this.later(1.3, () => this.count("nav_goal_request", row => !row.preview) === before && !root.navigationController.isAiming() && !root.speechController.asrRunning);
+        this.later(1.3, () => this.count("interaction_request", row => row.action === "confirm") === before && !root.navigationController.isAiming() && !root.speechController.asrRunning);
         break;
       }
       case "navigation_failure":

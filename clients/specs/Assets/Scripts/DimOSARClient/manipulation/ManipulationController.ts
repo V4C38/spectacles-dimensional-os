@@ -11,11 +11,13 @@ export class ManipulationController {
   private selected = false;
   private suspended = false;
   private target: object | null = null;
-  private speed = 0.2;
+  private speed = 0.5;
   private group: string | null = null;
-  constructor(private readonly session: Pick<ARModuleSession, "view" | "sendText" | "subscribeOutbound" | "requestEstop"> & Partial<Pick<ARModuleSession, "collaboration">>,
+  private readonly unsubscribeHealth?: () => void;
+  constructor(private readonly session: Pick<ARModuleSession, "view" | "sendText" | "subscribeOutbound" | "requestEstop"> & Partial<Pick<ARModuleSession, "collaboration" | "subscribeView">>,
     now: () => number, private readonly stop: () => void = () => session.requestEstop()) {
     this.interaction = new ManipulationInteraction(session, now);
+    this.unsubscribeHealth = session.subscribeView?.(view => { if (view.manipulationError) this.suspend(); });
   }
   setSelected(selected: boolean): void {
     if (selected !== this.selected) this.presentation.reset();
@@ -46,6 +48,7 @@ export class ManipulationController {
     }
   }
   tick(enabled = true): void {
+    if (this.session.view().manipulationError) enabled = false;
     if (!enabled) { this.suspend(); this.interaction.tick(); return; }
     this.suspended = false;
     const interaction = this.interaction;
@@ -60,7 +63,7 @@ export class ManipulationController {
     this.presentation.reset();
     if (this.interaction.dragging || this.interaction.busy || this.interaction.target || this.interaction.plan)
       this.interaction.invalidateTarget();
-    else this.interaction.end();
+    else this.interaction.interrupt();
   }
-  dispose(): void { this.suspend(); this.interaction.dispose(); }
+  dispose(): void { this.unsubscribeHealth?.(); this.suspend(); this.interaction.dispose(); }
 }

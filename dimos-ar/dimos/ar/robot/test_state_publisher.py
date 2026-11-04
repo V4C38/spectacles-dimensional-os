@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import struct
+import threading
 from unittest.mock import Mock
 
 import numpy as np
@@ -37,6 +39,77 @@ class _FakePointCloud2:
 
     def points_f32(self) -> np.ndarray:
         return self._points
+
+
+@pytest.mark.asyncio
+async def test_lidar_worker_retains_only_latest_pending_cloud_and_does_not_block_controls() -> None:
+    sink = _RecordingBroadcast()
+    publisher = _publisher(sink, lidar_max_hz=0)
+    entered, finish = threading.Event(), threading.Event()
+    points = np.array([[4.1, 8, 0.5]], dtype=np.float32)
+    first = _FakePointCloud2(points, ts=1)
+
+    def downsample(*, voxel_size):
+        entered.set()
+        assert finish.wait(2)
+        return first
+
+    first.voxel_downsample = downsample
+    settings = LidarSettings(True, 0.1, 1.5, 5)
+    try:
+        await publisher.publish_lidar_async(first, lidar=settings)
+        assert await asyncio.to_thread(entered.wait, 1)
+        await publisher.publish_lidar_async(_FakePointCloud2(points, ts=2), lidar=settings)
+        await publisher.publish_lidar_async(_FakePointCloud2(points, ts=3), lidar=settings)
+        await asyncio.wait_for(asyncio.sleep(0), 0.1)
+        finish.set()
+        await asyncio.wait_for(asyncio.shield(publisher._lidar_task), 2)
+        assert [struct.unpack_from("<d", frame, 4)[0] for frame in sink.binary_payloads] == [1, 3]
+    finally:
+        finish.set()
+        await publisher.close()
+
+
+@pytest.mark.asyncio
+async def test_lidar_result_from_retired_source_cannot_be_published() -> None:
+    sink = _RecordingBroadcast()
+    publisher = _publisher(sink, lidar_max_hz=0)
+    entered, finish = threading.Event(), threading.Event()
+    cloud = _FakePointCloud2(np.array([[4.1, 8, 0.5]], dtype=np.float32))
+
+    def downsample(*, voxel_size):
+        entered.set()
+        assert finish.wait(2)
+        return cloud
+
+    cloud.voxel_downsample = downsample
+    try:
+        await publisher.publish_lidar_async(cloud, lidar=LidarSettings(True, 0.1, 1.5, 5))
+        assert await asyncio.to_thread(entered.wait, 1)
+        publisher.invalidate_source()
+        finish.set()
+        await asyncio.wait_for(asyncio.shield(publisher._lidar_task), 2)
+        assert sink.binary_payloads == []
+    finally:
+        finish.set()
+        await publisher.close()
+
+
+@pytest.mark.asyncio
+async def test_lidar_worker_failure_is_observed_and_next_cloud_recovers() -> None:
+    sink = _RecordingBroadcast()
+    publisher = _publisher(sink, lidar_max_hz=0)
+    broken = _FakePointCloud2(np.array([[4.1, 8, 0.5]], dtype=np.float32))
+    broken.voxel_downsample = Mock(side_effect=ValueError("invalid native cloud"))
+    settings = LidarSettings(True, 0.1, 1.5, 5)
+    try:
+        await publisher.publish_lidar_async(broken, lidar=settings)
+        await asyncio.gather(publisher._lidar_task, return_exceptions=True)
+        await publisher.publish_lidar_async(_FakePointCloud2(broken._points, ts=4), lidar=settings)
+        await asyncio.wait_for(asyncio.shield(publisher._lidar_task), 1)
+        assert len(sink.binary_payloads) == 1
+    finally:
+        await publisher.close()
 
 
 def test_lidar_timing_measures_processing_without_extra_cloud_conversion(

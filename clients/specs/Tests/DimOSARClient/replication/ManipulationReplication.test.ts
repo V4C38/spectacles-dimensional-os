@@ -47,12 +47,15 @@ describe("manipulation shared authority", () => {
     f.ackTarget(); f.tick();
     expect(f.native().at(-1)).toMatchObject({ action: "gripper", value: 1, target_revision: 2 });
   });
-  it("keeps immediate local selected targets while native planning waits for grant and exact target acknowledgment", () => {
+  it("keeps immediate targets while advisory planning uses acknowledged canonical samples after grant", () => {
     const f = fixture(); f.core.setSelected(true); expect(f.core.begin()).toBe(true); f.core.aim(pose(0.3)); f.tick();
     expect(f.core.target?.position[2]).toBe(0.3); expect(f.native()).toEqual([]);
-    f.grant(); f.tick(); expect(f.native()).toEqual([]);
-    f.ackTarget(); f.tick();
-    expect(f.native().at(-1)).toMatchObject({ action: "plan", epoch: "robot", lease_id: "lease", target_revision: 2, position: [0,0,0.3] });
+    f.grant(); f.tick();
+    expect(f.native().at(-1)).toMatchObject({ action: "plan", epoch: "robot", lease_id: "lease", target_revision: 1, position: [0,0,0] });
+    f.ackTarget();
+    f.reply(f.native().at(-1), { status: "planned", plan_id: "old-advisory", joint_names: ["j"], trajectory: [{ time: 0, positions: [0] }], duration: 0, target_revision: 1 });
+    expect(f.core.plan).toBeNull(); expect(f.core.target?.position[2]).toBe(0.3);
+    f.core.execute(); expect(f.native().some(command => command.action === "execute")).toBe(false);
   });
   it("defers native following acquisition until the robot-wide lease is granted", () => {
     const f = fixture(); expect(f.core.begin()).toBe(true); expect(f.native()).toEqual([]);
@@ -88,4 +91,23 @@ describe("manipulation shared authority", () => {
     expect(f.native().at(-1)).toMatchObject({ position: [0,0,0.8], target_revision: 2 });
     expect(f.sent.some(c => c.type === "interaction_request" && c.action === "update")).toBe(false);
   });
+});
+
+it("correlates native following feedback independently of robot authority message sequences", () => {
+  const f = fixture();
+  expect(f.core.begin()).toBe(true);
+  f.grant(); f.tick();
+  f.reply(f.native().at(-1), { status: "acquired", token: "native-follow" });
+  f.core.aim(pose(0.3)); f.tick();
+  const blocked = f.native().at(-1);
+  expect(blocked.action).toBe("update");
+  f.reply(blocked, { status: "infeasible", code: "ik_failed", sequence: blocked.sequence });
+  expect(f.core.dragging).toBe(true);
+  expect(f.core.target).toEqual(pose(0.3));
+  expect(f.core.rejection?.message).toBe("IK failed");
+  f.core.aim(pose(0.4)); f.tick();
+  const recovered = f.native().at(-1);
+  f.reply(recovered, { status: "feasible", sequence: recovered.sequence, joints: { j: 0.25 }, pose: pose(0.4) });
+  expect(f.core.rejection).toBeNull();
+  expect(f.core.previewJoints).toEqual({ j: 0.25 });
 });

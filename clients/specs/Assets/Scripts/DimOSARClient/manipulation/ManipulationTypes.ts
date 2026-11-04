@@ -57,7 +57,9 @@ export interface ManipulationObservation {
   pose: ManipulationPose | null;
   gripper: number | null;
 }
+export interface FollowingTail { generation: number; group_id: string; target_revision: number; status: "finishing"; position?: Vec3; orientation?: Quat; speed_scale?: number; joints?: Record<string, number>; }
 export interface ManipulationState {
+  following_tail?: FollowingTail | null;
   type: "manipulation_state";
   available: boolean;
   message?: string | null;
@@ -85,6 +87,7 @@ export interface ManipulationResult {
   quiescent?: boolean;
   sequence?: number;
   code?: string;
+  failed_joints?: string[];
   message?: string;
   token?: string;
   joints?: Record<string, number> | null;

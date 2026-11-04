@@ -224,6 +224,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       this.unsubscribeSelection?.(); this.unsubscribeSelection = null;
       this.manipulation?.dispose(); this.manipulation = null;
       this.navigationTargetPriority?.dispose();
+      this.manipulation?.dispose(); this.manipulation = null;
       const dispatcher = LensConfig.getInstance().updateDispatcher;
       if (this.laserStart) dispatcher.removeEvent(this.laserStart);
       if (this.laserUpdate) dispatcher.removeEvent(this.laserUpdate);

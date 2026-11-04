@@ -12,32 +12,34 @@ from dimos.ar.manipulation.test_runtime import runtime
 
 def _request(action: str, revision: int = 1, target: int = 7, lease: str | None = "grab-a", **body):
     return {
-        "action": action, "group_id": "arm",
-        "authority_epoch": "robot-reference", "authority_lease": lease,
-        "authority_revision": revision, "target_revision": target,
+        "action": action,
+        "group_id": "arm",
+        "authority_epoch": "robot-reference",
+        "authority_lease": lease,
+        "authority_revision": revision,
+        "target_revision": target,
         "authority_deadline": time.monotonic() + 1,
         **body,
     }
 
 
 def _plan_request(**body):
-    return _request(
-        "plan", position=[0.1, 0.2, 0.3], orientation=[0, 0, 0, 1], **body
-    )
+    return _request("plan", position=[0.1, 0.2, 0.3], orientation=[0, 0, 0, 1], **body)
 
 
 def _planning_backend(module):
     plan = SimpleNamespace(
         plan_id="checked-plan",
         trajectory=SimpleNamespace(
-            joint_names=["joint"], duration=0.5,
-            points=[SimpleNamespace(time_from_start=0, positions=[0]),
-                    SimpleNamespace(time_from_start=0.5, positions=[0.2])],
+            joint_names=["joint"],
+            duration=0.5,
+            points=[
+                SimpleNamespace(time_from_start=0, positions=[0]),
+                SimpleNamespace(time_from_start=0.5, positions=[0.2]),
+            ],
         ),
     )
-    module.adapter.plan_to_poses = Mock(
-        return_value=SimpleNamespace(succeeded=True, plan=plan)
-    )
+    module.adapter.plan_to_poses = Mock(return_value=SimpleNamespace(succeeded=True, plan=plan))
 
 
 def test_released_selected_plan_is_robot_owned_and_another_client_can_execute():
@@ -47,9 +49,7 @@ def test_released_selected_plan_is_robot_owned_and_another_client_can_execute():
     assert module.session.owner is None
     module.revoke_authority("robot-reference", "grab-a", 2, "released")
     assert module.operation.plan["target_revision"] == 7
-    reply = module.command(
-        "b", _request("execute", revision=3, lease=None, plan_id="checked-plan")
-    )
+    reply = module.command("b", _request("execute", revision=3, lease=None, plan_id="checked-plan"))
     assert reply["status"] == "accepted"
     module.disconnect("a")
     assert not module.session.stopped
@@ -83,7 +83,9 @@ def test_accepted_execute_is_not_replayed_before_native_status_catches_up():
     module.adapter.execute.assert_called_once()
 
 
-@pytest.mark.parametrize("reason,accepted", [("released", True), ("target_changed", False), ("disconnect", False)])
+@pytest.mark.parametrize(
+    "reason,accepted", [("released", True), ("target_changed", False), ("disconnect", False)]
+)
 def test_delayed_plan_finishes_only_for_unchanged_released_target(reason, accepted):
     module = runtime()
     _planning_backend(module)

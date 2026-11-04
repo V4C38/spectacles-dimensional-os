@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import json
 import math
 import os
 import re
@@ -17,7 +19,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
+from can_setup import check_can, setup_command
 from config import (
     env_path,
     merge_env,
@@ -39,9 +43,10 @@ LOG_BUFFER_SIZE = 500
 SUBSCRIBER_QUEUE_SIZE = 2000
 STOP_GRACE_SECONDS = 8.0
 DIMOS_STOP_GRACE_SECONDS = 60.0
-BLUEPRINTS = ("unitree_go2_ar", "unitree_go2_ar_agentic")
+BLUEPRINTS = ("unitree_go2_ar", "unitree_go2_ar_agentic", "openyam_ar_planner")
 CLIENTS = ("specs", "webxr")
 BLUEPRINT_CLI = {
+    "openyam_ar_planner": "dimos-ar.openyam-ar-planner",
     "unitree_go2_ar": "dimos-ar.unitree-go2-ar",
     "unitree_go2_ar_agentic": "dimos-ar.unitree-go2-ar-agentic",
 }
@@ -59,6 +64,7 @@ _RE_CHECK_OK = re.compile(r"^CHECK_OK=([01])\s*$")
 _RE_DIMOS_PYTHON = re.compile(r"^DIMOS_PYTHON=(.+)$")
 _RE_DIMOS_VERSION = re.compile(r"^DIMOS_VERSION=(.+)$")
 _RE_DIMOS_REF = re.compile(r"^DIMOS_REF=(.+)$")
+_RE_WEBXR_URL = re.compile(r"\b(Local|Network):\s+(https?://\S+)")
 
 
 def _strip_ansi(text: str) -> str:
@@ -136,8 +142,13 @@ class ProcessManager:
         self.dimos_stop_grace_seconds = float(
             os.environ.get("DIMOS_STOP_GRACE_SECONDS", str(DIMOS_STOP_GRACE_SECONDS))
         )
-        if not math.isfinite(self.dimos_stop_grace_seconds) or self.dimos_stop_grace_seconds <= 0:
-            raise ValueError("DIMOS_STOP_GRACE_SECONDS must be a finite positive number")
+        if (
+            not math.isfinite(self.dimos_stop_grace_seconds)
+            or self.dimos_stop_grace_seconds <= 0
+        ):
+            raise ValueError(
+                "DIMOS_STOP_GRACE_SECONDS must be a finite positive number"
+            )
         self.root = root or repo_root()
         migrate_legacy_env(self.root)
         self.scripts = scripts_dir(self.root)
@@ -152,13 +163,35 @@ class ProcessManager:
         self._armodule_ready = asyncio.Event()
         self._lock = asyncio.Lock()
         self._check_started = False
+        self._can_setup_running = False
+        self._planner_lock = asyncio.Lock()
+        self._planner_status: dict[str, Any] = {
+            "ready": False,
+            "state": "checking",
+            "message": "Checking manipulation dependencies…",
+        }
+        self._planner_checked_at = 0.0
+        self._planner_python: str | None = None
+        self._listener_ready = False
+        self._manipulation_ready = False
+        self._startup_error: str | None = None
 
     def snapshot(self) -> dict[str, Any]:
         stored = read_env(env_path(self.root))
+        dimos_install_dir = self.status.dimos_python
+        if dimos_install_dir:
+            interpreter = Path(dimos_install_dir).absolute()
+            environment = interpreter.parent.parent
+            if interpreter.parent.name == "bin" and environment.name in (
+                ".venv",
+                "venv",
+            ):
+                dimos_install_dir = str(environment.parent)
         return {
             "phase": self.status.phase.value,
             "check_ok": self.status.check_ok,
             "dimos_python": self.status.dimos_python,
+            "dimos_install_dir": dimos_install_dir,
             "dimos_version": self.status.dimos_version,
             "dimos_ref": self.status.dimos_ref,
             "websocket_url": self.status.websocket_url,
@@ -171,6 +204,8 @@ class ProcessManager:
             "webxr_url": self.status.webxr_url,
             "webxr_local_url": self.status.webxr_local_url,
             "error": self.status.error,
+            "can_setup_running": self._can_setup_running,
+            "planner": self._planner_status,
             "openai_api_key": stored.get("OPENAI_API_KEY", ""),
             "multiset_client_id": stored.get("MULTISET_CLIENT_ID", ""),
             "multiset_client_secret": stored.get("MULTISET_CLIENT_SECRET", ""),
@@ -228,31 +263,192 @@ class ProcessManager:
 
     def _parse_armodule_line(self, line: str) -> None:
         plain = _strip_ansi(line)
+        if (
+            "Exception in RPC handler for " in plain
+            and "/start:" in plain
+            and not self._startup_error
+        ):
+            self._startup_error = plain.split("/start:", 1)[1].strip()
+            self._set_status(error=self._startup_error)
+        if "Manipulation runtime ready" in plain:
+            self._manipulation_ready = True
+            self._update_runtime_readiness()
         if m := _RE_PIN.search(plain):
             self._set_status(pin=m.group(1))
             return
-        if (
-            self.status.phase == Phase.RUNNING
-            and self.status.websocket_url
-            and self.status.host_ip
-            and self.status.robot_ip is not None
-        ):
-            return
         if m := _RE_ARMODULE_READY.search(plain):
-            self._set_status(websocket_url=m.group(1), phase=Phase.RUNNING, error=None)
+            self._listener_ready = True
+            self._set_status(websocket_url=m.group(1))
+            self._update_runtime_readiness()
             return
         if m := _RE_WEBSOCKET_BANNER.search(plain):
             self._set_status(websocket_url=m.group(1))
             return
         if m := _RE_WEBSOCKET_STARTED.search(plain):
-            self._set_status(websocket_url=m.group(1), phase=Phase.RUNNING, error=None)
+            self._listener_ready = True
+            self._set_status(websocket_url=m.group(1))
+            self._update_runtime_readiness()
             return
         if m := _RE_HOST_IP.search(plain):
-            self._set_status(host_ip=m.group(1))
+            # A platform-specific shell probe must not erase a known LAN IP.
+            if m.group(1).lower() != "unknown":
+                self._set_status(host_ip=m.group(1))
             return
         if m := _RE_ROBOT_IP.search(plain):
             self._set_status(robot_ip=m.group(1))
             return
+
+    def _update_runtime_readiness(self) -> None:
+        if (
+            self._listener_ready
+            and not self._startup_error
+            and (
+                self.status.blueprint != "openyam_ar_planner"
+                or self._manipulation_ready
+            )
+        ):
+            self._set_status(phase=Phase.RUNNING, error=None)
+
+    def _selected_python(self) -> str | None:
+        return self.status.dimos_python or read_env(env_path(self.root)).get(
+            "DIMOS_PYTHON"
+        )
+
+    async def planner_status(self, *, force: bool = False) -> dict[str, Any]:
+        async with self._planner_lock:
+            python = self._selected_python()
+            now = asyncio.get_running_loop().time()
+            if (
+                not force
+                and python == self._planner_python
+                and now - self._planner_checked_at < 30
+            ):
+                return self._planner_status
+            result: dict[str, Any] = {
+                "ready": False,
+                "state": "incomplete",
+                "message": "Select an installed DimOS environment first.",
+            }
+            if python:
+                proc = None
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        python,
+                        str(Path(__file__).with_name("planner_check.py")),
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+                    decoded = json.loads(out.decode().strip().splitlines()[-1])
+                    if not isinstance(decoded.get("ready"), bool):
+                        raise TypeError("Invalid planner check response")
+                    result = decoded
+                except (
+                    OSError,
+                    ValueError,
+                    IndexError,
+                    TypeError,
+                    AttributeError,
+                    TimeoutError,
+                ) as exc:
+                    result = {
+                        "ready": False,
+                        "state": "incomplete",
+                        "message": f"Planner check failed: {exc}",
+                    }
+                finally:
+                    if proc is not None and proc.returncode is None:
+                        proc.kill()
+                        await proc.wait()
+            self._planner_status = result
+            self._planner_python = python
+            self._planner_checked_at = now
+            self._emit({"type": "status", **self.snapshot()})
+            return result
+
+    async def can_status(self) -> dict[str, Any]:
+        result = await check_can()
+        return {**result, "setting_up": self._can_setup_running}
+
+    async def setup_can(self) -> dict[str, Any]:
+        if self._can_setup_running:
+            raise RuntimeError("CAN setup is already running")
+        async with self._lock:
+            if (
+                self._proc is not None
+                or self._webxr_proc is not None
+                or await self._running_dimos_pids()
+            ):
+                raise RuntimeError(
+                    "CAN setup is unavailable while DimOS is running. Stop it yourself before configuring CAN."
+                )
+            self._can_setup_running = True
+            self._emit({"type": "status", **self.snapshot()})
+            proc = None
+            try:
+                status = await self.can_status()
+                if status["ready"]:
+                    return {**status, "setting_up": False}
+                python = self._selected_python()
+                if not python:
+                    raise ValueError("Select an installed DimOS environment first")
+                argv = setup_command(python)
+                self._append_log(
+                    "Setting up can0. Approve the native administrator prompt if shown…"
+                )
+                proc = await asyncio.create_subprocess_exec(
+                    *argv,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    stdin=asyncio.subprocess.DEVNULL,
+                )
+                out, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
+                for line in out.decode(errors="replace").splitlines():
+                    self._append_log(line)
+                if proc.returncode:
+                    raise RuntimeError(
+                        "CAN setup was cancelled or failed. See the launcher log."
+                    )
+                verified = await check_can()
+                if not verified["ready"]:
+                    raise RuntimeError(verified["message"])
+                return {**verified, "setting_up": False}
+            except TimeoutError as exc:
+                raise RuntimeError(
+                    "CAN setup timed out. Dismiss the administrator prompt and retry."
+                ) from exc
+            finally:
+                if proc is not None and proc.returncode is None:
+                    try:
+                        proc.kill()
+                        await asyncio.wait_for(proc.wait(), timeout=2)
+                    except (PermissionError, ProcessLookupError, TimeoutError):
+                        self._append_log(
+                            "CAN setup did not exit; dismiss its administrator prompt."
+                        )
+                self._can_setup_running = False
+                self._emit({"type": "status", **self.snapshot()})
+
+    def _parse_webxr_line(self, line: str) -> None:
+        match = _RE_WEBXR_URL.search(_strip_ansi(line))
+        if match is None:
+            return
+        kind, url = match.groups()
+        if kind == "Local":
+            self._set_status(webxr_local_url=url)
+            return
+        try:
+            host = urlsplit(url).hostname
+            address = ipaddress.ip_address(host or "")
+        except ValueError:
+            return
+        if address.is_loopback or address.is_unspecified:
+            return
+        # Prefer the default-route interface when Vite lists several adapters.
+        # With no detected IP, retain the first usable address Vite reports.
+        if self.status.webxr_url and host != self.status.host_ip:
+            return
+        self._set_status(webxr_url=url, host_ip=host)
 
     def port_in_use(self, port: int = ARMODULE_PORT) -> bool:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -378,7 +574,9 @@ class ProcessManager:
             await asyncio.sleep(0.2)
 
     async def _clear_before_start(self, *, client: str) -> None:
-        await self._stop_pids(await self._running_dimos_pids(), "existing DimOS process(es)")
+        await self._stop_pids(
+            await self._running_dimos_pids(), "existing DimOS process(es)"
+        )
         ports = list(STACK_PORTS)
         if client == "webxr":
             ports.append(WEBXR_PORT)
@@ -408,8 +606,11 @@ class ProcessManager:
         dimos_python: str | None = None,
         clone_dir: str | None = None,
         dimos_ref: str | None = None,
+        manipulation: bool = False,
     ) -> list[str]:
         argv = [str(self.scripts / "setup.sh"), "--yes"]
+        if manipulation:
+            argv.append("--manipulation")
         if dimos_python and clone_dir:
             raise ValueError("provide either dimos_python or clone_dir, not both")
         if dimos_python:
@@ -458,6 +659,9 @@ class ProcessManager:
             env = os.environ.copy()
             env["DIMOS_AR_FORCE_COLOR"] = "1"
             env.pop("DIMOS_PYTHON", None)
+            selected_python = read_env(env_path(self.root)).get("DIMOS_PYTHON")
+            if selected_python:
+                env["DIMOS_PYTHON"] = selected_python
             await self._run_tracked(argv, env=env, on_line=on_line)
             self._set_status(
                 phase=Phase.READY if check_ok else Phase.NEEDS_SETUP,
@@ -467,6 +671,7 @@ class ProcessManager:
                 dimos_ref=dimos_ref,
                 error=None,
             )
+            self._planner_checked_at = 0
             return self.snapshot()
 
     async def run_setup(
@@ -475,14 +680,20 @@ class ProcessManager:
         dimos_python: str | None = None,
         clone_dir: str | None = None,
         dimos_ref: str | None = None,
+        manipulation: bool = False,
     ) -> None:
         async with self._lock:
             if self._proc is not None or self._webxr_proc is not None:
                 raise RuntimeError("another process is already running")
+            if self._can_setup_running or await self._running_dimos_pids():
+                raise RuntimeError(
+                    "Stop DimOS yourself before installing dependencies, and wait for CAN setup to finish"
+                )
             argv = self.build_setup_argv(
                 dimos_python=dimos_python,
                 clone_dir=clone_dir,
                 dimos_ref=dimos_ref,
+                manipulation=manipulation,
             )
             self._append_log("Installing dependencies…")
             self._set_status(phase=Phase.INSTALLING, error=None)
@@ -497,6 +708,13 @@ class ProcessManager:
                     error=None,
                 )
                 raise RuntimeError(f"setup.sh exited with code {code}")
+            selected_python = dimos_python
+            if clone_dir:
+                selected_python = str(
+                    Path(clone_dir).expanduser() / ".venv" / "bin" / "python3"
+                )
+            if selected_python:
+                merge_env({"DIMOS_PYTHON": selected_python}, env_path(self.root))
 
         await self.run_check()
 
@@ -531,9 +749,7 @@ class ProcessManager:
             "Requesting administrator access to configure macOS networking "
             "(one-time per boot)…"
         )
-        inner = (
-            f"{shlex.quote(str(helper))} --apply --state-dir {shlex.quote(state_dir)} 2>&1"
-        )
+        inner = f"{shlex.quote(str(helper))} --apply --state-dir {shlex.quote(state_dir)} 2>&1"
         applescript_cmd = inner.replace("\\", "\\\\").replace('"', '\\"')
         script = f'do shell script "{applescript_cmd}" with administrator privileges'
 
@@ -557,8 +773,12 @@ class ProcessManager:
                 "Approve the administrator prompt to start ARModule."
             )
 
-    def _require_vps_credentials(self) -> None:
-        ui = ui_from_armodule_config(read_armodule_config())
+    def _require_vps_credentials(
+        self, armodule_config: dict[str, Any] | None = None
+    ) -> None:
+        ui = ui_from_armodule_config(
+            armodule_config if armodule_config is not None else read_armodule_config()
+        )
         if not ui["vps"]:
             return
         stored = read_env(env_path(self.root))
@@ -603,10 +823,14 @@ class ProcessManager:
     async def _build_webxr(self, env: dict[str, str]) -> None:
         self._append_log("Building optimized WebXR client…")
         proc = await asyncio.create_subprocess_exec(
-            "npm", "run", "build",
+            "npm",
+            "run",
+            "build",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            cwd=str(self._webxr_dir()), env=env, start_new_session=True,
+            cwd=str(self._webxr_dir()),
+            env=env,
+            start_new_session=True,
         )
         try:
             assert proc.stdout is not None
@@ -619,7 +843,6 @@ class ProcessManager:
                 await self._stop_one(proc, "WebXR build")
 
     async def _spawn_webxr(self, env: dict[str, str]) -> None:
-        await self._build_webxr(env)
         argv = [
             "npm",
             "run",
@@ -649,6 +872,8 @@ class ProcessManager:
         blueprint: str,
         client: str,
         robot_ip: str | None = None,
+        armodule_config: dict[str, Any] | None = None,
+        simulation: bool = False,
     ) -> None:
         if blueprint not in BLUEPRINTS:
             raise ValueError(f"blueprint must be one of {', '.join(BLUEPRINTS)}")
@@ -657,12 +882,22 @@ class ProcessManager:
         async with self._lock:
             if self._proc is not None or self._webxr_proc is not None:
                 raise RuntimeError("ARModule is already running")
+            if self._can_setup_running:
+                raise RuntimeError("Wait for CAN setup to finish")
             if self.status.check_ok is False:
                 raise RuntimeError(
                     "Dependencies are not installed — use Install dependencies first"
                 )
 
-            self._require_vps_credentials()
+            if blueprint == "openyam_ar_planner":
+                planner = await self.planner_status(force=True)
+                if not planner["ready"]:
+                    raise ValueError(planner["message"])
+                if not simulation:
+                    can = await self.can_status()
+                    if not can["ready"]:
+                        raise ValueError(can["message"])
+            self._require_vps_credentials(armodule_config)
             await self._clear_before_start(client=client)
             await self._configure_system_if_needed()
             if client == "webxr":
@@ -671,7 +906,8 @@ class ProcessManager:
             pinned_ip = robot_ip.strip() if robot_ip else None
             if pinned_ip in ("simulated", "fake"):
                 pinned_ip = "simulated"
-            merge_env({"ROBOT_IP": pinned_ip}, env_path(self.root))
+            if blueprint != "openyam_ar_planner":
+                merge_env({"ROBOT_IP": pinned_ip}, env_path(self.root))
 
             env = os.environ.copy()
             env["DIMOS_AR_SKIP_SYSCONFIG"] = "1"
@@ -681,12 +917,23 @@ class ProcessManager:
             if self.status.dimos_python:
                 env["DIMOS_PYTHON"] = self.status.dimos_python
             stored = read_env(env_path(self.root))
-            for key in ("OPENAI_API_KEY", "MULTISET_CLIENT_ID", "MULTISET_CLIENT_SECRET"):
+            for key in (
+                "OPENAI_API_KEY",
+                "MULTISET_CLIENT_ID",
+                "MULTISET_CLIENT_SECRET",
+            ):
                 if stored.get(key):
                     env[key] = stored[key]
             env["DIMOS_LOG_LEVEL"] = normalize_log_level(stored.get("DIMOS_LOG_LEVEL"))
 
             host_ip = detect_lan_ip()
+            if armodule_config is not None:
+                for key, value in armodule_config.items():
+                    env[f"ARMODULE__{key.upper()}"] = (
+                        value if isinstance(value, str) else json.dumps(value)
+                    )
+            if simulation:
+                env["DIMOS_AR_SIMULATION"] = "1"
             argv = self.build_start_argv(blueprint=blueprint, robot_ip=pinned_ip)
             self._set_status(
                 phase=Phase.STARTING,
@@ -702,6 +949,9 @@ class ProcessManager:
                 error=None,
             )
             self._armodule_ready = asyncio.Event()
+            self._listener_ready = False
+            self._manipulation_ready = False
+            self._startup_error = None
             self._append_log(f"$ {' '.join(argv)}")
             await self._spawn(argv, env=env, parse_armodule=True)
             if client == "webxr":
@@ -718,6 +968,21 @@ class ProcessManager:
         env: dict[str, str],
     ) -> None:
         await ready.wait()
+        async with self._lock:
+            if (
+                self._proc is not proc
+                or proc.returncode is not None
+                or self.status.phase != Phase.RUNNING
+            ):
+                return
+        # A build can take seconds. Keep the manager available to Stop and child exits.
+        try:
+            await self._build_webxr(env)
+        except (OSError, RuntimeError) as exc:
+            await self._finalize_exit(
+                f"Failed to build WebXR: {exc}", expected_proc=proc
+            )
+            return
         async with self._lock:
             if (
                 self._proc is not proc
@@ -744,8 +1009,10 @@ class ProcessManager:
                 return
             host_ip = self.status.host_ip
             self._set_status(
-                webxr_local_url=f"https://localhost:{WEBXR_PORT}",
-                webxr_url=(
+                webxr_local_url=self.status.webxr_local_url
+                or f"https://localhost:{WEBXR_PORT}",
+                webxr_url=self.status.webxr_url
+                or (
                     f"https://{host_ip}:{WEBXR_PORT}"
                     if host_ip and host_ip != "unknown"
                     else None
@@ -765,7 +1032,13 @@ class ProcessManager:
         except ProcessLookupError:
             pass
         try:
-            grace = self.dimos_stop_grace_seconds if label == "ARModule" else STOP_GRACE_SECONDS
+            grace = (
+                self.dimos_stop_grace_seconds
+                if label == "ARModule"
+                else STOP_GRACE_SECONDS
+            )
+            if label == "ARModule" and self.status.blueprint == "openyam_ar_planner":
+                grace += 65  # Allow the supervisor to park before stopping DimOS.
             await asyncio.wait_for(proc.wait(), timeout=grace)
         except TimeoutError:
             self._append_log(f"{label} did not stop in time — sending SIGKILL")
@@ -777,7 +1050,7 @@ class ProcessManager:
         return True
 
     async def _cancel_task(self, task: asyncio.Task[None] | None) -> None:
-        if task is None or task.done():
+        if task is None or task.done() or task is asyncio.current_task():
             return
         task.cancel()
         try:
@@ -786,14 +1059,15 @@ class ProcessManager:
             pass
 
     async def _stop_children_unlocked(self) -> bool:
+        # Retire ownership before signalling: expected exits must not look like new failures.
+        webxr_proc, armodule_proc = self._webxr_proc, self._proc
+        self._webxr_proc = self._proc = None
         await self._cancel_task(self._webxr_start_task)
         self._webxr_start_task = None
-        stopped_webxr = await self._stop_one(self._webxr_proc, "WebXR")
-        self._webxr_proc = None
+        stopped_webxr = await self._stop_one(webxr_proc, "WebXR")
         await self._cancel_task(self._webxr_reader_task)
         self._webxr_reader_task = None
-        stopped_ar = await self._stop_one(self._proc, "ARModule")
-        self._proc = None
+        stopped_ar = await self._stop_one(armodule_proc, "ARModule")
         await self._cancel_task(self._reader_task)
         self._reader_task = None
         return stopped_webxr or stopped_ar
@@ -900,7 +1174,9 @@ class ProcessManager:
 
         if self._proc is not proc or self.status.phase == Phase.STOPPING:
             return
-        error = None if code == 0 else f"start.sh exited with code {code}"
+        error = self._startup_error or (
+            None if code == 0 else f"start.sh exited with code {code}"
+        )
         asyncio.create_task(self._finalize_exit(error, expected_proc=proc))
 
     async def _read_webxr_stream(self, proc: asyncio.subprocess.Process) -> None:
@@ -913,6 +1189,8 @@ class ProcessManager:
                     break
                 line = raw.decode("utf-8", errors="replace").rstrip("\n")
                 self._append_log(line)
+                if self._webxr_proc is proc and self.status.phase != Phase.STOPPING:
+                    self._parse_webxr_line(line)
         finally:
             await proc.wait()
 
@@ -935,8 +1213,11 @@ class ProcessManager:
             ):
                 return
             await self._stop_children_unlocked()
+            error = self._startup_error or error
             self._set_status(
-                phase=Phase.ERROR if error else (Phase.READY if self.status.check_ok else Phase.IDLE),
+                phase=Phase.ERROR
+                if error
+                else (Phase.READY if self.status.check_ok else Phase.IDLE),
                 error=error,
                 websocket_url=None,
                 webxr_url=None,

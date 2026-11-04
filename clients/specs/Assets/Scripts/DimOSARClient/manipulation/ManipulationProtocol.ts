@@ -1,5 +1,7 @@
+import { isValidatedBulkAsset, validatedBulkArray } from "../websocket/BulkTransfer";
 import { linkPoses } from "./ModelKinematics";
 import type {
+  FollowingTail,
   ManipulationModel,
   ManipulationAction,
   ManipulationOutbound,
@@ -39,12 +41,14 @@ function vector(value: unknown, count: number): number[] {
     throw new Error("Invalid manipulation vector");
   return value.map(finite);
 }
-function pose(value: unknown): void {
+function pose(value: unknown, path = "pose"): void {
+  try {
   const p = object(value);
   vector(p.position, 3);
   const q = vector(p.orientation, 4);
   if (Math.abs(q.reduce((s, v) => s + v * v, 0) - 1) > 1e-4)
     throw new Error("Expected unit quaternion");
+  } catch (error) { throw new Error(`${path}: ${error instanceof Error ? error.message : String(error)}`); }
 }
 function joints(value: unknown): void {
   for (const v of Object.values(object(value))) finite(v);
@@ -65,6 +69,11 @@ function plan(value: Record<string, unknown>): void {
     value.trajectory.length > 8192
   )
     throw new Error("Invalid trajectory");
+  const cached = validatedBulkArray(value.trajectory);
+  if (cached) {
+    if (cached.names?.length !== value.joint_names.length || cached.names.some((name, i) => name !== (value.joint_names as unknown[])[i]) || finite(value.duration) < cached.lastTime) throw new Error("Bulk plan metadata mismatch");
+    return;
+  }
   let previous = -1;
   for (const raw of value.trajectory) {
     const point = object(raw),
@@ -78,6 +87,20 @@ function plan(value: Record<string, unknown>): void {
     throw new Error("Trajectory exceeds duration");
 }
 
+export function decodeFollowingTail(value: unknown): FollowingTail | null {
+  if (value == null) return null;
+  const tail = object(value);
+  text(tail.group_id);
+  for (const field of ["generation", "target_revision"]) {
+    if (!Number.isSafeInteger(tail[field]) || Number(tail[field]) < 0) throw new Error("Invalid finishing generation");
+  }
+  if (tail.status !== "finishing") throw new Error("Invalid finishing status");
+  if (tail.position !== undefined || tail.orientation !== undefined) pose(tail);
+  if (tail.speed_scale !== undefined && (finite(tail.speed_scale) <= 0 || Number(tail.speed_scale) > 1)) throw new Error("Invalid finishing speed");
+  if (tail.joints !== undefined) joints(tail.joints);
+  return tail as unknown as FollowingTail;
+}
+
 export function decodeManipulation(
   data: Record<string, unknown>,
 ): ManipulationOutbound {
@@ -88,6 +111,11 @@ export function decodeManipulation(
     if (data.quiescent !== undefined && typeof data.quiescent !== "boolean")
       throw new Error("Invalid shutdown acknowledgment");
     if (data.code !== undefined) text(data.code);
+    if (data.failed_joints !== undefined) {
+      if (!Array.isArray(data.failed_joints) || data.failed_joints.length > 256)
+        throw new Error("Invalid failed joints");
+      data.failed_joints.forEach(text);
+    }
     if (
       data.sequence !== undefined &&
       (!Number.isSafeInteger(data.sequence) || Number(data.sequence) < 0)
@@ -100,6 +128,7 @@ export function decodeManipulation(
     if (data.pose != null) pose(data.pose);
     if (data.plan_id !== undefined) plan(data);
   } else {
+    if (data.following_tail !== undefined) decodeFollowingTail(data.following_tail);
     if (typeof data.available !== "boolean")
       throw new Error("Invalid manipulation availability");
     if (
@@ -111,6 +140,7 @@ export function decodeManipulation(
       finite(data.ts);
       if (data.root_pose != null) pose(data.root_pose);
       const model = object(data.model);
+      if (!isValidatedBulkAsset(model)) {
       text(model.revision);
       text(model.root);
       if (model.visual_profile !== undefined) text(model.visual_profile);
@@ -192,6 +222,7 @@ export function decodeManipulation(
         model as unknown as ManipulationModel,
         Object.fromEntries([...jointNames].map((name) => [name, 0])),
       );
+      }
       if (!Array.isArray(data.groups))
         throw new Error("Missing manipulation groups");
       for (const raw of data.groups) {

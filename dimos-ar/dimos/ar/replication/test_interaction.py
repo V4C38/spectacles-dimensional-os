@@ -369,3 +369,25 @@ def test_preview_tolerance_uses_requested_aim_not_adjusted_safe_endpoint(fixture
     assert owner.set_preview(
         frame, epoch=owner.epoch, lease_id=lease, target_revision=revision, **source
     )
+
+
+def test_finishing_tail_parks_validated_endpoint_without_reverting_after_completion(fixture):
+    from dimos.ar.replication.interaction import SharedTarget
+
+    owner, _ = fixture
+    owner.target = SharedTarget((9, 0, 0), (0, 0, 0, 1), 4, "draft", 100, 3,
+                                "manipulation", "arm")
+    owner._targets[("manipulation", "arm")] = owner.target
+    tail = {"generation": 1, "group_id": "arm", "target_revision": 3,
+            "position": [1, 0, 0], "orientation": [0, 0, 0, 1]}
+    owner.set_following_tail(tail)
+    assert owner.target.position == (1, 0, 0)
+    assert owner.target.revision == 5
+    revision = owner.revision
+    owner.set_following_tail(tail)
+    assert owner.revision == revision
+    owner.set_following_tail(None)
+    assert owner.snapshot()["target"]["position"] == [1, 0, 0]
+    assert acquire(owner, client="b", kind="manipulation_following", group_id="arm").status == "accepted"
+    owner.set_following_tail({**tail, "position": [5, 0, 0]})
+    assert owner.target.position == (1, 0, 0)

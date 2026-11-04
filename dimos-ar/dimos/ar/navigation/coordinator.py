@@ -69,6 +69,10 @@ class NavGoalCoordinator:
             state_changed = not was_following or was_resolved
             return nav_goal_frame, state_changed
 
+    def accepts_path(self, timestamp: float) -> bool:
+        with self._lock:
+            return bool(timestamp and timestamp > self._retired_at)
+
     def on_goal_reached(self, msg: Bool) -> bool:
         with self._lock:
             if self._correlated:

@@ -32,6 +32,11 @@ export class CollaborationController {
   constructor(private readonly port: CollaborationPort) {}
 
   raw(): InteractionState | null { return this.state; }
+  completeAssets(state: InteractionState): boolean {
+    if (!this.state || this.state.epoch !== state.epoch || this.state.revision !== state.revision) return false;
+    this.state = { ...this.state, preview: state.preview, active_goal: state.active_goal };
+    return true;
+  }
   get denialRevision(): number { return this.denial; }
   snapshot(nowOrDomain: number | "navigation" | "manipulation" = this.port.now(), groupId?: string) {
     const domain = typeof nowOrDomain === "string" ? nowOrDomain : "navigation";

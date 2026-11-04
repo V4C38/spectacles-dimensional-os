@@ -28,12 +28,41 @@ export function manipulationControls(state: ManipulationState | null | undefined
   const opening = selected ? interaction.desiredGripper ?? observed?.gripper : observed?.gripper;
   return {
     working,
-    executeAction: working ? "cancel" as const : "execute" as const,
-    executeLabel: working ? "Cancel" : "Execute",
-    canExecute: working ? intent.canStop : intent.canExecute,
+    executeAction: "execute" as const,
+    executeLabel: "Execute",
+    canExecute: intent.canExecute,
     canPreview: intent.canPreview,
     gripperLabel: opening == null ? "Gripper —" : opening < 0.5 ? "Open" : "Close",
     canGripper: intent.canManipulate && opening != null,
-    status: !fresh ? "Feedback unavailable" : state?.stopped ? "Stopped" : state?.following ? "Following" : intent.activity,
+    status: !fresh ? "Feedback unavailable" : state?.stopped ? "Stopped" : intent.activity,
   };
+}
+
+export function manipulationMenuRows(selected: boolean, stopped: boolean): string[] {
+  return [...(selected && !stopped ? ["execute"] : []), "reset", "speed", "stop", "estop"];
+}
+export function manipulationButtonEnabled(key: string, intent: import("./ManipulationInteraction").ManipulationSnapshot): boolean {
+  switch (key) {
+    case "estop": return intent.canStop || intent.canResume;
+    case "stop": return intent.canStop;
+    case "reset": return intent.canReset;
+    case "execute": return intent.canExecute;
+    case "plan": return intent.canPreview;
+    default: return intent.canManipulate;
+  }
+}
+
+
+/** The near-EE button represents the current interaction mode on both hosts. */
+export function endEffectorAction(selected: boolean, intent: import("./ManipulationInteraction").ManipulationSnapshot,
+  opening: number | null | undefined, hasGripper: boolean) {
+  return selected
+    ? { action: "execute" as const, label: "Execute", available: true, enabled: intent.canExecute, allowDuringGrab: false }
+    : { action: "gripper" as const, label: opening == null ? "Gripper —" : opening < 0.5 ? "Open" : "Close",
+        available: hasGripper, enabled: intent.canManipulate && opening != null, allowDuringGrab: true };
+}
+
+export function manipulationPathOpacity(intent: import("./ManipulationInteraction").ManipulationSnapshot,
+  following: boolean, hasPlan: boolean): number {
+  return !intent.stopped && (following || intent.finishing || intent.executing) ? 1 : hasPlan ? 0.7 : 0.5;
 }

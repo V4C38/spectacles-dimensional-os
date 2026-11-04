@@ -29,6 +29,58 @@ clients update their protocol module in the same change.
   `estop`, `agent`, plus optional `manipulation`. Any key may be `available=false` with `reason`. Nested
   `navigation.nav_goal` and `navigation.nav_joystick` are always present.
 
+## Protocol v3 control and bulk lanes
+
+The control WebSocket carries authority, small command results, target samples,
+mode, operation status, and references to immutable presentation assets. Hello
+includes `protocol_version:3`, `bulk_url`, `bulk_token`, and `bulk_epoch`. The same
+client opens the advertised bulk path and sends:
+
+```json
+{"type":"bulk_hello_request","protocol_version":3,"client_id":"from-hello","token":"from-hello"}
+```
+
+The bulk connection has no independent robot authority. It is bound to the live
+control session and acknowledged with `bulk_hello`. Images, LiDAR, model topology,
+checked trajectories, and route points use that lane. A control record is at most
+16 KiB; a batch is at most 64 KiB and 32 commands. Critical commands are never silently
+dropped; control overload retires the connection and its authority.
+
+Examples below show assembled model/plan/route domain values where useful;
+actual v3 control frames carry references in place of those arrays.
+
+Control `model_ref`, `plan_ref`, and `route_ref` values contain `{epoch,id,revision}`.
+A complete revision is reconstructed from ordered `bulk_record` values with the
+same reference, `kind` (`model`, `trajectory`, `route`), zero-based `part`, total
+`parts`, and typed `data`. Records are at most 16 KiB in UTF-8. Model data contains
+optional `metadata`, `links`, and `joints`; trajectory/route data contains optional
+`metadata` and `points`. ClientCore assembles these into the existing domain view;
+an incomplete or retired asset cannot authorize execution. Native arm snapshots
+also send compact revision metadata internally; model/plan assets are fetched
+only on revision change. A timed-out native snapshot, asset fetch, or command
+retains its actual admission slot until the native callback completes. Retries
+cannot accumulate blocked native work. Stop and control-plane heartbeat have
+independent lanes. Replaceable camera/costmap/LiDAR work does not queue one native
+CPU job per input frame.
+
+Localization binary uploads use a declared bounded bulk upload and incremental
+binary records; their existing observation payload is preserved. The bulk lane
+uses byte budgets and latest-value replacement, so a stalled image or large model
+does not sit ahead of Stop, lease renewals, or small authoritative snapshots on
+the control TCP connection. This is not a guarantee against operating-system or
+hardware failure; physical Emergency Stop remains necessary.
+
+The default aggregate 1 MiB/s token bucket and fair shares apply only to outgoing
+model/trajectory/route assets and LiDAR downloads. Incoming localization pixels
+do not wait on this optional-data budget: each client still has one upload of at
+most 4 MiB, each ARB3 record remains at most 16 KiB, and the server yields after
+every chunk so controls can run. Client upload pumping is bounded to 16 chunks
+per display tick, a 256 KiB socket high-water mark, and the same 2 ms work budget.
+Admitted JPEG chunks are pumped before optional asset-record parsing consumes
+that display tick's work budget.
+Existing image-age checks, localization timeouts, and pose acceptance rules are
+unchanged; transport must not deliberately make a fresh image stale.
+
 ## Transport
 
 - Plain WebSocket on port **8787**. The DimOS machine runs the server; AR devices
@@ -163,7 +215,7 @@ origins, paths, previews and points cannot mix old/new coordinate models.
 
 ## Multiple clients and replication
 
-The collaboration protocol is version **2**, advertised as `hello.protocol_version`.
+The collaboration protocol is version **3**, advertised as `hello.protocol_version`.
 ARModule owns the robot's shared targets, authority, manual/agent mode, accepted
 preview and active goal. Headset tracking origins, input capture and interpolation
 remain local. The supported validation target is two to five simultaneous clients.
@@ -215,6 +267,26 @@ Planning
 does not overwrite a previously executing goal/route. Selected arm planning
 releases editing authority when the hand opens; checked plans bind to the shared
 target revision rather than remaining owned by their creating client.
+
+Normal live arm release sends only `interaction_request.release`; clients stop
+sending native token updates immediately. ARModule frees the editing lease and
+hands the native process its last successfully validated pose and joint endpoint.
+That server-owned `following_tail` is takeoverable by any new grab. Its compact
+summary includes `generation`, `group_id`, `target_revision`, `status:"finishing"`,
+and optional pose/speed/joints. Newer admission fences delayed old release and
+cleanup messages. The former client's disconnect cannot cancel the detached tail
+or its replacement; losing the final client stops it. Finishing refreshes the
+native target at 10 Hz for at most 55 seconds and requires distinct fresh endpoint
+observations spanning 0.5 seconds to declare arrival. Stale feedback, IK failure,
+Stop, reference reset, or control-plane lease expiry aborts it. Execute/reset/park
+remain non-takeoverable accepted operations, distinct from a finishing tail.
+
+ARModule renews a native per-robot control-plane lease at 10 Hz with a 500 ms
+monotonic deadline. Native arm following, tails, and accepted operations stop when
+that lease expires, even if ARModule crashes. Repository-owned native navigation
+similarly gates AR-admitted base motion on its control-plane lease and rejects
+stale planning activation. These protections do not claim cancellation of every
+upstream native agent continuation or recovery from a hung physical controller.
 
 Every command receives `interaction_result` with `request_id`, `epoch`, `revision`,
 `status` (`accepted`, `busy`, `stale`, `rejected`), `code`, and optional `lease_id`.
@@ -268,7 +340,7 @@ connection, and replies with `hello`.
 ```json
 {
   "type": "hello",
-  "protocol_version": 2,
+  "protocol_version": 3,
   "client_id": "c3f1a9",
   "time_sync": {
     "ts_client": 1234.567,
@@ -297,7 +369,7 @@ connection, and replies with `hello`.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `protocol_version` | integer | Required collaboration protocol version; current value is `2`. |
+| `protocol_version` | integer | Required collaboration protocol version; current value is `3`. |
 | `client_id` | string | Server-assigned, unique per connection. |
 | `time_sync.ts_client` | float | Echo of `hello_request.ts_client`. |
 | `time_sync.ts_server` | float | Server time when `hello_request` arrived. |
@@ -450,6 +522,7 @@ the result timeout is only a fallback for a missing response.
 ```json
 {
   "type": "localization_observations_request",
+  "capture_id": "server-generated-generation",
   "capture_policy": "robot_los_required",
   "observation_count": 3
 }
@@ -457,6 +530,7 @@ the result timeout is only a fallback for a missing response.
 
 | Field | Type | Notes |
 |-------|------|-------|
+| `capture_id` | string | V3 server-generated capture generation, 1–128 characters. Echo in the matching `bulk_upload_begin`; it is scoped to this control connection. |
 | `capture_policy` | string | `robot_los_required` \| `robot_los_preferred` \| `any_angle`. Geometric gate only — not a provider name. |
 | `observation_count` | uint | Exact batch size. The client always sends this many frames. |
 | `wait_timeout_s` | float | Required when `capture_policy` is `robot_los_preferred`. Omitted otherwise. |
@@ -476,11 +550,34 @@ Example with timeout:
 ```json
 {
   "type": "localization_observations_request",
+  "capture_id": "server-generated-generation",
   "capture_policy": "robot_los_preferred",
   "observation_count": 3,
   "wait_timeout_s": 2.0
 }
 ```
+
+The server assigns a fresh `capture_id` when each capture request is enqueued for
+a particular control connection. The matching `bulk_upload_begin` must contain
+that ID in addition to its upload ID and declared byte count. The server checks
+the generation both before accepting the upload and after its final chunk, before
+dispatching any observations. A new manual localization start invalidates the
+previous generation before policy admission, so a delayed canceled upload cannot
+attach to the replacement episode across the separate sockets. Reconnect creates
+a new control identity; its previous capture IDs cannot be reused.
+
+An upload begins on the bulk socket with
+`{type:"bulk_upload_begin",kind:"localization",upload_id,total_bytes,capture_id}`.
+A client can stop that upload with `{type:"bulk_upload_cancel",upload_id}`; the
+server replies `bulk_upload_result` with that upload ID and `status:"cancelled"`.
+Cancellation of an old upload ID cannot cancel a replacement upload. The same
+capture generation may be reused for a replacement batch within the same prompt;
+a new prompt, manual start, or disconnect invalidates it.
+
+This envelope correlation changes neither LOCA bytes nor camera-pose acceptance,
+frame spacing, nearest-pose fallback, capture geometry, or result timeouts. The
+Python request type permits an omitted ID for internal construction; the v3
+transport supplies one on every delivered capture request.
 
 ### `localization_result`
 
@@ -949,7 +1046,7 @@ canonical `target_revision`. Following commands carry the owning `lease_id`.
 | `execute` | `plan_id` | Execute the still-current checked plan. |
 | `acquire` | Owning following lease | Request the native following `token`. |
 | `update` | `token`, increasing `sequence`, `ts`, pose, optional `speed_scale` | Refresh native following while the robot-wide lease remains valid. |
-| `release` | `token` | Retire native following. Release the interaction lease separately. |
+| `release` | `token` | Explicit native following cancellation. Ordinary hand release uses only `interaction_request.release` to start server finishing. |
 | `gripper` | `value` | Apply the replicated target's gripper setting. |
 | `cancel` | None | Cancel the current arm operation. |
 | `resume` | None | Resume only after native stop confirmation and valid authority. |
@@ -969,11 +1066,13 @@ release preserves a plan for an unchanged target; changing target settings
 retires it. Native execution remains robot-owned after editing release or client
 disconnect.
 
-`manipulation_state` is a complete native snapshot, normally sent at 10 Hz and
-replayed on connection. Available snapshots include the model descriptor,
+`manipulation_state` is a compact native snapshot, normally sent at 10 Hz and
+replayed on connection. Model and checked trajectory data travel by revision on
+the bulk lane and are reconstructed by ClientCore. Available snapshots include the model descriptor,
 `root_pose`, planning `groups`, measured group `observations`, `execution`,
 `operation_id`, `plan`, `following`, `owner`, `stopped`, and `stop_confirmed`.
-An unavailable snapshot contains `available=false` and a message. Accepted,
+The optional `following_tail` summary is independent of editing ownership and
+does not set `motion_busy`; a new grab supersedes it. An unavailable snapshot contains `available=false` and a message. Accepted,
 executing, uncertain, or faulted native motion blocks new robot interaction and
 mode changes through `interaction_state.motion_busy`. A transport failure after
 a motion command is uncertain; only positive native stop confirmation clears

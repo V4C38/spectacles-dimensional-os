@@ -19,6 +19,11 @@ def runtime():
     module.lock = threading.RLock()
     module.planning = threading.Lock()
     module.started = True
+    # Explicit fake control plane for domain-only native unit cases.
+    module._control_epoch = "robot-reference"
+    module._control_revision = 0
+    module._control_deadline = time.monotonic() + 10000
+    module._retired_control_epochs = set()
     module.zero = JointZeroOperation(module)
     module.adapter = SimpleNamespace(ready=False, feedback=SimpleNamespace(ts=time.time()))
     module.config = SimpleNamespace(
@@ -314,10 +319,14 @@ def test_follow_factory_uses_the_model_velocity_limits(monkeypatch):
 
     model = make_openyam_model_config()
     limits = {name: 0.5 + index * 0.1 for index, name in enumerate(model.joint_names)}
-    xml = "<robot name='fixture'>" + "".join(
-        f"<joint name='{name}'><limit velocity='{velocity}'/></joint>"
-        for name, velocity in limits.items()
-    ) + "</robot>"
+    xml = (
+        "<robot name='fixture'>"
+        + "".join(
+            f"<joint name='{name}'><limit velocity='{velocity}'/></joint>"
+            for name, velocity in limits.items()
+        )
+        + "</robot>"
+    )
     monkeypatch.setattr(type(model.model), "load", lambda _model: SimpleNamespace(xml=xml))
     captured = {}
     monkeypatch.setattr(following, "SpeedScaledPoseTargetSolver", lambda config: None)
@@ -675,7 +684,7 @@ def test_failed_streaming_solver_holds_target_until_it_changes(monkeypatch):
     clear.assert_called_once()
     task.on_cartesian_command(point)
     assert submit.call_count == 1
-    assert task.get_failure() == "QP failed"
+    assert task.get_failure()["message"] == "QP failed"
     point.position.z = 0.2
     task.on_cartesian_command(point)
     assert submit.call_count == 2

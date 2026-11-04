@@ -35,6 +35,7 @@ export class LocalizationSubmission {
     this.expectedResultTs = null;
     this.deadline = null;
   }
+  extendDeadline(deadline: number): void { if (this.expectedResultTs !== null && Number.isFinite(deadline)) this.deadline = deadline; }
 
   reset(): void {
     this.cancel();

@@ -15,6 +15,7 @@ export interface InteractionState {
   type: "interaction_state"; epoch: string; revision: number; mode: "manual" | "agent";
   authority: InteractionAuthority | null; target: InteractionTarget | null;
   targets?: InteractionTarget[];
+  following_tail?: import("../manipulation/ManipulationTypes").FollowingTail | null;
   motion_busy?: boolean;
   preview: NavGoal | null; active_goal: NavGoal | null;
 }

@@ -20,6 +20,7 @@ export class SpecsWebSocketTransport implements WebSocketTransport {
   private connecting = false;
   private hostClosing = false;
   private readonly retiredSockets = new Set<WebSocket>();
+  private readonly sibling: (path: string) => SpecsWebSocketTransport;
 
   constructor(deps: {
     internetModule: InternetModule;
@@ -28,6 +29,7 @@ export class SpecsWebSocketTransport implements WebSocketTransport {
     connectTimeoutS?: number;
   }) {
     this.internetModule = deps.internetModule;
+    this.sibling = path => new SpecsWebSocketTransport({ ...deps, url: /^wss?:\/\//.test(path) ? path : this.url.replace(/^(wss?:\/\/[^/]+).*$/, "$1") + path });
     this.url = deps.url;
     this.connectTimeoutS = requirePositive(
       deps.connectTimeoutS ?? AR_MODULE_CLIENT_CONFIG.connectTimeoutS,
@@ -50,6 +52,8 @@ export class SpecsWebSocketTransport implements WebSocketTransport {
   getUrl(): string {
     return this.url;
   }
+  createSibling(path: string): SpecsWebSocketTransport { return this.sibling(path); }
+  bufferedAmount(): number { return (this.socket as unknown as { bufferedAmount?: number } | null)?.bufferedAmount ?? 0; }
 
   setUrl(url: string): void {
     if (this.connecting || this.isSocketOpen()) {

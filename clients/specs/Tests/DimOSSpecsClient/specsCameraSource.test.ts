@@ -51,11 +51,11 @@ describe("lookupPoseSample", () => {
     expect(pose!.position.x).toBeCloseTo(5, 6);
   });
 
-  it("rejects a capture bracket spanning a tracking gap even near an endpoint", () => {
+  it("interpolates exposure across delayed display samples without an extra bracket-age gate", () => {
     const history = [sample(0, 0, 0, 0), sample(2, 10, 0, 0)];
-    expect(lookupPoseSample(history, 1)).toBeNull();
-    expect(lookupPoseSample(history, 0.01)).toBeNull();
-    expect(lookupPoseSample(history, 1.99)).toBeNull();
+    expect(lookupPoseSample(history, 1)?.position.x).toBeCloseTo(5);
+    expect(lookupPoseSample(history, 0.01)?.position.x).toBeCloseTo(0.05);
+    expect(lookupPoseSample(history, 1.99)?.position.x).toBeCloseTo(9.95);
   });
 
   it("returns null when the nearest sample is stale", () => {

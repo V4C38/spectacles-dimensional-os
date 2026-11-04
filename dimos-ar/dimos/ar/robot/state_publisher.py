@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 import math
 import time
 from typing import TYPE_CHECKING, Protocol
@@ -16,6 +19,9 @@ from dimos.ar.timing_diagnostics import TimingSummary
 from dimos.ar.websocket.protocol import encode_lidar_binary, encode_pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.utils.logging_config import setup_logger
+
+logger = setup_logger()
 
 if TYPE_CHECKING:
     from dimos.ar.websocket.server import WebSocketServer
@@ -58,6 +64,64 @@ class RobotStatePublisher:
         self._pose_last_emit_mono = 0.0
         self._lidar_last_emit_mono = 0.0
         self._lidar_timing = TimingSummary("robot lidar processing timing")
+        self._lidar_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ar-lidar")
+        self._lidar_task: asyncio.Task[None] | None = None
+        self._lidar_pending: tuple[PointCloud2, LidarSettings, tuple[float, float, float] | None,
+                                  dict[str, LidarSettings] | None, int] | None = None
+        self._source_generation = 0
+        self._closed = False
+
+    async def publish_lidar_async(self, msg: PointCloud2, *, lidar: LidarSettings) -> None:
+        if self._closed or not lidar.enabled:
+            return
+        self._lidar_pending = (
+            msg, lidar, self._robot_position(),
+            dict(self._subscriptions()) if self._subscriptions is not None else None,
+            self._source_generation,
+        )
+        if self._lidar_task is None or self._lidar_task.done():
+            self._lidar_task = asyncio.create_task(self._drain_lidar())
+            self._lidar_task.add_done_callback(self._lidar_done)
+
+    def _lidar_done(self, task: asyncio.Task[None]) -> None:
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.error("LiDAR worker failed", error=type(error).__name__)
+        if self._lidar_pending is not None and not self._closed:
+            self._lidar_task = asyncio.create_task(self._drain_lidar())
+            self._lidar_task.add_done_callback(self._lidar_done)
+
+    async def _drain_lidar(self) -> None:
+        while self._lidar_pending is not None and not self._closed:
+            if self._lidar_max_hz > 0:
+                delay = self._lidar_last_emit_mono + 1 / self._lidar_max_hz - time.monotonic()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+            pending, self._lidar_pending = self._lidar_pending, None
+            if pending is None:
+                return
+            msg, settings, position, subscriptions, generation = pending
+            loop = asyncio.get_running_loop()
+            future = loop.run_in_executor(
+                self._lidar_executor,
+                partial(self.publish_lidar, msg, lidar=settings,
+                        _snapshot=(position, subscriptions, generation)),
+            )
+            future.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+            # Actual work remains exclusive after cancellation: no replacement
+            # job can accumulate behind a blocked native voxel downsampler.
+            await asyncio.shield(future)
+
+    def invalidate_source(self) -> None:
+        self._source_generation += 1
+        self._lidar_pending = None
+
+    async def close(self) -> None:
+        self._closed = True
+        self.invalidate_source()
+        if self._lidar_task is not None:
+            self._lidar_task.cancel()
+            await asyncio.gather(self._lidar_task, return_exceptions=True)
+        self._lidar_executor.shutdown(wait=False, cancel_futures=True)
 
     def publish_odom(self, msg: PoseStamped) -> None:
         if not self._allow_emit(self._pose_last_emit_mono, self._pose_max_hz):
@@ -81,12 +145,15 @@ class RobotStatePublisher:
             )
         )
 
-    def publish_lidar(self, msg: PointCloud2, *, lidar: LidarSettings) -> None:
+    def publish_lidar(
+        self, msg: PointCloud2, *, lidar: LidarSettings,
+        _snapshot: tuple[tuple[float, float, float] | None, dict[str, LidarSettings] | None, int] | None = None,
+    ) -> None:
         if not lidar.enabled:
             return
         if not self._allow_emit(self._lidar_last_emit_mono, self._lidar_max_hz):
             return
-        robot_position = self._robot_position()
+        robot_position = self._robot_position() if _snapshot is None else _snapshot[0]
         if robot_position is None:
             return
         started = time.monotonic()
@@ -96,8 +163,11 @@ class RobotStatePublisher:
         downsampled_count = len(points)
         downsampled_at = time.monotonic()
         groups: dict[LidarSettings, list[str]] = {}
-        if self._subscriptions is not None:
-            for client_id, settings in self._subscriptions().items():
+        subscriptions = (
+            self._subscriptions() if self._subscriptions is not None else None
+        ) if _snapshot is None else _snapshot[1]
+        if subscriptions is not None:
+            for client_id, settings in subscriptions.items():
                 if settings.enabled:
                     groups.setdefault(settings, []).append(client_id)
         else:
@@ -115,7 +185,9 @@ class RobotStatePublisher:
             output = [tuple(point) for point in corrected]
             output_count = max(output_count, len(output))
             payload = encode_lidar_binary(ts=msg.ts, points=output)
-            if self._subscriptions is None:
+            if self._closed or (_snapshot is not None and _snapshot[2] != self._source_generation):
+                return
+            if subscriptions is None:
                 self._ws.schedule_broadcast_binary(payload)
             else:
                 for client_id in clients:

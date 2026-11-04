@@ -1,3 +1,4 @@
+import { V3BulkPeer } from "./fixtures/V3BulkPeer";
 import { saveCaseProof } from "./fixtures/CaseProof";
 import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
 import { startVisualReview, markVisualReview, saveVisualReview } from "./fixtures/VisualReview";
@@ -8,7 +9,7 @@ import { previewAimChanged } from "./fixtures/AdvisoryPreview";
 
 // ClientCore lives outside WebXR's ESM package. Load it through Playwright's
 // CommonJS transform so test discovery also works on CI's Node 20 runtime.
-const { ROBOT_LINE_STYLE } = createRequire(import.meta.url)(
+const { WORLD_DASH_STYLE } = createRequire(import.meta.url)(
   "../../../specs/Assets/Scripts/DimOSARClient/presentation/WorldVisualStyle",
 ) as typeof import("../../../specs/Assets/Scripts/DimOSARClient/presentation/WorldVisualStyle");
 
@@ -18,7 +19,7 @@ test.afterEach(async ({ page }, info) => {
   await saveCaseProof(info, info.title.startsWith("refuses") ? ["browser_permissions"] : info.title.startsWith("renders and localizes") ? ["panel_resize"] : []);
 });
 
-import { visiblePointerCount, setSelection, activateButton, pointRuntimeButton, activateRuntimeButton, frameMenu, restoreView, placeDirect } from "./fixtures/Input";
+import { visiblePointerCount, setSelection, activateButton, pointRuntimeButton, activateRuntimeButton, frameMenu, restoreView, placeDirect, touchButton } from "./fixtures/Input";
 
 async function captureMenu(page: Page, path: string): Promise<void> {
   await expect.poll(() => page.evaluate(() => {
@@ -62,16 +63,17 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       w.questDevice.primaryInputMode = inputMode;
       w.questDevice.installRuntime({ forceInstall: true });
     }, mode);
+    const bulk = new V3BulkPeer(); await bulk.install(page);
     let socket: WebSocketRoute | undefined;
     let interactionRevision = 0, interactionMode = "manual";
     let authority: any = null, target: any = null, preview: any = null, activeGoal: any = null;
     let previewAim: { position: number[]; orientation: number[] } | null = null;
-    const sendInteraction = (peer = socket) => peer!.send(JSON.stringify({ type: "interaction_state",
+    const sendInteraction = (peer = socket) => bulk.send(peer!, { type: "interaction_state",
       epoch: "startup-fixture", revision: ++interactionRevision, mode: interactionMode,
-      authority, target, targets: target ? [target] : [], preview, active_goal: activeGoal }) + "\n");
+      authority, target, targets: target ? [target] : [], preview, active_goal: activeGoal });
     const sendNavigation = (frame: object, peer = socket) => {
       activeGoal = frame;
-      peer!.send(JSON.stringify(frame) + "\n");
+      bulk.send(peer!, frame);
       sendInteraction(peer);
     };
     let serverState: State = { type: "state", server: { connected_clients: 1 },
@@ -79,7 +81,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       nav: { state: "idle", outcome: null }, agent: { idle: true } };
     const sendState = (update: Partial<State> = {}, peer = socket) => {
       serverState = { ...serverState, ...update };
-      peer!.send(JSON.stringify(serverState) + "\n");
+      bulk.send(peer!, serverState);
     };
     let observations = 0;
     let latestCaptureTs = 0;
@@ -89,8 +91,8 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     const agentMessages: string[] = [];
     await page.routeWebSocket("**/ar", ws => {
       socket = ws;
-      const send = (message: object) => ws.send(JSON.stringify(message) + "\n");
-      ws.onMessage(raw => {
+      const send = (message: object) => bulk.send(ws, message);
+      const onMessage = (raw: string | Buffer) => {
         if (typeof raw !== "string") {
           observations++;
           // Mirror ARModule's existing result timestamp: newest submitted capture.
@@ -101,7 +103,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
             offset += 4 + packet.getUint32(offset, true);
           }
           // Simulate two marker detection misses before a successful batch.
-          if (observations < 3) send({ type: "localization_observations_request", capture_policy: "robot_los_required", observation_count: 3 });
+          if (observations < 3) send({ type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: "robot_los_required", observation_count: 3 });
           return;
         }
         const command = JSON.parse(raw);
@@ -171,7 +173,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
         if (command.type === "hello_request") {
           handshakes++;
           const available = { available: true, reason: null };
-          send({ type: "hello", protocol_version: 2, client_id: "browser-test", time_sync: { ts_client: command.ts_client, ts_server: command.ts_client },
+          send({ type: "hello", protocol_version: 3, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "browser-test", time_sync: { ts_client: command.ts_client, ts_server: command.ts_client },
             server_info: { robot_ip: "192.168.1.42", dimos_version: "0.4.0", armodule_version: "0.2.0" },
             robot: { display_name: "Unitree Go2", body_bounds_m: [0.7, 0.5, 0.55], footprint_m: [0.7, 0.3], base_height_m: 0.33 },
             capabilities: { lidar: available, localization: available, estop: available, agent: available,
@@ -180,8 +182,9 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
           authority = null; sendInteraction(ws);
           send({ type: "pose", position: [2, 0, 0.33], orientation: [0, 0, 0, 1], ts: command.ts_client });
         }
-        if (command.type === "localization_start_request") send({ type: "localization_observations_request", capture_policy: "robot_los_required", observation_count: 3 });
-      });
+        if (command.type === "localization_start_request") send({ type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: "robot_los_required", observation_count: 3 });
+      };
+      ws.onMessage(onMessage); bulk.onUpload = onMessage;
     });
     await page.goto("/?debug=1");
     await expect(page.locator("#enter")).toBeEnabled({ timeout: 15000 });
@@ -434,10 +437,16 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await page.screenshot({ path: testInfo.outputPath("connected.png") });
     await restoreView(page, connectedView);
     const beforeNear = handshakes;
-    await placeDirect(page, "retry");
-    await setSelection(page, 1); await page.waitForTimeout(100);
-    await placeDirect(page, "retry");
-    await setSelection(page, 0);
+    if (mode === "hand") {
+      // Physical buttons activate after a front approach and withdrawal. A
+      // pinched finger left inside the button remains deliberately disarmed.
+      await touchButton(page, "Retry");
+    } else {
+      await placeDirect(page, "retry");
+      await setSelection(page, 1); await page.waitForTimeout(100);
+      await placeDirect(page, "retry");
+      await setSelection(page, 0);
+    }
     await expect.poll(() => handshakes).toBe(beforeNear + 1);
     await activateButton(page);
     await expect.poll(async () => (await ui())?.wizardStep).toBe("localization");
@@ -561,8 +570,8 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
           draft.object.getObjectByName("NavigationHeading").visible &&
           Math.abs(dashed.material.uniforms.uDash.value - dashStyle.dashM) < 0.00001 &&
           Math.abs(dashed.material.uniforms.uGap.value - dashStyle.gapM) < 0.00001 &&
-          Math.abs(dashed.material.uniforms.uWidth.value - dashStyle.selectedWidthM) < 0.00001;
-      }, { aiming, dashStyle: ROBOT_LINE_STYLE })).toBe(true); }
+          Math.abs(dashed.material.uniforms.uWidth.value - dashStyle.widthM) < 0.00001;
+      }, { aiming, dashStyle: WORLD_DASH_STYLE })).toBe(true); }
       catch (error) {
         console.error("World capture:", name, await page.evaluate(() => {
           const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
@@ -764,10 +773,10 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       const route = app.client.route.object;
       const dashed = route.children.find((child: any) => child.material?.uniforms?.uDash);
       return route.visible && route.material.color.getHex() === 0xffffff &&
-        route.material.worldUnits && Math.abs(route.material.linewidth - dashStyle.selectedWidthM) < 0.00001 && route.material.dashed && route.material.opacity === 0.85 &&
+        route.material.worldUnits && Math.abs(route.material.linewidth - dashStyle.widthM) < 0.00001 && route.material.dashed && route.material.opacity === 0.85 &&
         dashed.visible && Math.abs(dashed.material.uniforms.uDash.value - dashStyle.dashM) < 0.00001 &&
         Math.abs(dashed.material.uniforms.uGap.value - dashStyle.gapM) < 0.00001;
-    }, ROBOT_LINE_STYLE)).toBe(true);
+    }, WORLD_DASH_STYLE)).toBe(true);
 
     sendState({ nav: { state: "following_path", outcome: null } });
     const beforeFollowingView = await page.evaluate(() => {

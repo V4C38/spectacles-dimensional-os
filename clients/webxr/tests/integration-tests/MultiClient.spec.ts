@@ -44,7 +44,7 @@ test.afterAll(async () => {
   if (server.exitCode === null) server.kill("SIGKILL");
 });
 
-async function connect(page: Page, shift: number) {
+async function connect(page: Page, shift: number, renderEnabled = true) {
   page.on("pageerror", error => console.error("Multi-client page:", error.message));
   page.on("console", message => { if (message.type() === "error") console.error(message.text()); });
   // Loopback is the real shared server; no page-local authoritative fixtures.
@@ -53,7 +53,7 @@ async function connect(page: Page, shift: number) {
     body: "<!doctype html><html><head><title>Shared ARModule integration</title></head><body></body></html>",
   }));
   await page.goto("/multi-client-test");
-  await page.evaluate(async ({ coreUrl, shift, port }) => {
+  await page.evaluate(async ({ coreUrl, shift, port, renderEnabled }) => {
     const { ARModuleSession } = await import(`${coreUrl}/websocket/arModuleSession.ts`);
     const { ClientTrackingOriginStore } = await import(`${coreUrl}/localization/clientTrackingOrigin.ts`);
     const { BrowserWebSocketTransport } = await import("/src/websocket/BrowserWebSocketTransport.ts");
@@ -79,10 +79,10 @@ async function connect(page: Page, shift: number) {
         origin.restore({ position: [shift, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 });
       nav.applyView(session.view(), origin.T_odom_client, { position: [0, 0, 0], orientation: [0, 0, 0, 1] }, clock.now());
     });
-    const timer = setInterval(() => { session.tick(); nav.tick(clock.now(), 1 / 60); renderer.render(scene, camera); }, 1000 / 60);
+    const timer = setInterval(() => { session.tick(); nav.tick(clock.now(), 1 / 60); if (renderEnabled) renderer.render(scene, camera); }, 1000 / 60);
     (window as any).multi = { session, nav, timer, clock, origin, sent };
     session.start();
-  }, { coreUrl, shift, port });
+  }, { coreUrl, shift, port, renderEnabled });
   await expect.poll(() => page.evaluate(() => {
     const view = (window as any).multi.session.view();
     return view.lastError ?? view.connection;
@@ -94,7 +94,7 @@ async function state(page: Page) {
   return page.evaluate(() => {
     const { session, nav } = (window as any).multi;
     return { raw: session.view().interaction, clientId: session.view().hello?.client_id,
-      error: session.view().lastError,
+      error: session.view().lastError, diagnostics: session.diagnostics(), connectedClients: session.view().state?.server.connected_clients,
       marker: nav.interaction.snapshot(), cross: nav.draftMarker.object.getObjectByName("Navigation blocked cross").visible };
   });
 }
@@ -106,8 +106,16 @@ test("one selected planner replicates a smooth shared draft, confirms, and hands
   await first.grantPermissions(["local-network-access"]);
   await second.grantPermissions(["local-network-access"]);
   const a = await first.newPage(), b = await second.newPage();
+  const extra = await Promise.all(Array.from({ length: 3 }, () => browser.newContext({ ignoreHTTPSErrors: true })));
+  const observers: Page[] = [];
   try {
     await connect(a, 0); await connect(b, 1);
+    for (let i = 0; i < extra.length; i++) {
+      await extra[i].grantPermissions(["local-network-access"]);
+      const observer = await extra[i].newPage(); observers.push(observer); await connect(observer, i + 2, false);
+    }
+    await expect.poll(async () => (await state(a)).connectedClients).toBe(5);
+    expect(new Set(await Promise.all([a,b,...observers].map(async page => (await state(page)).clientId))).size).toBe(5);
     const aid = (await state(a)).clientId;
     expect(aid).not.toBe((await state(b)).clientId);
     await a.evaluate(() => {
@@ -129,6 +137,7 @@ test("one selected planner replicates a smooth shared draft, confirms, and hands
     });
     await expect.poll(async () => (await state(b)).raw.authority?.held).toBe(false);
     await expect.poll(async () => (await state(b)).marker.blocked).toBe(true);
+    for (const observer of observers) await expect.poll(async () => (await state(observer)).marker.blocked).toBe(true);
     await expect.poll(async () => (await state(b)).cross).toBe(true);
     await expect.poll(async () => (await state(b)).raw.preview?.path_poses?.length).toBe(2);
     expect(await b.evaluate(() => {
@@ -164,5 +173,5 @@ test("one selected planner replicates a smooth shared draft, confirms, and hands
     });
     await info.attach("owner-state", { body: JSON.stringify(debug, null, 2), contentType: "application/json" });
     throw error;
-  } finally { await first.close(); await second.close(); }
+  } finally { await first.close(); await second.close(); for (const context of extra) await context.close(); }
 });

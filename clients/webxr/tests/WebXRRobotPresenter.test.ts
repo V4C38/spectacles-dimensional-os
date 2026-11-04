@@ -25,7 +25,7 @@ function view(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionSta
     connection: "ready",
     hasTrackingOrigin: false,
     hello: {
-      type: "hello", protocol_version: 2,
+      type: "hello", protocol_version: 3, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
       client_id: "c",
       time_sync: { ts_client: 0, ts_server: 0 },
       robot: {
@@ -252,4 +252,19 @@ it("plays the exact same box animation backward over the same duration", () => {
   expect(outline.scale.distanceTo(quarter)).toBeLessThan(1e-6);
   robot.tick(0.06); expect(outline.scale.length()).toBeCloseTo(0);
   robot.dispose();
+});
+
+it("picks the root sphere independently of the robot body", () => {
+  const robot = new WebXRRobotPresenter();
+  try {
+    robot.object.visible = true;
+    robot.object.updateMatrixWorld(true);
+    expect(robot.ownsTarget(robot.markerCollider)).toBe(true);
+    expect(robot.ownsTarget(robot.collider)).toBe(true);
+    expect(robot.markerCollider.geometry.type).toBe("SphereGeometry");
+    const ray = new THREE.Raycaster(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1));
+    expect(ray.intersectObject(robot.markerCollider).length).toBeGreaterThan(0);
+    ray.ray.origin.x = 0.05;
+    expect(ray.intersectObject(robot.markerCollider)).toHaveLength(0);
+  } finally { robot.dispose(); }
 });

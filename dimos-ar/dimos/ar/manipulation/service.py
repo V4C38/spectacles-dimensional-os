@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 import logging
+import time
 from typing import Any
 
+from dimos.ar.manipulation.errors import ManipulationError, spatial_error_code
 from dimos.ar.manipulation.protocol import ManipulationRequest
 from dimos.ar.manipulation.rpc import ManipulationRPC
 from dimos.ar.manipulation.spec import ARManipulationSpec
 from dimos.ar.websocket.protocol import encode_text
 
 logger = logging.getLogger(__name__)
+
+_STATE_CHANGING_ACTIONS = frozenset(
+    {"acquire", "release", "cancel", "resume", "execute", "reset_joints", "prepare_shutdown"}
+)
+
+
+async def _unchanged(value: dict[str, Any]) -> dict[str, Any]:
+    return value
 
 
 class ManipulationService:
@@ -24,6 +34,8 @@ class ManipulationService:
         on_ready: Callable[[], None] | None = None,
         on_snapshot: Callable[[dict[str, Any]], None] | None = None,
         on_result: Callable[[ManipulationRequest, dict[str, Any]], None] | None = None,
+        control_state: Callable[[], tuple[str, int]] | None = None,
+        prepare_outbound: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     ) -> None:
         self._rpc = ManipulationRPC(runtime)
         self._send = send
@@ -31,6 +43,10 @@ class ManipulationService:
         self._on_ready = on_ready
         self._on_snapshot = on_snapshot
         self._on_result = on_result
+        self._control_state = control_state
+        self._prepare_outbound = prepare_outbound or _unchanged
+        self._heartbeat: asyncio.Task[None] | None = None
+        self._assets: dict[str, tuple[str, dict[str, Any]]] = {}
         self._latest_snapshot: dict[str, Any] | None = None
         self._tasks: set[asyncio.Task[None]] = set()
         self._pending: set[tuple[str, str]] = set()
@@ -44,9 +60,13 @@ class ManipulationService:
         self._pending_stop: tuple[str | None, int | None] | None = None
         self._authority_epoch: str | None = None
         self._authority_revision = -1
+        self._pending_revoke: tuple[str, str, int, str] | None = None
+        self._snapshot_generation = 0
 
     def start(self) -> None:
         self._poll = asyncio.create_task(self._poll_state())
+        if self._control_state is not None:
+            self._heartbeat = asyncio.create_task(self._heartbeat_loop())
 
     def connect(self, client_id: str) -> None:
         self._clients.add(client_id)
@@ -121,8 +141,9 @@ class ManipulationService:
         body = {**request.payload, "action": request.action, "group_id": request.group_id}
         if request.action == "update":
             body["ts"] += clock_offset
+        call = self._state_call if request.action in _STATE_CHANGING_ACTIONS else self._rpc.call
         try:
-            result = await self._rpc.call(
+            result = await call(
                 "ar_manipulation_command",
                 client_id,
                 body,
@@ -131,7 +152,19 @@ class ManipulationService:
             if request.action == "prepare_shutdown":
                 self._quiescent = result.get("quiescent") is True
         except ValueError as exc:
-            result = {"status": "rejected", "code": "rejected", "message": str(exc)}
+            code = exc.code if isinstance(exc, ManipulationError) else spatial_error_code(str(exc))
+            recoverable = request.action in {"update", "evaluate", "plan"} and code in {
+                "ik_failed",
+                "joint_limit",
+                "collision",
+            }
+            result = {
+                "status": "infeasible" if recoverable else "rejected",
+                "code": code,
+                "message": str(exc),
+            }
+            if isinstance(exc, ManipulationError) and exc.failed_joints:
+                result["failed_joints"] = exc.failed_joints
             logger.info("Manipulation request rejected: %s: %s", request.action, str(exc))
         except Exception as exc:
             logger.exception("Manipulation command failed")
@@ -149,7 +182,17 @@ class ManipulationService:
             "infeasible",
             "feasible",
         }:
+            result = await self._prepare_outbound({**result, "type": "manipulation_result"})
             self._reply(client_id, request, result)
+
+    async def _state_call(self, method: str, *args: Any, timeout: float = 2.0) -> Any:
+        # Invalidate snapshots captured before admission and while the command
+        # was in flight. Asset materialization/packing can outlive its native RPC.
+        self._snapshot_generation += 1
+        try:
+            return await self._rpc.call(method, *args, timeout=timeout)
+        finally:
+            self._snapshot_generation += 1
 
     def _reply(self, client_id: str, request: ManipulationRequest, result: dict[str, Any]) -> None:
         if self._on_result is not None:
@@ -168,25 +211,74 @@ class ManipulationService:
                 ),
             )
 
+    async def _heartbeat_loop(self) -> None:
+        while not self._closed:
+            assert self._control_state is not None
+            epoch, revision = self._control_state()
+            try:
+                await self._rpc.call(
+                    "ar_manipulation_heartbeat",
+                    epoch,
+                    revision,
+                    time.monotonic() + 0.5,
+                    timeout=0.3,
+                )
+            except Exception:
+                logger.exception("Manipulation control-plane heartbeat unavailable")
+                await self._rpc.wait_idle("ar_manipulation_heartbeat")
+            await asyncio.sleep(0.1)
+
+    async def _materialize(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        result = dict(snapshot)
+        for kind in ("model", "plan"):
+            revision = result.pop(f"{kind}_revision", None)
+            if revision is not None:
+                cached = self._assets.get(kind)
+                if cached is None or cached[0] != revision:
+                    asset = await self._rpc.call("ar_manipulation_asset", kind, revision)
+                    if kind == "plan" and asset is None:
+                        # Planning/target updates may retire this optional asset
+                        # after snapshot capture. Joint feedback remains valid.
+                        result[kind] = None
+                        self._assets.pop(kind, None)
+                        continue
+                    if not isinstance(asset, dict):
+                        raise ValueError(f"native {kind} asset retired")
+                    cached = self._assets[kind] = (revision, asset)
+                result[kind] = cached[1]
+            elif kind == "plan" and "plan_metadata" in result:
+                result[kind] = None
+                self._assets.pop(kind, None)
+        result.pop("plan_metadata", None)
+        return result
+
     async def _poll_state(self) -> None:
         while not self._closed:
+            generation = self._snapshot_generation
             try:
                 snapshot = await self._rpc.call("ar_manipulation_snapshot")
-                self._latest_snapshot = snapshot
-                if self._on_snapshot is not None:
-                    self._on_snapshot(snapshot)
-                if snapshot.get("available") and not self._ready_reported:
-                    if self._on_ready is not None:
-                        self._on_ready()
-                    self._ready_reported = True
-                self._broadcast(encode_text({**snapshot, "type": "manipulation_state"}))
-            except Exception as exc:
-                logger.exception("Manipulation observation failed")
-                self._broadcast(
-                    encode_text(
-                        {"type": "manipulation_state", "available": False, "message": str(exc)}
-                    )
+                snapshot = await self._materialize(snapshot)
+                prepared = await self._prepare_outbound(
+                    {**snapshot, "type": "manipulation_state"}
                 )
+                if generation == self._snapshot_generation:
+                    self._latest_snapshot = prepared
+                    if self._on_snapshot is not None:
+                        self._on_snapshot(snapshot)
+                    if snapshot.get("available") and not self._ready_reported:
+                        if self._on_ready is not None:
+                            self._on_ready()
+                        self._ready_reported = True
+                    self._broadcast(encode_text(self._latest_snapshot))
+            except Exception as exc:
+                if generation == self._snapshot_generation:
+                    logger.exception("Manipulation observation failed")
+                    self._broadcast(
+                        encode_text(
+                            {"type": "manipulation_state", "available": False, "message": str(exc)}
+                        )
+                    )
+            await self._rpc.wait_readers()
             await asyncio.sleep(0.1)
 
     def _record_authority(self, epoch: object, revision: object) -> None:
@@ -201,17 +293,30 @@ class ManipulationService:
 
     def revoke(self, epoch: str, lease_id: str, revision: int, reason: str) -> None:
         self._record_authority(epoch, revision)
-        if not self._closed:
-            self._spawn(
-                self._rpc.call("ar_manipulation_revoke", epoch, lease_id, revision, reason),
-                ("server", f"revoke-{revision}"),
-            )
+        if self._closed:
+            return
+        self._pending_revoke = (epoch, lease_id, revision, reason)
+        key = ("server", "revoke")
+        if key not in self._pending:
+            self._spawn(self._drain_revocations(), key)
+
+    async def _drain_revocations(self) -> None:
+        while self._pending_revoke is not None:
+            envelope = self._pending_revoke
+            self._pending_revoke = None
+            try:
+                call = self._rpc.call if envelope[3] == "target_changed" else self._state_call
+                await call("ar_manipulation_revoke", *envelope)
+            except TimeoutError:
+                await self._rpc.wait_idle("ar_manipulation_revoke")
+                self._snapshot_generation += 1
 
     def emergency_stop(self, epoch: str | None = None, revision: int | None = None) -> None:
         key = ("server", "estop")
         if self._closed:
             return
         self._updates.clear()
+        self._snapshot_generation += 1
         self._record_authority(epoch, revision)
         self._pending_stop = (epoch, revision)
         if key not in self._pending:
@@ -222,7 +327,11 @@ class ManipulationService:
             epoch, revision = self._pending_stop
             self._pending_stop = None
             args = () if epoch is None else (epoch, revision)
-            await self._rpc.call("ar_manipulation_stop", *args)
+            try:
+                await self._state_call("ar_manipulation_stop", *args)
+            except TimeoutError:
+                await self._rpc.wait_idle("ar_manipulation_stop")
+                self._snapshot_generation += 1
 
     def disconnect(self, client_id: str) -> None:
         self._clients.discard(client_id)
@@ -230,13 +339,19 @@ class ManipulationService:
         if self._closed or self._quiescent:
             return
         self._spawn(
-            self._rpc.call("ar_manipulation_disconnect", client_id),
+            self._state_call("ar_manipulation_disconnect", client_id),
             (client_id, "disconnect"),
         )
 
     async def close(self) -> None:
         self._closed = True
+        self._pending_stop = None
+        self._pending_revoke = None
         # Retire observation calls before the runtime and its RPC session shut down.
+        if self._heartbeat:
+            self._heartbeat.cancel()
+            await asyncio.gather(self._heartbeat, return_exceptions=True)
+            self._heartbeat = None
         if self._poll:
             self._poll.cancel()
             await asyncio.gather(self._poll, return_exceptions=True)
@@ -252,14 +367,11 @@ class ManipulationService:
                     if self._authority_epoch is None
                     else (self._authority_epoch, self._authority_revision + 1)
                 )
-                await self._rpc.call("ar_manipulation_stop", *stop_args, timeout=0.8)
-                await asyncio.gather(
-                    *(
-                        self._rpc.call("ar_manipulation_disconnect", client, timeout=0.3)
-                        for client in clients
-                    ),
-                    return_exceptions=True,
-                )
+                async with asyncio.timeout(0.8):
+                    await self._rpc.wait_idle("ar_manipulation_stop")
+                    await self._rpc.call("ar_manipulation_stop", *stop_args, timeout=0.8)
+                for client in clients:
+                    await self._rpc.call("ar_manipulation_disconnect", client, timeout=0.3)
             except Exception:
                 logger.warning(
                     "Manipulation stop acknowledgement unavailable during teardown", exc_info=True
@@ -267,3 +379,4 @@ class ManipulationService:
         for task in tuple(self._tasks):
             task.cancel()
         await asyncio.gather(*tuple(self._tasks), return_exceptions=True)
+        self._rpc.close()

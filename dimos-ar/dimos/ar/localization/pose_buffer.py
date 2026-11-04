@@ -239,9 +239,6 @@ def _interpolate(
         last = samples[-1]
         return last if abs(last.ts_server - ts_server) <= max_gap_s else None
 
-    if after.ts_server - before.ts_server > max_gap_s:
-        return None
-
     span = after.ts_server - before.ts_server
     if span <= 1e-6:
         return before

@@ -553,3 +553,15 @@ export function createPanelSurface(parent: SceneObject, name: string, width: num
   rectangle.setBorderGradient(PrimaryNeutralGradients.defaultBorder);
   return rectangle;
 }
+
+/** Inter world-label calibration, shared by mobile robot and arm markers. */
+export function createRobotLabelText(parent: SceneObject, name: string, emM: number,
+  xM: number, yM: number, widthM: number, semibold: boolean, color: vec4, order: number): Text {
+  const text = createText({ parent, name, text: "", fontSize: emM * 100 * 32 / 0.8216,
+    color, position: new vec3(xM * 100, yM * 100, 0.1), horizontalAlignment: HorizontalAlignment.Center,
+    worldSpaceRect: Rect.create(-widthM * 50, widthM * 50, -20, 0) });
+  text.font = (semibold ? requireAsset("../../../Fonts/Inter/Inter-Semibold.ttf") : requireAsset("../../../Fonts/Inter/Inter-Regular.ttf")) as Font;
+  text.sizeToFit = false; text.lineSpacing = (2478 / 2048) * 0.8216;
+  text.verticalAlignment = VerticalAlignment.Top; text.depthTest = true; text.setRenderOrder(order);
+  return text;
+}

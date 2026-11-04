@@ -32,8 +32,11 @@ from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationB
 from dimos.ar.localization.worker import LocalizationWorker
 from dimos.ar.manipulation.frames import ReferencePose
 from dimos.ar.manipulation.protocol import ManipulationRequest
+from dimos.ar.manipulation.rpc import ManipulationRPC
 from dimos.ar.manipulation.service import ManipulationService
 from dimos.ar.manipulation.spec import ARManipulationSpec
+from dimos.ar.navigation.control_service import NavigationControlService
+from dimos.ar.navigation.control_spec import ARNavigationControlSpec
 from dimos.ar.navigation.coordinator import NavGoalCoordinator
 from dimos.ar.navigation.preview_planner import PreviewPlanner
 from dimos.ar.navigation.preview_service import NavigationPreviewService
@@ -82,7 +85,6 @@ from dimos.ar.websocket.protocol import (
     UserMessageRequest,
     encode_localization_observations_request,
     encode_localization_result,
-    encode_nav_goal,
     encode_pose,
     encode_state,
     encode_text,
@@ -124,6 +126,8 @@ class LocalizationConfig(BaseModel):
 
 
 class ARModuleConfig(ModuleConfig):  # type: ignore[misc]
+    robot_display_name: str | None = Field(default=None, min_length=1, max_length=80)
+    object_detection: bool = False
     stationary_base: ReferencePose | None = None
     robot: RobotName = RobotName.UNITREE_GO2
     port: int = 8787
@@ -172,6 +176,8 @@ class ARModuleConfig(ModuleConfig):  # type: ignore[misc]
 
 def profile_for_config(config: ARModuleConfig) -> RobotProfile:
     profile = get_profile(config.robot)
+    if config.robot_display_name is not None:
+        profile = replace(profile, display_name=config.robot_display_name)
     if config.odom_scale_correction_factor is not None:
         profile = replace(profile, odom_scale_correction_factor=config.odom_scale_correction_factor)
     mounts = config.fiducial_marker_mounts
@@ -223,6 +229,9 @@ class ARModule(Module):  # type: ignore[misc]
     _previews: NavigationPreviewService
     _agent_service: ARAgentService
     _agent_control: ARAgentControlSpec | None = None
+    _agent_mode_rpc: ManipulationRPC | None = None
+    _navigation_control: ARNavigationControlSpec | None = None
+    _navigation_service: NavigationControlService | None = None
     _mode_task: asyncio.Task[None] | None = None
     _manipulation: ARManipulationSpec | None = None
     _manipulation_service: ManipulationService | None = None
@@ -242,6 +251,12 @@ class ARModule(Module):  # type: ignore[misc]
         self._interaction_task = None
         self._interaction_sent_revision = -1
         self._native_sequences = {}
+        if self._navigation_control is not None:
+            self._navigation_service = NavigationControlService(
+                self._navigation_control,
+                lambda: (self._interaction.epoch, self._interaction.revision),
+                self._native_navigation_failed,
+            )
         self._pending_arm_motion: set[str] = set()
         self._arm_uncertain = False
         self._arm_stop_pending = False
@@ -254,9 +269,11 @@ class ARModule(Module):  # type: ignore[misc]
         self._pairing_rejected = 0
         self._pairing_accepted = 0
         self._map_localization: MapLocalization | None = None
-        self._replay_mode = getattr(
-            global_config, "unitree_connection_type", None
-        ) == "replay" or global_config.robot_ip in ("fake", "mock", "replay")
+        self._replay_mode = (
+            bool(getattr(global_config, "replay", False))
+            or getattr(global_config, "unitree_connection_type", None) == "replay"
+            or global_config.robot_ip in ("fake", "mock", "replay")
+        )
         self._odometry = RobotOdometry(
             factor=self._profile.odom_scale_correction_factor, recording=self._replay_mode
         )
@@ -286,8 +303,11 @@ class ARModule(Module):  # type: ignore[misc]
                 self._manipulation,
                 self._ws_server.schedule_send_to_client,
                 self._ws_server.schedule_broadcast_text,
+                on_ready=lambda: logger.info("Manipulation runtime ready"),
                 on_snapshot=self._on_manipulation_snapshot,
                 on_result=self._on_manipulation_result,
+                control_state=lambda: (self._interaction.epoch, self._interaction.revision),
+                prepare_outbound=self._ws_server.prepare_outbound_async,
             )
         self._nav_goal_coordinator = NavGoalCoordinator(
             odom_scale_correction_factor=self._profile.odom_scale_correction_factor,
@@ -328,6 +348,7 @@ class ARModule(Module):  # type: ignore[misc]
             localization_available=bool(self._policy.providers),
             agent_available=self.config.agent,
             manipulation_available=self._manipulation is not None,
+            object_detection_available=self.config.object_detection,
             supported_navigation_inputs=self._profile.supported_navigation_inputs,
         )
         self._tele_cmd_vel_publisher = None
@@ -428,6 +449,8 @@ class ARModule(Module):  # type: ignore[misc]
     def start(self) -> None:
         super().start()
         self._loop.call_soon_threadsafe(self._localization_runner.start)
+        if self._navigation_service is not None:
+            self._loop.call_soon_threadsafe(self._navigation_service.start)
         self._loop.call_soon_threadsafe(self._start_interaction_poll)
         if self._manipulation_service is not None:
             self._loop.call_soon_threadsafe(self._manipulation_service.start)
@@ -446,15 +469,27 @@ class ARModule(Module):  # type: ignore[misc]
 
     @rpc
     def stop(self) -> None:
+        if getattr(self, "_ar_stopping", False):
+            return
+        self._ar_stopping = True
         logger.info("ARModule stopping")
         self._cancel_tele_cmd_vel()
         if self._mode_task is not None:
             self._loop.call_soon_threadsafe(self._mode_task.cancel)
+        if self._agent_mode_rpc is not None:
+            self._loop.call_soon_threadsafe(self._agent_mode_rpc.close)
         if self._interaction_task is not None:
             self._loop.call_soon_threadsafe(self._interaction_task.cancel)
         if self._stationary_task is not None:
             self._loop.call_soon_threadsafe(self._stationary_task.cancel)
         for name, service in (
+            ("navigation", getattr(self, "_navigation_service", None)),
+            (
+                "telemetry",
+                getattr(self, "_state_publisher", None)
+                if hasattr(getattr(self, "_state_publisher", None), "close")
+                else None,
+            ),
             ("manipulation", getattr(self, "_manipulation_service", None)),
             ("preview", getattr(self, "_previews", None)),
             ("localization", getattr(self, "_localization_runner", None)),
@@ -569,7 +604,7 @@ class ARModule(Module):  # type: ignore[misc]
         for marker in self._agent_service.marker_snapshot():
             self._ws_server.schedule_send_to_client(client_id, marker)
         self._broadcast_state()
-        if self._replay_mode:
+        if self._replay_mode or self.config.stationary_base is not None:
             pose = self._odometry.history.latest()
             if pose is not None:
                 # History already uses corrected AR coordinates. Preserve its
@@ -606,6 +641,12 @@ class ARModule(Module):  # type: ignore[misc]
             self._map_localization.disconnect(client_id)
         self._policy.on_disconnect(client_id)
         if self._ws_server.connection_count == 0:
+            if self._manipulation_service is not None:
+                self._arm_stop_pending = True
+                self._interaction.set_motion_busy(True)
+                self._manipulation_service.emergency_stop(
+                    self._interaction.epoch, self._interaction.revision
+                )
             self._cancel_tele_cmd_vel()
             self._safety.on_last_disconnect()
             self._agent_service.reset()
@@ -745,6 +786,18 @@ class ARModule(Module):  # type: ignore[misc]
                     self._interaction.revision,
                     "target_changed",
                 )
+            if (
+                request.action == "acquire"
+                and result.status == "accepted"
+                and result.code == "acquired"
+                and self._manipulation_service is not None
+            ):
+                self._manipulation_service.revoke(
+                    self._interaction.epoch,
+                    result.lease_id or "",
+                    self._interaction.revision - 1,
+                    "superseded",
+                )
             reply = result.wire()
         self._drain_interaction_retirements()
         self._ws_server.schedule_send_to_client(client_id, encode_text(reply))
@@ -773,11 +826,12 @@ class ARModule(Module):  # type: ignore[misc]
     async def _change_native_mode(self, request: InteractionRequest, client_id: str) -> None:
         try:
             assert self._agent_control is not None
-            accepted = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self._agent_control.ar_agent_set_manual, request.mode == "manual"
-                ),
-                2.0,
+            if self._agent_mode_rpc is None:
+                self._agent_mode_rpc = ManipulationRPC(self._agent_control)  # type: ignore[arg-type]
+            accepted = await self._agent_mode_rpc.call(
+                "ar_agent_set_manual",
+                request.mode == "manual",
+                timeout=2,
             )
             self._interaction.agent_busy = not self._agent_service.idle
             if request.epoch != self._interaction.epoch:
@@ -815,16 +869,33 @@ class ARModule(Module):  # type: ignore[misc]
         return self._submit_navigation_goal(NavGoalRequest(target.position, target.orientation))
 
     def _submit_navigation_goal(self, msg: NavGoalRequest) -> bool:
-        if self.goal_request.transport is None or getattr(self, "_requires_mapping_restart", False):
+        service = self._navigation_service
+        allow_fixture = getattr(self, "_allow_unfenced_navigation", False)
+        if (service is None and not allow_fixture) or getattr(
+            self, "_requires_mapping_restart", False
+        ):
+            return False
+        if allow_fixture and self.goal_request.transport is None:
             return False
         goal = self._nav_goal_coordinator.submit_goal(msg)
         self._broadcast_state()
-        self.goal_request.publish(goal)
+        if service is not None:
+            if not service.submit(goal, self._interaction.epoch, self._interaction.revision):
+                return False
+        else:
+            self.goal_request.publish(goal)
         yaw = PoseStamped(position=list(msg.position), orientation=list(msg.orientation)).yaw
         self._interaction.set_active_goal(
             {"type": "nav_goal", "pose": [*msg.position, yaw], "path_poses": [], "ts": time.time()}
         )
         return True
+
+    def _native_navigation_failed(self, goal_ts: float) -> None:
+        if self._nav_goal_coordinator.on_native_status(goal_ts, "failed"):
+            self._interaction.set_active_goal(None)
+            self._publish_stop()
+            self._broadcast_interaction(force=True)
+            self._broadcast_state()
 
     def _native_authorized(
         self, client_id: str, msg: NavGoalRequest | NavJoystickRequest, kind: InteractionKind
@@ -875,7 +946,7 @@ class ARModule(Module):  # type: ignore[misc]
                 replace(msg, position=target.position, orientation=target.orientation)
             )
 
-    def _on_navigation_preview(
+    async def _on_navigation_preview(
         self, client_id: str, request: NavGoalRequest, frame: object
     ) -> None:
         # The worker may complete after release, expiry, handover or aim changes.
@@ -883,7 +954,7 @@ class ARModule(Module):  # type: ignore[misc]
             return
         if request.epoch is None or request.lease_id is None or request.target_revision is None:
             return
-        body = json.loads(encode_nav_goal(frame))
+        body = await self._ws_server.prepare_outbound_async(self._navigation_payload(frame))
         if self._interaction.set_preview(
             body,
             epoch=request.epoch,
@@ -892,23 +963,28 @@ class ARModule(Module):  # type: ignore[misc]
             source_position=request.position,
             source_orientation=request.orientation,
         ):
-            self._ws_server.schedule_send_to_client(client_id, encode_nav_goal(frame))
+            self._ws_server.schedule_send_to_client(client_id, encode_text(body))
             self._broadcast_interaction()
 
     def _on_manipulation_snapshot(self, snapshot: dict[str, Any]) -> None:
         if snapshot.get("available") is not True:
             return
         execution = snapshot.get("execution")
+        self._interaction.set_following_tail(snapshot.get("following_tail"))
         self._arm_native_busy = (
             snapshot.get("operation_id") is not None
-            or snapshot.get("following") is True
             or execution in {"accepted", "executing", "uncertain", "fault"}
         )
+        # Live following is scoped to the editing lease; a normal release must
+        # allow immediate takeover while native handoff finishes asynchronously.
+        # Accepted execution/reset/parking and unresolved stop outcomes retain
+        # their independent robot-wide busy guards.
         # A transport timeout can leave native work running. Only an explicit,
         # confirmed stop resolves that uncertainty; missing observations cannot.
         stopped = (
             snapshot.get("stopped") is True
             and snapshot.get("stop_confirmed") is True
+            and snapshot.get("following") is not True
             and not self._arm_native_busy
             and execution in {"idle", "completed", "aborted", "rejected"}
         )
@@ -1280,6 +1356,8 @@ class ARModule(Module):  # type: ignore[misc]
         )
 
     def _clear_navigation(self) -> bool:
+        if self._navigation_service is not None:
+            self._navigation_service.cancel()
         return self._nav_goal_coordinator.on_estop()
 
     def _publish_stop(self) -> bool:
@@ -1298,7 +1376,7 @@ class ARModule(Module):  # type: ignore[misc]
                 return
             msg = copy.copy(msg)
             msg.ts = timestamp
-        self._state_publisher.publish_lidar(msg, lidar=self._lidar_settings)
+        await self._state_publisher.publish_lidar_async(msg, lidar=self._lidar_settings)
 
     async def handle_odom(self, msg: PoseStamped) -> None:
         try:
@@ -1326,6 +1404,9 @@ class ARModule(Module):  # type: ignore[misc]
         self._interaction.reset()
         self._broadcast_interaction()
         self._odometry.retire()
+        publisher = getattr(self, "_state_publisher", None)
+        if publisher is not None and hasattr(publisher, "invalidate_source"):
+            publisher.invalidate_source()
         self._previews.cancel_all()
         self._requires_mapping_restart = True
         self._localization_runner.cancel_all()
@@ -1371,7 +1452,7 @@ class ARModule(Module):  # type: ignore[misc]
         pose = poses.at_image_ts(timestamp)
         if pose is None:
             return
-        sample = await self._localization_worker.run(
+        sample = await self._localization_worker.run_if_idle(
             lambda: self._robot_observations.prepare_image(
                 msg,
                 ts_server=timestamp,
@@ -1400,13 +1481,32 @@ class ARModule(Module):  # type: ignore[misc]
         self._pairing_accepted = 0
         self._pairing_rejected = 0
 
+    @staticmethod
+    def _navigation_payload(frame: NavGoalFrame) -> dict[str, Any]:
+        return {
+            "type": "nav_goal",
+            "ts": frame.ts,
+            **({"pose": frame.pose} if frame.pose is not None else {}),
+            "path_poses": frame.path_poses,
+            **({"preview": True} if frame.preview else {}),
+            **({"preview_id": frame.preview_id} if frame.preview_id is not None else {}),
+        }
+
     async def handle_path(self, msg: Path) -> None:
         if not self._capabilities.supports(CapabilityName.NAVIGATION):
             return
         nav_goal_frame, state_changed = self._nav_goal_coordinator.on_path(msg)
         if nav_goal_frame is not None:
-            self._interaction.set_active_goal(json.loads(encode_nav_goal(nav_goal_frame)))
-            self._ws_server.schedule_broadcast_text(encode_nav_goal(nav_goal_frame))
+            epoch = self._interaction.epoch
+            body = await self._ws_server.prepare_outbound_async(
+                self._navigation_payload(nav_goal_frame)
+            )
+            if epoch != self._interaction.epoch or not self._nav_goal_coordinator.accepts_path(
+                nav_goal_frame.ts
+            ):
+                return
+            self._interaction.set_active_goal(body)
+            self._ws_server.schedule_broadcast_text(encode_text(body))
             self._broadcast_interaction()
         if state_changed:
             self._broadcast_state()

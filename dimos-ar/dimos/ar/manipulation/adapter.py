@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 from typing import Any
 
-from dimos.ar.manipulation.errors import ManipulationError
+from dimos.ar.manipulation.errors import ManipulationError, spatial_error_code
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.manipulation_spec import ExecutionResult, ExecutionStatus
 from dimos.manipulation.visualization.operator import ManipulationOperator, PoseTargetRequest
@@ -63,9 +63,18 @@ class DimOSManipulationAdapter:
         return state
 
     def evaluate(self, group: str, pose: Any) -> Any:
-        return ManipulationOperator(self.module, self.module._world_monitor).evaluate_pose_target(
-            PoseTargetRequest({group: pose})
-        )
+        try:
+            return ManipulationOperator(
+                self.module, self.module._world_monitor
+            ).evaluate_pose_target(PoseTargetRequest({group: pose}))
+        except Exception as exc:
+            code = self.error_code(str(exc))
+            if code in {"ik_failed", "joint_limit", "collision"}:
+                joint = getattr(exc, "joint_name", None)
+                raise ManipulationError(
+                    code, str(exc), [joint] if isinstance(joint, str) else None
+                ) from exc
+            raise
 
     def task_invoke(self, task: str, method: str, args: dict[str, Any] | None = None) -> Any:
         if args is None:
@@ -97,7 +106,13 @@ class DimOSManipulationAdapter:
         return self.module.execute(blocking=blocking, plan_id=plan_id)
 
     def plan_to_poses(self, poses: dict[str, Any], *, speed_scale: float) -> Any:
-        result = self.module.plan_to_poses(poses, speed_scale=speed_scale)
+        try:
+            result = self.module.plan_to_poses(poses, speed_scale=speed_scale)
+        except Exception as exc:
+            code = self.error_code(str(exc))
+            if code in {"ik_failed", "joint_limit", "collision"}:
+                raise ManipulationError(code, str(exc)) from exc
+            raise
         if not result.succeeded:
             raise ManipulationError(self.error_code(result.message), result.message)
         return result
@@ -114,10 +129,4 @@ class DimOSManipulationAdapter:
 
     @staticmethod
     def error_code(message: str | None, default: str = "rejected") -> str:
-        # Installed planning APIs expose text rather than structured failure reasons.
-        text = (message or "").lower()
-        if "limit" in text:
-            return "joint_limit"
-        if "ik" in text:
-            return "ik_failed"
-        return default
+        return spatial_error_code(message, default)

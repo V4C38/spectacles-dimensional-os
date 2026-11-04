@@ -33,6 +33,31 @@ class RobotPort:
         pass
 
 
+class NativeNavigationFixture:
+    """The native service boundary is simulated; ARModule authority stays real."""
+
+    def __init__(self, module: ARModule) -> None:
+        self.output = RobotPort(module, goals=True)
+        self.epoch: str | None = None
+        self.revision = -1
+
+    def start(self) -> None:
+        pass
+
+    def submit(self, goal: PoseStamped, epoch: str, revision: int) -> bool:
+        if epoch == self.epoch and revision <= self.revision:
+            return False
+        self.epoch, self.revision = epoch, revision
+        self.output.broadcast(None, goal)
+        return True
+
+    def cancel(self) -> None:
+        pass
+
+    async def close(self) -> None:
+        pass
+
+
 def main() -> None:
     with closing(socket.socket()) as available:
         available.bind(("127.0.0.1", 0))
@@ -42,6 +67,7 @@ def main() -> None:
     for stream in module.inputs.values():
         stream.transport = RobotPort(module)
     module.goal_request.transport = RobotPort(module, goals=True)
+    module._navigation_service = NativeNavigationFixture(module)
     module.stop_movement.transport = RobotPort(module)
     module.tele_cmd_vel.transport = RobotPort(module)
     # Deterministic native planner boundary; production request ownership is unchanged.

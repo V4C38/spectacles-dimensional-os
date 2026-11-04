@@ -106,3 +106,11 @@ class ManipulationAuthorityFence:
             self.revision = max(self.revision, revision)
             self.revoked_through = max(self.revoked_through, revision)
             self.lease = None
+
+    def supersede(self, epoch: str, revision: int) -> bool:
+        if revision < self.revision:
+            return False
+        self.epoch, self.revision = epoch, revision
+        self.revoked_through = max(self.revoked_through, revision)
+        self.lease = None
+        return True

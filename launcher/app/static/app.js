@@ -44,6 +44,7 @@
   const restoreTagsBtn = $("restoreTagsBtn");
   const fiducialEnabled = $("fiducialEnabled");
   const vpsEnabled = $("vpsEnabled");
+  const mixedPolicyBox = $("mixedPolicyBox");
   const blueprintSelect = $("blueprintSelect");
   const blueprintInfo = $("blueprintInfo");
   const agentConfig = $("agentConfig");
@@ -63,9 +64,18 @@
 
   let client = "specs";
   let blueprint = "unitree_go2_ar";
+  let robotProfileId = null;
+  let robotProfiles = [];
+  let profileLoadGeneration = 0;
   let phase = "idle";
   let checkOk = null;
   let lastStatus = {};
+  let canStatus = { ready: false, state: "checking", message: "Checking can0…" };
+  let plannerStatus = { ready: false, state: "checking", message: "Checking manipulation dependencies…" };
+  let canCheckPending = false;
+  let plannerCheckPending = false;
+  let canSetupPending = false;
+  let plannerPython = null;
   let keyVisible = false;
   let multisetVisible = false;
   const MAX_LOG_LINES = 5000;
@@ -96,9 +106,11 @@
     { field: "up_m", label: "Up (m)", step: 0.01 },
     { field: "yaw_deg", label: "Yaw (°)", step: 1 },
     { field: "pitch_deg", label: "Pitch (°)", step: 1 },
+    { field: "roll_deg", label: "Roll (°)", step: 1 },
   ];
 
   const BLUEPRINTS = {
+    openyam_ar_planner: { info: "OpenYAM · manipulation: plan/review/execute or grab the end effector to follow." },
     unitree_go2_ar: {
       info: "Unitree Go2 with ARModule\nManual Mode: place navigation goals from the headset.",
     },
@@ -108,15 +120,92 @@
     },
   };
 
+  const savedBlueprint = localStorage.getItem("dimos.blueprint");
+  if (savedBlueprint && BLUEPRINTS[savedBlueprint]) blueprintSelect.value = savedBlueprint;
+
   const LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR"];
 
   function applyBlueprintInfo() {
     blueprint = blueprintSelect.value;
     const spec = BLUEPRINTS[blueprint] || {};
     blueprintInfo.textContent = spec.info || "";
+    const manipulation = blueprint === "openyam_ar_planner";
+    robotIp.closest(".robot-ip-row").classList.toggle("hidden", manipulation);
+    $("simulationEnabled").closest("label").classList.toggle("hidden", !manipulation);
+
+    document.querySelectorAll("[data-client=specs]").forEach(button => { button.disabled = false; });
+    if (settingsReady) void refreshRobotProfiles();
     agentConfig.classList.toggle("hidden", !spec.agent);
     syncConfigCards();
+    syncHardwareSetup();
+    if (manipulation) { void refreshCan(); void refreshPlanner(); }
   }
+
+  function manipulationSelected() { return blueprint === "openyam_ar_planner"; }
+  function canRequired() {
+    return manipulationSelected() && !$("simulationEnabled").checked && canStatus.state !== "not_required";
+  }
+  function hardwareNotSetup() {
+    return manipulationSelected() && (!plannerStatus.ready || (canRequired() && !canStatus.ready));
+  }
+  function syncHardwareSetup() {
+    const selected = manipulationSelected();
+    const mock = $("simulationEnabled").checked;
+    const card = $("canCard");
+    card.classList.toggle("hidden", !selected);
+    const missing = canRequired() && !canStatus.ready;
+    card.classList.toggle("needs-setup", missing);
+    $("canSummary").textContent = mock ? "not required" : canStatus.ready ? "ready" : canStatus.state === "checking" ? "checking…" : "incomplete";
+    $("canSummary").dataset.phase = missing ? "needs_setup" : "";
+    $("canStatus").textContent = mock ? "Not required for mock hardware." : canStatus.message;
+    const settingUp = canSetupPending || lastStatus.can_setup_running || canStatus.setting_up;
+    $("canSetupBtn").textContent = settingUp ? "Setting up…" : "Set up CAN";
+    $("canSetupBtn").disabled = !selected || mock || configLocked || settingUp || canStatus.ready || checkOk !== true || ["checking", "installing"].includes(phase);
+    $("plannerStatus").classList.toggle("hidden", !selected);
+    $("plannerStatus").textContent = plannerStatus.message || "Checking manipulation dependencies…";
+    const deps = describeDeps(lastStatus);
+    depsSummary.textContent = deps.text;
+    depsSummary.dataset.phase = deps.phase;
+    syncInstallBanner();
+    applyHeader(lastStatus);
+    startBtn.disabled = configLocked || ["checking", "installing"].includes(phase) || checkOk !== true || settingUp || hardwareNotSetup();
+  }
+  async function refreshCan() {
+    if (!manipulationSelected() || canCheckPending || canSetupPending || document.hidden) return;
+    canCheckPending = true;
+    try {
+      const response = await fetch("/api/can/status");
+      if (!response.ok) throw new Error("CAN status check failed");
+      canStatus = await response.json();
+    } catch (error) { canStatus = {ready: false, state: "error", message: String(error)}; }
+    finally { canCheckPending = false; syncHardwareSetup(); }
+  }
+  async function refreshPlanner() {
+    if (!manipulationSelected() || plannerCheckPending || document.hidden) return;
+    plannerCheckPending = true;
+    try {
+      const response = await fetch("/api/planner/status");
+      if (!response.ok) throw new Error("Planner dependency check failed");
+      plannerStatus = await response.json();
+    } catch (error) { plannerStatus = {ready: false, state: "error", message: String(error)}; }
+    finally { plannerCheckPending = false; syncHardwareSetup(); }
+  }
+  $("simulationEnabled").addEventListener("change", syncHardwareSetup);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) { void refreshCan(); void refreshPlanner(); } });
+  setInterval(() => { void refreshCan(); void refreshPlanner(); }, 5000);
+  $("canSetupBtn").addEventListener("click", async () => {
+    if (canSetupPending || configLocked) return;
+    canSetupPending = true; syncHardwareSetup();
+    try {
+      const response = await fetch("/api/can/setup", {method: "POST"});
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "CAN setup failed");
+      canStatus = data;
+    } catch (error) {
+      appendLog(`CAN setup: ${error}`);
+      canStatus = {ready: false, state: "error", message: String(error)};
+    } finally { canSetupPending = false; syncHardwareSetup(); }
+  });
 
   function fiducialConfigured() {
     return mounts.length > 0;
@@ -169,6 +258,7 @@
       up_m: Number(src.up_m) || 0,
       yaw_deg: Number(src.yaw_deg) || 0,
       pitch_deg: Number(src.pitch_deg) || 0,
+      roll_deg: Number(src.roll_deg) || 0,
     };
   }
 
@@ -190,6 +280,7 @@
 
   function settingsBody() {
     return {
+      profile_id: robotProfileId,
       ...Object.fromEntries(Object.entries(policyInputs).map(([key, input]) => [key, Number(input.value)])),
       openai_api_key: apiKey.value.trim() || null,
       multiset_client_id: multisetClientId.value.trim() || null,
@@ -204,7 +295,6 @@
   }
 
   async function saveSettings() {
-    if (Object.values(policyInputs).some(input => !input.reportValidity())) return;
     try {
       const res = await fetch("/api/settings", {
         method: "PUT",
@@ -214,20 +304,19 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         appendLog(`Settings save failed: ${data.detail || res.statusText}`);
-        return data;
+        return null;
       }
       if (data.phase) applyStatus(data);
+      const profile = robotProfiles.find(p => p.id === robotProfileId);
+      if (profile) profile.settings = { ...profile.settings, ...settingsBody() };
       return data;
     } catch (err) {
       appendLog(`Settings save failed: ${err}`);
-      return {};
+      return null;
     }
   }
 
   function applySettingsPayload(data) {
-    Object.entries(policyInputs).forEach(([key, input]) => {
-      if (document.activeElement !== input && key in data) input.value = data[key] ?? policyDefaults[key];
-    });
     if (data.defaults?.mounts?.[0]) {
       Object.assign(DEFAULT_MOUNT, cloneMount(data.defaults.mounts[0]));
     }
@@ -255,6 +344,9 @@
     if (document.activeElement !== multisetClientSecret && "multiset_client_secret" in data) {
       multisetClientSecret.value = data.multiset_client_secret || "";
     }
+    Object.entries(policyInputs).forEach(([key, input]) => {
+      if (document.activeElement !== input) input.value = String(data[key] ?? policyDefaults[key]);
+    });
     settingsReady = true;
     syncLocalizationPanels();
     renderMountEditor();
@@ -269,6 +361,8 @@
       btn.disabled = locked;
     });
     blueprintSelect.disabled = locked;
+    for (const id of ["robotProfileSelect", "robotProfileName", "newRobotProfile", "duplicateRobotProfile", "deleteRobotProfile", "simulationEnabled"]) $(id).disabled = locked;
+    document.querySelectorAll("[data-client=specs]").forEach(button => { button.disabled = locked; });
     apiKey.disabled = locked;
     revealKey.disabled = locked;
     robotIp.disabled = locked;
@@ -283,7 +377,7 @@
     logLevel.disabled = locked;
     addTagBtn.disabled = locked;
     restoreTagsBtn.disabled = locked;
-    tagList.querySelectorAll("input, button, select, label").forEach((el) => {
+    tagList.querySelectorAll("input, button, label").forEach((el) => {
       el.disabled = locked;
     });
   }
@@ -404,11 +498,12 @@
     }
     tagList.replaceChildren();
     mounts.forEach((mount, index) => {
-      const card = document.createElement("div");
+      const card = document.createElement("details");
       card.className = "tag-card";
+      if (index === mounts.length - 1) card.open = true;
 
-      const summary = document.createElement("div");
-      summary.className = "tag-header";
+      const summary = document.createElement("summary");
+      summary.className = "tag-summary";
 
       const thumb = document.createElement("a");
       thumb.target = "_blank";
@@ -445,58 +540,44 @@
       const body = document.createElement("div");
       body.className = "tag-body";
 
-      const picker = document.createElement("select");
-      picker.className = "tag-selector";
-      picker.setAttribute("aria-label", `Select fiducial marker ${index + 1}`);
-      picker.disabled = configLocked;
+      const picker = document.createElement("div");
+      picker.className = "tag-picker";
       const used = usedMarkerIds(index);
       presetMarkerIds.forEach((presetId) => {
-        const option = document.createElement("option");
-        option.value = String(presetId);
-        option.textContent = `Fiducial marker ${presetId}`;
-        option.disabled = used.has(presetId) && mount.marker_id !== presetId;
-        picker.append(option);
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "tag-preset";
+        btn.dataset.markerId = String(presetId);
+        btn.setAttribute("aria-pressed", String(mount.marker_id === presetId));
+        btn.disabled = configLocked || (used.has(presetId) && mount.marker_id !== presetId);
+        const presetImg = document.createElement("img");
+        presetImg.src = `/api/apriltag/${presetId}.png`;
+        presetImg.alt = `ID ${presetId}`;
+        const presetLabel = document.createElement("span");
+        presetLabel.textContent = `ID ${presetId}`;
+        btn.append(presetImg, presetLabel);
+        btn.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          if (configLocked) return;
+          if (!assignMarkerId(index, presetId)) return;
+          renderMountEditor();
+          schedulePersist();
+        });
+        picker.append(btn);
       });
-      if (!isPresetId(mount.marker_id)) {
-        const uploaded = document.createElement("option");
-        uploaded.value = String(mount.marker_id);
-        uploaded.textContent = `Fiducial marker ${mount.marker_id} (uploaded)`;
-        picker.append(uploaded);
-      }
-      const uploadOption = document.createElement("option");
-      uploadOption.value = "upload";
-      uploadOption.textContent = "Upload PNG…";
-      picker.append(uploadOption);
-      picker.value = String(mount.marker_id);
-      const uploadInput = makeFileInput(async (file) => {
-        const originalId = mounts[index]?.marker_id;
-        const markerId = await decodeUploadedPng(file);
-        const currentIndex = mounts.findIndex(item => item.marker_id === originalId);
-        if (configLocked || currentIndex < 0 || !assignMarkerId(currentIndex, markerId)) return;
-        renderMountEditor();
-        schedulePersist();
-      });
-      picker.addEventListener("change", () => {
-        if (configLocked) { picker.value = String(mounts[index].marker_id); return; }
-        if (picker.value === "upload") {
-          picker.value = String(mounts[index].marker_id);
-          uploadInput.click();
-          return;
-        }
-        if (!assignMarkerId(index, Number(picker.value))) {
-          picker.value = String(mounts[index].marker_id);
-          return;
-        }
-        renderMountEditor();
-        schedulePersist();
-      });
-      metaWrap.append(picker, uploadInput);
 
-      const configuration = document.createElement("details");
-      configuration.className = "tag-config";
-      const configurationSummary = document.createElement("summary");
-      configurationSummary.className = "tag-config-summary";
-      configurationSummary.textContent = "Print size & placement";
+      const uploadLabel = document.createElement("label");
+      uploadLabel.className = "tag-preset tag-upload";
+      const uploadText = document.createElement("span");
+      uploadText.textContent = "Upload PNG";
+      const uploadInput = makeFileInput(async (file) => {
+        const markerId = await decodeUploadedPng(file);
+        if (!assignMarkerId(index, markerId)) return;
+        renderMountEditor();
+        schedulePersist();
+      });
+      uploadLabel.append(uploadInput, uploadText);
+      picker.append(uploadLabel);
 
       const grid = document.createElement("div");
       grid.className = "tag-grid";
@@ -533,18 +614,21 @@
       });
       footer.append(removeBtn);
 
-      body.append(grid, footer);
-      configuration.append(configurationSummary, body);
-      card.append(summary, configuration);
+      body.append(picker, grid, footer);
+      card.append(summary, body);
       tagList.append(card);
       syncThumb();
     });
   }
 
   function syncLocalizationPanels() {
-    $("markerPreferenceField").classList.toggle("hidden", !fiducialEnabled.checked);
     fiducialPanel.classList.toggle("hidden", !fiducialEnabled.checked);
+    $("markerPreferenceField").classList.toggle("hidden", !fiducialEnabled.checked);
     vpsPanel.classList.toggle("hidden", !vpsEnabled.checked);
+    mixedPolicyBox.classList.toggle(
+      "hidden",
+      !(fiducialEnabled.checked && vpsEnabled.checked)
+    );
   }
 
   function describeState(status) {
@@ -567,7 +651,7 @@
           phase: "error",
         };
       default: {
-        if (status.check_ok !== true || locNotSetup() || agentNotSetup()) {
+        if (status.check_ok !== true || locNotSetup() || agentNotSetup() || hardwareNotSetup()) {
           return { label: "Setup incomplete", detail: "", phase: "needs_setup" };
         }
         if (status.warning) {
@@ -598,7 +682,7 @@
     if (p === "checking") {
       return { text: "checking…", phase: "checking" };
     }
-    if (status.check_ok === true) {
+    if (status.check_ok === true && (!manipulationSelected() || plannerStatus.ready)) {
       return { text: "", phase: "" };
     }
     return { text: "incomplete", phase: "needs_setup" };
@@ -609,7 +693,7 @@
   }
 
   function syncInstallBanner() {
-    const ready = checkOk === true;
+    const ready = checkOk === true && (!manipulationSelected() || plannerStatus.ready);
     const busy =
       phase === "checking" ||
       phase === "installing" ||
@@ -626,7 +710,7 @@
     dimosRefField.classList.toggle("hidden", !cloning);
     installBtn.textContent = cloning ? "Download & install" : "Install";
     installBtn.classList.toggle("hidden", !showInstall);
-    installBtn.disabled = busy || phase === "installing" || phase === "checking";
+    installBtn.disabled = busy || configLocked || canSetupPending || lastStatus.can_setup_running;
     installBanner.classList.toggle("needs-setup", needsInstall);
 
     const versionBits = [];
@@ -857,6 +941,10 @@
 
   function applyStatus(status) {
     lastStatus = status || {};
+    if (status.planner) plannerStatus = status.planner;
+    const nextPython = status.dimos_python || null;
+    const environmentChanged = nextPython !== plannerPython;
+    plannerPython = nextPython;
     phase = status.phase || "idle";
     if ("check_ok" in status) checkOk = status.check_ok;
 
@@ -913,8 +1001,8 @@
     if (status.default_clone_dir && !cloneDir.value) {
       cloneDir.value = status.default_clone_dir;
     }
-    if (status.dimos_python && !dimosPython.value) {
-      dimosPython.value = status.dimos_python;
+    if ((status.dimos_install_dir || status.dimos_python) && !dimosPython.value) {
+      dimosPython.value = status.dimos_install_dir || status.dimos_python;
     }
 
     startBtn.disabled = busy || running || checkOk !== true;
@@ -924,6 +1012,8 @@
       phase === "running" || phase === "starting" || phase === "stopping"
     );
     setConfigLocked(locked);
+    syncHardwareSetup();
+    if (environmentChanged || phase === "ready") { void refreshPlanner(); }
   }
 
   function syncSetupMode() {
@@ -1000,9 +1090,11 @@
     });
   });
 
-  blueprintSelect.addEventListener("change", () => {
+  blueprintSelect.addEventListener("change", async () => {
     if (configLocked) return;
+    if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; await saveSettings(); }
     blueprint = blueprintSelect.value;
+    localStorage.setItem("dimos.blueprint", blueprint);
     applyBlueprintInfo();
   });
 
@@ -1102,6 +1194,29 @@
   logFilterLevel.addEventListener("change", applyLogFilter);
   logFilterSource.addEventListener("change", applyLogFilter);
 
+  let dimosPickerOpen = false;
+  dimosPython.addEventListener("click", async () => {
+    if (dimosPickerOpen) return;
+    dimosPickerOpen = true;
+    try {
+      const res = await fetch("/api/browse-dimos-install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: dimosPython.value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        appendLog(`File chooser error: ${data.detail || res.statusText}`);
+      } else if (data.path) {
+        dimosPython.value = data.path;
+      }
+    } catch (err) {
+      appendLog(`File chooser error: ${err}`);
+    } finally {
+      dimosPickerOpen = false;
+    }
+  });
+
   installBtn.addEventListener("click", async () => {
     const mode = setupMode();
     const body =
@@ -1115,6 +1230,7 @@
             clone_dir: cloneDir.value.trim(),
             dimos_ref: dimosRef.value.trim() || "main",
           };
+    body.manipulation = blueprint === "openyam_ar_planner";
     installBtn.disabled = true;
     try {
       const res = await fetch("/api/setup", {
@@ -1128,6 +1244,7 @@
         installBtn.disabled = false;
       }
       if (data.phase || "check_ok" in data) applyStatus(data);
+      void refreshCan(); void refreshPlanner();
     } catch (err) {
       appendLog(`Setup error: ${err}`);
       installBtn.disabled = false;
@@ -1141,10 +1258,12 @@
 
   startBtn.addEventListener("click", async () => {
     startBtn.disabled = true;
-    await saveSettings();
+    if (!(await saveSettings())) { startBtn.disabled = false; return; }
     const body = {
       blueprint,
       client,
+      profile_id: robotProfileId,
+      simulation: $("simulationEnabled").checked,
       robot_ip: robotIpAuto.checked ? null : robotIp.value.trim() || null,
     };
     try {
@@ -1232,4 +1351,70 @@
     .then((r) => r.json())
     .then(applyStatus)
     .catch(() => {});
+
+  async function refreshRobotProfiles(preferredId = robotProfileId) {
+    const generation = ++profileLoadGeneration;
+    const response = await fetch("/api/robot-profiles");
+    if (!response.ok) { appendLog("Could not load robot profiles"); return; }
+    const data = await response.json();
+    if (generation !== profileLoadGeneration) return;
+    const robot = blueprint === "openyam_ar_planner" ? "openyam" : "unitree_go2";
+    robotProfiles = data.profiles.filter(profile => profile.robot === robot);
+    if (!robotProfiles.length) {
+      await fetch("/api/robot-profiles", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ robot, name: robot === "openyam" ? "OpenYAM" : "UnitreeGo2" }) });
+      return refreshRobotProfiles(null);
+    }
+    const select = $("robotProfileSelect"); select.replaceChildren();
+    for (const profile of robotProfiles) {
+      const option = document.createElement("option"); option.value = profile.id; option.textContent = profile.name; select.append(option);
+    }
+    const remembered = localStorage.getItem(`dimos.profile.${robot}`);
+    robotProfileId = robotProfiles.some(p => p.id === preferredId) ? preferredId : robotProfiles.some(p => p.id === remembered) ? remembered : robotProfiles[0].id;
+    localStorage.setItem(`dimos.profile.${robot}`, robotProfileId);
+    select.value = robotProfileId;
+    applyRobotProfile();
+  }
+  function applyRobotProfile() {
+    const profile = robotProfiles.find(p => p.id === robotProfileId);
+    if (!profile) return;
+    $("robotProfileName").value = profile.name;
+    const settings = profile.settings;
+    fiducialEnabled.checked = settings.fiducial_marker;
+    vpsEnabled.checked = settings.vps;
+    mapCode.value = settings.map_code || "";
+    mounts = settings.mounts.map(cloneMount);
+    Object.entries(policyInputs).forEach(([key, input]) => {
+      input.value = String(settings[key] ?? policyDefaults[key]);
+    });
+    syncLocalizationPanels(); renderMountEditor(); syncConfigCards();
+  }
+  $("robotProfileSelect").addEventListener("change", async () => {
+    if (configLocked) return;
+    if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; await saveSettings(); }
+    robotProfileId = $("robotProfileSelect").value;
+    localStorage.setItem(`dimos.profile.${blueprint === "openyam_ar_planner" ? "openyam" : "unitree_go2"}`, robotProfileId);
+    applyRobotProfile();
+  });
+  $("robotProfileName").addEventListener("change", async () => {
+    if (configLocked || !robotProfileId) return;
+    const response = await fetch(`/api/robot-profiles/${robotProfileId}`, { method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name: $("robotProfileName").value}) });
+    if (!response.ok) { appendLog("Profile rename failed"); return; }
+    await refreshRobotProfiles();
+  });
+  async function createRobotProfile(duplicate) {
+    if (configLocked) return;
+    await saveSettings();
+    const current = robotProfiles.find(p => p.id === robotProfileId);
+    const response = await fetch("/api/robot-profiles", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({robot: blueprint === "openyam_ar_planner" ? "openyam" : "unitree_go2", name: (current?.name || "Robot") + "_2", source_id: duplicate ? robotProfileId : null}) });
+    const created = await response.json();
+    if (!response.ok) { appendLog("Profile creation failed"); return; }
+    await refreshRobotProfiles(created.id);
+  }
+  $("newRobotProfile").addEventListener("click", () => createRobotProfile(false));
+  $("duplicateRobotProfile").addEventListener("click", () => createRobotProfile(true));
+  $("deleteRobotProfile").addEventListener("click", async () => {
+    if (configLocked || !robotProfileId) return;
+    const response = await fetch(`/api/robot-profiles/${robotProfileId}`, {method: "DELETE"});
+    if (response.ok) await refreshRobotProfiles(null); else appendLog("Profile deletion failed");
+  });
 })();

@@ -47,7 +47,7 @@ type SetUIStateOptions = {
 };
 
 export interface UIPresenterDeps {
-  session: Pick<ARModuleSession, "view" | "start" | "stop" | "sendText" | "requestState">;
+  session: Pick<ARModuleSession, "view" | "start" | "stop" | "sendText" | "requestState" | "collaboration">;
   episode: LocalizationCaptureEpisode;
   transport: SpecsWebSocketTransport;
   clientTrackingOriginStore: ClientTrackingOriginStore;

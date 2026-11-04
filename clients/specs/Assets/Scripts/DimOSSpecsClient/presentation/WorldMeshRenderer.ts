@@ -28,6 +28,7 @@ export class WorldMeshRenderer {
     this.visual.meshShadowMode = MeshShadowMode.None;
     const pass = this.material.mainPass as Pass & { blendMode: BlendMode; depthWrite: boolean; twoSided: boolean };
     pass.blendMode = BlendMode.Normal; pass.depthWrite = false; pass.twoSided = true;
+    if (stroke) (this.material.mainPass as Pass & { nearWidthScale: number }).nearWidthScale = WORLD_DASH_STYLE.nearWidthScale;
     const attributes = [{ name: "position", components: 3 }, { name: "normal", components: 3 },
       { name: "color", components: 4 }, { name: "texture0", components: 2 }];
     if (stroke) for (let i = 1; i <= 5; i++) attributes.push({ name: `texture${i}`, components: 2 });
@@ -65,6 +66,12 @@ export class WorldMeshRenderer {
     this.upload(vertices, indices);
   }
 
+  setColor(color: WorldColor): void {
+    const input = this.triangleInput;
+    if (!input || sameNumbers(input.color, color)) return;
+    this.triangles(input.positions, input.indices, color, input.uvs, input.normals);
+  }
+
   setViewportHeight(height: number): void {
     (this.material.mainPass as Pass & { viewportHeightPx: number }).viewportHeightPx = Math.max(1, height);
   }
@@ -100,16 +107,25 @@ function sameNumbers(a: readonly number[], b: readonly number[]): boolean {
 
 /** Adaptive stroke quads encode the same segment metric used by the WebXR shader. */
 export class AdaptiveStrokeRenderer extends WorldMeshRenderer {
-  constructor(parent: SceneObject, name: string) { super(parent, name, WORLD_STROKE_MATERIAL, true); }
+  private baseWidth = 1;
+  constructor(parent: SceneObject, name: string) { super(parent, name, WORLD_STROKE_MATERIAL, true); this.style(1, 1); }
+  style(widthCm: number, opacity: number, color: readonly [number, number, number] = [1, 1, 1], startDistance = 0): void {
+    const pass = this.material.mainPass as Pass & { opacityScale: number; colorR: number; colorG: number; colorB: number; widthScale: number; startDistance: number };
+    pass.opacityScale = opacity; pass.colorR = color[0]; pass.colorG = color[1]; pass.colorB = color[2];
+    pass.widthScale = widthCm / this.baseWidth; pass.startDistance = startDistance;
+  }
+  minimumPixels = 2;
   segments(points: readonly Vec3[], widthCm: number, opacity: number,
     dashCm: number = WORLD_DASH_STYLE.dashM * 100, gapCm: number = WORLD_DASH_STYLE.gapM * 100,
-    continuous = false): void {
+    continuous = false, color: readonly [number, number, number] = [1, 1, 1]): void {
+    this.baseWidth = widthCm; this.style(widthCm, 1);
+    (this.material.mainPass as Pass & { minimumPixels: number }).minimumPixels = this.minimumPixels;
     const vertices: number[] = [], indices: number[] = [];
     let distance = 0;
     for (let i = 0; i + 1 < points.length; i += 2) {
       const a = points[i], b = points[i + 1], start = vertices.length / 22;
       for (const [side, t] of [[-1, 0], [1, 0], [-1, 1], [1, 1]]) {
-        vertices.push(...a, 0, 1, 0, 1, 1, 1, opacity, side, t,
+        vertices.push(...a, 0, 1, 0, ...color, opacity, side, t,
           b[0], b[1], b[2], continuous ? distance : 0, widthCm, dashCm, gapCm, a[0], a[1], a[2]);
       }
       indices.push(start, start + 1, start + 2, start + 2, start + 1, start + 3);

@@ -75,6 +75,24 @@ Selected navigation planning retains its reservation between placement gestures;
 ordinary release preserves the shared target and makes authority available again.
 Native arm execution remains robot-owned after the editing lease ends.
 
+Protocol v3 pairs the control session with a separate bulk WebSocket. Control carries
+small authority/target facts and revision references; models, routes, trajectories,
+LiDAR and localization images use the bulk channel. A bulk connection does not
+represent another client and never grants motion authority. ClientCore assembles
+revision-scoped assets incrementally; hosts retain their existing rendering ports.
+The owning target updates on the input frame, independently of publication cadence.
+
+Normal arm release retires the client's edit/native token and lets the server finish
+the last validated target. This finishing tail is takeoverable, unlike accepted
+Execute/reset/parking operations. New input supersedes its native generation; stale
+completion and old-owner disconnect callbacks cannot affect the successor. Native
+watchdogs and a control-plane liveness lease remain required during server-owned motion.
+
+Specs keeps the established pose-matching policy: interpolate bracketed captures;
+apply the 100 ms threshold only to nearest-sample fallback. Large bracket gaps are
+diagnostic data, not an additional capture rejection criterion. Tracking-reference
+resets still discard old pose samples and capture generations.
+
 **Specs logic** (tracked room)
 
 | Module | Role |

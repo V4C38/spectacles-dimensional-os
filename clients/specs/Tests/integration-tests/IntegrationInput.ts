@@ -19,8 +19,8 @@ export class IntegrationInput {
   ][] = [];
   private readonly isActive: () => boolean;
   private readonly isTargeting: () => boolean;
-  constructor() {
-    this.actor = InteractionManager.getInstance().getInteractorsByType(InteractorInputType.Mouse)[0];
+  constructor(inputType = InteractorInputType.Mouse) {
+    this.actor = InteractionManager.getInstance().getInteractorsByType(inputType)[0];
     if (!this.actor)
       throw new Error("Native integration requires the registered editor Mouse interactor");
     this.isActive = this.actor.isActive;

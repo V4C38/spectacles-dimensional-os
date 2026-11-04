@@ -1,3 +1,4 @@
+import { pairedBulkSocket } from "./fixtures/pairedBulkSocket";
 // @vitest-environment jsdom
 import "./fixtures/browserAudio";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +18,8 @@ class Socket {
   onerror: ((event: Event) => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
   sent: (string | Uint8Array)[] = [];
+  uploaded: Uint8Array[] = [];
+  bulk: ReturnType<typeof pairedBulkSocket> | null = null;
   nativeJoystick: { linear: number[]; angular: number[] }[] = [];
   private interaction: InteractionState = { type: "interaction_state", epoch: "fixture-robot", revision: 0,
     mode: "manual", authority: null, target: null, preview: null, active_goal: null };
@@ -58,7 +61,7 @@ class Socket {
     this.receive(shared);
   }
   result(position = [0, 0, 0]) {
-    const packet = this.sent.filter((value): value is Uint8Array => value instanceof Uint8Array).at(-1)!;
+    const packet = this.uploaded.at(-1)!;
     const ts = Math.max(...decodeLocalizationObservations(packet).observations.map(observation => observation.ts_capture));
     this.receive({ ...alignment, position, ts });
   }
@@ -75,7 +78,7 @@ class Socket {
   commands(type: string) { return this.sent.filter((value): value is string => typeof value === "string").map(value => JSON.parse(value)).filter(value => value.type === type); }
 }
 const hello: Hello = {
-  type: "hello", protocol_version: 2, client_id: "webxr", time_sync: { ts_client: 10, ts_server: 10 },
+  type: "hello", protocol_version: 3, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "webxr", time_sync: { ts_client: 10, ts_server: 10 },
   robot: { display_name: "Go2", body_bounds_m: [0.7, 0.5, 0.55], footprint_m: [0.7, 0.3], base_height_m: 0.33 },
   capabilities: {
     lidar: { available: true, reason: null }, localization: { available: true, reason: null },
@@ -90,7 +93,7 @@ const state: State = {
 };
 const pose = { position: [0, 0.5, 0], orientation: [0, 0, 0, 1] } as const;
 const alignment = { type: "localization_result", position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 10 };
-const request = { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 };
+const request = { type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: "any_angle", observation_count: 1 };
 const cleanup: (() => void)[] = [];
 afterEach(() => { cleanup.splice(0).forEach(dispose => dispose()); });
 function fixture(recognition: RecognitionPort | null = null, odomScale = 1, synthesis: SynthesisPort | null = null) {
@@ -100,7 +103,10 @@ function fixture(recognition: RecognitionPort | null = null, odomScale = 1, synt
   const camera = cameraFixture(undefined, { now: () => now });
   const client = new DimOSWebXRClient({
     recognition, synthesis, camera: camera.source, clock: { now: () => now },
-    transport: new BrowserWebSocketTransport({ url: "wss://pc.test/ar", socketFactory: () => {
+    transport: new BrowserWebSocketTransport({ url: "wss://pc.test/ar", socketFactory: url => {
+      if (url.endsWith("/bulk")) {
+        const control = sockets.at(-1)!; control.bulk = pairedBulkSocket(data => control.uploaded.push(data)); return control.bulk;
+      }
       const socket = new Socket(); sockets.push(socket); return socket as unknown as WebSocket;
     } }),
   });
@@ -119,6 +125,7 @@ function fixture(recognition: RecognitionPort | null = null, odomScale = 1, synt
   return { client, camera, sockets, tick, connect, advance: (delta: number) => { now += delta; } };
 }
 function submitAlignment(client: DimOSWebXRClient, timestamp: number) {
+  client.session.onTransportText(JSON.stringify({ ...request, capture_id: `fixture-${timestamp}` }) + "\n");
   client.session.submitLocalizationObservations([{
     ts_capture: timestamp, jpeg: new Uint8Array([1]),
     intrinsics: { fx: 1, fy: 1, cx: 0, cy: 0, width: 1, height: 1, distortion_model: "none", distortion: [] },
@@ -142,7 +149,7 @@ describe("WebXR complete ARModule session", () => {
     await f.camera.source.waitUntilOpen();
     f.tick(); await settle(); f.camera.emit(); await settle();
     expect(f.client.episode.view().phase).toBe("awaiting_result");
-    expect(socket.sent.filter(value => value instanceof Uint8Array)).toHaveLength(1);
+    expect(socket.uploaded).toHaveLength(1);
     f.client.suspend();
     expect(f.client.episode.view().phase).toBe("awaiting_result");
     expect(f.client.session.view().connection).toBe("ready");
@@ -167,7 +174,7 @@ describe("WebXR complete ARModule session", () => {
     const lidar = new DataView(cloud);
     lidar.setUint32(0, LIDAR_FOURCC, true); lidar.setFloat64(4, 10, true); lidar.setUint32(12, 1, true);
     lidar.setFloat32(16, 3, true); lidar.setFloat32(20, 0, true); lidar.setFloat32(24, 0.5, true);
-    socket.onmessage?.({ data: cloud } as MessageEvent);
+    socket.bulk!.lidar(new Uint8Array(cloud)); f.tick();
     expect(f.client.lidar.object.visible).toBe(true);
     expect(f.client.markers.object.children[0].position.z).toBeCloseTo(-3);
     const before = f.client.robot.object.position.clone();
@@ -205,7 +212,7 @@ describe("WebXR complete ARModule session", () => {
         f.camera.emit(); await settle();
       }
       expect(f.client.episode.view().phase).toBe("awaiting_result");
-      expect(socket.sent.filter(value => value instanceof Uint8Array)).toHaveLength(batch + 1);
+      expect(socket.uploaded).toHaveLength(batch + 1);
       expect(f.client.ui.setupCompleted).toBe(false);
       if (batch < 2) {
         // ARModule sends another observations request when no marker was detected.
@@ -387,7 +394,7 @@ it("uses the advertised XY heuristic only for native sensor clearance", () => {
   const data = new ArrayBuffer(28), wire = new DataView(data);
   wire.setUint32(0, LIDAR_FOURCC, true); wire.setFloat64(4, 10, true); wire.setUint32(12, 1, true);
   wire.setFloat32(16, 6, true); wire.setFloat32(20, -2.5, true); wire.setFloat32(24, 0.4, true);
-  socket.onmessage?.({ data } as MessageEvent); f.tick();
+  socket.bulk!.lidar(new Uint8Array(data)); f.tick();
   expect(f.client.lidar.object.geometry.getAttribute("color").getW(0)).toBeCloseTo(0.15625);
   expect(f.client.lidar.object.geometry.getAttribute("position").getZ(0)).toBeCloseTo(-6);
 });

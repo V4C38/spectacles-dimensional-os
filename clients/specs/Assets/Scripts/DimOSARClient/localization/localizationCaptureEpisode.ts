@@ -49,7 +49,7 @@ export interface LocalizationCaptureState {
 
 export type LocalizationTrace = { stage: string; atS: number; phase: LocalizationCapturePhase; captured: number; detail?: string };
 
-export type LocalizationSessionPort = Pick<ARModuleSession, "view" | "sendText" | "submitLocalizationObservations" | "cancelLocalizationSubmission" | "subscribeLocalizationObservationsRequest" | "subscribeOutbound" | "subscribeView">;
+export type LocalizationSessionPort = Pick<ARModuleSession, "view" | "sendText" | "submitLocalizationObservations" | "cancelLocalizationSubmission" | "subscribeLocalizationObservationsRequest" | "subscribeOutbound" | "subscribeView"> & Partial<Pick<ARModuleSession, "localizationResultDeadline">>;
 
 export interface LocalizationCaptureDependencies {
   session: LocalizationSessionPort;
@@ -263,6 +263,8 @@ export class LocalizationCaptureEpisode {
   tick(): void {
     this.publishTracking();
     const now = this.clock.now();
+    const submissionDeadline = this.session.localizationResultDeadline?.();
+    if (this.phase === "awaiting_result" && submissionDeadline != null) this.resultDeadline = submissionDeadline;
     if (this.suspended) {
       if (this.phase === "awaiting_result" && this.resultDeadline !== null && now >= this.resultDeadline) this.enterFailed("result timeout");
       return;

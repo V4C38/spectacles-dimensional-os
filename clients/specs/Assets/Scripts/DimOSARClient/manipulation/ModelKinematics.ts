@@ -94,10 +94,10 @@ export function samplePlan(
 }
 
 export function manipulationPlanPath(model: ManipulationModel, plan: ManipulationPlan,
-  tip: string, values: Record<string, number>, root: ManipulationPose): Vec3[] {
+  tip: string, values: Record<string, number>, root: ManipulationPose, startTime = 0): Vec3[] {
   const count = Math.min(240, Math.max(2, Math.ceil(plan.duration * 30)));
   return Array.from({ length: count + 1 }, (_, i) => composePose(root,
-    linkPoses(model, { ...values, ...samplePlan(plan, plan.duration * i / count) })[tip]).position);
+    linkPoses(model, { ...values, ...samplePlan(plan, startTime + (plan.duration - startTime) * i / count) })[tip]).position);
 }
 
 export function inversePose(pose: ManipulationPose): ManipulationPose {

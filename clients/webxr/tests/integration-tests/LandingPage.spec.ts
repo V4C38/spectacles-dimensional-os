@@ -1,3 +1,4 @@
+import { V3BulkPeer } from "./fixtures/V3BulkPeer";
 import { saveCaseProof } from "./fixtures/CaseProof";
 import { expect, test } from "@playwright/test";
 import { fileURLToPath } from "node:url";
@@ -15,6 +16,7 @@ test("prioritizes robot features with compact technical footnotes on desktop and
   let state: State = { type: "state", server: { connected_clients: 1 },
     lidar: { enabled: false, min_height_m: 0.1, max_height_m: 1.5, max_range_m: 5 },
     nav: { state: "idle", outcome: null }, agent: { idle: true } };
+  const bulk = new V3BulkPeer(); await bulk.install(page);
   await page.routeWebSocket("**/ar", socket => {
     const sendState = () => socket.send(JSON.stringify(state) + "\n");
     socket.onMessage(raw => {
@@ -27,7 +29,7 @@ test("prioritizes robot features with compact technical footnotes on desktop and
         sendState();
       }
       if (request.type !== "hello_request") return;
-      socket.send(JSON.stringify({ type: "hello", protocol_version: 2, client_id: "landing-review", time_sync: { ts_client: request.ts_client, ts_server: 1 },
+      socket.send(JSON.stringify({ type: "hello", protocol_version: 3, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "landing-review", time_sync: { ts_client: request.ts_client, ts_server: 1 },
         robot: { display_name: "Unitree Go2", body_bounds_m: [0.7, 0.5, 0.55], footprint_m: [0.7, 0.5], base_height_m: 0.33 },
         server_info: { robot_ip: "192.168.1.42", dimos_version: "0.4.0", armodule_version: "0.2.0" },
         capabilities: { navigation: { ...on, nav_goal: on, nav_joystick: on }, agent: on, lidar: on, localization: on, estop: on } }) + "\n");

@@ -1,3 +1,4 @@
+import { CAPABILITY_LABELS } from "@dimos-ar-client/presentation/CapabilityPresentation";
 import type { ARModuleSession, ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSession";
 
 declare const __DIMOS_BUILD__: string;
@@ -30,10 +31,14 @@ export class LandingInfoPresenter {
     this.detail("dimos", hello?.server_info?.dimos_version);
     this.detail("armodule", hello?.server_info?.armodule_version);
     let count = 0;
-    for (const key of ["navigation", "agent", "lidar", "localization", "estop"] as const) {
+    for (const key of Object.keys(CAPABILITY_LABELS) as (keyof typeof CAPABILITY_LABELS)[]) {
       const available = hello?.capabilities[key]?.available === true;
       const feature = this.root.querySelector<HTMLElement>(`[data-feature="${key}"]`);
-      if (feature) feature.hidden = !available;
+      if (feature) {
+        feature.hidden = !available;
+        const label = feature.lastElementChild;
+        if (label) label.textContent = CAPABILITY_LABELS[key];
+      }
       if (available) count++;
     }
     this.set("features", !hello ? "Waiting for robot…" : count ? "" : "No features available");
