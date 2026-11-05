@@ -44,7 +44,7 @@ test.afterAll(async () => {
   if (server.exitCode === null) server.kill("SIGKILL");
 });
 
-async function connect(page: Page, shift: number, renderEnabled = true) {
+async function connect(page: Page, shift: number, renderEnabled = true, specs = false) {
   page.on("pageerror", error => console.error("Multi-client page:", error.message));
   page.on("console", message => { if (message.type() === "error") console.error(message.text()); });
   // Loopback is the real shared server; no page-local authoritative fixtures.
@@ -53,7 +53,7 @@ async function connect(page: Page, shift: number, renderEnabled = true) {
     body: "<!doctype html><html><head><title>Shared ARModule integration</title></head><body></body></html>",
   }));
   await page.goto("/multi-client-test");
-  await page.evaluate(async ({ coreUrl, shift, port, renderEnabled }) => {
+  await page.evaluate(async ({ coreUrl, shift, port, renderEnabled, specs }) => {
     const { ARModuleSession } = await import(`${coreUrl}/websocket/arModuleSession.ts`);
     const { ClientTrackingOriginStore } = await import(`${coreUrl}/localization/clientTrackingOrigin.ts`);
     const { BrowserWebSocketTransport } = await import("/src/websocket/BrowserWebSocketTransport.ts");
@@ -61,7 +61,9 @@ async function connect(page: Page, shift: number, renderEnabled = true) {
     const THREE = await import("/node_modules/three/build/three.module.js");
     const origin = new ClientTrackingOriginStore();
     const clock = { now: () => performance.now() / 1000 };
-    const transport = new BrowserWebSocketTransport({ url: `ws://127.0.0.1:${port}/` });
+    const { specsTransport } = await import("/tests/integration-tests/fixtures/SpecsTransportHost.ts");
+    const transport = specs ? specsTransport(`ws://127.0.0.1:${port}/`)
+      : new BrowserWebSocketTransport({ url: `ws://127.0.0.1:${port}/` });
     const sent: object[] = [], sendText = transport.sendText.bind(transport);
     transport.sendText = (value: string) => { sent.push(JSON.parse(value)); sendText(value); };
     const session = new ARModuleSession({ transport, clock, clientTrackingOriginStore: origin });
@@ -80,9 +82,9 @@ async function connect(page: Page, shift: number, renderEnabled = true) {
       nav.applyView(session.view(), origin.T_odom_client, { position: [0, 0, 0], orientation: [0, 0, 0, 1] }, clock.now());
     });
     const timer = setInterval(() => { session.tick(); nav.tick(clock.now(), 1 / 60); if (renderEnabled) renderer.render(scene, camera); }, 1000 / 60);
-    (window as any).multi = { session, nav, timer, clock, origin, sent };
+    (window as any).multi = { host: specs ? "specs" : "webxr", session, nav, timer, clock, origin, sent };
     session.start();
-  }, { coreUrl, shift, port, renderEnabled });
+  }, { coreUrl, shift, port, renderEnabled, specs });
   await expect.poll(() => page.evaluate(() => {
     const view = (window as any).multi.session.view();
     return view.lastError ?? view.connection;
@@ -112,8 +114,9 @@ test("one selected planner replicates a smooth shared draft, confirms, and hands
     await connect(a, 0); await connect(b, 1);
     for (let i = 0; i < extra.length; i++) {
       await extra[i].grantPermissions(["local-network-access"]);
-      const observer = await extra[i].newPage(); observers.push(observer); await connect(observer, i + 2, false);
+      const observer = await extra[i].newPage(); observers.push(observer); await connect(observer, i + 2, false, i === 0);
     }
+    expect(await observers[0].evaluate(() => (window as any).multi.host)).toBe("specs");
     await expect.poll(async () => (await state(a)).connectedClients).toBe(5);
     expect(new Set(await Promise.all([a,b,...observers].map(async page => (await state(page)).clientId))).size).toBe(5);
     const aid = (await state(a)).clientId;

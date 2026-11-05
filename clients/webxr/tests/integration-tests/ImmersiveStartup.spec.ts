@@ -186,11 +186,11 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       };
       ws.onMessage(onMessage); bulk.onUpload = onMessage;
     });
-    await page.goto("/?debug=1");
+    await page.goto("/?debug=1&connection=local");
     await expect(page.locator("#enter")).toBeEnabled({ timeout: 15000 });
     await expect(page).toHaveTitle("dimOS AR");
     await expect(page.locator("body > #overlay header")).toHaveText("dimOS AR");
-    await expect(page.locator("#overlay main > *")).toHaveCount(4);
+    await expect(page.locator("#connection-controls")).toBeHidden();
     await page.selectOption("#hmd", hmd);
     await page.screenshot({ path: testInfo.outputPath("landing.png") });
     const cameraAccessRequests = await page.evaluate(denyFirstPermission => {
@@ -1277,7 +1277,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
 }
 
 test("renders full growing paths and keeps LiDAR behind opaque and transparent UI", async ({ page }) => {
-  await page.goto("/?debug=1");
+  await page.goto("/?debug=1&connection=local");
   const pixels = await page.evaluate(async () => {
     const fixture = await import("/tests/integration-tests/fixtures/Rendering.ts");
     return fixture.verifyRendering();

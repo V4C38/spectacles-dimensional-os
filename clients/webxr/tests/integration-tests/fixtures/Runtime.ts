@@ -294,7 +294,7 @@ export async function bootstrap(
     };
     ws.onMessage(onMessage); bulk.onUpload = onMessage;
   });
-  await page.goto("/?debug=1");
+  await page.goto("/?debug=1&connection=local");
   await page.selectOption("#hmd", mode === "hand" ? "quest3s" : "quest3");
   await page.evaluate(() => {
     const w = window as any,

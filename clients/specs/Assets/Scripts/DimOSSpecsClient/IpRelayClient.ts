@@ -1,3 +1,5 @@
+import { validPin } from "../DimOSARClient/websocket/ConnectionResolution";
+import { isValidHost } from "../DimOSARClient/websocket/hostNormalization";
 // Looks up a six-digit PIN on the IP relay and returns the LAN address.
 
 export const IP_RELAY_URL = "https://spectacles-ip-relay.johannestscharn.workers.dev";
@@ -19,13 +21,14 @@ export function routeConnectionField(
 ): { kind: "pin"; pin: string } | { kind: "ip"; host: string } | null {
   const text = field.trim();
   if (method === "pin") {
-    return /^\d{6}$/.test(text) ? { kind: "pin", pin: text } : null;
+    return validPin(text) ? { kind: "pin", pin: text } : null;
   }
   return text.length > 0 ? { kind: "ip", host: text } : null;
 }
 
 export class IpRelayClient {
   private readonly relayUrl: string;
+  private lookupPending = false;
 
   constructor(
     private internetModule: InternetModule,
@@ -35,6 +38,10 @@ export class IpRelayClient {
   }
 
   resolve(pin: string): Promise<ResolvedPin | null> {
+    // Native fetch has no portable cancellation API. Never accumulate outstanding requests
+    // if a platform request stalls past the UI/connection discovery deadline.
+    if (this.lookupPending) return Promise.resolve(null);
+    this.lookupPending = true;
     const request = new Request(this.relayUrl + "/v1/pins/" + pin, { method: "GET" });
     return this.internetModule
       .fetch(request)
@@ -44,12 +51,13 @@ export class IpRelayClient {
         }
         return response.text().then((raw: string) => {
           const body = JSON.parse(raw) as { ip?: unknown; port?: unknown };
-          if (!body || typeof body.ip !== "string" || typeof body.port !== "number") {
+          if (!body || typeof body.ip !== "string" || typeof body.port !== "number" || !Number.isInteger(body.port) || body.port < 1 || body.port > 65535 || !isValidHost(body.ip)) {
             return null;
           }
           return { ip: body.ip, port: body.port };
         });
       })
-      .catch(() => null);
+      .catch(() => null)
+      .finally(() => { this.lookupPending = false; });
   }
 }

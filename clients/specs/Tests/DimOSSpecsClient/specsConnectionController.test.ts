@@ -6,18 +6,19 @@ function fixture() {
   const events: { fire(): void; cancel: ReturnType<typeof vi.fn>; reset: ReturnType<typeof vi.fn> }[] = [];
   const pending: ((value: { ip: string; port: number } | null) => void)[] = [];
   const session = { view: () => ({ connection: "disconnected" }), start: vi.fn(), stop: vi.fn() };
-  const transport = { setUrl: vi.fn() }, onChanged = vi.fn();
+  const transport = { setUrl: vi.fn(), setConnectionResolver: vi.fn() }, onChanged = vi.fn();
+  const onConnectionTargetChanged = vi.fn();
   const controller = new SpecsConnectionController({
     script: { removeEvent: vi.fn(), createEvent: () => {
       let callback = () => {};
       const event = { bind: (fn: () => void) => { callback = fn; }, fire: () => callback(), cancel: vi.fn(), reset: vi.fn() };
       events.push(event); return event;
     } } as any,
-    session: session as any, transport, onChanged,
+    session: session as any, transport, onChanged, onConnectionTargetChanged,
     hostStore: { has: key => storage.has(key), getString: key => storage.get(key) ?? "", putString: (key, value) => { storage.set(key, value); }, remove: key => { storage.delete(key); } },
     ipRelayClient: { resolve: () => new Promise(resolve => pending.push(resolve)) },
   });
-  return { controller, storage, events, pending, session, transport, onChanged };
+  return { controller, storage, events, pending, session, transport, onChanged, onConnectionTargetChanged };
 }
 
 it("retires replaced PIN results and uses only the current attempt", async () => {
@@ -46,4 +47,28 @@ it("cancels a scheduled retry on edit and preserves the remembered PIN", async (
   h.pending[0](null); await Promise.resolve(); expect(h.events[0].reset).toHaveBeenCalledWith(2);
   h.controller.cancel(); h.events[0].fire();
   expect(h.pending).toHaveLength(1); expect(h.controller.storedPin()).toBe("012345");
+});
+
+
+it("refreshes the selected PIN on reconnect and clears it when switching to IP", async () => {
+  const h = fixture(); h.controller.start("pin", "012345");
+  h.pending[0]({ ip: "192.168.1.10", port: 8787 }); await Promise.resolve();
+  const resolver = h.transport.setConnectionResolver.mock.calls.at(-1)![0] as () => Promise<{ controlUrl: string }>;
+  await expect(resolver()).resolves.toEqual({ controlUrl: "ws://192.168.1.10:8787" });
+  const refreshed = resolver(); h.pending[1]({ ip: "192.168.1.11", port: 8788 });
+  await expect(refreshed).resolves.toEqual({ controlUrl: "ws://192.168.1.11:8788" });
+  expect(h.onConnectionTargetChanged).toHaveBeenCalledTimes(1);
+  h.controller.start("ip", "192.168.1.12");
+  expect(h.onConnectionTargetChanged).toHaveBeenCalledTimes(2);
+  expect(h.transport.setConnectionResolver).toHaveBeenLastCalledWith(undefined);
+  expect(h.transport.setUrl).toHaveBeenLastCalledWith("ws://192.168.1.12:8787");
+});
+
+it("times out initial PIN discovery and rejects its late result", async () => {
+  const h = fixture(); h.controller.start("pin", "012345");
+  h.events[2].fire();
+  expect(h.controller.snapshot().error).toBe("PIN lookup timed out");
+  h.pending[0]({ ip: "192.168.1.10", port: 8787 }); await Promise.resolve();
+  expect(h.session.start).not.toHaveBeenCalled();
+  expect(h.events[0].reset).toHaveBeenCalledWith(2);
 });

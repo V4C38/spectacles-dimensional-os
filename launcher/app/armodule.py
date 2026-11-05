@@ -125,6 +125,8 @@ class LauncherStatus:
     warning: str | None = None
     blueprint: str | None = None
     client: str | None = None
+    webxr_phase: str = "stopped"
+    webxr_error: str | None = None
     webxr_url: str | None = None
     webxr_local_url: str | None = None
     error: str | None = None
@@ -196,7 +198,9 @@ class ProcessManager:
             "dimos_ref": self.status.dimos_ref,
             "websocket_url": self.status.websocket_url,
             "host_ip": self.status.host_ip,
-            "pin": self.status.pin if self.status.client != "webxr" else None,
+            "pin": self.status.pin,
+            "webxr_phase": self.status.webxr_phase,
+            "webxr_error": self.status.webxr_error,
             "robot_ip": self.status.robot_ip,
             "warning": self.status.warning,
             "blueprint": self.status.blueprint,
@@ -578,8 +582,7 @@ class ProcessManager:
             await self._running_dimos_pids(), "existing DimOS process(es)"
         )
         ports = list(STACK_PORTS)
-        if client == "webxr":
-            ports.append(WEBXR_PORT)
+        # The optional WebXR gateway has an independent lifetime.
         for port in ports:
             await self._kill_port_listeners(port)
         stuck = [port for port in ports if self.port_in_use(port)]
@@ -810,15 +813,17 @@ class ProcessManager:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=str(webxr_dir),
+            start_new_session=True,
         )
-        assert proc.stdout is not None
-        while True:
-            raw = await proc.stdout.readline()
-            if not raw:
-                break
-            self._append_log(raw.decode("utf-8", errors="replace").rstrip("\n"))
-        if await proc.wait() != 0:
-            raise RuntimeError("npm ci failed in clients/webxr")
+        try:
+            assert proc.stdout is not None
+            while raw := await proc.stdout.readline():
+                self._append_log(raw.decode("utf-8", errors="replace").rstrip("\n"))
+            if await proc.wait() != 0:
+                raise RuntimeError("npm ci failed in clients/webxr")
+        finally:
+            if proc.returncode is None:
+                await self._stop_one(proc, "WebXR dependency installation")
 
     async def _build_webxr(self, env: dict[str, str]) -> None:
         self._append_log("Building optimized WebXR client…")
@@ -880,7 +885,7 @@ class ProcessManager:
         if client not in CLIENTS:
             raise ValueError(f"client must be one of {', '.join(CLIENTS)}")
         async with self._lock:
-            if self._proc is not None or self._webxr_proc is not None:
+            if self._proc is not None:
                 raise RuntimeError("ARModule is already running")
             if self._can_setup_running:
                 raise RuntimeError("Wait for CAN setup to finish")
@@ -900,8 +905,6 @@ class ProcessManager:
             self._require_vps_credentials(armodule_config)
             await self._clear_before_start(client=client)
             await self._configure_system_if_needed()
-            if client == "webxr":
-                await self._ensure_webxr_deps()
 
             pinned_ip = robot_ip.strip() if robot_ip else None
             if pinned_ip in ("simulated", "fake"):
@@ -943,8 +946,6 @@ class ProcessManager:
                 host_ip=host_ip,
                 pin=None,
                 robot_ip=pinned_ip,
-                webxr_url=None,
-                webxr_local_url=None,
                 warning=None,
                 error=None,
             )
@@ -954,7 +955,7 @@ class ProcessManager:
             self._startup_error = None
             self._append_log(f"$ {' '.join(argv)}")
             await self._spawn(argv, env=env, parse_armodule=True)
-            if client == "webxr":
+            if client == "webxr" and self._webxr_proc is None and self._webxr_start_task is None:
                 assert self._proc is not None
                 self._append_log("Waiting for ARModule before starting WebXR…")
                 self._webxr_start_task = asyncio.create_task(
@@ -975,49 +976,78 @@ class ProcessManager:
                 or self.status.phase != Phase.RUNNING
             ):
                 return
-        # A build can take seconds. Keep the manager available to Stop and child exits.
         try:
-            await self._build_webxr(env)
-        except (OSError, RuntimeError) as exc:
-            await self._finalize_exit(
-                f"Failed to build WebXR: {exc}", expected_proc=proc
-            )
-            return
-        async with self._lock:
-            if (
-                self._proc is not proc
-                or proc.returncode is not None
-                or self.status.phase != Phase.RUNNING
-                or self.status.client != "webxr"
-            ):
-                return
-            try:
-                await self._spawn_webxr(env)
-            except (OSError, RuntimeError) as exc:
-                error = f"Failed to start WebXR: {exc}"
-                self._append_log(error)
-                # Cleanup must not cancel the task performing it.
+            await self.start_webxr(env=env, scheduled=True)
+        finally:
+            if self._webxr_start_task is asyncio.current_task():
                 self._webxr_start_task = None
-                await self._stop_children_unlocked()
+
+    async def start_webxr(
+        self, *, env: dict[str, str] | None = None, scheduled: bool = False
+    ) -> None:
+        async with self._lock:
+            if self._webxr_proc is not None or (
+                self._webxr_start_task is not None
+                and self._webxr_start_task is not asyncio.current_task()
+            ):
+                raise RuntimeError("WebXR is already running or starting")
+            self._webxr_start_task = asyncio.current_task()
+            self._set_status(webxr_phase="starting", webxr_error=None)
+        try:
+            await self._ensure_webxr_deps()
+            await self._build_webxr(env or os.environ.copy())
+            async with self._lock:
+                await self._spawn_webxr(env or os.environ.copy())
+                host_ip = self.status.host_ip
                 self._set_status(
-                    phase=Phase.ERROR,
-                    error=error,
-                    websocket_url=None,
-                    webxr_url=None,
-                    webxr_local_url=None,
+                    webxr_phase="running",
+                    webxr_local_url=f"https://localhost:{WEBXR_PORT}",
+                    webxr_url=(f"https://{host_ip}:{WEBXR_PORT}"
+                               if host_ip and host_ip != "unknown" else None),
                 )
-                return
-            host_ip = self.status.host_ip
-            self._set_status(
-                webxr_local_url=self.status.webxr_local_url
-                or f"https://localhost:{WEBXR_PORT}",
-                webxr_url=self.status.webxr_url
-                or (
-                    f"https://{host_ip}:{WEBXR_PORT}"
-                    if host_ip and host_ip != "unknown"
-                    else None
-                ),
-            )
+        except asyncio.CancelledError:
+            raise
+        except (OSError, RuntimeError) as exc:
+            self._append_log(f"Failed to start WebXR: {exc}")
+            self._set_status(webxr_phase="error", webxr_error=str(exc),
+                             webxr_url=None, webxr_local_url=None)
+            if not scheduled:
+                raise
+        finally:
+            if self._webxr_start_task is asyncio.current_task():
+                self._webxr_start_task = None
+
+    async def _stop_webxr_unlocked(self) -> bool:
+        proc, self._webxr_proc = self._webxr_proc, None
+        task, self._webxr_start_task = self._webxr_start_task, None
+        await self._cancel_task(task)
+        stopped = await self._stop_one(proc, "WebXR")
+        await self._cancel_task(self._webxr_reader_task)
+        self._webxr_reader_task = None
+        self._set_status(webxr_phase="stopped", webxr_error=None,
+                         webxr_url=None, webxr_local_url=None)
+        return stopped
+
+    async def stop_webxr(self) -> None:
+        async with self._lock:
+            await self._stop_webxr_unlocked()
+
+    async def stop_backend(self) -> None:
+        async with self._lock:
+            await self._stop_backend_unlocked()
+            self._set_status(phase=Phase.READY if self.status.check_ok else Phase.IDLE,
+                             websocket_url=None, pin=None, error=None)
+
+    async def _stop_backend_unlocked(self) -> bool:
+        proc, self._proc = self._proc, None
+        # Cancel a compatibility start waiting for this backend; retain a running gateway.
+        if self._webxr_start_task is not None and self.status.webxr_phase != "starting":
+            task, self._webxr_start_task = self._webxr_start_task, None
+            await self._cancel_task(task)
+        stopped = await self._stop_one(proc, "ARModule")
+        await self._cancel_task(self._reader_task)
+        self._reader_task = None
+        return stopped
 
     async def _stop_one(
         self,
@@ -1059,17 +1089,8 @@ class ProcessManager:
             pass
 
     async def _stop_children_unlocked(self) -> bool:
-        # Retire ownership before signalling: expected exits must not look like new failures.
-        webxr_proc, armodule_proc = self._webxr_proc, self._proc
-        self._webxr_proc = self._proc = None
-        await self._cancel_task(self._webxr_start_task)
-        self._webxr_start_task = None
-        stopped_webxr = await self._stop_one(webxr_proc, "WebXR")
-        await self._cancel_task(self._webxr_reader_task)
-        self._webxr_reader_task = None
-        stopped_ar = await self._stop_one(armodule_proc, "ARModule")
-        await self._cancel_task(self._reader_task)
-        self._reader_task = None
+        stopped_webxr = await self._stop_webxr_unlocked()
+        stopped_ar = await self._stop_backend_unlocked()
         return stopped_webxr or stopped_ar
 
     async def stop_armodule(self) -> None:
@@ -1181,7 +1202,6 @@ class ProcessManager:
 
     async def _read_webxr_stream(self, proc: asyncio.subprocess.Process) -> None:
         assert proc.stdout is not None
-        armodule_proc = self._proc
         try:
             while True:
                 raw = await proc.stdout.readline()
@@ -1196,10 +1216,13 @@ class ProcessManager:
 
         if self._webxr_proc is not proc or self.status.phase == Phase.STOPPING:
             return
-        self._append_log("WebXR Vite exited — stopping ARModule")
-        asyncio.create_task(
-            self._finalize_exit("WebXR Vite exited", expected_proc=armodule_proc)
-        )
+        async with self._lock:
+            if self._webxr_proc is proc:
+                self._webxr_proc = None
+                self._webxr_reader_task = None
+                self._append_log("WebXR exited; ARModule remains available")
+                self._set_status(webxr_phase="error", webxr_error="WebXR exited",
+                                 webxr_url=None, webxr_local_url=None)
 
     async def _finalize_exit(
         self,
@@ -1212,7 +1235,7 @@ class ProcessManager:
                 expected_proc is not None and self._proc is not expected_proc
             ):
                 return
-            await self._stop_children_unlocked()
+            await self._stop_backend_unlocked()
             error = self._startup_error or error
             self._set_status(
                 phase=Phase.ERROR
@@ -1220,6 +1243,5 @@ class ProcessManager:
                 else (Phase.READY if self.status.check_ok else Phase.IDLE),
                 error=error,
                 websocket_url=None,
-                webxr_url=None,
-                webxr_local_url=None,
+                pin=None,
             )

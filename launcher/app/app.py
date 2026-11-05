@@ -81,7 +81,7 @@ class StartBody(BaseModel):
     profile_id: str | None = None
     simulation: bool = False
     blueprint: Literal["unitree_go2_ar", "unitree_go2_ar_agentic", "openyam_ar_planner"]
-    client: Literal["specs", "webxr"]
+    client: Literal["specs", "webxr"] = "specs"
     robot_ip: str | None = None
 
 
@@ -483,6 +483,27 @@ async def api_armodule_start(body: StartBody) -> dict[str, Any]:
 @app.post("/api/armodule/stop", dependencies=[Depends(require_local_launcher)])
 async def api_armodule_stop() -> dict[str, Any]:
     await manager.stop_armodule()
+    return manager.snapshot()
+
+
+@app.post("/api/webxr/start", dependencies=[Depends(require_local_launcher)])
+async def api_webxr_start() -> dict[str, Any]:
+    try:
+        await manager.start_webxr()
+    except (RuntimeError, OSError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return manager.snapshot()
+
+
+@app.post("/api/webxr/stop", dependencies=[Depends(require_local_launcher)])
+async def api_webxr_stop() -> dict[str, Any]:
+    await manager.stop_webxr()
+    return manager.snapshot()
+
+
+@app.post("/api/backend/stop", dependencies=[Depends(require_local_launcher)])
+async def api_backend_stop() -> dict[str, Any]:
+    await manager.stop_backend()
     return manager.snapshot()
 
 

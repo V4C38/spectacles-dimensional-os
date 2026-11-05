@@ -1,5 +1,6 @@
 import { validDiagnosticEntry } from "./src/diagnostics/DiagnosticReporter";
 import { defineConfig, type Plugin } from "vitest/config";
+import { pinGatewayPlugin } from "./server/PinGateway";
 import basicSsl from "@vitejs/plugin-basic-ssl";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -73,7 +74,7 @@ function buildRevision(): string {
 
 export default defineConfig({
   define: { __DIMOS_BUILD__: JSON.stringify(buildRevision()) },
-  plugins: [stubOptionalModules(), basicSsl(), browserDiagnostics()],
+  plugins: [stubOptionalModules(), basicSsl(), pinGatewayPlugin(), browserDiagnostics()],
   resolve: {
     alias: {
       "@dimos-ar-client": clientCore,

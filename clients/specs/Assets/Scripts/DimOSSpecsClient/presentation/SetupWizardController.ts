@@ -142,6 +142,10 @@ export class SetupWizardController {
       script: deps.script, session: deps.session, transport: deps.transport,
       hostStore: deps.hostStore, ipRelayClient: deps.ipRelayClient,
       onChanged: () => { this.showConnectStatus(); this.refreshFooterButtons(); },
+      onConnectionTargetChanged: () => {
+        this.invalidateBaseline(); this.deps.episode.reset();
+        this.deps.clientTrackingOriginStore.clear();
+      },
     });
 
     this.view.bindHandlers(

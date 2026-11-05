@@ -69,3 +69,16 @@ describe("BrowserWebSocketTransport", () => {
     expect(onTransportClose).toHaveBeenCalledOnce();
   });
 });
+
+it("re-resolves control and preserves gateway identity for bulk", async () => {
+  const urls: string[] = [];
+  const transport = new BrowserWebSocketTransport({ url: "wss://gateway/ar", socketFactory: url => { urls.push(url); return new FakeSocket() as unknown as WebSocket; } });
+  const resolve = vi.fn().mockResolvedValueOnce({ controlUrl: "wss://gateway/api/connections/a/control", bulkUrl: "wss://gateway/api/connections/a/bulk" })
+    .mockResolvedValueOnce({ controlUrl: "wss://gateway/api/connections/b/control", bulkUrl: "wss://gateway/api/connections/b/bulk" });
+  transport.setConnectionResolver(resolve);
+  transport.connect(); await Promise.resolve();
+  const bulk = transport.createSibling("/bulk"); bulk.connect();
+  transport.close(); transport.connect(); await Promise.resolve();
+  expect(urls).toEqual(["wss://gateway/api/connections/a/control", "wss://gateway/api/connections/a/bulk", "wss://gateway/api/connections/b/control"]);
+  transport.close(); bulk.close();
+});

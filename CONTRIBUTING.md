@@ -666,7 +666,8 @@ server settings; point budgets and saved range preferences stay local.
 `SetupFlow` exposes read-only facts and command transitions using the canonical
 `SetupStep`. Both hosts consume Core activity derivation and `RobotSelection`
 eligibility. Coupled controls are applied from one snapshot per view.
-`SpecsConnectionController` owns PIN resolution, retry/poll events and invalidation;
+`SpecsConnectionController` owns connection entry, initial PIN resolution, retry/poll events and invalidation;
+portable `ConnectionResolution` fences discovery on subsequent transport reconnects.
 UI disposal retires those operations before the session stops. Native views remove
 their subscriptions and destroy their generated UI, retaining authored scene hosts.
 `WebXRSessionController` owns immersive events, stable reference spaces and tracking
@@ -712,3 +713,24 @@ reply for that same aim/origin. This prevents continuous costmap updates while d
 from starving the dotted preview route. Aim changes, origin changes, capability loss,
 and request deadlines retain their existing invalidation behavior; confirmed robot
 navigation is independent of preview requests.
+
+
+## Mixed-client PIN connections
+
+An ARModule PIN identifies a discoverable backend, not a client or an editing lease.
+Specs connects directly to the resolved backend. WebXR resolves the PIN through its
+optional LAN HTTPS service and uses the same service for secure control and bulk
+WebSocket proxying. Multiple clients may reuse one PIN; different PINs on the same
+WebXR service retain separate immutable routes. Protocol v3 and server authority
+remain unchanged.
+
+The WebXR service and ARModule have independent lifetimes. Starting or stopping the
+browser service must not restart a backend used by Specs. The launcher's global Stop
+still shuts down both services. A WebXR service can also connect browsers to another
+ARModule on the LAN; it need not run a local backend. Existing TLS certificate setup
+and LAN reachability requirements still apply.
+
+PIN resolution belongs to connection establishment, outside the application message
+path. Reconnects resolve again, while bulk sockets retain their control connection's
+backend route. Cancelled connection attempts must never open late sockets or restore
+state from a previously selected backend.

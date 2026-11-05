@@ -26,7 +26,7 @@
         <div class="panel-bottom" id="actionsBar">
           <div class="actions">
             <button type="button" class="btn primary" id="startBtn">Start</button>
-            <button type="button" class="btn" id="stopBtn">Stop</button>
+            <button type="button" class="btn" id="stopBtn">Stop all</button>
           </div>
         </div>
       </header>
@@ -162,11 +162,19 @@
               </div>
             </details>
             <div class="selector-group">
-              <span class="selector-label">Client</span>
-              <div class="tabs" role="group" aria-label="Client">
-                <button type="button" class="tab active" data-client="specs">SPECS</button>
-                <button type="button" class="tab" data-client="webxr">WebXR</button>
+              <span class="selector-label">Start WebXR with ARModule</span>
+              <div class="tabs" role="group" aria-label="Start WebXR with ARModule">
+                <button type="button" class="tab active" data-client="specs">No</button>
+                <button type="button" class="tab" data-client="webxr">Yes</button>
               </div>
+            </div>
+
+            <div class="selector-group">
+              <span class="selector-label">WebXR service · <span id="webxrServiceStatus">stopped</span></span>
+              <button type="button" class="btn" id="startWebxrBtn">Start WebXR</button>
+              <button type="button" class="btn" id="stopWebxrBtn" disabled>Stop WebXR</button>
+              <button type="button" class="btn" id="stopBackendBtn">Stop ARModule only</button>
+              <p class="hint">Specs and WebXR can share the PIN. Specs does not need this service.</p>
             </div>
 
             <section class="card config-card" id="locCard" aria-label="Localization">
