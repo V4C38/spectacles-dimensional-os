@@ -124,7 +124,9 @@ run_client_webxr_job() {
     npx playwright install chromium
   fi
   node --test "${ROOT}/tools/integration-tests/integration.test.mjs" "${ROOT}/tools/visual-review.test.mjs"
-  npm run test:integration
+  # The active environment belongs to the launcher job; use the backend environment
+  # for the real ARModule server spawned by the multi-client browser test.
+  DIMOS_PYTHON="${DIMOS_PYTHON:-${CI_VENV}/bin/python}" npm run test:integration
 }
 
 check_runtime_tools

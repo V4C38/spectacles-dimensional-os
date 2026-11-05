@@ -92,6 +92,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install and verify ARModule integration server
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install websockets numpy opencv-python-headless Pillow scipy dimos "aiohttp>=3.9,<4" "requests>=2.32,<3" langchain-core "trimesh>=4"
+          python -m pip install -e ../../dimos-ar --no-deps
+          python -c "from dimos.ar.module import ARModule"
       - run: npm ci
       - run: npm test
       - run: npm run build

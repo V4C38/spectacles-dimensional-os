@@ -18,8 +18,8 @@ test.afterEach(async ({}, info) => {
 });
 
 test.beforeAll(async () => {
-  const python = process.env.CI_VENV ? `${process.env.CI_VENV}/bin/python`
-    : process.env.DIMOS_PYTHON ?? "/tmp/spectacles-dimensional-os-ci-venv/bin/python";
+  const python = process.env.DIMOS_PYTHON || (process.env.CI_VENV
+    ? `${process.env.CI_VENV}/bin/python` : "python3");
   server = spawn(python, [fileURLToPath(new URL("./fixtures/multi_client_server.py", import.meta.url))], {
     cwd: `${root}dimos-ar`, env: { ...process.env, PYTHONPATH: `${root}dimos-ar` },
     stdio: ["ignore", "pipe", "pipe"],
