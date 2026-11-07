@@ -20,7 +20,7 @@ test.afterEach(async ({}, info) => {
 test.beforeAll(async () => {
   const python = process.env.DIMOS_PYTHON || (process.env.CI_VENV
     ? `${process.env.CI_VENV}/bin/python` : "python3");
-  server = spawn(python, [fileURLToPath(new URL("./fixtures/multi_client_server.py", import.meta.url))], {
+  server = spawn(python, [fileURLToPath(new URL("./fixtures/multi_client_server.py", import.meta.url)), "--manipulation"], {
     cwd: `${root}dimos-ar`, env: { ...process.env, PYTHONPATH: `${root}dimos-ar` },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -44,7 +44,7 @@ test.afterAll(async () => {
   if (server.exitCode === null) server.kill("SIGKILL");
 });
 
-async function connect(page: Page, shift: number, renderEnabled = true, specs = false) {
+async function connect(page: Page, shift: number, renderEnabled = true, specs = false, manipulation = false) {
   page.on("pageerror", error => console.error("Multi-client page:", error.message));
   page.on("console", message => { if (message.type() === "error") console.error(message.text()); });
   // Loopback is the real shared server; no page-local authoritative fixtures.
@@ -53,7 +53,7 @@ async function connect(page: Page, shift: number, renderEnabled = true, specs = 
     body: "<!doctype html><html><head><title>Shared ARModule integration</title></head><body></body></html>",
   }));
   await page.goto("/multi-client-test");
-  await page.evaluate(async ({ coreUrl, shift, port, renderEnabled, specs }) => {
+  await page.evaluate(async ({ coreUrl, shift, port, renderEnabled, specs, manipulation }) => {
     const { ARModuleSession } = await import(`${coreUrl}/websocket/arModuleSession.ts`);
     const { ClientTrackingOriginStore } = await import(`${coreUrl}/localization/clientTrackingOrigin.ts`);
     const { BrowserWebSocketTransport } = await import("/src/websocket/BrowserWebSocketTransport.ts");
@@ -70,7 +70,11 @@ async function connect(page: Page, shift: number, renderEnabled = true, specs = 
     transport.bind({ onTransportOpen: () => session.onTransportOpen(), onTransportClose: () => session.onTransportClose(),
       onTransportText: (value: string) => session.onTransportText(value), onTransportBinary: (value: Uint8Array) => session.onTransportBinary(value) });
     const nav = new WebXRNavigationController(session);
+    const { WebXRManipulationController } = await import("/src/manipulation/WebXRManipulationController.ts");
+    const arm = manipulation ? new WebXRManipulationController(session, () => origin.T_odom_client, () => clock.now()) : null;
+    const results: object[] = []; session.subscribeOutbound((message: { type: string }) => { if (message.type === "manipulation_result") results.push(message); });
     const scene = new THREE.Scene(); scene.background = new THREE.Color(0x182028);
+    if (arm) scene.add(arm.object);
     scene.add(nav.marker.object, nav.draftMarker.object, nav.probeRoot);
     const renderer = new THREE.WebGLRenderer({ antialias: true }); renderer.setSize(800, 600);
     document.body.replaceChildren(renderer.domElement);
@@ -81,10 +85,10 @@ async function connect(page: Page, shift: number, renderEnabled = true, specs = 
         origin.restore({ position: [shift, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 });
       nav.applyView(session.view(), origin.T_odom_client, { position: [0, 0, 0], orientation: [0, 0, 0, 1] }, clock.now());
     });
-    const timer = setInterval(() => { session.tick(); nav.tick(clock.now(), 1 / 60); if (renderEnabled) renderer.render(scene, camera); }, 1000 / 60);
-    (window as any).multi = { host: specs ? "specs" : "webxr", session, nav, timer, clock, origin, sent };
+    const timer = setInterval(() => { session.tick(); nav.tick(clock.now(), 1 / 60); arm?.tick(true); if (renderEnabled) renderer.render(scene, camera); }, 1000 / 60);
+    (window as any).multi = { host: specs ? "specs" : "webxr", session, nav, arm, timer, clock, origin, sent, results };
     session.start();
-  }, { coreUrl, shift, port, renderEnabled, specs });
+  }, { coreUrl, shift, port, renderEnabled, specs, manipulation });
   await expect.poll(() => page.evaluate(() => {
     const view = (window as any).multi.session.view();
     return view.lastError ?? view.connection;
@@ -177,4 +181,131 @@ test("one selected planner replicates a smooth shared draft, confirms, and hands
     await info.attach("owner-state", { body: JSON.stringify(debug, null, 2), contentType: "application/json" });
     throw error;
   } finally { await first.close(); await second.close(); for (const context of extra) await context.close(); }
+});
+
+async function armState(page: Page) {
+  return page.evaluate(() => {
+    const { session, arm, results, sent } = (window as any).multi;
+    return { client: session.view().hello?.client_id, shared: session.view().interaction,
+      native: session.view().manipulation, intent: arm.interaction.snapshot(),
+      target: arm.interaction.target, joints: arm.interaction.previewJoints,
+      rayDisabled: arm.renderer.handle.collider.userData.rayDisabled,
+      results, sent };
+  });
+}
+
+async function connectArm(page: Page, shift = 0, specs = false) {
+  await connect(page, shift, false, specs, true);
+  await expect.poll(async () => (await armState(page)).native?.available).toBe(true);
+  await expect.poll(() => page.evaluate(() => (window as any).multi.arm.interaction.groupId)).toBe("arm");
+  if ((await armState(page)).native.stopped) {
+    await page.evaluate(() => (window as any).multi.arm.interaction.resume());
+    await expect.poll(async () => (await armState(page)).native.stopped).toBe(false);
+  }
+}
+
+async function grabArm(page: Page, x: number, selected = false) {
+  expect(await page.evaluate(selected => {
+    const { arm } = (window as any).multi;
+    arm.setSelected(selected); return arm.interaction.begin();
+  }, selected)).toBe(true);
+  const client = (await armState(page)).client;
+  await expect.poll(async () => (await armState(page)).shared.authority?.client_id).toBe(client);
+  await page.evaluate(x => (window as any).multi.arm.interaction.aim({ position: [x, 0, 0], orientation: [0, 0, 0, 1] }), x);
+  await expect.poll(async () => (await armState(page)).joints?.slide).toBeCloseTo(x);
+}
+
+async function armContext(browser: import("@playwright/test").Browser) {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true });
+  await context.grantPermissions(["local-network-access"]);
+  return context;
+}
+
+test("arm following replicates to late joiners, excludes observers and allows takeover after release", async ({ browser }) => {
+  test.setTimeout(60000);
+  const ca = await armContext(browser), cb = await armContext(browser), cc = await armContext(browser);
+  const a = await ca.newPage(), b = await cb.newPage(), c = await cc.newPage();
+  try {
+    await connectArm(a); await connectArm(b, 1, true);
+    await grabArm(a, 0.6);
+    await expect.poll(async () => (await armState(b)).target?.position[0]).toBeCloseTo(0.6);
+    expect((await armState(b)).intent.blocked).toBe(true);
+    expect((await armState(b)).rayDisabled).toBe(true);
+    expect(await b.evaluate(() => (window as any).multi.arm.interaction.begin())).toBe(false);
+    await connectArm(c, 2);
+    await expect.poll(async () => (await armState(c)).target?.position[0]).toBeCloseTo(0.6);
+    expect((await armState(c)).intent.blocked).toBe(true);
+    const owner = await armState(a);
+    const token = owner.results.find((r: any) => r.type === "manipulation_result" && r.action === "acquire" && r.token).token;
+    const forged = { type: "manipulation_request", request_id: "forged-observer", action: "acquire", group_id: "arm",
+      epoch: owner.shared.epoch, lease_id: owner.shared.authority.lease_id, sequence: 1000 };
+    await b.evaluate(command => (window as any).multi.session.sendText(JSON.stringify(command)), forged);
+    await expect.poll(async () => (await armState(b)).results.find((r: any) => r.request_id === "forged-observer")?.code).toBe("ownership");
+    await a.evaluate(() => (window as any).multi.arm.interaction.end());
+    await expect.poll(async () => (await armState(b)).shared.authority).toBeNull();
+    await expect.poll(async () => (await armState(b)).native.following_tail?.position[0]).toBeCloseTo(0.6);
+    await grabArm(b, 0.9);
+    const bid = (await armState(b)).client;
+    const stale = { ...forged, request_id: "stale-owner", action: "update", token, sequence: 999,
+      ts: 0, position: [-1, 0, 0], orientation: [0, 0, 0, 1], speed_scale: 0.5 };
+    await a.evaluate(command => (window as any).multi.session.sendText(JSON.stringify(command)), stale);
+    await expect.poll(async () => (await armState(a)).results.find((r: any) => r.request_id === "stale-owner")?.code).toBe("ownership");
+    await ca.close();
+    await expect.poll(async () => (await armState(c)).shared.authority?.client_id).toBe(bid);
+    await expect.poll(async () => (await armState(c)).target?.position[0]).toBeCloseTo(0.9);
+    expect((await armState(b)).native.stopped).toBe(false);
+    await b.evaluate(() => {
+      const { arm } = (window as any).multi;
+      arm.interaction.setSpeedScale(0.7); arm.interaction.setGripper(1);
+    });
+    await expect.poll(async () => (await armState(c)).shared.target?.speed_scale).toBe(0.7);
+    await expect.poll(async () => (await armState(c)).shared.target?.gripper).toBe(1);
+    await expect.poll(async () => (await armState(c)).native.observations.arm.gripper).toBe(1);
+    await b.evaluate(() => (window as any).multi.arm.interaction.end());
+    await expect.poll(async () => (await armState(c)).native.following_tail).toBeNull();
+    await expect.poll(async () => (await armState(c)).native.observations.arm.joints.slide).toBeCloseTo(0.9);
+    expect((await armState(c)).native.stopped).toBe(false);
+    await grabArm(b, -0.2);
+    await cb.close();
+    await expect.poll(async () => (await armState(c)).native.stopped).toBe(true);
+    await expect.poll(async () => (await armState(c)).native.following).toBe(false);
+    await expect.poll(async () => (await armState(c)).shared.authority).toBeNull();
+  } finally { await ca.close(); await cb.close(); await cc.close(); }
+});
+
+test("a replicated selected arm plan can be executed by another client after editing release", async ({ browser }) => {
+  test.setTimeout(60000);
+  const ca = await armContext(browser), cb = await armContext(browser), cc = await armContext(browser);
+  const a = await ca.newPage(), b = await cb.newPage(), c = await cc.newPage();
+  try {
+    await connectArm(a); await connectArm(b, 1, true);
+    await grabArm(a, 0.3, true);
+    await expect.poll(async () => (await armState(b)).target?.position[0]).toBeCloseTo(0.3);
+    expect(await b.evaluate(() => (window as any).multi.arm.interaction.begin())).toBe(false);
+    await expect.poll(async () => (await armState(b)).joints?.slide).toBeCloseTo(0.3);
+    expect((await armState(b)).native.plan).toBeNull();
+    for (const x of [0.45, 0.3]) {
+      await a.evaluate(x => (window as any).multi.arm.interaction.aim({ position: [x, 0, 0], orientation: [0, 0, 0, 1] }), x);
+      await expect.poll(async () => (await armState(b)).joints?.slide).toBeCloseTo(x);
+    }
+    await connectArm(c, 2);
+    await expect.poll(async () => (await armState(c)).joints?.slide).toBeCloseTo(0.3);
+    expect((await armState(c)).intent.blocked).toBe(true);
+    await a.evaluate(() => (window as any).multi.arm.interaction.end());
+    await expect.poll(async () => (await armState(b)).native.plan?.trajectory?.length).toBe(2);
+    await expect.poll(async () => (await armState(b)).shared.authority).toBeNull();
+    const plan = (await armState(b)).native.plan;
+    await expect.poll(async () => (await armState(c)).native.plan?.plan_id).toBe(plan.plan_id);
+    await b.evaluate(() => (window as any).multi.arm.setSelected(true));
+    await expect.poll(async () => (await armState(b)).intent.canExecute).toBe(true);
+    await b.evaluate(() => (window as any).multi.arm.interaction.execute());
+    await expect.poll(async () => (await armState(b)).results.some((r: any) => r.action === "execute" && r.status === "accepted")).toBe(true);
+    await ca.close();
+    await expect.poll(async () => (await armState(c)).native.execution).toBe("completed");
+    await expect.poll(async () => (await armState(c)).native.observations.arm.joints.slide).toBeCloseTo(0.3);
+    expect((await armState(c)).native.stopped).toBe(false);
+  } catch (error) {
+    console.error(JSON.stringify({ a: await armState(a), b: await armState(b) }));
+    throw error;
+  } finally { await ca.close(); await cb.close(); await cc.close(); }
 });

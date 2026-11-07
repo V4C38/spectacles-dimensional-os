@@ -717,3 +717,14 @@ it("preserves the validated finishing tail in native and shared interaction snap
     }
   }
 });
+
+
+it("validates revision-bound observational arm evaluations", () => {
+  const evaluation = { group_id: "arm", target_revision: 2, joints: { slide: 0.3 }, pose: null };
+  const message = { type: "manipulation_state", available: false, evaluation };
+  expect((decodeOutbound(JSON.stringify(message)) as any).evaluation).toEqual(evaluation);
+  for (const invalid of [{ group_id: "" }, { target_revision: -1 }, { target_revision: 1.5 },
+    { joints: { slide: null } }, { joints: null }, { pose: { position: [0,0,0], orientation: [0,0,0,0] } }]) {
+    expect(() => decodeOutbound(JSON.stringify({ ...message, evaluation: { ...evaluation, ...invalid } }))).toThrow();
+  }
+});

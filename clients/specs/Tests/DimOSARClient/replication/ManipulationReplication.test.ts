@@ -55,6 +55,10 @@ describe("manipulation shared authority", () => {
     f.ackTarget();
     f.reply(f.native().at(-1), { status: "feasible", joints: { j: 0.1 }, pose: pose(0), target_revision: 1 });
     expect(f.core.plan).toBeNull(); expect(f.core.target?.position[2]).toBe(0.3);
+    f.tick();
+    expect(f.native().at(-1)).toMatchObject({ action: "evaluate", position: [0,0,0.3], target_revision: 2 });
+    f.reply(f.native().at(-1), { status: "feasible", joints: { j: 0.3 }, pose: pose(0.3) });
+    expect(f.core.previewJoints).toEqual({ j: 0.3 });
     f.core.execute(); expect(f.native().some(command => command.action === "execute")).toBe(false);
   });
   it("defers native following acquisition until the robot-wide lease is granted", () => {
@@ -144,4 +148,27 @@ it("keeps editing authority when a feedback gap releases only the native token",
   f.view.manipulation.available = true; f.tick();
   expect(f.core.dragging).toBe(true);
   expect(f.native().at(-1)).toMatchObject({ action: "acquire", lease_id: "lease" });
+});
+
+
+it("replicates evaluated arm joints only for the observer's canonical group and target revision", () => {
+  const f = fixture();
+  f.state.target = { ...pose(0.3), domain: "manipulation", group_id: "arm", revision: 1, phase: "draft", sample_ts: 100, sequence: 1 };
+  f.collaboration.apply({ ...f.state, revision: 1 });
+  f.view.manipulation.evaluation = { group_id: "arm", target_revision: 1, joints: { j: 0.3 }, pose: pose(0.3) };
+  f.tick();
+  expect(f.core.previewJoints).toEqual({ j: 0.3 });
+  expect(f.core.plan).toBeNull();
+  f.state.target = { ...f.state.target, ...pose(0.5), revision: 2 };
+  f.collaboration.apply({ ...f.state, revision: 2 });
+  f.view.manipulation.evaluation = { group_id: "arm", target_revision: 1, joints: { j: 0.9 }, pose: pose(0.9) };
+  f.tick();
+  expect(f.core.previewJoints).toEqual({ j: 0.3 });
+  f.view.manipulation.evaluation = { group_id: "other-arm", target_revision: 2, joints: { j: 0.8 }, pose: pose(0.8) };
+  f.tick();
+  expect(f.core.previewJoints).toEqual({ j: 0.3 });
+  f.view.manipulation.evaluation = { group_id: "arm", target_revision: 2, joints: { j: 0.5 }, pose: pose(0.5) };
+  f.tick();
+  expect(f.core.previewJoints).toEqual({ j: 0.5 });
+  expect(f.native()).toEqual([]);
 });

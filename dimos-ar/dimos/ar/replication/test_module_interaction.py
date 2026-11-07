@@ -94,6 +94,7 @@ def test_repeated_equal_target_does_not_revoke_selected_plan():
     )
     module._manipulation_service.revoke.assert_called_once()
     assert module._manipulation_service.revoke.call_args.args[-1] == "target_changed"
+    assert module._manipulation_service.revoke.call_args.args[2] == module._interaction.revision - 1
 
 
 def test_uncertain_execution_keeps_robot_busy_until_explicit_confirmed_stop():

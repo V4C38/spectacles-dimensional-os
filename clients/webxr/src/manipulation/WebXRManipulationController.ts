@@ -121,7 +121,7 @@ export class WebXRManipulationController {
       speedScale: this.interaction.speedScale,
     });
     const blocked = this.session.collaboration.snapshot("manipulation", this.interaction.groupId ?? undefined).blocked;
-    this.replication.apply(blocked, [this.renderer.handle.visual], false);
+    this.replication.apply(blocked, [this.renderer.handle.collider], false);
     const material = this.renderer.handle.visual.material as THREE.ShaderMaterial;
     material.uniforms.uCenterColor.value.setHex(blocked ? WebXRReplicationPresenter.blockedColor : 0xb3b3b3);
   }

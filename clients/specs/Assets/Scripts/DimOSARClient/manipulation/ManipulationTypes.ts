@@ -60,7 +60,9 @@ export interface ManipulationObservation {
   joint_velocities?: Record<string, number>;
 }
 export interface FollowingTail { generation: number; group_id: string; target_revision: number; status: "finishing"; position?: Vec3; orientation?: Quat; speed_scale?: number; joints?: Record<string, number>; }
+export interface ManipulationEvaluation { group_id: string; target_revision: number; joints: Record<string, number>; pose: ManipulationPose | null; }
 export interface ManipulationState {
+  evaluation?: ManipulationEvaluation | null;
   protection?: {state: "normal" | "derated" | "paused" | "fault"; reason?: string; joints?: string[]; effective_speed_scale: number; resumable?: boolean} | null;
   read_only?: boolean;
   following_tail?: FollowingTail | null;

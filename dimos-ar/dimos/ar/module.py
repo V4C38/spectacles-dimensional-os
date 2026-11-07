@@ -783,7 +783,8 @@ class ARModule(Module):  # type: ignore[misc]
                 self._manipulation_service.revoke(
                     self._interaction.epoch,
                     authority.lease_id,
-                    self._interaction.revision,
+                    # Retire work preceding this edit, not requests admitted for it.
+                    self._interaction.revision - 1,
                     "target_changed",
                 )
             if (

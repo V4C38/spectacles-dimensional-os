@@ -1506,3 +1506,14 @@ newest intent coalesced. Release, Preview and Execute request a checked full pat
 Presentation uses update-timed Hermite interpolation with velocity continuity,
 a 50 ms interpolation cap and at most 30 ms of bounded visual prediction. Filtered
 positions never enter control or completion checks.
+
+### Replicated arm IK preview
+
+`manipulation_state.evaluation` optionally carries `{group_id, target_revision,
+joints, pose}` for the latest feasible nonmoving IK evaluation. `joints` maps
+model joint names to finite values; `pose` is the validated end-effector pose or
+null. The revision is a nonnegative integer identifying the canonical shared
+manipulation target. Observers use it only for that group and target revision.
+It is a visual preview, never an executable plan or measured robot feedback.
+Changed targets and retired requests cannot publish evaluations for newer revisions;
+Execute still requires the exact checked `plan_id` and target revision.

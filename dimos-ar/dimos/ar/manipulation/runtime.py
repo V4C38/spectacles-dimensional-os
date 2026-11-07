@@ -17,6 +17,7 @@ from dimos.ar.replication.manipulation_authority import (
     ManipulationAdmission,
     ManipulationAuthorityFence,
 )
+from dimos.ar.websocket.protocol import ManipulationEvaluation
 from dimos.core.global_config import global_config
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.utils.logging_config import setup_logger
@@ -40,6 +41,7 @@ class ManipulationRuntime:
             None
         )
         self.following_tail: FollowingTail | None = None
+        self.evaluation: ManipulationEvaluation | None = None
         self._control_epoch: str | None = None
         self._control_deadline = 0.0
         self._control_revision = -1
@@ -133,6 +135,7 @@ class ManipulationRuntime:
             )
 
     def retire(self) -> None:
+        self.evaluation = None
         self.following_tail = None
         self._following_target = None
         self.session.retire()
@@ -418,6 +421,18 @@ class ManipulationRuntime:
                     if action == "plan":
                         self.adapter.clear_planned_path()
                     raise ManipulationError("retired", "request retired")
+                if (
+                    action == "evaluate"
+                    and result_body["status"] == "feasible"
+                    and result_body["joints"] is not None
+                    and admission is not None
+                ):
+                    self.evaluation = {
+                        "group_id": group,
+                        "target_revision": admission.target_revision,
+                        "joints": result_body["joints"],
+                        "pose": result_body["pose"],
+                    }
                 if action == "plan":
                     if "final_gripper" in body:
                         result_body["final_gripper"] = body["final_gripper"]
@@ -526,7 +541,10 @@ class ManipulationRuntime:
             ):
                 self.session.rejected_key = None
                 self._following_target = (
-                    group, dict(body), result["joints"], self.authority().target_revision
+                    group,
+                    dict(body),
+                    result["joints"],
+                    self.authority().target_revision,
                 )
                 pose = self.pose(body)
                 native_key = [
@@ -683,6 +701,7 @@ class ManipulationRuntime:
                 if goal
                 else None,
                 "following_tail": (tail.wire() if tail is not None else None),
+                "evaluation": getattr(self, "evaluation", None),
                 "stopped": self.session.stopped,
                 "stop_confirmed": self.session.stop_confirmed,
                 "plan": self.operation.plan,
@@ -792,7 +811,11 @@ class ManipulationRuntime:
                         self.adapter.task_invoke(
                             task,
                             "set_target",
-                            {"pose": self.pose(tail.body), "value": tail.body["speed_scale"], "t_now": None},
+                            {
+                                "pose": self.pose(tail.body),
+                                "value": tail.body["speed_scale"],
+                                "t_now": None,
+                            },
                         )
                         failure = self.adapter.task_invoke(task, "get_failure", {})
                         if isinstance(failure, (str, dict)) and failure:

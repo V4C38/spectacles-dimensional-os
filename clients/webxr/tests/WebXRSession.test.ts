@@ -1,3 +1,4 @@
+import * as THREE from "three";
 import { pairedBulkSocket } from "./fixtures/pairedBulkSocket";
 // @vitest-environment jsdom
 import "./fixtures/browserAudio";
@@ -455,4 +456,29 @@ it("gates selection and manual commands during alignment review and restores eli
   f.client.ui.dismissAlignmentReview(); f.tick();
   expect(f.client.controlsEnabled()).toBe(true);
   expect(f.client.ui.snapshot()).toMatchObject({ robotSelected: false, robotSelectable: true });
+});
+
+
+it("excludes the arm handle from ray picking while another client owns control", () => {
+  const f = fixture(); const socket = f.connect();
+  const shared: InteractionState = {
+    type: "interaction_state", epoch: "fixture-robot", revision: 100, mode: "manual",
+    authority: { client_id: "other", source_id: "hand", acquisition_id: "other-grab",
+      lease_id: "other-lease", kind: "manipulation_following", group_id: "arm",
+      held: true, expires_at: 1000, sequence: 0 },
+    target: null, preview: null, active_goal: null,
+  };
+  const collider = f.client.manipulation.renderer.handle.collider;
+  const intersections = () => {
+    collider.visible = true;
+    collider.traverseAncestors(node => { node.visible = true; });
+    collider.updateWorldMatrix(true, false);
+    const center = collider.getWorldPosition(new THREE.Vector3());
+    const ray = new THREE.Raycaster(center.clone().add(new THREE.Vector3(0, 0, 1)), new THREE.Vector3(0, 0, -1));
+    return ray.intersectObject(collider, false);
+  };
+  socket.receive(shared); f.tick();
+  expect(intersections()).toHaveLength(0);
+  socket.receive({ ...shared, revision: 101, authority: null }); f.tick();
+  expect(intersections().length).toBeGreaterThan(0);
 });

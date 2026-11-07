@@ -605,6 +605,12 @@ export class ManipulationInteraction {
         if (plan && plan.target_revision === shared.rawTarget?.revision && (!plan.group_id || plan.group_id === this.groupId)) {
           this.plan = this.previewPlan = plan; this.planGeneration = this.generation;
         } else if (!this.busy) this.plan = this.previewPlan = null;
+        const evaluation = view.manipulation?.evaluation;
+        if (evaluation?.group_id === this.groupId && evaluation.target_revision === shared.rawTarget?.revision) {
+          this.valid = null;
+          this.solution = evaluation.joints;
+          this.rejection = null;
+        }
       }
       if (this.deferredNative && shared.ownsAuthority) {
         const request = this.deferredNative; this.deferredNative = null;
@@ -769,8 +775,8 @@ export class ManipulationInteraction {
         ["evaluate", "plan", "cancel", "resume"].includes(p.action),
       )
     ) {
-      this.send("evaluate", this.target);
       this.evaluatedGeneration = this.generation;
+      this.send("evaluate", this.target);
       this.lastEvaluation = now;
     }
   }
@@ -1042,6 +1048,8 @@ export class ManipulationInteraction {
         }
       }
     }
+    // An advisory result for the previous ACK must not mark the newest aim as checked.
+    if (advisoryPreviousSample && action === "evaluate") this.evaluatedGeneration = this.generation - 1;
     const id = `manipulation-${++this.sequence}`;
     this.pending.set(id, {
       action,

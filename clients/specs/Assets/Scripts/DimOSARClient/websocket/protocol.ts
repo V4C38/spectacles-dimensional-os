@@ -1020,6 +1020,8 @@ function decodeInteractionResult(data: Record<string, unknown>): InteractionResu
 
 // Manipulation results may carry optional failed_joints identifiers for segment feedback.
 
+// Revision-bound manipulation_state.evaluation supplies observational IK previews;
+// only a checked plan can authorize execution.
 // Manipulation observations optionally carry joint_velocities and gripper_target;
 // execution_phase (motion/gripper) resolves before the single terminal outcome.
 // See dimos-ar/PROTOCOL.md and ManipulationProtocol.ts for validation.

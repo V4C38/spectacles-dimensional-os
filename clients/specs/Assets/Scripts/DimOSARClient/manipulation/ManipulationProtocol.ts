@@ -128,6 +128,13 @@ export function decodeManipulation(
     if (data.pose != null) pose(data.pose);
     if (data.plan_id !== undefined) plan(data);
   } else {
+    if (data.evaluation != null) {
+      const evaluation = object(data.evaluation);
+      text(evaluation.group_id);
+      if (!Number.isSafeInteger(evaluation.target_revision) || Number(evaluation.target_revision) < 0) throw new Error("Invalid evaluation target revision");
+      joints(evaluation.joints);
+      if (evaluation.pose != null) pose(evaluation.pose);
+    }
     if (data.execution_phase != null && !["motion", "gripper"].includes(String(data.execution_phase))) throw new Error("Invalid execution phase");
     if (data.following_at_target !== undefined && typeof data.following_at_target !== "boolean") throw new Error("Invalid following arrival flag");
     if (data.following_goal != null) pose(data.following_goal);

@@ -30,11 +30,21 @@ NAV_JOYSTICK_MAX_DURATION_S = 2.0
 
 class ManipulationProtectionState(TypedDict, total=False):
     """Additive, read-only motor protection facts in manipulation_state."""
+
     state: Literal["normal", "derated", "paused", "fault"]
     reason: str
     joints: list[str]
     effective_speed_scale: float
     resumable: bool
+
+
+class ManipulationEvaluation(TypedDict):
+    """Non-authorizing IK preview, bound to a canonical shared arm target."""
+
+    group_id: str
+    target_revision: int
+    joints: dict[str, float]
+    pose: dict[str, Any] | None
 
 
 def _dumps(payload: dict[str, Any]) -> str:

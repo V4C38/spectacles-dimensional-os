@@ -5,6 +5,7 @@ import asyncio
 from contextlib import closing
 import signal
 import socket
+import sys
 import threading
 import time
 from typing import Any
@@ -63,6 +64,11 @@ def main() -> None:
         available.bind(("127.0.0.1", 0))
         port = available.getsockname()[1]
     module = ARModule(port=port, ip_relay_url=None)
+    arm = None
+    if "--manipulation" in sys.argv:
+        from simulated_arm import SimulatedArm
+        arm = SimulatedArm()
+        module._manipulation = arm
     module.build()
     for stream in module.inputs.values():
         stream.transport = RobotPort(module)
@@ -81,6 +87,8 @@ def main() -> None:
     print(f"MULTI_CLIENT_READY={port}", flush=True)
     try:
         while not stopped.wait(0.05):
+            if arm is not None:
+                arm.tick()
             future = asyncio.run_coroutine_threadsafe(module.handle_odom(
                 PoseStamped(ts=time.time(), frame_id="odom", position=[0, 0, 0.33])), module._loop)
             future.result(timeout=1)

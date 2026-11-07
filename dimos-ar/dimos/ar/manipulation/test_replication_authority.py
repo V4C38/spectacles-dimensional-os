@@ -219,3 +219,86 @@ def test_release_failure_retires_token_and_attempts_other_following_tasks_and_es
     assert module.session.stopped
     assert any(call.args[0] == "other-follow" for call in module.adapter.task_invoke.call_args_list)
     module.adapter.set_estop.assert_called_once_with(True)
+
+
+def test_shared_ik_evaluation_does_not_authorize_execution():
+    module = runtime()
+    module.adapter.ready = True
+    module.adapter.evaluate = Mock(
+        return_value=SimpleNamespace(
+            success=True,
+            message="valid",
+            target_joints=SimpleNamespace(name=["joint"], position=[0.2]),
+            group_poses={},
+        )
+    )
+    reply = module.command(
+        "a", _request("evaluate", position=[0.2, 0, 0], orientation=[0, 0, 0, 1])
+    )
+    assert reply["status"] == "feasible"
+    assert module.evaluation["target_revision"] == 7
+    assert module.evaluation["joints"] == {"joint": 0.2}
+    assert module.operation.plan is None
+    with pytest.raises(ValueError, match="retired or replaced"):
+        module.command("a", _request("execute", plan_id="not-a-checked-plan"))
+    module.adapter.execute.assert_not_called()
+
+
+def test_delayed_ik_evaluation_cannot_publish_after_shared_target_changes():
+    module = runtime()
+    module.adapter.ready = True
+    module.evaluation = None
+    entered, finish = threading.Event(), threading.Event()
+    replies = []
+
+    def evaluate(*_args):
+        entered.set()
+        assert finish.wait(2)
+        return SimpleNamespace(
+            success=True,
+            message="valid",
+            target_joints=SimpleNamespace(name=["joint"], position=[0.2]),
+            group_poses={},
+        )
+
+    module.adapter.evaluate = evaluate
+    worker = threading.Thread(
+        target=lambda: replies.append(
+            module.dispatch(
+                "a", _request("evaluate", position=[0.2, 0, 0], orientation=[0, 0, 0, 1])
+            )
+        )
+    )
+    worker.start()
+    try:
+        assert entered.wait(1)
+        module.revoke_authority("robot-reference", "grab-a", 2, "target_changed")
+    finally:
+        finish.set()
+        worker.join(3)
+    assert not worker.is_alive()
+    assert replies[0]["status"] == "rejected"
+    assert module.evaluation is None
+
+
+def test_target_edit_revokes_older_work_but_admits_the_edit_revision():
+    module = runtime()
+    module.adapter.ready = True
+    module.adapter.evaluate = Mock(
+        return_value=SimpleNamespace(
+            success=True,
+            message="valid",
+            target_joints=SimpleNamespace(name=["joint"], position=[0.2]),
+            group_poses={},
+        )
+    )
+    module.command("a", _request("evaluate", position=[0.2, 0, 0], orientation=[0, 0, 0, 1]))
+    module.revoke_authority("robot-reference", "grab-a", 1, "target_changed")
+    with pytest.raises(ValueError, match="retired"):
+        module.command("a", _request("evaluate", position=[0.2, 0, 0], orientation=[0, 0, 0, 1]))
+    reply = module.command(
+        "a",
+        _request("evaluate", revision=2, target=8, position=[0.3, 0, 0], orientation=[0, 0, 0, 1]),
+    )
+    assert reply["status"] == "feasible"
+    assert module.evaluation["target_revision"] == 8
