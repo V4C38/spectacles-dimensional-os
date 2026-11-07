@@ -83,6 +83,8 @@ class ManipulationOperation:
         if self.id is None or self.kind in {"resetting", "parking"}:
             return False
         state = backend.get_state()
+        if state.execution_status.name in {"IDLE", "UNCERTAIN"}:
+            return False
         active = state.execution_status.name in {"ACCEPTED", "EXECUTING"}
         now = time.monotonic()
         observed = state.groups.get(self.group) if self.group else None

@@ -40,3 +40,8 @@ header, label, .connection-panel h2, .robot-status, .feature-heading, .feature-e
 .connection-footnote p + p { margin-top: 4px; }
 .connection-footnote span { overflow-wrap: anywhere; }
 @media (max-width: 760px) { #overlay { overflow-y: auto; align-items: start; } .landing-layout { grid-template-columns: minmax(0, 420px); justify-content: center; } .landing-panel { padding: 24px; } }
+
+#pin { width: 100%; min-height: 36px; padding: 8px 12px; border: 1px solid #ffffff24; border-radius: var(--dimos-controlRadius, 6px); color: var(--dimos-color-ink, #fff); background: var(--dimos-color-control, #3a3a3c); font: inherit; letter-spacing: .15em; margin-bottom: 12px; }
+#connection-controls { margin-bottom: 24px; }
+#connection-controls[hidden] { display: none; }
+#pin:focus-visible { outline: 2px solid var(--dimos-color-accent, #fff); outline-offset: 4px; }

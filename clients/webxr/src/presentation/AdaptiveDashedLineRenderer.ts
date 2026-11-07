@@ -13,7 +13,7 @@ export class AdaptiveDashedLineRenderer {
     geometry.setIndex([0, 1, 2, 2, 1, 3]);
     geometry.instanceCount = 0;
     const material = new THREE.ShaderMaterial({
-      uniforms: { uNearWidthScale: { value: WORLD_DASH_STYLE.nearWidthScale }, uMinimumPixels: { value: minimumPixelWidth }, uColor: { value: new THREE.Color(0xffffff) }, uViewport: { value: new THREE.Vector2(1, 1) }, uWidth: { value: widthM }, uDash: { value: dashM }, uGap: { value: gapM }, uOpacity: { value: 0.7 } },
+      uniforms: { uStartDistance: { value: 0 }, uNearWidthScale: { value: WORLD_DASH_STYLE.nearWidthScale }, uMinimumPixels: { value: minimumPixelWidth }, uColor: { value: new THREE.Color(0xffffff) }, uViewport: { value: new THREE.Vector2(1, 1) }, uWidth: { value: widthM }, uDash: { value: dashM }, uGap: { value: gapM }, uOpacity: { value: 0.7 } },
       transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false,
       vertexShader: `
         attribute vec2 instanceOpacity; varying float vOpacity; attribute vec3 instanceStart; attribute vec3 instanceEnd; attribute float instanceDistance;
@@ -39,9 +39,10 @@ export class AdaptiveDashedLineRenderer {
           vPixelM = pixelM; vHalfWidth = halfWidth;
         }`,
       fragmentShader: `
-        varying float vOpacity; uniform vec3 uColor; uniform float uDash; uniform float uGap; uniform float uOpacity;
+        varying float vOpacity; uniform float uStartDistance; uniform vec3 uColor; uniform float uDash; uniform float uGap; uniform float uOpacity;
         varying float vAcross; varying float vDistance; varying float vPixelM; varying float vHalfWidth;
         void main() {
+          if (vDistance < uStartDistance) discard;
           float period = max(0.0001, uDash + uGap);
           float phase = mod(vDistance, period);
           float along = min(phase, period - phase);
@@ -65,6 +66,8 @@ export class AdaptiveDashedLineRenderer {
       material.uniforms.uViewport.value.set(Math.max(1, this.viewport.z), Math.max(1, this.viewport.w));
     };
   }
+
+  setStartDistance(distance: number): void { this.object.material.uniforms.uStartDistance.value = Math.max(0, distance); }
 
   setStyle(widthM: number, opacity: number): void {
     this.object.material.uniforms.uWidth.value = widthM;

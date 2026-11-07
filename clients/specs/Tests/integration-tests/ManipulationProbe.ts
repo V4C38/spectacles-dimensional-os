@@ -3,6 +3,7 @@ import { DimOSSpecsClient } from "../../Assets/Scripts/DimOSSpecsClient/DimOSSpe
 import { clientTrackingToSpecsPose } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
 import { ARM_FIXTURE } from "./IntegrationArmFixture";
 import { IntegrationInput } from "./IntegrationInput";
+import { IntegrationV3Fixture } from "./IntegrationV3Fixture";
 import { InteractorInputType } from "SpectaclesInteractionKit.lspkg/Core/Interactor/Interactor";
 import { INTEGRATION_CATALOG as CATALOG } from "./IntegrationCatalog";
 
@@ -10,6 +11,9 @@ import { INTEGRATION_CATALOG as CATALOG } from "./IntegrationCatalog";
 export class ReviewScenario extends BaseScriptComponent {
   @input startDelayS = 5;
   private root: any;
+  private peer!: IntegrationV3Fixture;
+  private tailGeneration = 0;
+  private validatedTarget: any = null;
   private elapsed = 0;
   private phase = -1;
   private failed = false;
@@ -21,7 +25,7 @@ export class ReviewScenario extends BaseScriptComponent {
   private dragFrom = vec3.zero();
   private emit(value: Record<string, unknown>): void { print(`SPECS_REVIEW ${JSON.stringify({ ...value, unixMs: Date.now() })}`); }
   private check(name: string, passed: boolean): void { this.failed ||= !passed; this.emit({ type: "result", name, passed }); }
-  private wire(message: any): void { this.root.session.onTransportText(JSON.stringify(message) + "\n"); }
+  private wire(message: any): void { this.peer.send(message); }
   private scene(id: string): void { this.emit({ type: "scene", id, name: id, label: id, videoOnly: true, durationS: 3 }); }
   onAwake(): void { this.createEvent("OnStartEvent").bind(() => this.createEvent("UpdateEvent").bind(() => this.tick())); }
   private prepare(): void {
@@ -33,25 +37,48 @@ export class ReviewScenario extends BaseScriptComponent {
     for (let i = 0; i < global.scene.getRootObjectsCount(); i++) { this.root = find(global.scene.getRootObject(i)); if (this.root) break; }
     if (!this.root) throw new Error("Production root missing");
     const root = this.root;
+    this.peer = new IntegrationV3Fixture(value => root.session.onTransportText(JSON.stringify(value) + "\n"), "native-manipulation", () => getTime());
+    this.peer.onTakeover = () => {
+      if (this.state) { this.state.following_tail = null; this.wire(this.state); }
+    };
+    this.peer.onFollowingRelease = () => {
+      const target = this.validatedTarget;
+      const tail = target ? { generation: ++this.tailGeneration, group_id: "arm", status: "finishing",
+        target_revision: target.revision, position: target.position, orientation: target.orientation,
+        speed_scale: target.speed_scale ?? .5, joints: ARM_FIXTURE.joints } : null;
+      this.state.following_tail = tail;
+      this.wire(this.state);
+      return tail;
+    };
     root.transport.connect = () => {}; root.transport.close = () => {};
+    root.transport.createSibling = () => this.peer;
+    root.transport.sendBinary = () => { throw new Error("v3 control binary is forbidden"); };
     root.transport.sendText = (text: string) => {
       for (const line of text.trim().split("\n")) {
         const command = JSON.parse(line); this.sent.push(command);
+        if (this.peer.command(command)) continue;
         if (command.type !== "manipulation_request") continue;
+        if (!["cancel", "release"].includes(command.action) && !this.peer.authorizes(command))
+          throw new Error("Unfenced native manipulation command");
         const reply: any = { type: "manipulation_result", request_id: command.request_id,
           group_id: command.group_id, action: command.action, status: "completed" };
-        if (command.action === "acquire") reply.token = "native-follow";
+        if (command.action === "acquire") reply.token = `native-follow-${this.tailGeneration}`;
         if (command.action === "evaluate") { reply.status = "feasible"; reply.joints = ARM_FIXTURE.joints; }
         if (command.action === "plan") Object.assign(reply, { status: "planned", plan_id: "native-plan",
+          group_id: command.group_id, target_revision: command.target_revision,
           joint_names: Object.keys(ARM_FIXTURE.joints), duration: 2,
           trajectory: [{ time: 0, positions: Object.values(ARM_FIXTURE.joints) },
             { time: 2, positions: Object.values(ARM_FIXTURE.joints).map((v, i) => i === 0 ? v + 0.3 : v) }] });
         if (command.action === "update") {
           reply.status = "feasible"; reply.sequence = command.sequence; reply.joints = ARM_FIXTURE.joints;
-          this.state.observations.arm.pose = { position: command.position, orientation: command.orientation };
+          const canonical = this.peer.canonical();
+          if (canonical) {
+            this.validatedTarget = canonical;
+            this.state.observations.arm.pose = { position: canonical.position, orientation: canonical.orientation };
+          }
         }
         if (command.action === "gripper") this.state.observations.arm.gripper = command.value;
-        if (command.action === "execute") this.state.execution = "executing";
+        if (command.action === "execute") { this.state.execution = "executing"; this.peer.setBusy(true); }
         this.wire(reply);
       }
     };
@@ -64,6 +91,7 @@ export class ReviewScenario extends BaseScriptComponent {
       robot: { ...CATALOG.fixtures.robot, display_name: "OpenYAM" },
       capabilities: { manipulation: yes, localization: yes, lidar: no, agent: no, estop: yes,
         navigation: { ...no, nav_goal: no, nav_joystick: no } } });
+    this.peer.reset();
     this.wire({ type: "state", server: { connected_clients: 1 }, lidar: { enabled: false, min_height_m: -10, max_height_m: 10, max_range_m: 5 },
       nav: { state: "idle", outcome: null }, agent: { idle: true } });
     this.origin = { position: [-1.4, 0, 0.55], orientation: [0, 0, 0, 1], confidence: 1, ts: getTime() };
@@ -71,7 +99,7 @@ export class ReviewScenario extends BaseScriptComponent {
     this.state = { type: "manipulation_state", available: true, ts: getTime(), model: ARM_FIXTURE.model,
       root_pose: { position: [0, 0, 0], orientation: [0, 0, 0, 1] },
       groups: [{ id: "arm", joint_names: Object.keys(ARM_FIXTURE.joints), base_frame: "base", tip_frame: "gripper_tip", has_gripper: true, following: true }],
-      observations: { arm: { joints: ARM_FIXTURE.joints, measured_at: getTime(), pose: ARM_FIXTURE.pose, gripper: 0 } }, execution: "idle", stopped: false };
+      observations: { arm: { joints: ARM_FIXTURE.joints, measured_at: getTime(), pose: ARM_FIXTURE.pose, gripper: 0 } }, execution: "idle", stopped: false, following_tail: null };
     this.wire(this.state); root.uiPresenter.setupFlow.finish(); root.uiPresenter.setupWizardController.hide(); root.uiPresenter.finishWizard();
     this.drag = new IntegrationInput(); this.drag.active = true;
     this.other = new IntegrationInput(InteractorInputType.LeftHand); this.other.active = true;
@@ -115,7 +143,7 @@ export class ReviewScenario extends BaseScriptComponent {
       this.check("selected_ee_execute", arm.renderer.gripper.labelText.text === "Execute");
       this.check("manipulation_plan", !!arm.core.interaction.plan);
       arm.core.action("execute"); this.check("manipulation_execute", this.sent.some(c => c.action === "execute" && c.plan_id === "native-plan"));
-      this.state.execution = "idle"; root.selection.setSelected(false); this.scene("manipulation_follow");
+      this.state.execution = "idle"; this.peer.setBusy(false); root.selection.setSelected(false); this.scene("manipulation_follow");
     } else if (this.phase === 4) {
       const interactable = handle.getComponent("ScriptComponent") as any;
       this.drag!.ray(handle.getTransform().getWorldPosition().add(new vec3(0, 0, 30)), handle.getTransform().getWorldPosition(), interactable);
@@ -138,7 +166,9 @@ export class ReviewScenario extends BaseScriptComponent {
           const shape = pick.getComponent("Physics.ColliderComponent").shape;
           return !!shape.mesh && shape.convex === false;
         }));
-      this.check("manipulation_release", this.sent.some(c => c.action === "release"));
+      this.check("manipulation_release", this.sent.some(c => c.type === "interaction_request" && c.action === "release") &&
+        !this.sent.some(c => c.type === "manipulation_request" && c.action === "release") &&
+        root.session.view().interaction.authority === null && this.state.following_tail?.status === "finishing");
       root.emergencyStop(); this.check("manipulation_estop", this.sent.some(c => c.type === "estop_request"));
       this.drag!.restore(); this.other!.restore();
       this.emit({ type: "complete", passed: !this.failed }); this.enabled = false;

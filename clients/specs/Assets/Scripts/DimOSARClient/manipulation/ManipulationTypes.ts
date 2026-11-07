@@ -45,6 +45,7 @@ export interface ManipulationGroup {
   following: boolean;
 }
 export interface ManipulationPlan {
+  target_revision?: number; group_id?: string;
   plan_id: string;
   joint_names: string[];
   trajectory: { time: number; positions: number[] }[];
@@ -58,9 +59,11 @@ export interface ManipulationObservation {
   gripper_target?: number | null;
   joint_velocities?: Record<string, number>;
 }
+export interface FollowingTail { generation: number; group_id: string; target_revision: number; status: "finishing"; position?: Vec3; orientation?: Quat; speed_scale?: number; joints?: Record<string, number>; }
 export interface ManipulationState {
   protection?: {state: "normal" | "derated" | "paused" | "fault"; reason?: string; joints?: string[]; effective_speed_scale: number; resumable?: boolean} | null;
   read_only?: boolean;
+  following_tail?: FollowingTail | null;
   type: "manipulation_state";
   available: boolean;
   message?: string | null;
@@ -82,6 +85,7 @@ export interface ManipulationState {
   operation_id?: string | null;
 }
 export interface ManipulationResult {
+  target_revision?: number;
   type: "manipulation_result";
   request_id: string;
   action: ManipulationAction;

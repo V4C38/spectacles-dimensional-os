@@ -1,5 +1,7 @@
+import { isValidatedBulkAsset, validatedBulkArray } from "../websocket/BulkTransfer";
 import { linkPoses } from "./ModelKinematics";
 import type {
+  FollowingTail,
   ManipulationModel,
   ManipulationAction,
   ManipulationOutbound,
@@ -53,6 +55,8 @@ function joints(value: unknown): void {
 }
 function plan(value: Record<string, unknown>): void {
   text(value.plan_id);
+  if (value.target_revision !== undefined && (!Number.isSafeInteger(value.target_revision) || Number(value.target_revision) < 0)) throw new Error("Invalid plan target revision");
+  if (value.group_id !== undefined) text(value.group_id);
   if (!Array.isArray(value.joint_names) || !value.joint_names.length)
     throw new Error("Missing joint names");
   value.joint_names.forEach(text);
@@ -65,6 +69,11 @@ function plan(value: Record<string, unknown>): void {
     value.trajectory.length > 8192
   )
     throw new Error("Invalid trajectory");
+  const cached = validatedBulkArray(value.trajectory);
+  if (cached) {
+    if (cached.names?.length !== value.joint_names.length || cached.names.some((name, i) => name !== (value.joint_names as unknown[])[i]) || finite(value.duration) < cached.lastTime) throw new Error("Bulk plan metadata mismatch");
+    return;
+  }
   let previous = -1;
   for (const raw of value.trajectory) {
     const point = object(raw),
@@ -76,6 +85,20 @@ function plan(value: Record<string, unknown>): void {
   }
   if (finite(value.duration) < previous)
     throw new Error("Trajectory exceeds duration");
+}
+
+export function decodeFollowingTail(value: unknown): FollowingTail | null {
+  if (value == null) return null;
+  const tail = object(value);
+  text(tail.group_id);
+  for (const field of ["generation", "target_revision"]) {
+    if (!Number.isSafeInteger(tail[field]) || Number(tail[field]) < 0) throw new Error("Invalid finishing generation");
+  }
+  if (tail.status !== "finishing") throw new Error("Invalid finishing status");
+  if (tail.position !== undefined || tail.orientation !== undefined) pose(tail);
+  if (tail.speed_scale !== undefined && (finite(tail.speed_scale) <= 0 || Number(tail.speed_scale) > 1)) throw new Error("Invalid finishing speed");
+  if (tail.joints !== undefined) joints(tail.joints);
+  return tail as unknown as FollowingTail;
 }
 
 export function decodeManipulation(
@@ -116,6 +139,7 @@ export function decodeManipulation(
     }
     if (data.read_only !== undefined && typeof data.read_only !== "boolean")
       throw new Error("Invalid manipulation read-only flag");
+    if (data.following_tail !== undefined) decodeFollowingTail(data.following_tail);
     if (typeof data.available !== "boolean")
       throw new Error("Invalid manipulation availability");
     if (
@@ -127,6 +151,7 @@ export function decodeManipulation(
       finite(data.ts);
       if (data.root_pose != null) pose(data.root_pose);
       const model = object(data.model);
+      if (!isValidatedBulkAsset(model)) {
       text(model.revision);
       text(model.root);
       if (model.visual_profile !== undefined) text(model.visual_profile);
@@ -208,6 +233,7 @@ export function decodeManipulation(
         model as unknown as ManipulationModel,
         Object.fromEntries([...jointNames].map((name) => [name, 0])),
       );
+      }
       if (!Array.isArray(data.groups))
         throw new Error("Missing manipulation groups");
       for (const raw of data.groups) {
@@ -224,13 +250,13 @@ export function decodeManipulation(
         )
           throw new Error("Invalid group capabilities");
       }
-      for (const [name, raw] of Object.entries(object(data.observations))) {
+      for (const raw of Object.values(object(data.observations))) {
         const observation = object(raw);
         if (observation.joints != null) joints(observation.joints);
         if (observation.gripper_target != null) { finite(observation.gripper_target); if (Number(observation.gripper_target)<0 || Number(observation.gripper_target)>1) throw new Error("Invalid gripper target"); }
         if (observation.joint_velocities != null) for (const value of Object.values(object(observation.joint_velocities))) finite(value);
         if (observation.measured_at != null) finite(observation.measured_at);
-        if (observation.pose != null) pose(observation.pose, `observations.${name}.pose`);
+        if (observation.pose != null) pose(observation.pose);
         if (observation.gripper != null) finite(observation.gripper);
       }
       if (data.plan != null) plan(object(data.plan));
@@ -244,6 +270,7 @@ export function encodeManipulation(
   action: ManipulationAction,
   groupId: string,
   payload: Partial<ManipulationPose> & {
+    epoch?: string; lease_id?: string; target_revision?: number;
     token?: string;
     plan_id?: string;
     ts?: number;
@@ -255,6 +282,11 @@ export function encodeManipulation(
 ): string {
   text(requestId);
   text(groupId);
+  if (payload.epoch !== undefined || payload.lease_id !== undefined) {
+    text(payload.epoch); text(payload.lease_id);
+    if (!Number.isSafeInteger(payload.sequence) || payload.sequence! < 0) throw new Error("Invalid authority sequence");
+  }
+  if (payload.target_revision !== undefined && (!Number.isSafeInteger(payload.target_revision) || payload.target_revision < 0)) throw new Error("Invalid target revision");
   if (["evaluate", "plan", "update"].includes(action)) pose(payload);
   if (
     ["plan", "update", "reset_joints", "prepare_shutdown"].includes(action) &&

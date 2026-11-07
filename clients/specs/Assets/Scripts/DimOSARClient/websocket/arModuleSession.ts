@@ -1,4 +1,7 @@
+import { BulkTransfer, utf8Bytes } from "./BulkTransfer";
 import type { ManipulationState } from "../manipulation/ManipulationTypes";
+import { CollaborationController } from "../replication/CollaborationController";
+import type { InteractionState } from "../replication/CollaborationTypes";
 import type { ClientTrackingOrigin, ClientTrackingOriginStore } from "../localization/clientTrackingOrigin";
 import { LocalizationSubmission } from "../localization/localizationSubmission";
 import {
@@ -6,7 +9,7 @@ import {
   ProtocolDecodeError,
   encodeClientError,
   decodeLidar,
-  decodeOutbound,
+  decodeOutboundObject,
   encodeEstopRequest,
   encodeHelloRequest,
   encodeLocalizationObservations,
@@ -42,6 +45,7 @@ export interface ARModuleSessionConfig {
 }
 
 export interface ARModuleSessionState {
+  interaction?: InteractionState | null;
   connection: ConnectionPhase;
   hasTrackingOrigin: boolean;
   hasRetainedTrackingOrigin?: boolean;
@@ -71,8 +75,10 @@ export interface ARModuleSessionDependencies {
 type ViewListener = (view: ARModuleSessionState) => void;
 type OutboundListener = (message: Outbound) => void;
 type CaptureRequestListener = (request: LocalizationObservationsRequest) => void;
+type DeferredAsset = { value: Record<string, unknown>; deadline: number; stream: string | null; generation: number; connection: number };
 
 export class ARModuleSession {
+  readonly collaboration: CollaborationController;
   private readonly transport: WebSocketTransport;
   private readonly clock: ClientClock;
   private readonly clientTrackingOriginStore: ClientTrackingOriginStore;
@@ -104,8 +110,22 @@ export class ARModuleSession {
   private alignmentRequired = false;
   private retainedOrigin: { reference: string; origin: ClientTrackingOrigin } | null = null;
   private readonly localizationSubmission = new LocalizationSubmission();
+  private captureEpisodeId: string | null = null;
+  private captureId: string | null = null;
+  private readonly bulk: BulkTransfer;
+  private readonly deferredAssets = new Map<string, DeferredAsset>();
+  private readonly assetGenerations = new Map<string, number>();
+  private assetConnection = 0;
+  private traffic = { at: 0, up: 0, down: 0, maxUp: 0, maxDown: 0, dropped: 0 };
+  private reportWindow = { at: 0, count: 0 };
+  private uploadResultTimeout: number | null = null;
+  private resultDeadline: number | null = null;
+  private assetsDirty = false;
 
   constructor(deps: ARModuleSessionDependencies) {
+    this.collaboration = new CollaborationController({ ready: () => this.phase === "ready",
+      clientId: () => this.hello?.client_id ?? null, now: () => deps.clock.now(), send: text => this.sendText(text) });
+    this.bulk = new BulkTransfer(deps.clock, () => this.bulkChanged(), data => this.applyLidar(data), reason => this.fail(reason));
     this.transport = deps.transport;
     this.clock = deps.clock;
     this.clientTrackingOriginStore = deps.clientTrackingOriginStore;
@@ -144,7 +164,16 @@ export class ARModuleSession {
     this.emitView();
   }
 
+  diagnostics() { return { control: { ...this.traffic }, bulk: this.bulk.diagnostics() }; }
+
   tick(): void {
+    const frameStart = this.clock.now();
+    this.bulk.tick();
+    if (this.assetsDirty) this.retryAssets(frameStart);
+    for (const [key, pending] of this.deferredAssets) {
+      if (this.clock.now() >= pending.deadline) this.retireAssetReply(key, pending.value);
+    }
+    this.collaboration.tick();
     const now = this.clock.now();
     if (this.phase === "awaiting_hello" && this.helloDeadline !== null && now >= this.helloDeadline) {
       this.fail("hello timeout");
@@ -190,6 +219,7 @@ export class ARModuleSession {
     if (this.phase !== "awaiting_hello" && this.phase !== "ready") {
       throw new Error("text frame before session is open");
     }
+    this.rollTraffic(); this.traffic.down += utf8Bytes(chunk);
     let lines: string[];
     try {
       lines = this.framer.push(chunk);
@@ -205,10 +235,14 @@ export class ARModuleSession {
     }
   }
 
-  onTransportBinary(data: Uint8Array): void {
+  onTransportBinary(_data: Uint8Array): void {
     if (this.phase !== "ready") {
       throw new Error("binary frame before hello");
     }
+    this.fail("Binary payload on v3 control channel");
+  }
+
+  private applyLidar(data: Uint8Array): void {
     try {
       this.lidar = decodeLidar(data);
     } catch (error) {
@@ -223,14 +257,28 @@ export class ARModuleSession {
     if (this.phase !== "ready") {
       throw new Error("send requires a ready session");
     }
-    this.transport.sendText(text);
+    const bytes = utf8Bytes(text);
+    if (bytes > 16384) throw new Error("Control frame exceeds 16KiB");
+    this.rollTraffic();
+    const stream = /"(?:action)":"(?:update|renew)"|"type":"client_pose"/.test(text);
+    if (stream && (this.traffic.up + bytes > 32768 || (this.transport.bufferedAmount?.() ?? 0) > 32768)) { this.traffic.dropped++; return; }
+    this.traffic.up += bytes; this.transport.sendText(text);
+  }
+  private rollTraffic(): void {
+    const now = this.clock.now();
+    if (now - this.traffic.at >= 1) {
+      this.traffic.maxUp = Math.max(this.traffic.maxUp, this.traffic.up);
+      this.traffic.maxDown = Math.max(this.traffic.maxDown, this.traffic.down);
+      this.traffic.at = now; this.traffic.up = this.traffic.down = 0;
+    }
   }
 
   sendBinary(data: Uint8Array): void {
     if (this.phase !== "ready") {
       throw new Error("send requires a ready session");
     }
-    this.transport.sendBinary(data);
+    if (!this.captureId) throw new Error("Localization upload requires a current capture request");
+    this.bulk.uploadLocalization(data, this.captureId); this.bulk.tick();
   }
 
   submitLocalizationObservations(
@@ -243,7 +291,8 @@ export class ARModuleSession {
     const encoded = encodeLocalizationObservations(observations);
     const timestamp = Math.max(...observations.map((observation) => observation.ts_capture));
     const sync = this.hello.time_sync;
-    this.localizationSubmission.begin(timestamp, sync.ts_server - sync.ts_client, this.clock.now(), timeoutS);
+    this.localizationSubmission.begin(timestamp, sync.ts_server - sync.ts_client, this.clock.now(), timeoutS + 30);
+    this.resultDeadline = this.clock.now() + timeoutS + 30; this.uploadResultTimeout = timeoutS;
     try {
       this.sendBinary(encoded);
     } catch (error) {
@@ -252,12 +301,25 @@ export class ARModuleSession {
     }
   }
 
+  localizationResultDeadline(): number | null { return this.resultDeadline; }
+
+  assetTransferDeadline(requestId: string): number | null {
+    return this.deferredAssets.get(requestId)?.deadline ?? null;
+  }
+
   cancelLocalizationSubmission(): void {
+    this.bulk.cancelUpload();
+    this.uploadResultTimeout = this.resultDeadline = null;
     this.localizationSubmission.cancel();
   }
 
   requestEstop(): void {
     requireCapability(this, "estop");
+    this.invalidateAssetStream("nav_goal:active");
+    this.invalidateAssetStream("nav_goal:preview");
+    this.invalidateAssetStream("manipulation_state");
+    this.invalidateAssetStream("interaction_state");
+    this.collaboration.cancel();
     this.sendText(encodeEstopRequest());
   }
 
@@ -267,6 +329,7 @@ export class ARModuleSession {
 
   view(): ARModuleSessionState {
     return {
+      interaction: this.collaboration.raw(),
       connection: this.phase,
       hasTrackingOrigin: this.clientTrackingOriginStore.hasTrackingOrigin,
       ...(this.retainedOrigin ? { hasRetainedTrackingOrigin: true } : {}),
@@ -302,7 +365,21 @@ export class ARModuleSession {
   private dispatchText(line: string): void {
     let message: Exclude<Outbound, Lidar>;
     try {
-      message = decodeOutbound(line);
+      const value = JSON.parse(line) as Record<string, unknown>;
+      this.observeAssetFacts(value);
+      const hydrated = this.bulk.hydrate(value);
+      if (hydrated.unavailable && (value.type === "manipulation_result" || value.type === "nav_goal")) {
+        this.retireAssetReply(String(value.request_id ?? value.preview_id ?? value.type), value); return;
+      }
+      if (hydrated.pending && (value.type === "manipulation_result" || value.type === "nav_goal" && value.preview)) {
+        this.deferAssetReply(value, hydrated.deadline); return;
+      }
+      message = decodeOutboundObject(hydrated.value);
+      if (message.type === "interaction_state") {
+        const previous = this.collaboration.raw();
+        if (previous && message.epoch === previous.epoch && message.revision <= previous.revision) return;
+      }
+      if (hydrated.pending) this.deferAssetReply(value, hydrated.deadline);
     } catch (error) {
       if (this.phase !== "ready") {
         this.fail(errorMessage(error));
@@ -330,6 +407,8 @@ export class ARModuleSession {
       this.pendingHelloTs = null;
       this.helloDeadline = null;
       this.phase = "ready";
+      const sibling = this.transport.createSibling?.(message.bulk_url);
+      if (sibling) { this.bulk.connect(sibling, message); this.bulk.tick(); }
       this.emitOutbound(message);
       this.emitView();
       return;
@@ -342,20 +421,121 @@ export class ARModuleSession {
     this.applyReadyMessage(message);
   }
 
-  private applyReadyMessage(message: Exclude<Outbound, Lidar | Hello>): void {
+  private bulkChanged(): void {
+    if (this.uploadResultTimeout !== null && !this.bulk.uploading) {
+      if (this.bulk.uploadResult()?.status === "accepted") {
+        this.resultDeadline = this.clock.now() + this.uploadResultTimeout;
+        this.localizationSubmission.extendDeadline(this.resultDeadline);
+      } else {
+        this.resultDeadline = null;
+        this.localizationSubmission.cancel();
+      }
+      this.uploadResultTimeout = null;
+    }
+    this.assetsDirty = true;
+  }
+
+  private retryAssets(start: number): void {
+    let count = 0;
+    for (const [key, pending] of this.deferredAssets) {
+      if (count++ >= 4 || this.clock.now() - start >= 0.002) break;
+      this.deferredAssets.delete(key);
+      if (!this.currentAssetReply(pending)) continue;
+      try {
+        const hydrated = this.bulk.hydrate(pending.value);
+        if (hydrated.unavailable) { this.retireAssetReply(key, pending.value); continue; }
+        if (hydrated.pending) {
+          pending.deadline = hydrated.deadline ?? pending.deadline;
+          this.deferredAssets.set(key, pending); continue;
+        }
+        this.deferredAssets.delete(key);
+        const message = decodeOutboundObject(hydrated.value);
+        if (message.type !== "hello" && this.currentAssetReply(pending)) this.applyReadyMessage(message, true);
+      } catch (error) { this.deferredAssets.delete(key); this.reportDecodeError(error, "Bulk asset completion"); }
+    }
+    this.assetsDirty = this.deferredAssets.size > 0;
+  }
+
+  private assetStream(value: Record<string, unknown>): string | null {
+    if (value.type === "nav_goal") return value.preview ? "nav_goal:preview" : "nav_goal:active";
+    return value.type === "manipulation_state" || value.type === "interaction_state" ? value.type : null;
+  }
+
+  private deferAssetReply(value: Record<string, unknown>, deadline: number | null): void {
+    const key = String(value.request_id ?? value.preview_id ?? value.type), stream = this.assetStream(value);
+    if (!this.deferredAssets.has(key) && this.deferredAssets.size >= 64) throw new Error("Asset correlation budget exceeded");
+    this.deferredAssets.set(key, { value, deadline: deadline ?? this.clock.now() + 120,
+      stream, generation: stream ? this.assetGenerations.get(stream) ?? 0 : 0, connection: this.assetConnection });
+    this.assetsDirty = true;
+  }
+
+  private invalidateAssetStream(stream: string): void {
+    this.assetGenerations.set(stream, (this.assetGenerations.get(stream) ?? 0) + 1);
+    for (const [key, pending] of this.deferredAssets) if (pending.stream === stream) this.deferredAssets.delete(key);
+  }
+
+  private currentAssetReply(pending: DeferredAsset): boolean {
+    return pending.connection === this.assetConnection &&
+      (pending.stream === null || pending.generation === this.assetGenerations.get(pending.stream));
+  }
+
+  private observeAssetFacts(value: Record<string, unknown>): void {
+    const stream = this.assetStream(value);
+    if (stream === "interaction_state") {
+      const previous = this.collaboration.raw();
+      if (previous && value.epoch === previous.epoch && Number(value.revision) <= previous.revision) return;
+      if (previous && value.epoch !== previous.epoch) {
+        this.invalidateAssetStream("nav_goal:active");
+        this.invalidateAssetStream("nav_goal:preview");
+        this.invalidateAssetStream("manipulation_state");
+      } else {
+        if (value.active_goal === null || !this.sameGoal(value.active_goal, this.nav_goal)) this.invalidateAssetStream("nav_goal:active");
+        if (value.preview === null || !this.sameGoal(value.preview, this.nav_preview)) this.invalidateAssetStream("nav_goal:preview");
+      }
+    }
+    if (stream) this.invalidateAssetStream(stream);
+    // Native action results remain request-correlated across newer state snapshots.
+    // A later result for the same request still supersedes its pending asset reply.
+    if (value.request_id !== undefined) this.deferredAssets.delete(String(value.request_id));
+  }
+
+  private sameGoal(value: unknown, current: NavGoal | null): boolean {
+    if (!value || typeof value !== "object" || !current) return value === null && current === null;
+    const goal = value as Record<string, unknown>;
+    return goal.ts === current.ts && goal.preview_id === current.preview_id && JSON.stringify(goal.pose) === JSON.stringify(current.pose);
+  }
+
+  private retireAssetReply(key: string, value: Record<string, unknown>): void {
+    this.deferredAssets.delete(key);
+    const detail = "Robot asset transfer unavailable";
+    if (value.type === "manipulation_state" || value.type === "manipulation_result") this.manipulationError = detail;
+    if (value.type === "manipulation_result") {
+      const rejected = { ...value, status: "rejected", code: "asset_unavailable", message: detail };
+      for (const field of ["plan_id", "plan_ref", "trajectory", "joint_names", "duration"]) delete (rejected as Record<string, unknown>)[field];
+      this.applyReadyMessage(decodeOutboundObject(rejected) as Exclude<Outbound, Lidar | Hello>);
+    } else if (value.type === "nav_goal") {
+      const empty: Record<string, unknown> = { ...value, path_poses: [] };
+      if (value.preview) delete empty.pose;
+      this.applyReadyMessage(decodeOutboundObject(empty) as Exclude<Outbound, Lidar | Hello>);
+    }
+    this.emitView();
+  }
+
+  private applyReadyMessage(message: Exclude<Outbound, Lidar | Hello>, completedAssets = false): void {
     switch (message.type) {
       case "manipulation_state":
         this.manipulationError = null;
-        // An unavailable poll contains no replacement topology or measurements.
-        // Keep their original timestamps so brief gaps pause commands rather than
-        // reset capture; genuinely stale source feedback still expires normally.
-        this.manipulation = !message.available && this.manipulation
-          ? { ...this.manipulation, available: false, message: message.message }
-          : message;
+        this.manipulation = !message.available && this.manipulation ? { ...this.manipulation, available: false, message: message.message } : message;
         break;
-      case "manipulation_result":
-        this.emitOutbound(message);
-        return;
+      case "manipulation_result": this.emitOutbound(message); return;
+      case "interaction_state":
+        if (!(completedAssets ? this.collaboration.completeAssets(message) : this.collaboration.apply(message))) return;
+        this.nav_goal = message.active_goal;
+        this.nav_preview = message.preview;
+        break;
+      case "interaction_result":
+        this.collaboration.accept(message);
+        break;
       case "state":
         this.state = message;
         break;
@@ -365,6 +545,24 @@ export class ARModuleSession {
       case "nav_goal":
         if (message.preview) this.nav_preview = message;
         else this.nav_goal = message;
+        break;
+      case "localization_context":
+        if (message.odom_reference_id !== this.hello?.odom_reference_id) return;
+        this.clientTrackingOriginStore.setMapContext(message, message.reset);
+        if (!this.clientTrackingOriginStore.hasTrackingOrigin) this.alignmentRequired = true;
+        break;
+      case "localization_map_transform":
+        if (message.odom_reference_id !== this.hello?.odom_reference_id) return;
+        this.clientTrackingOriginStore.applyMapTransform(message);
+        break;
+      case "localization_status":
+        if (!this.clientTrackingOriginStore.acceptsContext(message)) return;
+        if (message.episode_id !== undefined) {
+          if (message.episode_id !== this.captureEpisodeId) return;
+          if (message.ts !== undefined && !this.localizationSubmission.accept(message.ts, this.clock.now())) return;
+          this.cancelLocalizationSubmission();
+          this.captureEpisodeId = null;
+        }
         break;
       case "localization_result":
         if (!this.localizationSubmission.accept(message.ts, this.clock.now())) return;
@@ -378,6 +576,8 @@ export class ARModuleSession {
         break;
       case "localization_observations_request":
         this.cancelLocalizationSubmission();
+        this.captureEpisodeId = message.episode_id ?? null;
+        this.captureId = message.capture_id ?? null;
         this.emitCaptureRequest(message);
         this.emitOutbound(message);
         this.emitView();
@@ -403,16 +603,22 @@ export class ARModuleSession {
   private reportDecodeError(error: unknown, excerpt: string, type = "unknown"): void {
     const context = error instanceof ProtocolDecodeError ? error.context : { message_type: type };
     const detail = errorMessage(error).slice(0, 1024);
-    if (context.message_type === "unknown" || context.message_type.startsWith("manipulation_")) {
-      this.manipulationError = detail;
-      this.emitView();
+    if (["unknown", "hello", "interaction_state", "interaction_result", "state", "nav_goal", "localization_context", "localization_map_transform", "localization_status"].includes(context.message_type)) {
+      this.collaboration.cancel(); this.fail(`Invalid critical ${context.message_type}: ${detail}`); return;
+    }
+    if (context.message_type.startsWith("manipulation_") && this.manipulationError !== detail) {
+      this.collaboration.cancel(["manipulation_planning", "manipulation_following"]);
+      this.manipulationError = detail; this.emitView();
     }
     const now = this.clock.now(), key = `${context.message_type}:${detail}`;
+    if (now - this.reportWindow.at >= 1) this.reportWindow = { at: now, count: 0 };
+    if (this.reportWindow.count >= 4) return;
     const prior = this.decodeReports.get(key);
     if (prior && now - prior.at < 5) { prior.suppressed++; return; }
     this.decodeReports.delete(key);
     if (this.decodeReports.size >= 32) this.decodeReports.delete(this.decodeReports.keys().next().value!);
     this.decodeReports.set(key, { at: now, suppressed: 0 });
+    this.reportWindow.count++;
     const sync = this.hello?.time_sync;
     try {
       this.transport.sendText(encodeClientError({ type: "client_error", ...context,
@@ -449,6 +655,12 @@ export class ARModuleSession {
   }
 
   private clearConnectionFacts(): void {
+    this.captureId = null;
+    this.assetConnection++; this.assetGenerations.clear();
+    this.bulk.reset(); this.deferredAssets.clear(); this.uploadResultTimeout = this.resultDeadline = null;
+    this.collaboration.reset();
+    this.manipulation = null;
+    this.captureEpisodeId = null;
     this.localizationSubmission.reset();
     this.hello = null;
     this.state = null;

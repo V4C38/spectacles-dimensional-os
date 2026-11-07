@@ -9,7 +9,7 @@ test("keeps scene inspection quiet and only enables traces with explicit diagnos
     }
   });
   await page.routeWebSocket("**/ar", () => {});
-  await page.goto("/?debug=1");
+  await page.goto("/?debug=1&connection=local");
   await page.evaluate(async () => {
     const diagnostics = await import("/src/diagnostics/BrowserDiagnostics.ts");
     diagnostics.reportDiagnostic("panel-visible", { x: 1 });
@@ -17,7 +17,7 @@ test("keeps scene inspection quiet and only enables traces with explicit diagnos
   });
   await page.waitForTimeout(100);
   expect(entries.filter(entry => entry.level === "debug")).toEqual([]);
-  await page.goto("/?debug=1&diagnostics=1");
+  await page.goto("/?debug=1&diagnostics=1&connection=local");
   await page.evaluate(async () => {
     const diagnostics = await import("/src/diagnostics/BrowserDiagnostics.ts");
     diagnostics.reportDiagnostic("panel-visible", { x: 1 });

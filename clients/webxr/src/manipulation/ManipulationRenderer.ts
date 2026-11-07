@@ -78,6 +78,7 @@ export class ManipulationRenderer {
   );
   readonly path = this.pathStroke.object;
   private pathKey = "";
+  private pathDistances: number[] = [];
   private lastFrameTime = 0;
   private readonly meshFade = new ArmMeshFade();
   private readonly pointFade = new ArmMeshFade();
@@ -380,7 +381,6 @@ export class ManipulationRenderer {
       activePlan && group?.tip_frame
         ? JSON.stringify([
             activePlan.plan_id,
-            pathTime,
             model.revision,
             group.tip_frame,
             origin,
@@ -399,7 +399,7 @@ export class ManipulationRenderer {
           ...all,
           ...samplePlan(
             activePlan,
-            pathTime + ((activePlan.duration - pathTime) * i) / count,
+            (activePlan.duration * i) / count,
           ),
         })[group.tip_frame];
         if (pose)
@@ -411,6 +411,8 @@ export class ManipulationRenderer {
             ),
           );
       }
+      this.pathDistances = [0];
+      for (let i = 1; i < points.length; i++) this.pathDistances.push(this.pathDistances[i - 1] + points[i].distanceTo(points[i - 1]));
       this.pathStroke.setSegments(
         points
           .slice(0, -1)
@@ -466,6 +468,11 @@ export class ManipulationRenderer {
       for (const joint of model.joints) if (["revolute", "continuous"].includes(joint.kind) && all[joint.name] != null)
         debug(joint.name, composePose(rootPose, rawPoses[joint.child]), all[joint.name]);
     }
+    if (activePlan && this.pathDistances.length) {
+      const cursor = Math.min(this.pathDistances.length - 1, pathTime / Math.max(1e-6, activePlan.duration) * (this.pathDistances.length - 1));
+      const lower = Math.floor(cursor), upper = Math.min(this.pathDistances.length - 1, lower + 1);
+      this.pathStroke.setStartDistance(this.pathDistances[lower] + (this.pathDistances[upper] - this.pathDistances[lower]) * (cursor - lower));
+    } else this.pathStroke.setStartDistance(0);
     this.controlsView.apply({
       intent,
       handDragging: this.handDragging,

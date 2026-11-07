@@ -107,11 +107,18 @@ function sameNumbers(a: readonly number[], b: readonly number[]): boolean {
 
 /** Adaptive stroke quads encode the same segment metric used by the WebXR shader. */
 export class AdaptiveStrokeRenderer extends WorldMeshRenderer {
-  constructor(parent: SceneObject, name: string) { super(parent, name, WORLD_STROKE_MATERIAL, true); }
+  private baseWidth = 1;
+  constructor(parent: SceneObject, name: string) { super(parent, name, WORLD_STROKE_MATERIAL, true); this.style(1, 1); }
+  style(widthCm: number, opacity: number, color: readonly [number, number, number] = [1, 1, 1], startDistance = 0): void {
+    const pass = this.material.mainPass as Pass & { opacityScale: number; colorR: number; colorG: number; colorB: number; widthScale: number; startDistance: number };
+    pass.opacityScale = opacity; pass.colorR = color[0]; pass.colorG = color[1]; pass.colorB = color[2];
+    pass.widthScale = widthCm / this.baseWidth; pass.startDistance = startDistance;
+  }
   minimumPixels = 2;
   segments(points: readonly Vec3[], widthCm: number, opacity: number,
     dashCm: number = WORLD_DASH_STYLE.dashM * 100, gapCm: number = WORLD_DASH_STYLE.gapM * 100,
     continuous = false, color: readonly [number, number, number] = [1, 1, 1], opacities?: readonly number[]): void {
+    this.baseWidth = widthCm; this.style(widthCm, 1);
     (this.material.mainPass as Pass & { minimumPixels: number }).minimumPixels = this.minimumPixels;
     const vertices: number[] = [], indices: number[] = [];
     let distance = 0;

@@ -3,10 +3,14 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 import time
+from typing import TYPE_CHECKING
 
 from dimos.ar.localization.coordinator import LocalizationCoordinator, LocalizationOutcome
 from dimos.ar.localization.policy import EpisodeWork, LocalizationPolicy
 from dimos.utils.logging_config import setup_logger
+
+if TYPE_CHECKING:
+    from dimos.ar.localization.map_localization import MapLocalization
 
 logger = setup_logger()
 EPISODE_TIMEOUT_S = 12.0
@@ -24,7 +28,9 @@ class LocalizationRunner:
         on_outcome: Callable[[EpisodeWork, LocalizationOutcome], None],
         on_prompt: Callable[[str], None],
         timeout_s: float = EPISODE_TIMEOUT_S,
+        map_localization: MapLocalization | None = None,
     ) -> None:
+        self._map_localization = map_localization
         self._coordinator = coordinator
         self._policy = policy
         self._on_outcome = on_outcome
@@ -36,6 +42,11 @@ class LocalizationRunner:
         self._closed = False
 
     def start(self) -> None:
+        if self._closed:
+            return
+        if self._map_localization is not None:
+            self._map_localization.start()
+            return
         if self._poll_task is None and not self._closed:
             self._poll_task = asyncio.create_task(self._poll())
 
@@ -71,6 +82,8 @@ class LocalizationRunner:
             tasks += (self._poll_task,)
             self._poll_task = None
         await asyncio.gather(*tasks, return_exceptions=True)
+        if self._map_localization is not None:
+            await self._map_localization.close()
         await self._coordinator.close()
 
     async def _poll(self) -> None:

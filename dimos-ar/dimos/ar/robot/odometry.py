@@ -7,6 +7,7 @@ from uuid import uuid4
 from dimos.ar.localization.pose_buffer import PoseBuffer, PoseSample
 from dimos.ar.localization.source_clock import RobotSourceClock
 from dimos.ar.robot.odometry_correction import correct_odom_pose
+from dimos.ar.timing_diagnostics import TimingSummary
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
 
@@ -39,6 +40,10 @@ class RobotOdometry:
         self._factor = factor
         self._source_frame: str | None = None
         self._latest: AcceptedOdometry | None = None
+        self._timing = TimingSummary(
+            "robot odometry timing", source="replay" if recording else "live"
+        )
+        self._last_arrival_mono: float | None = None
 
     def latest(self) -> AcceptedOdometry | None:
         return self._latest
@@ -55,6 +60,27 @@ class RobotOdometry:
     ) -> AcceptedOdometry | None:
         now = time.time() if received_at is None else received_at
         timestamp = self.clock.odometry_time(float(msg.ts), received_at=now)
+        arrival = time.monotonic()
+        gap_ms = (
+            (arrival - self._last_arrival_mono) * 1000
+            if self._last_arrival_mono is not None
+            else 0.0
+        )
+        self._last_arrival_mono = arrival
+        age = now - timestamp if timestamp is not None else None
+        self._timing.record(
+            counts={
+                "received": 1,
+                "invalid_timestamp": int(timestamp is None),
+                "delayed": int(age is not None and age > 0.25),
+                "stale": int(age is not None and age > 2.0),
+                "future": int(age is not None and age < -0.25),
+            },
+            maxima={
+                "arrival_gap_max_ms": gap_ms,
+                **({"source_age_max_ms": age * 1000} if age is not None else {}),
+            },
+        )
         if timestamp is None:
             return None
         previous = self.history.latest()

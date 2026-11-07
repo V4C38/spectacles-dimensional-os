@@ -33,6 +33,13 @@ class LocalizationWorker:
         future.add_done_callback(lambda done: None if done.cancelled() else done.exception())
         return await asyncio.shield(future)
 
+    async def run_if_idle(self, work: Callable[[], _T]) -> _T | None:
+        # Camera streams are replaceable samples. Never queue one waiter per
+        # frame behind an encoder or a client localization operation.
+        if self._closed or self._permit.locked():
+            return None
+        return await self.run(work)
+
     def close(self) -> None:
         self._closed = True
         self._executor.shutdown(wait=False, cancel_futures=True)

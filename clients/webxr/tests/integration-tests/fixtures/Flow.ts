@@ -69,6 +69,10 @@ export class Flow {
             elapsed: app?.client.ui.successElapsedS,
             tracking: app?.tracking,
             source: app?.menuAnchor.source?.handedness,
+            navigation: app?.client.navigation.interaction.snapshot(),
+            interaction: app?.client.session.collaboration.raw(),
+            preview: app?.client.session.view().nav_preview,
+            previewVisible: app?.client.previewRoute.object.visible,
           };
         })
         .catch(() => null);

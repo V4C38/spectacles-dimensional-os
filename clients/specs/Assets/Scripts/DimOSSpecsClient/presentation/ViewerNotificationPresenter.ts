@@ -1,7 +1,7 @@
 import type { RoundedRectangle } from "SpectaclesUIKit.lspkg/Scripts/Visuals/RoundedRectangle/RoundedRectangle";
-import { NotificationCenter, type ClientNotification } from "../../DimOSARClient/presentation/NotificationCenter";
+import { NotificationCenter, notificationGlyph, type ClientNotification } from "../../DimOSARClient/presentation/NotificationCenter";
 import { VIEWER_NOTIFICATION_STYLE } from "../../DimOSARClient/presentation/WorldVisualStyle";
-import { WorldMeshRenderer, circleMesh } from "./WorldMeshRenderer";
+import { WorldMeshRenderer } from "./WorldMeshRenderer";
 import { createRoundedSurface, createText, uiMaterialLayer, COLOR_WHITE } from "./UIKit";
 
 /** Non-interactive viewer-relative feedback, driven only by visible-frame time. */
@@ -27,6 +27,7 @@ export class ViewerNotificationPresenter {
     this.root.enabled = false;
   }
   show(notification: ClientNotification): void { if (!this.disposed) this.center.show(notification); }
+  clear(key: string): void { this.center.clear(key); }
   tick(deltaS: number): void {
     if (this.disposed) return;
     this.center.tick(Math.min(0.1, Math.max(0, deltaS)));
@@ -34,12 +35,19 @@ export class ViewerNotificationPresenter {
     this.root.enabled = notification !== null;
     if (!notification) return;
     this.text.text = notification.text;
-    const ring = circleMesh(1.6, 0.22, Math.min(1, snap.elapsedS / 0.25), 48);
-    const positions = [...ring.positions], indices = [...ring.indices];
-    const offset = positions.length / 3;
-    positions.push(-1, 0.05, -1.2, -1.2, 0.05, -1, 1.2, 0.05, 1, 1, 0.05, 1.2);
-    indices.push(offset, offset + 1, offset + 2, offset + 2, offset + 1, offset + 3);
-    this.icon.triangles(positions, indices, [1, 0.27, 0.23, 1]);
+    const positions: number[] = [], indices: number[] = [];
+    for (const [x, y, ex, ey] of notificationGlyph(notification.glyph, snap.elapsedS)) {
+      const length = Math.hypot(ex - x, ey - y);
+      if (length < 0.00001) continue;
+      const dx = -(ey - y) / length * 0.11, dy = (ex - x) / length * 0.11;
+      const base = positions.length / 3;
+      positions.push(x + dx, 0.05, -y - dy, x - dx, 0.05, -y + dy,
+        ex + dx, 0.05, -ey - dy, ex - dx, 0.05, -ey + dy);
+      indices.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
+    }
+    const color: [number, number, number, number] = notification.tone === "warning" ? [1, 0.84, 0.04, 1]
+      : notification.tone === "success" ? [0.19, 0.82, 0.35, 1] : [1, 0.27, 0.23, 1];
+    this.icon.triangles(positions, indices, color);
     const transform = this.camera.getTransform(), rotation = transform.getWorldRotation();
     const target = transform.getWorldPosition().add(rotation.multiplyVec3(new vec3(0, -15, -65)));
     const alpha = 1 - Math.exp(-12 * Math.max(0, deltaS));

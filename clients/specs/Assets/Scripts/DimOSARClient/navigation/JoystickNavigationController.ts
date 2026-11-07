@@ -23,7 +23,7 @@ export class JoystickNavigationController {
   private lastSentAt = Number.NEGATIVE_INFINITY;
   private held = false;
 
-  constructor(private readonly session: Pick<ARModuleSession, "view" | "sendText">) {}
+  constructor(private readonly session: Pick<ARModuleSession, "view" | "sendText"> & Partial<Pick<ARModuleSession, "collaboration">>) {}
 
   tick(now: number, axes: JoystickAxes | null): void {
     if (this.session.view().connection !== "ready" || this.session.view().capabilities?.navigation.nav_joystick.available !== true) {
@@ -40,6 +40,11 @@ export class JoystickNavigationController {
         this.held = false;
       }
       return;
+    }
+    if (this.session.collaboration) {
+      if (!this.session.collaboration.begin("joystick", "joystick")) return;
+      this.held = true;
+      if (!this.session.collaboration.snapshot().ownsAuthority) return;
     }
     if (now - this.lastSentAt < JOYSTICK_SEND_INTERVAL_S) {
       this.held = true;
@@ -61,6 +66,7 @@ export class JoystickNavigationController {
   }
 
   private sendZero(): void {
+    if (this.session.collaboration) { this.session.collaboration.release(undefined, ["joystick"]); return; }
     try {
       requestNavJoystick(this.session, { linear: [0, 0, 0], angular: [0, 0, 0] });
     } catch {

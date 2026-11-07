@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("encodes frozen full-resolution video pixels in the real JPEG worker", async ({ page }) => {
   await page.routeWebSocket("**/ar", () => {});
-  await page.goto("/");
+  await page.goto("/?connection=local");
   const result = await page.evaluate(async () => {
     const { BrowserJpegEncoder } = await import("/src/localization/BrowserJpegEncoder.ts");
     const canvas = document.createElement("canvas"); canvas.width = 1280; canvas.height = 960;

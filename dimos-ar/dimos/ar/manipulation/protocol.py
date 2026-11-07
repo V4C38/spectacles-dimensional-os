@@ -50,6 +50,16 @@ def decode_request(data: dict[str, Any]) -> ManipulationRequest:
     if not isinstance(action, str) or action not in ACTIONS:
         raise ValueError("unknown manipulation action")
     payload: dict[str, Any] = {}
+    for field in ("epoch", "lease_id"):
+        if field in data:
+            payload[field] = identifier(data[field], field)
+    for field in ("sequence", "target_revision"):
+        if field in data:
+            value = data[field]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{field} must be a nonnegative integer")
+            payload[field] = value
+
     if action in {"evaluate", "plan", "update"}:
         for key, count in (("position", 3), ("orientation", 4)):
             values = data.get(key)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import math
@@ -81,11 +82,13 @@ class MultisetVpsClient:
         config: MultisetVpsClientConfig,
         client_id: str,
         client_secret: str,
+        admit: Callable[[], None] | None = None,
     ) -> None:
         if not client_id.strip():
             raise ValueError("client_id must be a non-empty string")
         if not client_secret.strip():
             raise ValueError("client_secret must be a non-empty string")
+        self._admit = admit
         self._config = config
         self._client_id = client_id
         self._client_secret = client_secret
@@ -95,7 +98,9 @@ class MultisetVpsClient:
         self._token_expires = 0.0
 
     @classmethod
-    def from_env(cls, config: MultisetVpsClientConfig) -> MultisetVpsClient:
+    def from_env(
+        cls, config: MultisetVpsClientConfig, *, admit: Callable[[], None] | None = None
+    ) -> MultisetVpsClient:
         client_id = os.environ.get(_CLIENT_ID_ENV, "").strip()
         client_secret = os.environ.get(_CLIENT_SECRET_ENV, "").strip()
         missing = [
@@ -110,7 +115,7 @@ class MultisetVpsClient:
             raise ValueError(
                 "MultiSet VPS credentials are not configured: " + ", ".join(missing) + " missing"
             )
-        return cls(config=config, client_id=client_id, client_secret=client_secret)
+        return cls(config=config, client_id=client_id, client_secret=client_secret, admit=admit)
 
     async def query(self, *, jpeg: bytes, intrinsics: Intrinsics) -> VpsQueryResult | None:
         _validate_query(jpeg, intrinsics)
@@ -194,6 +199,8 @@ class MultisetVpsClient:
             "queryMode": _QUERY_MODE,
         }
         files = {"queryImage": ("query.jpg", jpeg, "image/jpeg")}
+        if self._admit is not None:
+            self._admit()
         return await self._post(self._query_url(), headers=headers, data=data, files=files)
 
     async def _post(

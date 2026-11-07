@@ -7,8 +7,7 @@ clients update their protocol module in the same change.
 
 ## Conventions
 
-- **Message types** — control, telemetry, optional manipulation, and client diagnostics.
-  Inventory is below.
+- **Version 2 interaction messages** supplement the robot telemetry and localization inventory below.
 - **Wire frame is `odom`** — the robot's drifting leg-odometry frame, in
   DimOS's right-handed Z-up axes. ARModule performs **no axis conversion**. Each
   client converts on receipt; clients do not share one scene convention.
@@ -27,8 +26,60 @@ clients update their protocol module in the same change.
   the client to act: `localization_observations_request` is that exception.
   Binary payloads use a bare noun (`localization_observations`, `lidar`).
 - **`hello.capabilities`** — keys `lidar`, `navigation`, `localization`,
-  `estop`, `agent`. Any key may be `available=false` with `reason`. Nested
+  `estop`, `agent`, plus optional `manipulation`. Any key may be `available=false` with `reason`. Nested
   `navigation.nav_goal` and `navigation.nav_joystick` are always present.
+
+## Protocol v3 control and bulk lanes
+
+The control WebSocket carries authority, small command results, target samples,
+mode, operation status, and references to immutable presentation assets. Hello
+includes `protocol_version:3`, `bulk_url`, `bulk_token`, and `bulk_epoch`. The same
+client opens the advertised bulk path and sends:
+
+```json
+{"type":"bulk_hello_request","protocol_version":3,"client_id":"from-hello","token":"from-hello"}
+```
+
+The bulk connection has no independent robot authority. It is bound to the live
+control session and acknowledged with `bulk_hello`. Images, LiDAR, model topology,
+checked trajectories, and route points use that lane. A control record is at most
+16 KiB; a batch is at most 64 KiB and 32 commands. Critical commands are never silently
+dropped; control overload retires the connection and its authority.
+
+Examples below show assembled model/plan/route domain values where useful;
+actual v3 control frames carry references in place of those arrays.
+
+Control `model_ref`, `plan_ref`, and `route_ref` values contain `{epoch,id,revision}`.
+A complete revision is reconstructed from ordered `bulk_record` values with the
+same reference, `kind` (`model`, `trajectory`, `route`), zero-based `part`, total
+`parts`, and typed `data`. Records are at most 16 KiB in UTF-8. Model data contains
+optional `metadata`, `links`, and `joints`; trajectory/route data contains optional
+`metadata` and `points`. ClientCore assembles these into the existing domain view;
+an incomplete or retired asset cannot authorize execution. Native arm snapshots
+also send compact revision metadata internally; model/plan assets are fetched
+only on revision change. A timed-out native snapshot, asset fetch, or command
+retains its actual admission slot until the native callback completes. Retries
+cannot accumulate blocked native work. Stop and control-plane heartbeat have
+independent lanes. Replaceable camera/costmap/LiDAR work does not queue one native
+CPU job per input frame.
+
+Localization binary uploads use a declared bounded bulk upload and incremental
+binary records; their existing observation payload is preserved. The bulk lane
+uses byte budgets and latest-value replacement, so a stalled image or large model
+does not sit ahead of Stop, lease renewals, or small authoritative snapshots on
+the control TCP connection. This is not a guarantee against operating-system or
+hardware failure; physical Emergency Stop remains necessary.
+
+The default aggregate 1 MiB/s token bucket and fair shares apply only to outgoing
+model/trajectory/route assets and LiDAR downloads. Incoming localization pixels
+do not wait on this optional-data budget: each client still has one upload of at
+most 4 MiB, each ARB3 record remains at most 16 KiB, and the server yields after
+every chunk so controls can run. Client upload pumping is bounded to 16 chunks
+per display tick, a 256 KiB socket high-water mark, and the same 2 ms work budget.
+Admitted JPEG chunks are pumped before optional asset-record parsing consumes
+that display tick's work budget.
+Existing image-age checks, localization timeouts, and pose acceptance rules are
+unchanged; transport must not deliberately make a fresh image stale.
 
 ## Transport
 
@@ -49,7 +100,8 @@ clients update their protocol module in the same change.
 
 ## Coordinate conventions
 
-Every position and orientation on the wire is in the **`odom`** frame, in
+Robot poses, navigation, LiDAR, and top-level localization results use **`odom`**.
+Explicit map-alignment metadata uses the named MultiSet map frame. Both use
 DimOS's axes:
 
 | Axis | Direction |
@@ -79,7 +131,7 @@ Two consequences for clients on a drifting stack:
   holds forever.
 
 Fiducial marker localization and robot-side VPS anchoring look up that pose at
-shutter time. Robot-side VPS also needs an onboard camera extrinsic
+the image timestamp; Go2 receipt timestamps are an exposure-time approximation. Robot-side VPS also needs an onboard camera extrinsic
 (`T_base_camera_optical`). Declared DimOS ports for LiDAR and navigation stay
 on `ARModule`; they no-op when `hello.capabilities` reports them unavailable.
 
@@ -161,25 +213,100 @@ repeated marker/VPS localization handles alignment drift that one constant canno
 Changing the factor requires restarting ARModule and reconnecting clients so
 origins, paths, previews and points cannot mix old/new coordinate models.
 
-## Multiple clients
+## Multiple clients and replication
 
-Any number of clients may connect at once.
+The collaboration protocol is version **3**, advertised as `hello.protocol_version`.
+ARModule owns the robot's shared targets, authority, manual/agent mode, accepted
+preview and active goal. Headset tracking origins, input capture and interpolation
+remain local. The supported validation target is two to five simultaneous clients.
 
-- **Telemetry is broadcast.** Every client receives identical `pose`, active `nav_goal`,
-  `lidar` and `state`. Payloads are byte-identical, so there is no per-client
-  view to reconcile.
-- **Localization is per connection.** `localization_observations_request` and
-  `localization_result` are addressed to one connection, since each client has
-  its own tracking origin.
-- **Control is last-command-wins.** ARModule does not arbitrate. The most
-  recent `nav_goal_request`, `nav_joystick_request`, or `estop_request` takes
-  effect regardless of which client sent it. ARModule publishes joystick
-  commands on DimOS `tele_cmd_vel`; `MovementManager` muxes that stream against
-  planner `nav_cmd_vel`.
+`interaction_state` is a complete revisioned snapshot. It contains `epoch` (robot
+interaction reference), `revision`, `mode`, `motion_busy`, `authority`, `target` (last edited
+canonical target), `targets` (retained navigation and per-group manipulation targets),
+`preview`, and `active_goal`. Poses use odometry metres and XYZW quaternions.
+Targets contain `domain`, optional `group_id`, `position`, `orientation`, `revision`,
+`phase` (`draft`, `live`, `committed`), `sample_ts`, `sequence`, `speed_scale` and
+optional `gripper`. `sample_ts` is a server monotonic interpolation sample time,
+not a headset clock or exposure timestamp. Apply each headset's current origin
+when rendering canonical odometry poses.
 
-`hello` assigns each connection a `client_id` for logging and future features.
-Navigation overlay uses `nav_goal` and `pose`. `state.nav` tracks planner
-navigation regardless of who issued the goal.
+Authority is robot-wide: `client_id`, `source_id`, `acquisition_id`, `lease_id`,
+`kind`, `held`, `expires_at`, `sequence`, and optional `group_id`. Kinds are `live`,
+`navigation_planning`, `joystick`, `manipulation_planning`, and
+`manipulation_following`. A lease lasts 500 ms; its client renews at 100 ms.
+Only the owning connection can edit or command while a lease is present.
+Other clients display grey targets with a cross and retain Emergency Stop.
+
+### Interaction commands
+
+`interaction_request` contains a nonempty `request_id` and `action`:
+
+| Action | Additional fields | Effect |
+|---|---|---|
+| `snapshot` | None | Return current state. |
+| `acquire` | `epoch`, `kind`, `source_id`, `acquisition_id`; optional pose and `group_id` | First accepted acquisition owns the robot. |
+| `renew` | `epoch`, `lease_id` | Extend the current lease. |
+| `update` | `epoch`, `lease_id`, increasing `sequence`, pose; optional speed/gripper | Accept an exact intended target. |
+| `release` | Same credentials, increasing sequence and final pose | Atomically retain final pose and release live authority; live navigation submits its final goal. |
+| `confirm` | Same credentials, increasing sequence and frozen final pose | Commit selected navigation and release planning authority. |
+| `cancel` | `epoch`, `lease_id` | Retire this interaction without confirming its draft. |
+| `cancel_acquire` | `epoch`, `acquisition_id` | Cancel pending acquisition; a late grant cannot restore it. |
+| `mode` | `epoch`, `mode` (`manual` or `agent`) | Change shared robot mode only while no interaction/agent turn owns it. |
+
+Selected navigation is a two-gesture planning session. **Its first release keeps
+the planning lease** (with `held: false`) until confirmation, cancellation,
+deselection, tracking loss, disconnect or expiry. Only that client requests an
+advisory path; every client sees the accepted shared draft and preview. An
+advisory navigation preview survives target jitter below 0.2 m and 15 degrees of
+yaw relative to the canonical aim captured for that preview (the native safe-goal
+endpoint can be offset from that aim). A worker result from an earlier target
+revision may be accepted only within those bounds and the same live epoch and
+planning lease. Larger changes invalidate the route; handover or reference reset
+always rejects the old result. Arm checked plans retain exact revision matching.
+Planning
+does not overwrite a previously executing goal/route. Selected arm planning
+releases editing authority when the hand opens; checked plans bind to the shared
+target revision rather than remaining owned by their creating client.
+
+Normal live arm release sends only `interaction_request.release`; clients stop
+sending native token updates immediately. ARModule frees the editing lease and
+hands the native process its last successfully validated pose and joint endpoint.
+That server-owned `following_tail` is takeoverable by any new grab. Its compact
+summary includes `generation`, `group_id`, `target_revision`, `status:"finishing"`,
+and optional pose/speed/joints. Newer admission fences delayed old release and
+cleanup messages. The former client's disconnect cannot cancel the detached tail
+or its replacement; losing the final client stops it. Finishing refreshes the
+native target at 10 Hz for at most 55 seconds and requires distinct fresh endpoint
+observations spanning 0.5 seconds to declare arrival. Stale feedback, IK failure,
+Stop, reference reset, or control-plane lease expiry aborts it. Execute/reset/park
+remain non-takeoverable accepted operations, distinct from a finishing tail.
+
+ARModule renews a native per-robot control-plane lease at 10 Hz with a 500 ms
+monotonic deadline. Native arm following, tails, and accepted operations stop when
+that lease expires, even if ARModule crashes. Repository-owned native navigation
+similarly gates AR-admitted base motion on its control-plane lease and rejects
+stale planning activation. These protections do not claim cancellation of every
+upstream native agent continuation or recovery from a hung physical controller.
+
+Every command receives `interaction_result` with `request_id`, `epoch`, `revision`,
+`status` (`accepted`, `busy`, `stale`, `rejected`), `code`, and optional `lease_id`.
+Request deduplication is bounded per connection. Ordinary target snapshots may
+coalesce; critical command results cannot be silently dropped on queue overflow.
+
+Navigation and joystick requests carry `epoch`, `lease_id`, and `sequence`.
+Preview work requires the selected planning owner. Bare legacy motion packets
+never reach native ports. The server validates authority separately from clients'
+optimistic prediction. Owner input renders immediately; accepted target updates
+replicate at up to 20 Hz independently from robot command throttling. Remote
+interpolation never changes authoritative target poses or native commands.
+
+Localization requests/results remain per connection. Shared robot telemetry and
+accepted targets are broadcast. Reconnection creates a fresh connection identity
+and receives current shared state; old leases cannot resume. A live owner loss
+stops that control even if observers remain, while observer loss does not stop
+another owner's interaction. Last-client disconnect retains stop handling.
+Agent context uses the sender of the active robot turn, not the most recent
+headset pose. Shared AR marker poses are replayed to late joiners.
 
 ## Handshake
 
@@ -213,6 +340,7 @@ connection, and replies with `hello`.
 ```json
 {
   "type": "hello",
+  "protocol_version": 3,
   "client_id": "c3f1a9",
   "time_sync": {
     "ts_client": 1234.567,
@@ -241,6 +369,7 @@ connection, and replies with `hello`.
 
 | Field | Type | Notes |
 |-------|------|-------|
+| `protocol_version` | integer | Required collaboration protocol version; current value is `3`. |
 | `client_id` | string | Server-assigned, unique per connection. |
 | `time_sync.ts_client` | float | Echo of `hello_request.ts_client`. |
 | `time_sync.ts_server` | float | Server time when `hello_request` arrived. |
@@ -249,14 +378,16 @@ connection, and replies with `hello`.
 | `robot.footprint_m` | `[L, W]` | Ground footprint for nav UI. |
 | `robot.base_height_m` | float | Height of the odometry pose origin above the ground, so a client can place a ground marker under a `pose`. |
 | `robot.odom_scale_correction_factor` | float | Optional finite positive native-to-AR XY heuristic, default 1 when absent. Points/poses are already corrected; use it only to recover native distances. |
-| `capabilities.*.available` | bool | Feature gate for client UI. Keys are `lidar`, `navigation`, `localization`, `estop`, and `agent`. |
+| `capabilities.*.available` | bool | Feature gate for client UI. Keys are `lidar`, `navigation`, `localization`, `estop`, `agent`, and optional `manipulation`. |
 | `capabilities.*.reason` | string \| null | Human-readable, non-null exactly when `available` is `false`. |
 | `capabilities.navigation.nav_goal` | `{ available, reason, preview? }` | Can send `nav_goal_request`. Always present. Optional boolean `preview` defaults to false. |
 | `capabilities.navigation.nav_joystick` | `{ available, reason }` | Can send `nav_joystick_request`. Always present. |
 
 `navigation.available` is true when any nested input is available. Clients that
 need a specific input check that nested key; Specs point-and-click checks
-`nav_goal`.
+`nav_goal`. `capabilities.manipulation` is present and available only when the
+optional native manipulation Spec is connected; an absent key means unavailable.
+Go2 deployments do not load arm runtime dependencies.
 
 ARModule keeps `ts_server - ts_client` as the per-connection offset. The client
 may use the same pair for its own UI timing; localization does not require the
@@ -385,12 +516,13 @@ ARModule → one client. Prompt to capture a camera batch and send
 needs the client to act.
 
 After an unsuccessful scan, ARModule requests a replacement batch with this
-same message (subject to provider cooldowns). Clients resume capture immediately;
+same message (subject to retry backoff and the shared VPS query budget). Clients resume capture immediately;
 the result timeout is only a fallback for a missing response.
 
 ```json
 {
   "type": "localization_observations_request",
+  "capture_id": "server-generated-generation",
   "capture_policy": "robot_los_required",
   "observation_count": 3
 }
@@ -398,6 +530,7 @@ the result timeout is only a fallback for a missing response.
 
 | Field | Type | Notes |
 |-------|------|-------|
+| `capture_id` | string | V3 server-generated capture generation, 1–128 characters. Echo in the matching `bulk_upload_begin`; it is scoped to this control connection. |
 | `capture_policy` | string | `robot_los_required` \| `robot_los_preferred` \| `any_angle`. Geometric gate only — not a provider name. |
 | `observation_count` | uint | Exact batch size. The client always sends this many frames. |
 | `wait_timeout_s` | float | Required when `capture_policy` is `robot_los_preferred`. Omitted otherwise. |
@@ -417,11 +550,34 @@ Example with timeout:
 ```json
 {
   "type": "localization_observations_request",
+  "capture_id": "server-generated-generation",
   "capture_policy": "robot_los_preferred",
   "observation_count": 3,
   "wait_timeout_s": 2.0
 }
 ```
+
+The server assigns a fresh `capture_id` when each capture request is enqueued for
+a particular control connection. The matching `bulk_upload_begin` must contain
+that ID in addition to its upload ID and declared byte count. The server checks
+the generation both before accepting the upload and after its final chunk, before
+dispatching any observations. A new manual localization start invalidates the
+previous generation before policy admission, so a delayed canceled upload cannot
+attach to the replacement episode across the separate sockets. Reconnect creates
+a new control identity; its previous capture IDs cannot be reused.
+
+An upload begins on the bulk socket with
+`{type:"bulk_upload_begin",kind:"localization",upload_id,total_bytes,capture_id}`.
+A client can stop that upload with `{type:"bulk_upload_cancel",upload_id}`; the
+server replies `bulk_upload_result` with that upload ID and `status:"cancelled"`.
+Cancellation of an old upload ID cannot cancel a replacement upload. The same
+capture generation may be reused for a replacement batch within the same prompt;
+a new prompt, manual start, or disconnect invalidates it.
+
+This envelope correlation changes neither LOCA bytes nor camera-pose acceptance,
+frame spacing, nearest-pose fallback, capture geometry, or result timeouts. The
+Python request type permits an omitted ID for internal construction; the v3
+transport supplies one on every delivered capture request.
 
 ### `localization_result`
 
@@ -462,18 +618,104 @@ Localization never occupies a client's WebSocket read loop. The default server
 budget is 12 seconds from admission, including CPU/HTTP queueing, authentication,
 token refresh, and robot/headset queries; the advertised client timeout is the
 configured budget plus 3 seconds. Cancellation retires delivery and aborts HTTP.
-A miss or exception schedules a new capture after backoff/provider cooldowns;
-images are never held through a cooldown. Polling does not depend on odometry.
+A miss or exception schedules a new capture after backoff/query admission;
+images are never held through an admission wait. Polling does not depend on odometry.
 
-After 0.75 m of accumulated corrected robot travel since the capture used by the last successful
-fix, ARModule requests another episode without waiting for a navigation goal to
-finish. A marker-only client waits for the robot to enter its geometric capture
-gate, and pauses a partial batch if it leaves that gate. Successful setup keeps
-this runtime handler armed; it does not keep the camera running between episodes.
+With VPS enabled, robot correction and headset alignment are independent. Robot
+correction becomes due after 0.75 m accumulated corrected robot travel or 30° net
+heading change. Headset map alignment refreshes after 10 m accumulated horizontal
+headset travel, without a rotation trigger. Defaults are configurable in the launcher.
+Capture-time baselines preserve movement during processing. Failed attempts do not
+reset those baselines. Fiducial-only mode retains relative odometry alignment and
+its geometric capture gate.
 
-Always in `odom`, regardless of which frame the underlying provider works in.
-When a provider answers in a scanned-map frame ARModule composes it into
-`odom` before sending, because only ARModule knows that relationship.
+### Independent map localization
+
+VPS deployments send `localization_context` after hello:
+
+```json
+{"type":"localization_context","map_code":"<map>","odom_reference_id":"<reference>"}
+```
+
+This binds retained headset alignment to the current map and robot reference.
+An optional `reset: true` invalidates a retained alignment that the server cannot
+resume. Clients report tracking only after receiving this context; agent capability
+is not required. There is no standing camera policy or additional camera-info message.
+
+`localization_tracking` (client → server) contains `tracking_reference_id` (nonempty,
+at most 128 characters), finite nonnegative cumulative `travel_m`, boolean `active`,
+and optional `alignment_id` identifying a previously accepted headset map fix.
+Send once per second while active and immediately on activation, reference changes,
+and accepted fixes. Travel is measured at 10 Hz in native headset tracking coordinates,
+with a 5 cm displacement deadband. Visibility loss or a sampling gap over 0.5 seconds
+starts a new travel segment without bridging the gap. A tracking-reference reset
+starts a new identity and counter. Plain socket reconnect preserves them.
+The server resumes only an issued fix matching map, robot reference, tracking
+reference, and a nondecreasing travel counter. Issued-fix storage retains active
+alignments and a bounded pool for reconnects.
+
+Map-mode capture requests add `episode_id` (opaque identity) and `purpose`:
+`headset` requests one `any_angle` frame; `robot` requests a three-frame
+`robot_los_preferred` tag batch with `wait_timeout_s` (default 1.5 seconds).
+For robot correction, expiry of this gate wait ends headset capture and falls
+back to the robot camera; it does not send headset pixels to VPS. An immediately
+visible tag is still attempted with zero preference duration. Once capture has
+started, its normal bounded collection/processing deadline replaces the gate wait.
+Losing the gate discards a partial tag batch and returns to the bounded wait.
+
+`localization_capture_progress` (client → server) contains `episode_id`, `phase`
+(`waiting`, `capturing`, `submitted`, or `unavailable`), and nonnegative `travel_m`.
+`submitted` also requires `capture_ts`: the newest batch timestamp in client time.
+Send this JSON context immediately before the existing LOCA binary batch. The
+server correlates its converted timestamp to the batch within one microsecond;
+stale or superseded episode progress is ignored. The binary layout is unchanged.
+
+A successful headset `localization_result` keeps its existing top-level odometry
+pose and timestamp, and includes both `map_alignment` and `map_transform`.
+`map_alignment` contains `id`, `map_code`, `odom_reference_id`,
+`tracking_reference_id`, capture-time `travel_m`, `position`, `orientation`,
+`confidence`, and server-clock `ts`. Its pose is `T_map_client`.
+`map_transform` is a complete `localization_map_transform` snapshot:
+`map_code`, `odom_reference_id`, nonnegative integer `revision`, `position`,
+`orientation`, `confidence`, and server-clock capture `ts`. Its pose is `T_odom_map`.
+
+ClientCore adopts `T_map_client` only after the existing outstanding-submission
+and result-deadline checks accept the result. It composes:
+
+```text
+T_odom_client = T_odom_map × T_map_client
+```
+
+New robot corrections broadcast `localization_map_transform` independently of
+headset capture. Ignore mismatched contexts and older/equal revisions. Use the
+newest valid robot transform when accepting a headset fix. A transform update
+cannot activate an unaccepted, cancelled, or timed-out headset fix. Recomposition
+updates the existing origin owner and all odometry-space renderers/conversions;
+it does not alter the native planner or resubmit confirmed navigation goals.
+
+A tag correction uses an active, map-aligned headset below its own refresh
+threshold: `T_odom_map = T_odom_client_from_tag × inverse(T_map_client)`.
+Existing fiducial detection/fusion quality gates apply. The same observation never
+updates both independent alignments.
+
+`localization_status` contains `map_code`, `odom_reference_id`, `scope` (`robot` or
+`headset`), `status` (`succeeded`, `failed`, `deferred`), and `reason`.
+Capture-related status includes `episode_id` and, after submission, its server-clock
+capture `ts`; optional nonnegative `retry_after_s` describes an admission wait.
+Clients ignore stale capture status and retire matching submission deadlines.
+Robot-only status can arrive without a capture identity. Failure displays the
+2.5-second yellow triangle/`!` notification “Tracking Inaccurate”; corresponding
+success clears it. Gate waiting and query deferral do not warn. Emergency-stop
+feedback takes priority.
+
+Every robot/headset camera-query HTTP POST shares a limit of three dispatches per
+rolling 30 seconds. Authentication is excluded; a repeated query after token refresh
+counts again. Reserve at dispatch after local frame validation; dispatched failures
+and cancellation consume admission. One cloud task runs at a time, with fair turns
+between shared robot work and headset captures. A collecting headset owns its next
+cloud turn. Failed attempts retry after two seconds, subject to admission, without
+a retry-count ceiling. Images are recaptured after waits; tags remain available
+while cloud queries are rate-limited.
 
 ### `pose`
 
@@ -572,7 +814,7 @@ usual.
 
 If neither a result nor a replacement batch request arrives before the client's
 deadline, it asks for another episode. ARModule may withhold the prompt until a
-provider cooldown expires and send `localization_observations_request` later, so clients back off
+query budget permits and send `localization_observations_request` later, so clients back off
 between attempts rather than assuming a prompt per request.
 
 ### `localization_observations` (binary)
@@ -642,7 +884,7 @@ using the per-connection offset from `hello` before pose lookup. A localization
 round trip can take seconds; pairing uses shutter time, not send time.
 
 Response: `localization_result` after a successful episode, or another
-`localization_observations_request` after a failed scan (subject to cooldowns).
+`localization_observations_request` after a failed scan (subject to query admission).
 
 ### `nav_goal_request`
 
@@ -697,7 +939,7 @@ DimOS `tele_cmd_vel: Out[Twist]`; `MovementManager` muxes with planner
 | `duration` | float | Optional. Seconds to republish this twist. Omit or `0` publishes once. `0 < duration <= 2.0` holds at 10 Hz on ARModule, then a release-edge zero. Negative, boolean, non-finite, or above `2.0` is rejected, not clamped. |
 
 A new `nav_joystick_request` replaces any in-flight duration. Zero twist is the
-release edge. `estop_request` and last-client disconnect cancel a hold. Callers
+release edge. `estop_request`, owner disconnect, interaction release, and lease expiry cancel a hold. Callers
 that omit `duration` must keep sending if drive should continue
 (`cmd_vel_timeout` is 0.2 s). Gated on `hello.capabilities.navigation.nav_joystick`.
 
@@ -730,6 +972,19 @@ issuing a new `nav_goal_request`.
 ARModule also stops the robot on its own when the last client disconnects, so
 losing the headset cannot leave the robot walking.
 
+The repository's Go2 blueprints use `ARReplanningAStarPlanner`, a subclass of
+the installed native planner. Its private DimOS `ar_navigation_status` topic
+captures the immutable submitted goal timestamp and accepted/succeeded/failed
+phase under the native planner lock. ARModule ignores uncorrelated native Bool
+terminal messages after an AR goal has been issued. A delayed old-goal terminal
+therefore cannot clear a newer shared goal. Native stop also installs a timestamp
+tombstone under that lock: a queued goal created before the stop cannot restart
+motion, and a later explicit goal can resume it. This changes no WebSocket message.
+The native planning algorithm still owns obstacle avoidance, arrival detection,
+and cancellation: the adapter cannot guarantee that an upstream monitoring
+thread never makes an incorrect decision from its own stale internal samples.
+Hardware validation remains necessary for that backend behavior.
+
 ### `lidar_settings_request`
 
 ```json
@@ -756,8 +1011,78 @@ All four fields are required on every `lidar_settings_request`. A non-finite or 
 (`min_height_m` above `max_height_m`) is an error and is rejected, not silently
 clamped.
 
-`state.lidar` reflects the result, and because telemetry is broadcast, one client
-changing the filter changes it for everyone.
+LiDAR settings belong to the requesting connection. `state.lidar` reflects that
+connection's settings; changing presets or disabling LiDAR does not affect other
+clients. ARModule downsamples a cloud once, groups identical subscriptions, and
+sends each filtered binary payload only to its subscribing connections. A new
+connection starts with LiDAR disabled.
+
+### `manipulation_request` (optional)
+
+Arm deployments expose `hello.capabilities.manipulation.available=true`.
+Every request contains `request_id`, `action`, `group_id`, and the current
+interaction `epoch`. Planning, execution, and gripper commands also contain the
+canonical `target_revision`. Following commands carry the owning `lease_id`.
+
+```json
+{
+  "type": "manipulation_request",
+  "request_id": "plan-42",
+  "action": "plan",
+  "group_id": "arm",
+  "epoch": "robot-interaction-reference",
+  "target_revision": 12,
+  "position": [0.4, 0.0, 0.3],
+  "orientation": [0.0, 0.0, 0.0, 1.0],
+  "speed_scale": 0.2,
+  "final_gripper": 0.5
+}
+```
+
+| Action | Additional fields | Behavior |
+|---|---|---|
+| `evaluate` | `position`, `orientation` | Advisory feasibility for the current target. |
+| `plan` | Pose, optional `speed_scale` and `final_gripper` | Return a checked plan bound to the canonical target revision. |
+| `execute` | `plan_id` | Execute the still-current checked plan. |
+| `acquire` | Owning following lease | Request the native following `token`. |
+| `update` | `token`, increasing `sequence`, `ts`, pose, optional `speed_scale` | Refresh native following while the robot-wide lease remains valid. |
+| `release` | `token` | Explicit native following cancellation. Ordinary hand release uses only `interaction_request.release` to start server finishing. |
+| `gripper` | `value` | Apply the replicated target's gripper setting. |
+| `cancel` | None | Cancel the current arm operation. |
+| `resume` | None | Resume only after native stop confirmation and valid authority. |
+| `reset_joints`, `prepare_shutdown` | Optional `speed_scale` | Native reset or parking; shutdown reports explicit `quiescent`. |
+
+Poses are odometry metres and unit XYZW quaternions. Speed is in `(0,1]`;
+gripper values are in `[0,1]`. Plan/evaluate/following poses and speed, plan final
+gripper, and discrete gripper values are taken from the matching server target;
+client echoes cannot change the geometry labeled with that revision. A gripper
+setting must first be accepted into the replicated target.
+
+`manipulation_result` includes `request_id`, `action`, `group_id`, `status`, and
+optional `code`/`message` plus action-specific fields. A `planned` result includes
+`plan_id`, `target_revision`, `joint_names`, `trajectory` (time/positions), and
+`duration`. The checked plan is robot-owned and replayed to late joiners. Editing
+release preserves a plan for an unchanged target; changing target settings
+retires it. Native execution remains robot-owned after editing release or client
+disconnect.
+
+`manipulation_state` is a compact native snapshot, normally sent at 10 Hz and
+replayed on connection. Model and checked trajectory data travel by revision on
+the bulk lane and are reconstructed by ClientCore. Available snapshots include the model descriptor,
+`root_pose`, planning `groups`, measured group `observations`, `execution`,
+`operation_id`, `plan`, `following`, `owner`, `stopped`, and `stop_confirmed`.
+The optional `following_tail` summary is independent of editing ownership and
+does not set `motion_busy`; a new grab supersedes it. An unavailable snapshot contains `available=false` and a message. Accepted,
+executing, uncertain, or faulted native motion blocks new robot interaction and
+mode changes through `interaction_state.motion_busy`. A transport failure after
+a motion command is uncertain; only positive native stop confirmation clears
+that uncertainty. Emergency Stop remains available to every client.
+
+ARModule injects a private native RPC envelope with epoch, monotonic deadline,
+authority revision, lease, and target revision. The native process rejects retired
+or expired envelopes. Emergency Stop installs its revision tombstone atomically
+with the native stop latch, preventing delayed old resume commands from undoing
+it. These private fields are not client-controlled WebSocket authority.
 
 ### `state_request`
 
@@ -817,6 +1142,8 @@ stale returns `No client pose`.
 |-----------------|-----------------|
 | `hello_request` | `hello` |
 | `state_request` | `state` |
+| `interaction_request` | `interaction_state`, `interaction_result` |
+| `manipulation_request` (optional) | `manipulation_state`, `manipulation_result` |
 | `localization_start_request` | `localization_observations_request` |
 | `localization_observations` (binary) | `localization_result` |
 | `nav_goal_request` | `nav_goal` |
@@ -824,8 +1151,9 @@ stale returns `No client pose`.
 | `estop_request` | `lidar` (binary) |
 | `lidar_settings_request` | `agent_message` |
 | `user_message_request` | `agent_skill` |
-| `client_pose` | |
-| `client_error` | |
+| `client_pose` | `localization_context` |
+| `localization_tracking` | `localization_map_transform` |
+| `localization_capture_progress` | `localization_status` |
 
 **Inbound naming.** Commands use `*_request` (`nav_goal_request`,
 `estop_request`, `user_message_request`). Unsolicited telemetry uses a bare
@@ -881,11 +1209,15 @@ currently stamps odometry, decoded video, and voxel-map packets at receipt, so t
 are **not hardware exposure timestamps**. Known Go2 replay streams instead use one
 shared recorded-to-server epoch, bound once from the first odometry arrival; later
 arrival delay never changes that offset. Live boot-time/unknown clocks are not
-silently rebased. Robot VPS capture requires continuous
-pose history spanning a provisional ±0.5-second uncertainty window, translation
-speed ≤0.05 m/s, and angular speed ≤0.05 rad/s. Encoding runs off-loop after the
-future bracket arrives. A robot image must be ≤2 seconds old at query admission;
-normal HTTP latency does not reapply this image-age limit after the query.
+silently rebased. Moving robot capture requires an exact odometry timestamp match
+or surrounding pose samples no more than 200 ms apart. Wait at most 200 ms for the
+following sample, then reject missing brackets rather than extrapolating or using
+the latest pose. Translation is interpolated linearly and orientation with
+shortest-path SLERP. There is no stillness, linear-speed, or angular-speed gate.
+Encoding runs off-loop. A robot image must be ≤2 seconds old at actual HTTP query
+admission, including after authentication; normal HTTP latency does not reapply
+this image-age limit after the query. Higher odometry cadence reduces interpolation
+error but cannot remove unknown camera/odometry receipt-time skew.
 Live AprilTag localization requires a robot pose within 0.25 seconds and does not
 substitute the origin when odometry is missing. Offline replay explicitly permits
 its final retained robot pose for captures newer than the complete history, so
@@ -894,16 +1226,23 @@ the retained pose's original timestamp and corrected coordinates; empty history,
 prehistory and internal gaps remain invalid. VPS and live-robot freshness rules
 are unchanged.
 
-VPS anchors retain capture-time robot travel and immutable transform snapshots.
-Their initial limits are 1 metre of subsequent travel and 60 seconds of capture
-age; both source generation and map identity must match. These checks run before
-and after awaited queries. Composed confidence is the minimum of robot/headset
-confidence, a conservative quality score rather than a calibrated probability.
-`armodule.localization.episode_timeout_s` (default 12), `anchor_max_age_s` (60),
-and `robot_timing_uncertainty_s` (0.5) are configurable, provisional engineering
-limits. They do not certify physical calibration or bound undocumented camera
-transport latency. A detected robot clock/frame reset retires pending work and
-connections; AR navigation requires restarting DimOS mapping with a fresh map.
+Accepted map alignment retains capture-time robot travel, heading, source generation,
+and immutable transform snapshots. Its lifetime is separate from image admission
+freshness: crossing a motion threshold makes another correction due, without
+invalidating the last accepted alignment or discarding a valid response solely
+because the robot moved during HTTP processing. Older corrections cannot supersede
+newer ones. Composed confidence is the minimum of robot/headset confidence, a
+conservative quality score rather than a calibrated probability.
+
+`armodule.localization` exposes `travel_threshold_m` (0.75),
+`heading_threshold_deg` (30), `marker_preference_s` (1.5), and
+`headset_travel_threshold_m` (10). Distances must be finite and positive, angle is
+in (0, 180], and preference is finite and nonnegative. Changes apply at restart.
+`episode_timeout_s` defaults to 12. Historical `anchor_max_age_s` and
+`robot_timing_uncertainty_s` settings remain readable for configuration compatibility;
+they do not expire accepted independent map alignments or impose stillness.
+A robot clock/frame reset retires pending work and connections; AR navigation
+requires restarting DimOS mapping with a fresh map.
 
 The 1.25 heuristic now consistently covers all outbound odometry-space points,
 including LiDAR, with inverse conversion for native navigation and agent inputs.

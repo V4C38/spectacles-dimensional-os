@@ -43,7 +43,6 @@
   const restoreTagsBtn = $("restoreTagsBtn");
   const fiducialEnabled = $("fiducialEnabled");
   const vpsEnabled = $("vpsEnabled");
-  const mixedPolicyBox = $("mixedPolicyBox");
   const blueprintSelect = $("blueprintSelect");
   const blueprintInfo = $("blueprintInfo");
   const agentConfig = $("agentConfig");
@@ -321,9 +320,18 @@
     }, 400);
   }
 
+  const policyDefaults = { travel_threshold_m: 0.75, heading_threshold_deg: 30,
+    marker_preference_s: 1.5, headset_travel_threshold_m: 10 };
+  const policyInputs = Object.fromEntries(Object.keys(policyDefaults).map(key => [key, $(key)]));
+  Object.values(policyInputs).forEach(input => {
+    input.addEventListener("change", () => { if (input.reportValidity()) schedulePersist(); });
+    input.addEventListener("blur", () => { if (input.reportValidity()) schedulePersist(); });
+  });
+
   function settingsBody() {
     return {
       profile_id: robotProfileId,
+      ...Object.fromEntries(Object.entries(policyInputs).map(([key, input]) => [key, Number(input.value)])),
       openai_api_key: apiKey.value.trim() || null,
       multiset_client_id: multisetClientId.value.trim() || null,
       multiset_client_secret: multisetClientSecret.value.trim() || null,
@@ -349,6 +357,8 @@
         return null;
       }
       if (data.phase) applyStatus(data);
+      const profile = robotProfiles.find(p => p.id === robotProfileId);
+      if (profile) profile.settings = { ...profile.settings, ...settingsBody() };
       return data;
     } catch (err) {
       appendLog(`Settings save failed: ${err}`);
@@ -384,6 +394,9 @@
     if (document.activeElement !== multisetClientSecret && "multiset_client_secret" in data) {
       multisetClientSecret.value = data.multiset_client_secret || "";
     }
+    Object.entries(policyInputs).forEach(([key, input]) => {
+      if (document.activeElement !== input) input.value = String(data[key] ?? policyDefaults[key]);
+    });
     settingsReady = true;
     syncLocalizationPanels();
     renderMountEditor();
@@ -392,6 +405,7 @@
 
   function setConfigLocked(locked) {
     configLocked = locked;
+    Object.values(policyInputs).forEach(input => { input.disabled = locked; });
     controlsCard.classList.toggle("locked", locked);
     document.querySelectorAll("[data-client]").forEach((btn) => {
       btn.disabled = locked;
@@ -664,11 +678,8 @@
 
   function syncLocalizationPanels() {
     fiducialPanel.classList.toggle("hidden", !fiducialEnabled.checked);
+    $("markerPreferenceField").classList.toggle("hidden", !fiducialEnabled.checked);
     vpsPanel.classList.toggle("hidden", !vpsEnabled.checked);
-    mixedPolicyBox.classList.toggle(
-      "hidden",
-      !(fiducialEnabled.checked && vpsEnabled.checked)
-    );
   }
 
   function describeState(status) {
@@ -962,20 +973,19 @@
   function applyConnectionStatus(status) {
     setText(hostIp, status.host_ip);
     setText(hostIpSummary, status.host_ip);
-    const isWebxr = client === "webxr";
-    $("hostIpRow").classList.toggle("hidden", isWebxr);
-    $("hostIpSummaryLabel").classList.toggle("hidden", isWebxr);
-    hostIpSummary.classList.toggle("hidden", isWebxr);
-    $("pinRow").classList.toggle("hidden", isWebxr);
-    setText(pinValue, isWebxr ? null : status.pin);
-    $("connectionSummaryLabel").textContent = isWebxr ? "URL" : "PIN";
-    if (isWebxr) setHref(pinSummary, status.webxr_url, "Address available after Start");
-    else setText(pinSummary, status.pin);
+    $("hostIpRow").classList.remove("hidden");
+    $("hostIpSummaryLabel").classList.remove("hidden");
+    hostIpSummary.classList.remove("hidden");
+    $("pinRow").classList.remove("hidden");
+    setText(pinValue, status.pin);
+    $("connectionSummaryLabel").textContent = "PIN";
+    setText(pinSummary, status.pin);
     setText(robotValue, displayRobotIp(status.robot_ip));
-
-    const showWebxr = isWebxr;
-    webxrNetworkRow.classList.toggle("hidden", !showWebxr);
-    webxrHint.classList.toggle("hidden", !showWebxr);
+    webxrNetworkRow.classList.toggle("hidden", !status.webxr_url);
+    webxrHint.classList.toggle("hidden", !status.webxr_url);
+    $("webxrServiceStatus").textContent = status.webxr_error || status.webxr_phase || "stopped";
+    $("startWebxrBtn").disabled = ["starting", "running"].includes(status.webxr_phase);
+    $("stopWebxrBtn").disabled = !["starting", "running"].includes(status.webxr_phase);
     setHref(webxrNetwork, status.webxr_url);
   }
 
@@ -1336,6 +1346,19 @@
     }
   });
 
+  for (const [id, endpoint] of [["startWebxrBtn", "/api/webxr/start"], ["stopWebxrBtn", "/api/webxr/stop"], ["stopBackendBtn", "/api/backend/stop"]]) {
+    $(id).addEventListener("click", async () => {
+      $(id).disabled = true;
+      try {
+        const response = await fetch(endpoint, { method: "POST" });
+        const data = await response.json();
+        if (!response.ok) appendLog(data.detail || "Service operation failed");
+        if (data.phase) applyStatus(data);
+      } catch (error) { appendLog(String(error)); }
+      finally { applyStatus(lastStatus); }
+    });
+  }
+
   async function loadConfig() {
     try {
       const res = await fetch("/api/settings");
@@ -1425,6 +1448,9 @@
     vpsEnabled.checked = settings.vps;
     mapCode.value = settings.map_code || "";
     mounts = settings.mounts.map(cloneMount);
+    Object.entries(policyInputs).forEach(([key, input]) => {
+      input.value = String(settings[key] ?? policyDefaults[key]);
+    });
     syncLocalizationPanels(); renderMountEditor(); syncConfigCards();
   }
   $("robotProfileSelect").addEventListener("change", async () => {

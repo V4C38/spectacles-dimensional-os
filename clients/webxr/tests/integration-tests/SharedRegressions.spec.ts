@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { bootstrap, snapshot, shared } from "./fixtures/Runtime";
+import { bootstrap, snapshot, shared, isNavigationCommit } from "./fixtures/Runtime";
 import {
   activateButton,
   activateRuntimeButton,
@@ -83,7 +83,7 @@ for (const id of ids)
           ["robot_los_preferred", "mixed"],
         ]) {
           runtime.send({
-            type: "localization_observations_request",
+            type: "localization_observations_request", capture_id: "fixture-capture",
             capture_policy: policy,
             observation_count: 1,
             ...(policy === "robot_los_preferred"
@@ -116,7 +116,7 @@ for (const id of ids)
           };
         });
         runtime.send({
-          type: "localization_observations_request",
+          type: "localization_observations_request", capture_id: "fixture-capture",
           capture_policy: "any_angle",
           observation_count: 1,
         });
@@ -165,7 +165,7 @@ for (const id of ids)
           expect((await snapshot(page)).hasTrackingOrigin).toBe(true);
         } else if (id === "interaction_safety") {
           const before = runtime.commands.filter(
-            (c) => c.type === "nav_goal_request" && !c.preview,
+            isNavigationCommit,
           ).length;
           await pointRuntimeButton(page, "Manual");
           await setSelection(page, 1);
@@ -173,7 +173,7 @@ for (const id of ids)
           await setSelection(page, 0);
           expect(
             runtime.commands.filter(
-              (c) => c.type === "nav_goal_request" && !c.preview,
+              isNavigationCommit,
             ),
           ).toHaveLength(before);
           expect(

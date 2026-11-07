@@ -1,3 +1,4 @@
+import { PairedBulk } from "../fixtures/PairedBulk";
 import { describe, expect, it } from "vitest";
 import { ClientTrackingOriginStore } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingOrigin";
 import {
@@ -23,6 +24,8 @@ class FakeClock implements ClientClock {
 }
 
 class FakeTransport implements WebSocketTransport {
+  readonly bulk = new PairedBulk();
+  createSibling() { return this.bulk; }
   texts: string[] = [];
 
   connect(): void {}
@@ -35,7 +38,7 @@ class FakeTransport implements WebSocketTransport {
 
 function helloAt(tsClient: number, capabilities?: Partial<Capabilities>): Hello {
   return {
-    type: "hello",
+    type: "hello", protocol_version: 3, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
     client_id: "c3f1a9",
     time_sync: { ts_client: tsClient, ts_server: 100 },
     robot: {

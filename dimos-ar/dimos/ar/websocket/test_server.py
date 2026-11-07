@@ -9,6 +9,7 @@ import json
 import os
 import socket
 import threading
+from types import SimpleNamespace
 
 import pytest
 import websockets
@@ -17,6 +18,7 @@ from dimos.ar.navigation.types import NavGoalRequest
 from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, Capability, CapabilityName
 from dimos.ar.robot.profiles.profile import RobotDescription
 from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
+from dimos.ar.websocket.bulk import binary_chunks
 from dimos.ar.websocket.protocol import HelloBody, LocalizationStartRequest
 from dimos.ar.websocket.server import WebSocketServer, split_inbound_text_lines
 from dimos.ar.websocket.test_protocol import TYPESCRIPT_LOCA_ONE
@@ -57,6 +59,23 @@ async def _send_hello_request(ws: websockets.ClientConnection, ts_client: float 
     await ws.send(json.dumps({"type": "hello_request", "ts_client": ts_client}))
     raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
     return json.loads(raw)
+
+
+async def _upload_localization(harness: ServerHarness, control, hello: dict, payload: bytes) -> None:
+    harness._server.schedule_send_to_client(hello["client_id"], json.dumps({
+        "type": "localization_observations_request", "capture_policy": "any_angle", "observation_count": 1}) + "\n")
+    capture = json.loads(await control.recv())
+    async with websockets.connect(f"ws://127.0.0.1:{harness.port}{hello['bulk_url']}") as bulk:
+        await bulk.send(json.dumps({"type": "bulk_hello_request", "protocol_version": 3,
+                                   "client_id": hello["client_id"], "token": hello["bulk_token"]}))
+        assert json.loads(await bulk.recv())["type"] == "bulk_hello"
+        await bulk.send(json.dumps({"type": "bulk_upload_begin", "kind": "localization",
+                                   "upload_id": 1, "total_bytes": len(payload),
+                                   "capture_id": capture["capture_id"]}))
+        assert json.loads(await bulk.recv())["type"] == "bulk_upload_ready"
+        for chunk in binary_chunks(1, payload):
+            await bulk.send(chunk)
+        assert json.loads(await bulk.recv())["status"] == "accepted"
 
 
 class ServerHarness:
@@ -171,7 +190,7 @@ async def test_connect_receives_hello_after_hello_request(harness: ServerHarness
         assert "client_id" in msg
         assert msg["time_sync"]["ts_client"] == 42.0
         assert isinstance(msg["time_sync"]["ts_server"], float)
-        assert "protocol_version" not in msg
+        assert msg["protocol_version"] == 3
 
 
 @pytest.mark.asyncio
@@ -256,6 +275,7 @@ async def test_estop_is_processed_on_same_socket_while_localization_waits(
     stopped = threading.Event()
     callback_threads = []
     module = object.__new__(ARModule)
+    module._map_localization = None
     module._policy = LocalizationPolicy(["vps"])
     module._odometry = RobotOdometry(factor=1.0)
     module._replay_mode = False
@@ -291,8 +311,8 @@ async def test_estop_is_processed_on_same_socket_while_localization_waits(
         h.start()
         h._server._on_disconnect = disconnected
         async with websockets.connect(f"ws://127.0.0.1:{h.port}/ws") as ws:
-            await _send_hello_request(ws)
-            await ws.send(TYPESCRIPT_LOCA_ONE)
+            hello = await _send_hello_request(ws)
+            await _upload_localization(h, ws, hello, TYPESCRIPT_LOCA_ONE)
             assert await asyncio.to_thread(entered.wait, 1)
             await ws.send(json.dumps({"type": "estop_request"}))
             assert await asyncio.to_thread(stopped.wait, 0.5)
@@ -312,7 +332,10 @@ async def test_clients_sharing_an_ip_remain_independent(harness: ServerHarness) 
         async with websockets.connect(f"ws://127.0.0.1:{harness.port}/ws") as second:
             second_hello = await _send_hello_request(second)
             assert first_hello["client_id"] != second_hello["client_id"]
-            assert harness._server.connection_count == 2
+            # Hello is sent before the server registers the connection.
+            async with asyncio.timeout(1):
+                while harness._server.connection_count != 2:
+                    await asyncio.sleep(0.001)
             harness._server.schedule_broadcast_text('{"type":"agent_message","text":"both"}\n')
             for peer in (first, second):
                 frame = json.loads(await asyncio.wait_for(peer.recv(), 1))
@@ -431,7 +454,8 @@ async def test_hello_precedes_broadcasts_and_only_completed_handshakes_receive_t
             h._server.schedule_broadcast_text('{"type":"agent_message","text":"after"}\n')
             assert json.loads(await asyncio.wait_for(ws.recv(), 1))["text"] == "after"
             h._server.schedule_broadcast_binary(b"after")
-            assert await asyncio.wait_for(ws.recv(), 1) == b"after"
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(ws.recv(), 0.05)
     finally:
         release.set()
         h.stop()
@@ -463,6 +487,130 @@ async def test_unhandshaken_socket_does_not_count_as_active_or_trigger_disconnec
         h.stop()
     assert h.disconnected_client_ids == [hello["client_id"]]
     assert h._server._time_sync == {}
+
+
+@pytest.mark.parametrize("held_cleanup", ["bulk_close", "writer_stop"])
+async def test_disconnect_retires_authority_before_transport_cleanup(monkeypatch, held_cleanup) -> None:
+    h = ServerHarness()
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    remaining = []
+
+    def on_disconnect(websocket, client_id):
+        h._on_disconnect(websocket, client_id)
+        remaining.append(h._server.connection_count)
+        # A sender can report its failure during the callback or cleanup. It must
+        # not retire the same authority twice.
+        h._server._retire_connection(websocket, client_id, "late sender failure")
+
+    h.start()
+    h._server._on_disconnect = on_disconnect
+    try:
+        async with websockets.connect(f"ws://127.0.0.1:{h.port}/ws") as old:
+            hello = await _send_hello_request(old)
+            old_id = hello["client_id"]
+
+            async def install_held_cleanup():
+                websocket = h._server._connections[old_id]
+
+                async def hold():
+                    entered.set()
+                    while not release.is_set():
+                        await asyncio.sleep(0.005)
+
+                if held_cleanup == "bulk_close":
+                    async def close(*_args):
+                        await hold()
+                        finished.set()
+
+                    h._server._bulk_peers[old_id] = SimpleNamespace(
+                        task=None, websocket=SimpleNamespace(close=close))
+                else:
+                    queued = h._server._outbound[websocket]
+                    real_stop = queued.stop
+
+                    async def stop():
+                        await hold()
+                        await real_stop()
+                        finished.set()
+
+                    monkeypatch.setattr(queued, "stop", stop)
+                return websocket
+
+            old_socket = await asyncio.wrap_future(
+                asyncio.run_coroutine_threadsafe(install_held_cleanup(), h.loop))
+            await old.close()
+            assert await asyncio.to_thread(entered.wait, 1)
+            assert h._server.connection_count == 0
+            assert h.disconnected_client_ids == [old_id]
+            assert remaining == [0]
+            assert old_socket not in h._server._client_ids
+            assert old_socket not in h._server._outbound
+            assert old_id not in h._server._bulk_tokens
+            assert old_id not in h._server._bulk_peers
+
+            async with websockets.connect(f"ws://127.0.0.1:{h.port}/ws") as successor:
+                successor_id = (await _send_hello_request(successor))["client_id"]
+                assert successor_id != old_id
+                assert h._server.connection_count == 1
+                release.set()
+                assert await asyncio.to_thread(finished.wait, 1)
+                await successor.send('{"type":"localization_start_request"}')
+                for _ in range(100):
+                    if h.localization_start_requests:
+                        break
+                    await asyncio.sleep(0.005)
+                assert h.localization_start_requests == [successor_id]
+                assert h._server.connection_count == 1
+                assert h.disconnected_client_ids == [old_id]
+                assert remaining == [0]
+                assert old_socket not in h._server._retired_connections
+    finally:
+        release.set()
+        h.stop()
+
+
+async def test_disconnect_callback_and_bulk_close_failures_still_stop_sender(monkeypatch) -> None:
+    h = ServerHarness()
+    stopped = threading.Event()
+
+    def on_disconnect(websocket, client_id):
+        h._on_disconnect(websocket, client_id)
+        raise RuntimeError("disconnect callback failed")
+
+    h.start()
+    h._server._on_disconnect = on_disconnect
+    try:
+        async with websockets.connect(f"ws://127.0.0.1:{h.port}/ws") as ws:
+            hello = await _send_hello_request(ws)
+            client_id = hello["client_id"]
+
+            async def install_failing_cleanup():
+                websocket = h._server._connections[client_id]
+                queued = h._server._outbound[websocket]
+                real_stop = queued.stop
+
+                async def close(*_args):
+                    raise RuntimeError("bulk close failed")
+
+                async def stop():
+                    await real_stop()
+                    stopped.set()
+
+                h._server._bulk_peers[client_id] = SimpleNamespace(
+                    task=None, websocket=SimpleNamespace(close=close))
+                monkeypatch.setattr(queued, "stop", stop)
+                return websocket
+
+            server_socket = await asyncio.wrap_future(
+                asyncio.run_coroutine_threadsafe(install_failing_cleanup(), h.loop))
+            await ws.close()
+            assert await asyncio.to_thread(stopped.wait, 1)
+            assert h._server.connection_count == 0
+            assert h.disconnected_client_ids == [client_id]
+            assert server_socket not in h._server._retired_connections
+            assert h._server._outbound == {}
+    finally:
+        h.stop()
 
 
 @pytest.mark.parametrize("send_request", [False, True])
@@ -518,3 +666,28 @@ async def test_client_decode_report_does_not_disconnect_or_generate_a_reply(harn
         assert harness.disconnected_client_ids == []
         with pytest.raises(TimeoutError):
             await asyncio.wait_for(ws.recv(), 0.05)
+
+
+@pytest.mark.asyncio
+async def test_stop_at_rate_limit_is_honored_then_flooding_peer_retires():
+    from dimos.ar.websocket.bulk import TokenBucket
+
+    stops = []
+    h = ServerHarness(on_estop_request=lambda *_args: stops.append(True))
+    h.start()
+    try:
+        async with websockets.connect(f"ws://localhost:{h.port}") as ws:
+            hello = await _send_hello_request(ws)
+            installed = threading.Event()
+
+            def limit():
+                h._server._ingress[hello["client_id"]] = TokenBucket(0, 1)
+                installed.set()
+
+            h.loop.call_soon_threadsafe(limit)
+            assert await asyncio.to_thread(installed.wait, 1)
+            await ws.send('\n'.join(['{"type":"estop_request"}'] * 4))
+            await asyncio.wait_for(ws.wait_closed(), 2)
+            assert len(stops) == 2
+    finally:
+        h.stop()

@@ -353,15 +353,14 @@ it("trims the executing path from raw measured joints without selection boxes", 
       "",
       fresh,
     );
-  const startDistance = () => {
-    const start = r.path.geometry.getAttribute("instanceStart");
-    return Math.hypot(start.getX(0), start.getY(0), start.getZ(0));
-  };
+  const startDistance = () => (r.path.material as THREE.ShaderMaterial).uniforms.uStartDistance.value;
   apply(1);
+  const geometry = r.path.geometry;
   s.observations!.arm.joints.fixed = 0.5;
   s.observations!.arm.pose = { ...pose, position: [0.5, 0, 0] };
   apply(1.05);
   expect(startDistance()).toBeCloseTo(0.5);
+  expect(r.path.geometry).toBe(geometry);
   expect(r.object.getObjectByName("LinkBounds_tool")).toBeUndefined();
   apply(1.1);
   expect(startDistance()).toBeCloseTo(0.5);

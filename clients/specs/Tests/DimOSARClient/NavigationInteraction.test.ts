@@ -24,6 +24,63 @@ it("rejects unselected floor gestures and previews on the first click and sends 
   expect(f.core.isAiming()).toBe(false);
 });
 
+it.each(["cancelled", "succeeded", "failed"] as const)("resolves a shared pending goal as %s before native following telemetry arrives", outcome => {
+  const f = fixture();
+  const accepted = { type: "nav_goal" as const, pose: [2,0,0,0] as [number,number,number,number], path_poses: [], ts: 1 };
+  f.view.nav = { state: "idle", outcome: null };
+  f.view.nav_goal = accepted;
+  f.view.interaction = { type: "interaction_state", epoch: "robot", revision: 1, mode: "manual", authority: null, target: null, preview: null, active_goal: accepted };
+  f.core.applyView(f.view, f.origin, { position: [0,0,0], orientation: [0,0,0,1] }, 1);
+  expect(f.core.snapshot().goalActive).toBe(true);
+  f.view.interaction = { ...f.view.interaction, revision: 2, active_goal: null };
+  f.view.nav_goal = null;
+  f.core.applyView(f.view, f.origin, null, 1.1);
+  expect(f.core.flash()).toBeNull();
+  f.view.nav = outcome === "cancelled" ? { state: "idle", outcome: null } : { state: "resolved", outcome };
+  f.core.applyView(f.view, f.origin, { position: [0,0,0], orientation: [0,0,0,1] }, 1.2);
+  expect(f.core.flash()).toBe(outcome); expect(f.core.snapshot().goalActive).toBe(false);
+  expect(f.core.snapshot().position[0]).toBe(2);
+  f.core.tick(2, 1);
+  expect(f.core.snapshot().attachedToRobot).toBe(true);
+});
+
+it.each(["cancelled", "succeeded", "failed"] as const)("handles idle-before-clear ordering with final %s priority", outcome => {
+  const f = fixture();
+  const accepted = { type: "nav_goal" as const, pose: [2,0,0,0] as [number,number,number,number], path_poses: [], ts: 1 };
+  f.view.nav = { state: "idle", outcome: null }; f.view.nav_goal = accepted;
+  f.view.interaction = { type: "interaction_state", epoch: "robot", revision: 1, mode: "manual", authority: null, target: null, preview: null, active_goal: accepted };
+  f.core.applyView(f.view, f.origin, null, 1);
+  f.view.nav = { state: "idle", outcome: null };
+  f.core.applyView(f.view, f.origin, null, 1.1);
+  expect(f.core.flash()).toBeNull();
+  f.view.nav_goal = null; f.view.interaction = { ...f.view.interaction, revision: 2, active_goal: null };
+  f.core.applyView(f.view, f.origin, null, 1.2);
+  expect(f.core.flash()).toBe("cancelled");
+  if (outcome !== "cancelled") {
+    f.view.nav = { state: "resolved", outcome };
+    f.core.applyView(f.view, f.origin, null, 1.3);
+    expect(f.core.flash()).toBe(outcome);
+  }
+  expect(f.core.snapshot().goalActive).toBe(false);
+  f.view.nav_goal = accepted; f.core.applyView(f.view, f.origin, null, 1.4);
+  expect(f.core.snapshot().goalActive).toBe(false);
+});
+
+it("does not carry a previous goal's idle evidence into a new accepted goal", () => {
+  const f = fixture();
+  const accepted = { type: "nav_goal" as const, pose: [2,0,0,0] as [number,number,number,number], path_poses: [], ts: 1 };
+  f.view.nav = { state: "idle", outcome: null }; f.view.nav_goal = accepted;
+  f.view.interaction = { type: "interaction_state", epoch: "robot", revision: 1, mode: "manual", authority: null, target: null, preview: null, active_goal: accepted };
+  f.core.applyView(f.view, f.origin, null, 1);
+  f.view.nav = { state: "idle", outcome: null }; f.core.applyView(f.view, f.origin, null, 1.1);
+  const next = { ...accepted, ts: 2, pose: [3,0,0,0] as [number,number,number,number] };
+  f.view.nav_goal = next; f.view.interaction = { ...f.view.interaction, revision: 2, active_goal: next };
+  f.core.applyView(f.view, f.origin, null, 1.2);
+  f.view.nav_goal = null; f.view.interaction = { ...f.view.interaction, revision: 3, active_goal: null };
+  f.core.applyView(f.view, f.origin, null, 1.3);
+  expect(f.core.flash()).toBeNull(); expect(f.core.snapshot().goalActive).toBe(true);
+});
+
 it("turns while aiming in canonical XY, freezes heading on press, and cancels without sending", () => {
   const f = fixture(); f.core.setSelected(true); f.core.aim(0, f.point());
   f.core.hold(0, f.point(), false); f.core.release(0.1, f.point());

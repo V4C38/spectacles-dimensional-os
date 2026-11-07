@@ -27,8 +27,9 @@ from discovery import discover_devices, validate_replay
 from robot_profiles import RobotProfiles
 from tag_config import (
     DEFAULT_MOUNT,
+    LOCALIZATION_POLICY_DEFAULTS,
     PRESET_MARKER_IDS,
-    armodule_config_from_ui,
+    merge_armodule_settings,
     normalize_ui_mounts,
     ui_from_armodule_config,
 )
@@ -91,7 +92,7 @@ class StartBody(BaseModel):
     profile_id: str | None = None
     simulation: bool = False
     blueprint: Literal["unitree_go2_ar", "unitree_go2_ar_agentic", "openyam_ar_planner"]
-    client: Literal["specs", "webxr"]
+    client: Literal["specs", "webxr"] = "specs"
     robot_ip: str | None = None
 
 
@@ -107,6 +108,10 @@ class MountBody(BaseModel):
 
 
 class SettingsBody(BaseModel):
+    travel_threshold_m: float = Field(default=0.75, gt=0, allow_inf_nan=False)
+    heading_threshold_deg: float = Field(default=30, gt=0, le=180, allow_inf_nan=False)
+    marker_preference_s: float = Field(default=1.5, ge=0, allow_inf_nan=False)
+    headset_travel_threshold_m: float = Field(default=10, gt=0, allow_inf_nan=False)
     profile_id: str | None = None
     openai_api_key: str | None = None
     multiset_client_id: str | None = None
@@ -139,6 +144,7 @@ def settings_payload() -> dict[str, Any]:
         "vps_vendor": ui["vps_vendor"],
         "map_code": ui["map_code"],
         "mounts": ui["mounts"],
+        **{key: ui[key] for key in LOCALIZATION_POLICY_DEFAULTS},
         "defaults": {
             "mounts": [dict(DEFAULT_MOUNT)],
             "preset_marker_ids": list(PRESET_MARKER_IDS),
@@ -390,16 +396,14 @@ async def api_settings_put(body: SettingsBody) -> dict[str, Any]:
             if body.mounts is not None
             else None
         )
+        settings = body.model_dump(exclude_unset=True)
+        if "mounts" in settings:
+            settings["mounts"] = mounts
         if body.profile_id:
-            robot_profiles.update(body.profile_id, settings=body.model_dump())
+            robot_profiles.update(body.profile_id, settings=settings)
         else:
             merge_armodule_config(
-                armodule_config_from_ui(
-                    fiducial_marker=body.fiducial_marker,
-                    vps=body.vps,
-                    map_code=body.map_code,
-                    mounts=mounts,
-                )
+                merge_armodule_settings(read_armodule_config(), settings)
             )
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -456,9 +460,7 @@ async def api_apriltag_decode(file: Annotated[UploadFile, File()]) -> dict[str, 
 
 @app.post("/api/armodule/start", dependencies=[Depends(require_local_launcher)])
 async def api_armodule_start(body: StartBody) -> dict[str, Any]:
-    if body.blueprint == "openyam_ar_planner" and (
-        not body.profile_id
-    ):
+    if body.blueprint == "openyam_ar_planner" and (not body.profile_id):
         raise HTTPException(
             status_code=400,
             detail="OpenYAM requires an explicit robot profile",
@@ -547,6 +549,27 @@ async def api_armodule_stop(force: bool = False) -> dict[str, Any]:
         await manager.stop_armodule(force=True)
     else:
         await manager.stop_armodule()
+    return manager.snapshot()
+
+
+@app.post("/api/webxr/start", dependencies=[Depends(require_local_launcher)])
+async def api_webxr_start() -> dict[str, Any]:
+    try:
+        await manager.start_webxr()
+    except (RuntimeError, OSError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return manager.snapshot()
+
+
+@app.post("/api/webxr/stop", dependencies=[Depends(require_local_launcher)])
+async def api_webxr_stop() -> dict[str, Any]:
+    await manager.stop_webxr()
+    return manager.snapshot()
+
+
+@app.post("/api/backend/stop", dependencies=[Depends(require_local_launcher)])
+async def api_backend_stop() -> dict[str, Any]:
+    await manager.stop_backend()
     return manager.snapshot()
 
 

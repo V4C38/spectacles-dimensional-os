@@ -697,6 +697,25 @@
       "assertions": [
         "launcher_responsive"
       ]
+    },
+    {
+      "id": "multi_client_replication",
+      "label": "Shared-server exclusive preview, blocked markers and handover",
+      "platforms": [
+        "webxr"
+      ],
+      "group": "multiclient",
+      "video": false,
+      "assertions": [
+        "single_planner",
+        "shared_target",
+        "observer_grey_cross",
+        "handover",
+        "owner_disconnect"
+      ],
+      "platformException": {
+        "specs": "Portable and mocked native-controller coverage runs in Vitest; simultaneous physical Specs sessions require a device run."
+      }
     }
   ],
   "golden": {

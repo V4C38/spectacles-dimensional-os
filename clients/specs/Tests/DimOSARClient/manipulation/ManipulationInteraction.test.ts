@@ -8,6 +8,7 @@ import type { Outbound } from "../../../Assets/Scripts/DimOSARClient/websocket/p
 
 function fixture() {
   const sent: any[] = [];
+  const assets = new Map<string, number>();
   let now = 100;
   let listener: (message: Outbound) => void = () => {};
   const view: any = {
@@ -28,6 +29,7 @@ function fixture() {
   const interaction = new ManipulationInteraction(
     {
       view: () => view,
+      assetTransferDeadline: (id: string) => assets.get(id) ?? null,
       sendText: (text) => sent.push(JSON.parse(text)),
       subscribeOutbound: (callback) => {
         listener = callback;
@@ -50,8 +52,13 @@ function fixture() {
   return {
     interaction,
     sent,
+    assets,
     reply,
     view,
+    tail: (position = pose, joints = { joint: 0.3 }) => {
+      view.manipulation.following_tail = { generation: 1, group_id: "arm", status: "finishing", target_revision: 1, ...position, joints };
+      interaction.tick();
+    },
     advance: (seconds: number, fresh = true) => {
       now += seconds;
       if (fresh) view.manipulation.observations.arm.measured_at = now;
@@ -489,6 +496,7 @@ it("keeps an infeasible following target grabbed, recovers, and finishes moving 
   expect(f.interaction.rejection).toBeNull();
   f.interaction.end();
   expect(f.interaction.target?.position).toEqual([0, 0, 0.2]);
+  f.tail({ ...pose, position: [0,0,0.2] }, { joint: 0.2 });
   expect(f.interaction.snapshot().finishing).toBe(true);
   f.interaction.interrupt();
   expect(f.sent.at(-1).action).toBe("release");
@@ -775,9 +783,10 @@ it("validates a new released follow goal rather than restoring an older rejected
   f.interaction.aim(corrected); f.advance(0.2); const pending = f.sent.at(-1);
   f.interaction.end(); expect(f.interaction.target).toEqual(corrected);
   f.reply(pending, { status: "feasible", sequence: pending.sequence, joints: { joint: 0.4 } });
+  f.tail(corrected, { joint: 0.4 });
   expect(f.interaction.rejection).toBeNull(); expect(f.interaction.target).toEqual(corrected);
   expect(f.interaction.snapshot().finishing).toBe(true);
-  f.advance(0.1); expect(f.sent.at(-1)).toMatchObject({ action: "update", position: corrected.position });
+  const count = f.sent.length; f.advance(0.1); expect(f.sent).toHaveLength(count);
 });
 
 it("retains a grab during unavailable feedback, reacquires safely, and expires after two seconds", () => {
@@ -994,4 +1003,25 @@ it("waits for release acknowledgement before recovering a short feedback gap", (
   expect(f.sent).toHaveLength(count);
   f.reply(release, { status: "released" }); f.advance(.05);
   expect(f.sent.at(-1).action).toBe("acquire");
+
+});
+
+it("keeps a checked-plan request alive while its bounded trajectory asset is still transferring", () => {
+  const f = fixture(); f.interaction.setSelected(true); f.interaction.begin();
+  f.interaction.aim(pose); f.interaction.end(); f.advance(0.4); const request = f.sent.at(-1);
+  f.assets.set(request.request_id, 140);
+  f.advance(20.1);
+  expect(f.interaction.rejection).toBeNull();
+  expect(f.interaction.dragging).toBe(false);
+  f.reply(request, planned("slow-trajectory"));
+  expect(f.interaction.previewPlan?.plan_id).toBe("slow-trajectory");
+});
+
+it("bounds a stalled checked-plan asset and ignores its completion after the asset deadline", () => {
+  const f = fixture(); f.interaction.setSelected(true); f.interaction.begin();
+  f.interaction.aim(pose); f.interaction.end(); f.advance(0.4); const request = f.sent.at(-1);
+  f.assets.set(request.request_id, 140); f.advance(40);
+  expect(f.interaction.rejection?.message).toBe("Request timed out");
+  f.reply(request, planned("expired-trajectory"));
+  expect(f.interaction.plan).toBeNull();
 });

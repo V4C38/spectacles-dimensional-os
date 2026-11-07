@@ -47,8 +47,10 @@ def test_new_arm_never_inherits_go2_calibration(tmp_path, monkeypatch):
     ui = ui_from_armodule_config(arm["armodule"])
     assert ui["mounts"][0]["print_size_mm"] == pytest.approx(70)
     restored = armodule_config_from_ui(
-        fiducial_marker=ui["fiducial_marker"], vps=False,
-        map_code=None, mounts=ui["mounts"],
+        fiducial_marker=ui["fiducial_marker"],
+        vps=False,
+        map_code=None,
+        mounts=ui["mounts"],
     )["fiducial_marker_mounts"][0]
     assert restored["position"] == mount["position"]
     assert restored["orientation"] == mount["orientation"]
@@ -67,14 +69,22 @@ def test_selected_profile_is_the_localization_source(tmp_path, monkeypatch):
     import armodule
     from armodule import ProcessManager
 
-    monkeypatch.setattr(armodule, "read_armodule_config", lambda: {"localization": {"providers": [{"type": "vps", "map_code": "legacy"}]}})
+    monkeypatch.setattr(
+        armodule,
+        "read_armodule_config",
+        lambda: {
+            "localization": {"providers": [{"type": "vps", "map_code": "legacy"}]}
+        },
+    )
     manager = ProcessManager(root=tmp_path)
     manager._require_vps_credentials({"localization": {"providers": []}})
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("client", ["specs", "webxr"])
-async def test_openyam_start_accepts_either_client_with_explicit_profile(monkeypatch, client):
+async def test_openyam_start_accepts_either_client_with_explicit_profile(
+    monkeypatch, client
+):
     from unittest.mock import AsyncMock
 
     import app
@@ -82,8 +92,14 @@ async def test_openyam_start_accepts_either_client_with_explicit_profile(monkeyp
     start = AsyncMock()
     monkeypatch.setattr(app.manager, "start_armodule", start)
     monkeypatch.setattr(app.manager, "snapshot", dict)
-    monkeypatch.setattr(app.robot_profiles, "snapshot", lambda profile_id, blueprint: {"profile": profile_id})
-    await app.api_armodule_start(app.StartBody(blueprint="openyam_ar_planner", client=client, profile_id="arm"))
+    monkeypatch.setattr(
+        app.robot_profiles,
+        "snapshot",
+        lambda profile_id, blueprint: {"profile": profile_id},
+    )
+    await app.api_armodule_start(
+        app.StartBody(blueprint="openyam_ar_planner", client=client, profile_id="arm")
+    )
     assert start.await_args.kwargs["client"] == client
 
 
@@ -94,5 +110,41 @@ async def test_openyam_start_still_requires_profile():
     import app
 
     with pytest.raises(HTTPException) as error:
-        await app.api_armodule_start(app.StartBody(blueprint="openyam_ar_planner", client="specs"))
+        await app.api_armodule_start(
+            app.StartBody(blueprint="openyam_ar_planner", client="specs")
+        )
     assert error.value.status_code == 400
+
+
+def test_profile_settings_preserve_policy_and_unrelated_config(tmp_path, monkeypatch):
+    legacy = {
+        "stationary_base": {"position": [0, 0, 0]},
+        "localization": {
+            "providers": [{"type": "vps", "map_code": "old"}],
+            "travel_threshold_m": 3,
+            "heading_threshold_deg": 60,
+            "marker_preference_s": 4,
+            "headset_travel_threshold_m": 12,
+            "episode_timeout_s": 21,
+        },
+    }
+    monkeypatch.setattr(
+        robot_profiles, "read_armodule_config", lambda: deepcopy(legacy)
+    )
+    profiles = RobotProfiles(tmp_path / "profiles.json")
+    profile = profiles.all()[0]
+    updated = profiles.update(
+        profile["id"],
+        settings={
+            "fiducial_marker": False,
+            "vps": True,
+            "map_code": "new",
+            "travel_threshold_m": 5,
+        },
+    )["armodule"]
+    assert updated["stationary_base"] == legacy["stationary_base"]
+    assert updated["localization"] == {
+        **legacy["localization"],
+        "providers": [{"type": "vps", "map_code": "new"}],
+        "travel_threshold_m": 5,
+    }

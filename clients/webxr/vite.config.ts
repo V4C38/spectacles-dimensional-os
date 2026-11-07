@@ -1,5 +1,6 @@
 import { validDiagnosticEntry } from "./src/diagnostics/DiagnosticReporter";
 import { defineConfig, type Plugin } from "vitest/config";
+import { pinGatewayPlugin } from "./server/PinGateway";
 import basicSsl from "@vitejs/plugin-basic-ssl";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
@@ -43,6 +44,8 @@ function stubOptionalModules(): Plugin {
 }
 
 const arModuleProxy = {
+  "/bulk": { target: `ws://127.0.0.1:${AR_MODULE_CLIENT_CONFIG.port}`, ws: true },
+  "/ws/bulk": { target: `ws://127.0.0.1:${AR_MODULE_CLIENT_CONFIG.port}`, ws: true },
   "/ar": {
     target: `ws://127.0.0.1:${AR_MODULE_CLIENT_CONFIG.port}`,
     ws: true,
@@ -84,7 +87,7 @@ function buildRevision(): string {
 
 export default defineConfig({
   define: { __DIMOS_BUILD__: JSON.stringify(buildRevision()) },
-  plugins: [stubOptionalModules(), basicSsl(), browserDiagnostics()],
+  plugins: [stubOptionalModules(), basicSsl(), pinGatewayPlugin(), browserDiagnostics()],
   resolve: {
     alias: {
       "@dimos-ar-client": clientCore,

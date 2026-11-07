@@ -13,8 +13,8 @@ export class ManipulationController {
   private target: object | null = null;
   private speed = 0.5;
   private group: string | null = null;
-  private readonly unsubscribeHealth: (() => void) | undefined;
-  constructor(private readonly session: Pick<ARModuleSession, "view" | "sendText" | "subscribeOutbound" | "requestEstop"> & Partial<Pick<ARModuleSession, "subscribeView">>,
+  private readonly unsubscribeHealth?: () => void;
+  constructor(private readonly session: Pick<ARModuleSession, "view" | "sendText" | "subscribeOutbound" | "requestEstop"> & Partial<Pick<ARModuleSession, "collaboration" | "subscribeView">>,
     now: () => number, private readonly stop: () => void = () => session.requestEstop()) {
     this.interaction = new ManipulationInteraction(session, now);
     this.unsubscribeHealth = session.subscribeView?.(view => { if (view.manipulationError && !this.interaction.retainingFeedback) this.suspend(); });

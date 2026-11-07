@@ -14,29 +14,74 @@ from websockets.exceptions import ConnectionClosed
 
 
 async def prepare_shutdown() -> None:
+    """Use compact v3 control facts; parking requires no visual model assets."""
+    bulk_task: asyncio.Task[None] | None = None
     try:
         async with asyncio.timeout(60):
-            async with connect("ws://127.0.0.1:8787", max_size=8 * 1024 * 1024) as ws:
+            async with connect("ws://127.0.0.1:8787", max_size=64 * 1024) as ws:
                 await ws.send(
                     json.dumps({"type": "hello_request", "ts_client": time.time()})
                 )
-                group = None
+                hello = False
+                state = None
+                arm = None
+                sent = False
                 async for raw in ws:
                     if not isinstance(raw, str):
                         continue
                     for line in raw.splitlines():
                         message = json.loads(line)
-                        if message.get("type") == "manipulation_state" and not group:
-                            if message.get("stopped"):
+                        if message.get("type") == "hello":
+                            if message.get("protocol_version") != 3:
+                                raise ValueError("shutdown requires protocol v3")
+                            hello = True
+                            if message.get("bulk_url") and message.get("bulk_token"):
+                                from urllib.parse import urljoin
+
+                                async def hold_bulk(info=message):
+                                    url = urljoin(
+                                        "ws://127.0.0.1:8787/", info["bulk_url"]
+                                    )
+                                    async with connect(url, max_size=64 * 1024) as bulk:
+                                        await bulk.send(
+                                            json.dumps(
+                                                {
+                                                    "type": "bulk_hello_request",
+                                                    "protocol_version": 3,
+                                                    "client_id": info["client_id"],
+                                                    "token": info["bulk_token"],
+                                                }
+                                            )
+                                        )
+                                        async for _record in bulk:
+                                            pass  # Visual assets are not needed for parking.
+
+                                bulk_task = asyncio.create_task(hold_bulk())
+                        elif message.get("type") == "interaction_state":
+                            state = message
+                        elif message.get("type") == "manipulation_state":
+                            arm = message
+                        if hello and state and arm and not sent:
+                            if arm.get("stopped"):
                                 print(
                                     "Shutdown: E-stop active; zero-pose motion skipped.",
                                     flush=True,
                                 )
                                 return
-                            groups = message.get("groups") or []
+                            if (
+                                state.get("mode") != "manual"
+                                or state.get("authority") is not None
+                                or state.get("motion_busy")
+                            ):
+                                print(
+                                    "Shutdown: robot busy; zero-pose motion skipped.",
+                                    flush=True,
+                                )
+                                return
+                            groups = arm.get("groups") or []
                             if not groups:
                                 continue
-                            group = groups[0]["id"]
+                            sent = True
                             print(
                                 "Shutdown: returning arm to zero (maximum 60 seconds)…",
                                 flush=True,
@@ -47,25 +92,30 @@ async def prepare_shutdown() -> None:
                                         "type": "manipulation_request",
                                         "request_id": "shutdown-zero",
                                         "action": "prepare_shutdown",
-                                        "group_id": group,
+                                        "group_id": groups[0]["id"],
+                                        "epoch": state["epoch"],
                                         "speed_scale": 0.2,
                                     }
                                 )
                             )
-                        if message.get("request_id") == "shutdown-zero":
+                        if sent and message.get("request_id") == "shutdown-zero":
                             print(
                                 "Shutdown zero result: "
                                 + str(message.get("message") or message.get("status")),
                                 flush=True,
                             )
                             return
-    except (OSError, TimeoutError, ValueError, ConnectionClosed) as exc:
+    except (OSError, TimeoutError, ValueError, TypeError, KeyError, ConnectionClosed) as exc:
         print(
             f"Shutdown: zero pose not confirmed ({type(exc).__name__}: "
             f"{str(exc) or 'no parking response within 60 seconds'}); "
             "proceeding with requested shutdown.",
             flush=True,
         )
+    finally:
+        if bulk_task is not None:
+            bulk_task.cancel()
+            await asyncio.gather(bulk_task, return_exceptions=True)
 
 
 async def main(command: list[str]) -> int:

@@ -73,14 +73,19 @@ class OdomMapTransform:
         travel_m: float,
         map_code: str | None = None,
         source_generation: int = 0,
+        min_confidence: float | None = None,
     ) -> bool:
+        # Marker callers have already passed their own detection/fusion gates.
+        minimum = self._config.min_vps_confidence if min_confidence is None else min_confidence
+        if not math.isfinite(minimum) or not 0 <= minimum <= 1:
+            raise ValueError("minimum confidence must be in [0, 1]")
         if localization.frame_id != "map":
             raise ValueError(
                 f"VPS T_odom_map update expects frame_id='map', got {localization.frame_id!r}"
             )
         if (
             not all(math.isfinite(v) for v in (localization.confidence, ts_server, travel_m))
-            or not self._config.min_vps_confidence <= localization.confidence <= 1.0
+            or not minimum <= localization.confidence <= 1.0
             or travel_m < 0
         ):
             return False

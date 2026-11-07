@@ -1,3 +1,9 @@
+input_float OpacityScale;
+input_float ColorR;
+input_float ColorG;
+input_float ColorB;
+input_float WidthScale;
+input_float StartDistance;
 input_float ViewportHeightPx;
 input_float NearWidthScale;
 input_float MinimumPixels;
@@ -26,8 +32,8 @@ void strokeMetrics(out vec3 a, out vec3 b, out vec3 p, out vec2 normal,
     float period = max(0.01, uv3.y + uv4.x);
     float blendA = 1.0 - smoothstep(6.0, 10.0, period / max(pixelA, 0.001));
     float blendB = 1.0 - smoothstep(6.0, 10.0, period / max(pixelB, 0.001));
-    float widthA = max(uv3.x, MinimumPixels * pixelA) * mix(NearWidthScale, 1.0, blendA);
-    float widthB = max(uv3.x, MinimumPixels * pixelB) * mix(NearWidthScale, 1.0, blendB);
+    float widthA = max(uv3.x * WidthScale, MinimumPixels * pixelA) * mix(NearWidthScale, 1.0, blendA);
+    float widthB = max(uv3.x * WidthScale, MinimumPixels * pixelB) * mix(NearWidthScale, 1.0, blendB);
     halfWidth = mix(widthA, widthB, uv0.y) * 0.5;
 }
 output_vec4 Result;
@@ -40,6 +46,7 @@ void main() {
     vec2 uv4 = system.getSurfaceUVCoord4();
     float across = dot((system.getSurfacePositionCameraSpace() - p).xy, normal);
     float distanceAlong = uv2.y + uv0.y * length(b - a);
+    if (distanceAlong < StartDistance) discard;
     float period = max(0.01, uv3.y + uv4.x);
     float phase = mod(distanceAlong, period);
     float along = min(phase, period - phase);
@@ -51,5 +58,5 @@ void main() {
     float coverage = mix(dash, solid, blend);
     if (coverage < 0.001) discard;
     vec4 color = system.getSurfaceColor();
-    Result = vec4(color.rgb, color.a * coverage);
+    Result = vec4(color.rgb * vec3(ColorR, ColorG, ColorB), color.a * coverage * OpacityScale);
 }

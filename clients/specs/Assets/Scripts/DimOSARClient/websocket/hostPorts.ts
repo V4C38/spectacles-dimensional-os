@@ -26,6 +26,8 @@ export interface WebSocketTransport {
   close(): void;
   sendText(text: string): void;
   sendBinary(data: Uint8Array): void;
+  bufferedAmount?(): number;
+  createSibling?(path: string): BindableWebSocketTransport;
 }
 
 export interface WebSocketTransportHandlers {
@@ -43,6 +45,8 @@ export interface ClientClock {
 }
 
 export interface CameraTrackingSource {
+  trackingPosition?(): Vec3;
+  clearTracking?(): void;
   cameraOptical(): { position: Vec3; orientation: Quat };
 }
 

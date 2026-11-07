@@ -1,3 +1,4 @@
+import { WebXRReplicationPresenter } from "../replication/WebXRReplicationPresenter";
 import { NAVIGATION_OUTCOME_STYLE, strokeJoints2D, STROKE_JOIN_SEGMENTS, WORLD_DASH_STYLE, circleStrokeSegments, NAVIGATION_CANCEL_STYLE, navigationCancelReveal, NAVIGATION_PREVIEW_ARROW_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
 import * as THREE from "three";
 import { AdaptiveDashedLineRenderer } from "../presentation/AdaptiveDashedLineRenderer";
@@ -61,6 +62,8 @@ export class WebXRNavGoalView {
   private motion = 0;
   private aiming = false;
   private flash: NavFlash | null = null;
+  private blocked = false;
+  private readonly replication = new WebXRReplicationPresenter();
 
   constructor(private readonly radiusM: number = GOAL_RADIUS_M) {
     this.object = new THREE.Group();
@@ -144,6 +147,7 @@ export class WebXRNavGoalView {
     this.probe.traverse(node => { node.raycast = () => {}; });
     this.probe.visible = false;
     this.object.add(this.disc, this.visuals, this.cancelRoot, this.connector, this.draftCircleRenderer.object);
+    this.object.add(this.replication.object);
     this.object.visible = false;
     // Proximity uses the circular hit surface, not the decorative arrow/ring bounding boxes.
     this.arrow.userData.proximityTarget = this.ring.userData.proximityTarget = false;
@@ -187,11 +191,16 @@ export class WebXRNavGoalView {
 
   setGoalActive(_active: boolean): void { /* Goal existence is independent of following state. */ }
   setInteraction(dragging: boolean, following: boolean): void { this.dragging = dragging; this.following = following; }
+  setBlocked(blocked: boolean): void {
+    this.blocked = blocked;
+    this.replication.apply(blocked, [this.disc, this.arrow, this.ring], this.aiming);
+    this.applyStyle(0);
+  }
   setHovered(hovered: boolean): void { this.hovered = hovered; }
   setSelected(selected: boolean): void { this.selected = selected; }
   setAiming(aiming: boolean): void {
     this.aiming = aiming;
-    for (const mesh of [this.disc, this.arrow, this.ring]) mesh.userData.rayDisabled = aiming;
+    for (const mesh of [this.disc, this.arrow, this.ring]) mesh.userData.rayDisabled = aiming || this.blocked;
   }
 
   setProbe(position: Vec3 | null): void {
@@ -241,8 +250,9 @@ export class WebXRNavGoalView {
       this.draftCircleRenderer.object.position.y = 0.015 * this.visualScale;
       this.draftCircleRenderer.setSegments(circleStrokeSegments(radius * strokeScale - WORLD_DASH_STYLE.widthM / 2), true);
     }
-    this.setMarkerStyle(MARKER_COLOR, this.opacity);
+    this.setMarkerStyle(this.blocked ? WebXRReplicationPresenter.blockedColor : MARKER_COLOR, this.opacity);
     this.applyFeedback();
+    if (this.blocked) this.arrow.visible = false;
   }
 
   setCancelVisible(visible: boolean, confirmationId = 0): void {
@@ -344,6 +354,7 @@ export class WebXRNavGoalView {
     for (const mesh of [this.outcomeRing, this.outcomeJoin, ...this.outcomeStrokes]) { mesh.geometry.dispose(); mesh.material.dispose(); }
     this.connectorRenderer.dispose();
     this.draftCircleRenderer.dispose();
+    this.replication.dispose();
     this.disc.geometry.dispose();
     this.arrow.geometry.dispose();
     this.ring.geometry.dispose();

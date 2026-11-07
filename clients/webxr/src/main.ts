@@ -1,3 +1,5 @@
+import { resolvePinConnection } from "./websocket/PinConnectionResolver";
+import { validPin } from "@dimos-ar-client/websocket/ConnectionResolution";
 import { EnvironmentDepthRenderer } from "./presentation/EnvironmentDepthRenderer";
 import { BrowserJpegEncoder } from "./localization/BrowserJpegEncoder";
 import { LandingInfoPresenter } from "./presentation/LandingInfoPresenter";
@@ -113,6 +115,12 @@ async function boot(): Promise<void> {
   });
   const enter = document.getElementById("enter") as HTMLButtonElement | null;
   const select = document.getElementById("hmd") as HTMLSelectElement | null;
+  const pinInput = document.getElementById("pin") as HTMLInputElement;
+  const connect = document.getElementById("connect") as HTMLButtonElement;
+  const localConnection = new URLSearchParams(location.search).get("connection") === "local";
+  const controls = document.getElementById("connection-controls");
+  if (controls) controls.hidden = localConnection;
+  try { pinInput.value = new URLSearchParams(location.search).get("pin") ?? localStorage.getItem("dimos_ar_module_pin") ?? ""; } catch { /* Storage can be disabled. */ }
   const overlay = document.getElementById("overlay");
   const infoRoot = document.querySelector<HTMLElement>(".landing-layout");
   const info = infoRoot ? new LandingInfoPresenter(infoRoot, window.location.host) : null;
@@ -133,8 +141,9 @@ async function boot(): Promise<void> {
       frames: videoFrameCallbackPort(),
       jpeg: new BrowserJpegEncoder(),
     });
+    const transport = new BrowserWebSocketTransport({ url });
     const client = new DimOSWebXRClient({
-      transport: new BrowserWebSocketTransport({ url }),
+      transport,
       clock: new BrowserClientClock(),
       camera,
       recognition: browserRecognition(),
@@ -173,21 +182,51 @@ async function boot(): Promise<void> {
         xr.offerSession = offerSession;
       }
     }
-    client.session.start();
+    let wantsConnection = localConnection;
+    if (wantsConnection) client.session.start();
+    let connectionGeneration = 0;
+    let lastConnection: string | null = null;
+    const unsubscribeConnection = client.session.subscribeView(view => {
+      if (localConnection || lastConnection === view.connection) return;
+      lastConnection = view.connection;
+      enter.disabled = view.connection !== "ready";
+      connect.textContent = view.connection === "ready" ? "Reconnect" : view.connection === "connecting" || view.connection === "awaiting_hello" ? "Connecting…" : "Connect";
+      if (view.connection === "ready") setStatus("Connected", "success");
+    });
+    connect.disabled = !validPin(pinInput.value.trim());
+    const disconnect = () => {
+      connectionGeneration++; wantsConnection = false;
+      client.suspend(); client.session.stop(); client.restartSetup();
+      cameraReady = false; enter.textContent = "Allow camera"; enter.disabled = true;
+    };
+    pinInput.oninput = () => {
+      disconnect(); connect.disabled = !validPin(pinInput.value.trim()); setStatus("", "muted");
+    };
+    connect.onclick = () => {
+      const pin = pinInput.value.trim();
+      if (!validPin(pin)) { setStatus("Enter a 6-digit PIN", "warn"); return; }
+      disconnect();
+      try { localStorage.setItem("dimos_ar_module_pin", pin); } catch { /* Storage can be disabled. */ }
+      const generation = connectionGeneration;
+      transport.setConnectionResolver(() => resolvePinConnection(pin, location.origin).catch(error => {
+        if (generation === connectionGeneration) setStatusFromUnknown(error); throw error;
+      }));
+      wantsConnection = true; setStatus("Connecting…", "muted"); client.session.start();
+    };
     const landingTick = window.setInterval(() => {
       if (document.visibilityState !== "visible" || xb.core.renderer.xr.isPresenting) return;
-      if (client.session.view().connection === "disconnected") client.session.start();
+      if (wantsConnection && client.session.view().connection === "disconnected") client.session.start();
       client.session.tick();
     }, 100);
     let cameraReady = false;
     const onStarted = () => {
-      select.disabled = true;
+      select.disabled = true; pinInput.disabled = true; connect.disabled = true;
       if (overlay) overlay.style.display = "none";
     };
     const onEnded = () => {
       if (overlay) overlay.style.display = "";
-      select.disabled = false;
-      enter.disabled = false;
+      select.disabled = false; pinInput.disabled = false; connect.disabled = !validPin(pinInput.value.trim());
+      enter.disabled = !localConnection && client.session.view().connection !== "ready";
       cameraReady = false;
       enter.textContent = "Allow camera";
       setStatus("", "muted");
@@ -198,7 +237,8 @@ async function boot(): Promise<void> {
       if (event.persisted) { app.onXRSessionEnded(); onEnded(); return; }
       xb.core.renderer.xr.removeEventListener("sessionstart", onStarted);
       xb.core.renderer.xr.removeEventListener("sessionend", onEnded);
-      window.clearInterval(landingTick); info?.dispose();
+      window.clearInterval(landingTick); info?.dispose(); unsubscribeConnection();
+      connect.onclick = null; pinInput.oninput = null;
       enter.onclick = null;
       app.dispose();
     });
@@ -210,12 +250,12 @@ async function boot(): Promise<void> {
       setStatus("", "muted");
     };
     select.disabled = false;
-    enter.disabled = false;
+    enter.disabled = !localConnection && client.session.view().connection !== "ready";
     enter.onclick = () => {
       void app.sound.unlock();
       enter.disabled = true;
       if (!cameraReady) {
-        select.disabled = true;
+        select.disabled = true; pinInput.disabled = true; connect.disabled = true;
         setStatus("Allow camera access in the browser prompt…", "muted");
         void camera.requestPermission().then(() => {
           cameraReady = true;
@@ -226,8 +266,8 @@ async function boot(): Promise<void> {
           reportDiagnostic("camera-preflight-failed", { hmd: select.value, message: String(error) });
           setStatusFromUnknown(error);
         }).finally(() => {
-          enter.disabled = false;
-          select.disabled = false;
+          enter.disabled = !localConnection && client.session.view().connection !== "ready";
+          select.disabled = false; pinInput.disabled = false; connect.disabled = !validPin(pinInput.value.trim());
         });
         return;
       }

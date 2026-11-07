@@ -36,6 +36,8 @@ class JointZeroOperation:
                     }
             else:
                 runtime.require_owner(client_id, group)
+                if runtime.operation.id is not None:
+                    raise ManipulationError("busy", "execution active or outcome uncertain")
             runtime.fresh(group)
             # Acquire before changing ownership: a rejected reset cannot retire a planner.
             if not runtime.planning.acquire(blocking=False):

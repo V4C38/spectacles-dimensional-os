@@ -1,3 +1,4 @@
+import type { ConnectionResolver } from "../../DimOSARClient/websocket/ConnectionResolution";
 import type { ARModuleSession } from "../../DimOSARClient/websocket/arModuleSession";
 import { AR_MODULE_CLIENT_CONFIG } from "../../DimOSARClient/websocket/hostPorts";
 import { buildModuleWebSocketUrl, isValidHost, saveModuleHost, type ModuleHostStore } from "../../DimOSARClient/websocket/hostNormalization";
@@ -8,10 +9,11 @@ const PIN_STORAGE_KEY = "dimos_ar_module_pin";
 export interface SpecsConnectionDependencies {
   script: Pick<ScriptComponent, "createEvent" | "removeEvent">;
   session: Pick<ARModuleSession, "view" | "start" | "stop">;
-  transport: { setUrl(url: string): void };
+  transport: { setUrl(url: string): void; setConnectionResolver?(resolver: ConnectionResolver | undefined): void };
   hostStore: ModuleHostStore;
   ipRelayClient: { resolve(pin: string): Promise<ResolvedPin | null> };
   onChanged(): void;
+  onConnectionTargetChanged?(): void;
 }
 
 /** Owns connection attempts; session tick remains the sole socket reconnect owner. */
@@ -25,6 +27,7 @@ export class SpecsConnectionController {
   private retry: (() => void) | null = null;
   private polling = false;
   private readonly retryEvent: DelayedCallbackEvent;
+  private readonly resolutionTimeoutEvent: DelayedCallbackEvent;
   private readonly pollEvent: DelayedCallbackEvent;
 
   constructor(private readonly deps: SpecsConnectionDependencies) {
@@ -32,6 +35,7 @@ export class SpecsConnectionController {
     this.retryEvent.bind(() => { if (!this.disposed) this.retry?.(); });
     this.pollEvent = deps.script.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
     this.pollEvent.bind(() => this.poll());
+    this.resolutionTimeoutEvent = deps.script.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
   }
 
   snapshot(): Readonly<{ connecting: boolean; resolvingPin: boolean; error: string | null }> {
@@ -46,7 +50,7 @@ export class SpecsConnectionController {
 
   start(method: ConnectionMethod, field: string): void {
     if (this.disposed) return;
-    this.cancel();
+    this.cancel(true);
     const generation = this.generation;
     const routed = routeConnectionField(method, field);
     if (!routed || routed.kind === "ip" && !isValidHost(routed.host)) {
@@ -67,10 +71,12 @@ export class SpecsConnectionController {
 
   cancel(disconnect = false): void {
     this.generation++;
-    this.retryEvent.cancel(); this.pollEvent.cancel();
+    this.retryEvent.cancel(); this.pollEvent.cancel(); this.resolutionTimeoutEvent.cancel();
     this.retry = null; this.polling = false;
     this.connecting = false; this.resolving = false; this.error = null;
-    if (disconnect) { this.deps.session.stop(); this.started = false; }
+    if (disconnect || this.started && this.deps.session.view().connection !== "ready") {
+      this.deps.session.stop(); this.started = false;
+    }
   }
 
   dispose(): void {
@@ -78,30 +84,50 @@ export class SpecsConnectionController {
     this.disposed = true;
     this.cancel();
     this.deps.script.removeEvent(this.retryEvent); this.deps.script.removeEvent(this.pollEvent);
+    this.deps.script.removeEvent(this.resolutionTimeoutEvent);
   }
 
   private changed(): void { if (!this.disposed) this.deps.onChanged(); }
   private current(generation: number): boolean { return !this.disposed && generation === this.generation; }
 
   private async resolve(pin: string, generation: number): Promise<void> {
+    this.resolutionTimeoutEvent.bind(() => {
+      if (!this.current(generation)) return;
+      this.generation++; this.resolving = false; this.connecting = false;
+      this.error = "PIN lookup timed out"; this.changed();
+      this.schedule(() => this.start("pin", pin));
+    });
+    this.resolutionTimeoutEvent.reset(15);
     let found: ResolvedPin | null;
     try { found = await this.deps.ipRelayClient.resolve(pin); }
     catch { found = null; }
     if (!this.current(generation)) return;
+    this.resolutionTimeoutEvent.cancel();
     this.resolving = false;
     if (!found) {
       this.connecting = false; this.error = "PIN did not resolve"; this.changed();
       this.schedule(() => this.start("pin", pin)); return;
     }
-    this.connect(found.ip, found.port, generation, () => this.start("pin", pin));
+    this.connect(found.ip, found.port, generation, () => this.start("pin", pin), pin);
   }
 
-  private connect(host: string, port: number, generation: number, retry: () => void): void {
+  private connect(host: string, port: number, generation: number, retry: () => void, pin?: string): void {
     if (!this.current(generation)) return;
     try {
       const url = buildModuleWebSocketUrl(host, port);
       if (this.started) this.deps.session.stop();
+      this.deps.onConnectionTargetChanged?.();
       this.deps.transport.setUrl(url);
+      this.deps.transport.setConnectionResolver?.(undefined);
+      if (pin && this.deps.transport.setConnectionResolver) {
+        let initial = true;
+        this.deps.transport.setConnectionResolver(async () => {
+          if (initial) { initial = false; return { controlUrl: url }; }
+          const endpoint = await this.deps.ipRelayClient.resolve(pin);
+          if (!endpoint) throw new Error("PIN did not resolve");
+          return { controlUrl: buildModuleWebSocketUrl(endpoint.ip, endpoint.port) };
+        });
+      }
       saveModuleHost(this.deps.hostStore, host);
       this.deps.session.start(); this.started = true;
     } catch (error) {

@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
+import copy
 import math
 from typing import Any
+
+LOCALIZATION_POLICY_DEFAULTS = {
+    "travel_threshold_m": 0.75,
+    "heading_threshold_deg": 30.0,
+    "marker_preference_s": 1.5,
+    "headset_travel_threshold_m": 10.0,
+}
 
 DEFAULT_PRINT_SIZE_MM = 70.0
 _BLACK_FRACTION = 8.0 / 10.0
@@ -233,4 +241,33 @@ def ui_from_armodule_config(
         "vps_vendor": "multiset",
         "map_code": map_code,
         "mounts": mounts,
+        **{
+            key: (section.get("localization") or {}).get(key, value)
+            for key, value in LOCALIZATION_POLICY_DEFAULTS.items()
+        },
     }
+
+
+def merge_armodule_settings(
+    existing: dict[str, Any], settings: dict[str, Any]
+) -> dict[str, Any]:
+    """Update one profile without replacing unrelated nested localization policy."""
+    result = copy.deepcopy(existing)
+    prior = ui_from_armodule_config(existing)
+    enabled = settings.get("fiducial_marker", prior["fiducial_marker"])
+    patch = armodule_config_from_ui(
+        fiducial_marker=enabled,
+        vps=settings.get("vps", prior["vps"]),
+        map_code=settings.get("map_code", prior["map_code"]),
+        mounts=settings.get("mounts", prior["mounts"]),
+    )
+    localization = dict(result.get("localization") or {})
+    localization.update(patch.pop("localization"))
+    localization.update(
+        {key: settings[key] for key in LOCALIZATION_POLICY_DEFAULTS if key in settings}
+    )
+    result.update(patch)
+    result["localization"] = localization
+    if not enabled:
+        result["fiducial_marker_mounts"] = None
+    return result

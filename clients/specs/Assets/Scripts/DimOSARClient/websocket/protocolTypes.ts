@@ -1,4 +1,5 @@
 import type { ManipulationOutbound } from "../manipulation/ManipulationTypes";
+import type { InteractionState, InteractionResult } from "../replication/CollaborationTypes";
 export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number];
 export type YawPose = [number, number, number, number];
@@ -62,6 +63,10 @@ export interface ServerInfo {
 
 export interface Hello {
   source?: { kind: "recording"; read_only: boolean; name: string };
+  protocol_version: 3;
+  bulk_url: string;
+  bulk_token: string;
+  bulk_epoch: string;
   /** Stable for the server odometry reference, including across socket reconnects. */
   odom_reference_id?: string;
   server_info?: ServerInfo;
@@ -108,7 +113,46 @@ export interface AgentSkill {
   args: Record<string, unknown>;
 }
 
-export type LocalizationObservationsRequest =
+export interface MapContext {
+  map_code: string;
+  odom_reference_id: string;
+}
+export interface MapAlignment extends MapContext {
+  id: string;
+  tracking_reference_id: string;
+  travel_m: number;
+  position: Vec3;
+  orientation: Quat;
+  confidence: number;
+  ts: number;
+}
+export interface LocalizationMapTransform extends MapContext {
+  type: "localization_map_transform";
+  revision: number;
+  position: Vec3;
+  orientation: Quat;
+  confidence: number;
+  ts: number;
+}
+export interface LocalizationContext extends MapContext {
+  type: "localization_context";
+  reset?: boolean;
+}
+export interface LocalizationStatus extends MapContext {
+  type: "localization_status";
+  scope: "robot" | "headset";
+  status: "succeeded" | "failed" | "deferred";
+  reason: string;
+  retry_after_s?: number;
+  episode_id?: string;
+  ts?: number;
+}
+export interface CaptureEpisodeIdentity {
+  capture_id?: string;
+  episode_id?: string;
+  purpose?: "robot" | "headset";
+}
+export type LocalizationObservationsRequest = CaptureEpisodeIdentity & (
   | {
       type: "localization_observations_request";
       capture_policy: "robot_los_required" | "any_angle";
@@ -121,9 +165,11 @@ export type LocalizationObservationsRequest =
       observation_count: number;
       result_timeout_s?: number;
       wait_timeout_s: number;
-    };
+    });
 
 export interface LocalizationResult {
+  map_alignment?: MapAlignment;
+  map_transform?: LocalizationMapTransform;
   type: "localization_result";
   position: Vec3;
   orientation: Quat;
@@ -155,10 +201,15 @@ export interface Lidar {
 
 export type Outbound =
   | ManipulationOutbound
+  | InteractionState
+  | InteractionResult
   | Hello
   | State
   | LocalizationObservationsRequest
   | LocalizationResult
+  | LocalizationContext
+  | LocalizationMapTransform
+  | LocalizationStatus
   | Pose
   | NavGoal
   | Lidar
@@ -185,11 +236,27 @@ export interface StateRequest {
   type: "state_request";
 }
 
+export interface LocalizationTracking {
+  type: "localization_tracking";
+  tracking_reference_id: string;
+  travel_m: number;
+  active: boolean;
+  alignment_id?: string;
+}
+export interface LocalizationCaptureProgress {
+  type: "localization_capture_progress";
+  episode_id: string;
+  phase: "waiting" | "capturing" | "submitted" | "unavailable";
+  travel_m: number;
+  capture_ts?: number;
+}
+
 export interface LocalizationStartRequest {
   type: "localization_start_request";
 }
 
 export interface NavGoalRequest {
+  epoch?: string; lease_id?: string; sequence?: number;
   preview?: boolean;
   preview_id?: string;
   type: "nav_goal_request";
@@ -218,6 +285,7 @@ export interface ClientPose {
 }
 
 export interface NavJoystickRequest {
+  epoch?: string; lease_id?: string; sequence?: number;
   type: "nav_joystick_request";
   linear: Vec3;
   angular: Vec3;
@@ -253,6 +321,8 @@ export type Inbound =
   | HelloRequest
   | StateRequest
   | LocalizationStartRequest
+  | LocalizationTracking
+  | LocalizationCaptureProgress
   | LocalizationObservations
   | NavGoalRequest
   | NavJoystickRequest

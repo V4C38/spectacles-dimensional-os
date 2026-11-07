@@ -85,13 +85,13 @@ def test_encode_text_ends_with_newline() -> None:
     assert encode_text({"type": "state_request"}) == '{"type":"state_request"}\n'
 
 
-def test_encode_hello_has_no_protocol_version() -> None:
+def test_encode_hello_advertises_interaction_protocol_version() -> None:
     msg = _parse_json_line(encode_hello(_sample_hello()))
     assert msg["type"] == "hello"
     assert msg["client_id"] == "abc123"
     assert msg["time_sync"]["ts_client"] == 1000.0
     assert msg["time_sync"]["ts_server"] == 2000.0
-    assert "protocol_version" not in msg
+    assert msg["protocol_version"] == 3
     assert "alignment" not in msg
     assert msg["capabilities"]["estop"]["available"] is True
     assert msg["capabilities"]["navigation"]["nav_goal"]["available"] is True

@@ -8,6 +8,12 @@ test.afterEach(async ({}, info) => {
 });
 
 async function aimHandle(page: Page) {
+  await expect.poll(() => page.evaluate(() => {
+    const app = (window as any).xb.core.scene.children.find(
+      (o: any) => o.constructor.name === "WebXRApp",
+    );
+    return app.client.manipulation.interaction.snapshot().canManipulate;
+  })).toBe(true);
   await page.evaluate(() => {
     const w = window as any,
       app = w.xb.core.scene.children.find(
@@ -118,7 +124,7 @@ test("plans with a mesh ghost and follows only during an unselected grab", async
     await setSelection(page, 0);
     expect(
       fixture.commands.some(
-        (c) => c.action === "acquire" || c.action === "update",
+        (c) => c.type === "manipulation_request" && (c.action === "acquire" || c.action === "update"),
       ),
     ).toBe(false);
     await expect
@@ -194,13 +200,13 @@ test("plans with a mesh ghost and follows only during an unselected grab", async
     await aimHandle(page);
     await setSelection(page, 1);
     await expect
-      .poll(() => fixture.commands.some((c) => c.action === "acquire"))
+      .poll(() => fixture.commands.some((c) => c.type === "manipulation_request" && c.action === "acquire"))
       .toBe(true);
     await page.evaluate(() => {
       (window as any).questDevice.controllers.right.position.x += 0.08;
     });
     await expect
-      .poll(() => fixture.commands.some((c) => c.action === "update"))
+      .poll(() => fixture.commands.some((c) => c.type === "manipulation_request" && c.action === "update"))
       .toBe(true);
     await page.waitForTimeout(1000);
     await setSelection(page, 0);
@@ -326,6 +332,12 @@ test("arm Stop clears the target and one emergency control becomes Resume operat
     });
     await aimHandle(page);
     await setSelection(page, 1);
+    await expect.poll(() => page.evaluate(() => {
+      const app = (window as any).xb.core.scene.children.find(
+        (o: any) => o.constructor.name === "WebXRApp",
+      );
+      return app.client.manipulation.interaction.dragging;
+    })).toBe(true);
     await page.evaluate(() => {
       (window as any).questDevice.controllers.right.position.y += 0.08;
     });
@@ -455,7 +467,7 @@ test("hand tracking keeps the gripper usable by the other hand during following"
       return app.client.manipulation.renderer.gripperMenu.scale.x;
     })).toBeGreaterThan(0.999);
     await setSelection(page, 1);
-    await expect.poll(() => fixture.commands.some(c => c.action === "acquire")).toBe(true);
+    await expect.poll(() => fixture.commands.some(c => c.type === "manipulation_request" && c.action === "acquire")).toBe(true);
     await page.evaluate(() => {
       const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
       w.questDevice.hands.right.position.y += 0.05;
@@ -493,7 +505,7 @@ test("hand tracking keeps the gripper usable by the other hand during following"
       }),
     })).toContain('"count":1');
     expect(fixture.commands.some(c => c.action === "release"), JSON.stringify(fixture.commands.filter(c => c.action === "release" || c.action === "cancel"))).toBe(false);
-    await expect.poll(() => fixture.commands.some(c => c.action === "update")).toBe(true);
+    await expect.poll(() => fixture.commands.some(c => c.type === "manipulation_request" && c.action === "update")).toBe(true);
     await setSelection(page, 0);
     await expect.poll(() => fixture.commands.some(c => c.action === "release")).toBe(true);
   } finally { await fixture.close(); }
@@ -830,9 +842,19 @@ for (const selected of [false, true]) test(`production model moves through inter
       r.apply = (input: any) => apply({...input, now: animationTime += 1 / 90});
       if (selected) {
         const interaction = app.client.manipulation.interaction, current = app.client.session.view().manipulation.observations.manipulator.pose;
-        interaction.begin(); interaction.aim({...current, position: [current.position[0],current.position[1],current.position[2]+.06]}); interaction.end();
+        interaction.begin(); interaction.aim({...current, position: [current.position[0],current.position[1],current.position[2]+.06]});
       }
     }, selected);
+    if (selected) {
+      await expect.poll(() => page.evaluate(() => {
+        const app = (window as any).xb.core.scene.children.find((o: any) => o.client?.manipulation);
+        return app.client.session.collaboration.snapshot("manipulation", "manipulator").ownsAuthority;
+      })).toBe(true);
+      await page.evaluate(() => {
+        const app = (window as any).xb.core.scene.children.find((o: any) => o.client?.manipulation);
+        app.client.manipulation.interaction.end();
+      });
+    }
     if (!selected) {
       const value = await page.evaluate(() => {
         const app = (window as any).xb.core.scene.children.find((o: any) => o.client?.manipulation);
@@ -924,11 +946,11 @@ for(const selected of [false,true]) test(`feedback loss preserves the ${selected
     const moved=await read();
     expect(moved).toMatchObject({held:true,visible:true,retained:true,model:held.model,current:held.current});
     expect(moved.target).not.toEqual(held.target);
-    expect(fixture.commands.slice(count).some(c=>["update","evaluate","plan","execute","acquire"].includes(c.action))).toBe(false);
+    expect(fixture.commands.slice(count).some(c=>c.type === "manipulation_request" && ["update","evaluate","plan","execute","acquire"].includes(c.action))).toBe(false);
     fixture.pauseArmFeedback(false);
     await expect.poll(async()=>(await read()).retained).toBe(false);
     expect((await read()).held).toBe(true);
-    if(!selected) await expect.poll(()=>fixture.commands.filter(c=>c.action==="acquire").length).toBe(2);
+    if(!selected) await expect.poll(()=>fixture.commands.filter(c=>c.type === "manipulation_request" && c.action==="acquire").length).toBe(2);
     fixture.pauseArmFeedback(true);
     await expect.poll(async()=>(await read()).retained).toBe(true);
     await page.waitForTimeout(2300);
@@ -971,7 +993,7 @@ for(const selected of [false,true]) test(`socket reconnect retains the ${selecte
     });
     await expect.poll(async()=>(await read()).stopped).toBe(false);
     expect((await read()).held).toBe(true);
-    if(!selected) await expect.poll(()=>fixture.commands.filter(c=>c.action==="acquire").length).toBe(2);
+    if(!selected) await expect.poll(()=>fixture.commands.filter(c=>c.type === "manipulation_request" && c.action==="acquire").length).toBe(2);
     await setSelection(page,0);
   } finally {fixture.close();}
 });

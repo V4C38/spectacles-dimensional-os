@@ -78,12 +78,14 @@ def test_push_image_while_stationary() -> None:
     assert sample.travel_m == pytest.approx(0.0)
 
 
-def test_skips_frames_while_moving() -> None:
+def test_accepts_frames_while_moving() -> None:
     robot_buffer, pose_buffer = _buffer()
     _push_pose(pose_buffer, ts_server=100.0, position=(1.0, 0.0, 0.0))
     robot_buffer.push_image(_image(), ts_server=100.0, speed_mps=0.2, travel_m=0.0)  # type: ignore[arg-type]
 
-    assert robot_buffer.newest(now_server=100.0) is None
+    sample = robot_buffer.newest(now_server=100.0)
+    assert sample is not None
+    assert sample.observation.camera_pose.x == pytest.approx(1.0)
 
 
 def test_retains_frames_after_movement_starts() -> None:

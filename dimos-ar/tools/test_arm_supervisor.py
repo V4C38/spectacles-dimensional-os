@@ -65,6 +65,16 @@ async def test_shutdown_request_and_estop_skip(monkeypatch, stopped):
 
         def __aiter__(self):
             async def frames():
+                yield json.dumps({"type": "hello", "protocol_version": 3})
+                yield json.dumps(
+                    {
+                        "type": "interaction_state",
+                        "epoch": "robot",
+                        "mode": "manual",
+                        "authority": None,
+                        "motion_busy": False,
+                    }
+                )
                 yield json.dumps(
                     {"type": "manipulation_state", "stopped": stopped, "groups": [{"id": "arm"}]}
                 )
@@ -76,3 +86,5 @@ async def test_shutdown_request_and_estop_skip(monkeypatch, stopped):
     await supervisor.prepare_shutdown()
     actions = [m.get("action") for m in sent if m.get("action")]
     assert actions == ([] if stopped else ["prepare_shutdown"])
+    if not stopped:
+        assert sent[-1]["epoch"] == "robot"

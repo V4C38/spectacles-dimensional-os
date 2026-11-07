@@ -1,4 +1,4 @@
-# WebXR manipulation
+# AR manipulation
 
 The `openyam-ar-planner` installed blueprint composes one official OpenYAM
 hardware owner, one pose-capable control coordinator, the official manipulation
@@ -26,8 +26,9 @@ For the launcher, select **openyam_ar_planner**, **WebXR** or **Specs**, a named
 profile, and **Mock hardware** for software development. Profiles are stored in
 `~/.config/dimos/ar-profiles.json`; existing Go2 calibration is migrated into a
 named Go2 profile. Names are editable; stable profile IDs are retained on rename.
-A new arm profile deliberately has no enabled localization provider or assumed tag
-mount. Configure the measured tag mount before enabling tag localization. The tag
+New OpenYAM profiles copy the bundled OpenYAM Bench preset, including its enabled
+fiducial provider and configured tag mount. Calibration belongs to the selected
+robot instance and can be edited independently for each saved profile. The tag
 rotation preserves Go2's existing convention and adds roll:
 `R = Ry(pitch) Rx(roll) Rz(yaw)`. Print size includes the border; the existing
 8/10 conversion supplies the black-square fitting size.
@@ -57,9 +58,11 @@ curve or authorize execution. Preview plays the trajectory once. Execute names
 that exact reviewed plan; replacement or invalid start state rejects execution.
 
 With the arm unselected, grabbing the end effector handle acquires following.
-Targets use absolute localized poses with a preserved grab offset. Release, input
-loss, tracking loss, realignment, owner disconnect, or the controller's target
-watchdog terminates following. The default watchdog and feedback freshness limit
+Targets use absolute localized poses with a preserved grab offset. Normal release
+frees editing authority immediately and hands the last validated target to a
+server-owned finishing tail. Any new grab supersedes that generation. Input loss,
+tracking loss, realignment, or disconnect before release terminates owned following;
+disconnect after release cannot cancel the detached tail or a newer client's work. The default watchdog and feedback freshness limit
 are 500 ms; targets are sent at up to 30 Hz. These are software settings, not
 measured physical latency guarantees. Following uses official bounded Cartesian
 IK; it has no claim to the planner's checked-path world-collision guarantee.
@@ -297,13 +300,17 @@ clocks establish freshness; snapshot publication does not count as a new measure
 `DimOSManipulationAdapter` is the installed-DimOS boundary; private upstream
 collaborators and the quiesced teardown receipt stay there. `ManipulationRuntime`
 uses the typed `ManipulationBackend` port and coordinates commands.
-`ManipulationSession` owns connection/group leases and retirement generations;
+`InteractionCoordinator` owns the robot-wide editing lease and canonical targets.
+`ManipulationSession` owns native following tokens and retirement generations;
+`FollowingTail` owns detached completion of the last validated target;
 `ManipulationOperation` owns reviewed-plan correlation and deferred gripper
 completion; `JointZeroOperation` owns reset/parking settling. Official DimOS
 continues to own measured joints and execution status. The lifecycle thread
 expires leases and advances completion independently of snapshot polling and is
 joined before native teardown. `ManipulationService` owns asynchronous delivery,
-including emergency-stop dispatch; `ManipulationRPC` retires RPC callbacks.
+including emergency-stop dispatch. `ManipulationRPC` keeps timed-out native work
+quarantined until actual completion, so polling cannot accumulate blocked native
+calls. Stop and heartbeat use separate admission lanes.
 
 `ManipulationInteraction` owns portable intent and hysteresis transitions. Its
 immutable snapshot is read-only, and `deriveManipulationSnapshot` is the one
@@ -408,3 +415,25 @@ separately anchored robot badge does not scale with it. Presentation uses Hermit
 interpolation capped at 50 ms, finite measured velocities when available, and visual
 prediction bounded to 30 ms. Execution uses raw feedback, with 30 mm / 8° arrival
 settled for 500 ms; the deferred gripper must acknowledge before terminal completion.
+
+## Multi-client protocol v3
+
+Editing uses a 500 ms robot-wide lease, renewed every 100 ms. Selected checked
+plans remain robot-owned after editing release and bind to the exact canonical
+target revision. Ordinary following release starts a takeoverable server tail;
+accepted execute/reset/parking remains non-takeoverable. The tail refreshes the
+cached validated target at 10 Hz for at most 55 seconds and requires distinct,
+fresh endpoint observations spanning 0.5 seconds to declare arrival. Failed or
+stale feedback aborts it. Losing the last connected client stops native motion.
+
+A separate native per-robot heartbeat gives ARModule a 500 ms control-plane lease.
+Its expiry stops admitted arm motion even if the AR server process disappears.
+The native Cartesian task watchdog stays enabled. This is software admission and
+watchdog behavior; physical controller hangs and upstream agent continuations
+still require their own backend guarantees.
+
+Control snapshots contain model/plan references and compact operation facts.
+Topology, checked trajectories, route points, LiDAR, and camera uploads use the
+paired, byte-bounded bulk WebSocket. Native arm snapshots also transmit revisions
+rather than repeating complete model/trajectory arrays at 10 Hz. See
+[`PROTOCOL.md`](../../../PROTOCOL.md) for the wire contract and failure handling.

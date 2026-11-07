@@ -1,4 +1,5 @@
 import { WebXRManipulationController } from "./manipulation/WebXRManipulationController";
+import { applyLocalizationNotification } from "@dimos-ar-client/presentation/NotificationCenter";
 import { ClientPosePublisher } from "@dimos-ar-client/agent/ClientPosePublisher";
 import { ViewerNotificationPresenter } from "./presentation/ViewerNotificationPresenter";
 import { reportDiagnostic } from "./diagnostics/BrowserDiagnostics";
@@ -34,7 +35,7 @@ import { WebXRRobotPresenter } from "./presentation/WebXRRobotPresenter";
 import { WebXRRouteRenderer } from "./navigation/WebXRRouteRenderer";
 import { WebXRUIPresenter } from "./presentation/WebXRUIPresenter";
 import type { BindableWebSocketTransport } from "@dimos-ar-client/websocket/hostPorts";
-type WebXRCameraPort = Pick<HmdCameraSource, "samplePose" | "cameraOptical" | "start" | "stop" | "capture" | "clearTracking" | "availabilityError" | "previewFrame" | "dispose">;
+type WebXRCameraPort = Pick<HmdCameraSource, "samplePose" | "cameraOptical" | "start" | "stop" | "capture" | "clearTracking" | "availabilityError" | "previewFrame" | "dispose"> & Partial<Pick<HmdCameraSource, "trackingPosition">>;
 
 export interface DimOSWebXRClientDeps {
   transport: BindableWebSocketTransport;
@@ -151,6 +152,7 @@ export class DimOSWebXRClient {
       this.applyView();
     });
     this.unsubscribeOutbound = this.session.subscribeOutbound((message) => {
+      applyLocalizationNotification(message, this.notifications);
       if (message.type === "localization_result") {
         reportDiagnostic("localization-result", { confidence: message.confidence, origin: this.originStore.hasTrackingOrigin });
       }
@@ -358,9 +360,16 @@ export class DimOSWebXRClient {
     this.robot.reset();
   }
 
-  /** Drops the current alignment and reruns the wizard's localization step. */
+  /** Runtime correction preserves a usable map reference; recovery reopens setup. */
   realign(): void {
     const origin = this.originStore.T_odom_client, hello = this.session.view().hello;
+    if (this.ui.setupCompleted && !this.ui.alignmentReview?.pending &&
+        this.session.view().connection === "ready" && this.session.view().hasTrackingOrigin &&
+        this.originStore.mapAlignment) {
+      this.episode.requestCorrection();
+      this.ui.menuOpen = false;
+      return;
+    }
     this.restartSetup();
     this.localizationBaseline = origin ? {origin,reference:hello?.odom_reference_id,hello} : null;
     this.ui.flow.showStep("localization");

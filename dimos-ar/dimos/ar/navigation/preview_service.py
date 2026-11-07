@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from concurrent.futures import ThreadPoolExecutor
+import inspect
 import time
 from typing import Protocol
 
@@ -32,13 +34,21 @@ class NavigationPreviewService:
         factor: float,
         odometry: Callable[[], AcceptedOdometry | None],
         send: Callable[[str, str], None],
+        on_preview: Callable[[str, NavGoalRequest, NavGoalFrame], Awaitable[None] | None]
+        | None = None,
     ) -> None:
         self._closed = False
         self._planner = planner
         self._factor = factor
         self._odometry = odometry
         self._send = send
+        self._on_preview = on_preview
+        self._executor: ThreadPoolExecutor | None = None
+        self._permit = asyncio.Semaphore(1)
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._costmap_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ar-costmap")
+        self._costmap_pending: OccupancyGrid | None = None
+        self._costmap_task: asyncio.Task[None] | None = None
         self.costmap_ts: float | None = None
 
     def request(self, request: NavGoalRequest, client_id: str) -> None:
@@ -53,9 +63,23 @@ class NavigationPreviewService:
     async def update_costmap(self, grid: OccupancyGrid) -> None:
         if self._closed:
             return
-        await asyncio.to_thread(self._planner.update_costmap, grid)
-        if not self._closed:
-            self.costmap_ts = grid.ts
+        self._costmap_pending = grid
+        if self._costmap_task is None or self._costmap_task.done():
+            self._costmap_task = asyncio.create_task(self._drain_costmaps())
+        # Return after bounded admission. A newer costmap replaces the pending
+        # sample; native work already running is never canceled or duplicated.
+        await asyncio.sleep(0)
+
+    async def _drain_costmaps(self) -> None:
+        while self._costmap_pending is not None and not self._closed:
+            grid = self._costmap_pending
+            self._costmap_pending = None
+            future = asyncio.get_running_loop().run_in_executor(
+                self._costmap_executor, self._planner.update_costmap, grid
+            )
+            await asyncio.shield(future)
+            if not self._closed:
+                self.costmap_ts = grid.ts
 
     def cancel(self, client_id: str) -> None:
         task = self._tasks.pop(client_id, None)
@@ -68,16 +92,37 @@ class NavigationPreviewService:
 
     async def close(self) -> None:
         self._closed = True
-        tasks = tuple(self._tasks.values())
+        self._costmap_pending = None
+        tasks = (*self._tasks.values(), *([self._costmap_task] if self._costmap_task else []))
         self.cancel_all()
+        if self._costmap_task is not None:
+            self._costmap_task.cancel()
+        self._costmap_executor.shutdown(wait=False, cancel_futures=True)
         await asyncio.gather(*tasks, return_exceptions=True)
+        if self._executor is not None:
+            self._executor.shutdown(wait=False, cancel_futures=True)
 
     async def _run(
         self, request: NavGoalRequest, client_id: str, pose: AcceptedOdometry | None
     ) -> None:
         try:
-            frame = await asyncio.to_thread(self.compute, request, pose)
-            self._send(client_id, encode_nav_goal(frame))
+            await self._permit.acquire()
+            if self._closed:
+                self._permit.release()
+                return
+            if self._executor is None:
+                self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ar-preview")
+            loop = asyncio.get_running_loop()
+            future = loop.run_in_executor(self._executor, self.compute, request, pose)
+            future.add_done_callback(lambda _future: self._permit.release())
+            future.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+            frame = await asyncio.shield(future)
+            if self._on_preview is not None:
+                completed = self._on_preview(client_id, request, frame)
+                if inspect.isawaitable(completed):
+                    await completed
+            else:
+                self._send(client_id, encode_nav_goal(frame))
         finally:
             if self._tasks.get(client_id) is asyncio.current_task():
                 self._tasks.pop(client_id, None)

@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { join } from "node:path";
-import { bootstrap, snapshot, shared } from "./fixtures/Runtime";
+import { bootstrap, snapshot, shared, isNavigationCommit } from "./fixtures/Runtime";
 import { Flow } from "./fixtures/Flow";
 import {
   activateButton,
@@ -206,7 +206,7 @@ test("comparable hand golden path", async ({ page }, info) => {
       async () => !!(await snapshot(page)).robotSelected,
     );
     let goals = runtime.commands.filter(
-      (c) => c.type === "nav_goal_request" && !c.preview,
+      isNavigationCommit,
     ).length;
     await flow.step(
       "navigation_preview",
@@ -221,7 +221,7 @@ test("comparable hand golden path", async ({ page }, info) => {
           "app.client.navigation.isAiming() && app.client.previewRoute.object.visible",
         )) &&
         runtime.commands.filter(
-          (c) => c.type === "nav_goal_request" && !c.preview,
+          isNavigationCommit,
         ).length === goals,
     );
     await flow.step(
@@ -239,7 +239,7 @@ test("comparable hand golden path", async ({ page }, info) => {
       },
       async () =>
         runtime.commands.filter(
-          (c) => c.type === "nav_goal_request" && !c.preview,
+          isNavigationCommit,
         ).length > goals &&
         (await appValue(page, "app.client.route.object.visible")),
     );

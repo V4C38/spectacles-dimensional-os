@@ -95,13 +95,6 @@ class RobotObservationBuffer:
         poses = pose_buffer or self._pose_buffer.snapshot()
         if self._T_base_camera_optical is None:
             return None
-        if self.timing_uncertainty_s > 0 and not poses.is_static_window(
-            ts_server - self.timing_uncertainty_s,
-            ts_server + self.timing_uncertainty_s,
-            max_speed_mps=self._static_speed_mps,
-            max_angular_rps=DEFAULT_STATIC_ANGULAR_RPS,
-        ):
-            return None
         with self._lock:
             camera_info = self._camera_info
         if camera_info is None:
@@ -131,7 +124,7 @@ class RobotObservationBuffer:
     ) -> None:
         if self._T_base_camera_optical is None:
             return
-        if not math.isfinite(speed_mps) or speed_mps > self._static_speed_mps:
+        if not math.isfinite(speed_mps):
             with self._lock:
                 self._drop_stale(travel_m)
             return
@@ -174,7 +167,7 @@ def observation_from_robot_frame(
 ) -> Observation | None:
     if ts_server is None:
         ts_server = float(image.ts)
-    robot_pose = pose_buffer.at_server_ts(ts_server)
+    robot_pose = pose_buffer.at_image_ts(ts_server)
     if robot_pose is None:
         return None
 

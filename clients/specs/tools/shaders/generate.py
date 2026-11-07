@@ -87,7 +87,7 @@ def float_parameter(template: dict[str, Any], name: str, level: int) -> dict[str
     ports = node["Ports"]
     for key, text in (("Title", name), ("ScriptName", name[0].lower() + name[1:])):
         ports[key]["Property"]["Variables"]["String"] = graph.text_variable(text)
-    default = 1024 if name == "ViewportHeightPx" else 0.75 if name == "NearWidthScale" else 2 if name == "MinimumPixels" else 0
+    default = 1024 if name == "ViewportHeightPx" else 0.75 if name == "NearWidthScale" else 2 if name == "MinimumPixels" else 1 if name in {"ColorR", "ColorG", "ColorB", "OpacityScale", "WidthScale"} else 0
     ports["Default"]["Property"]["Variables"] = {"VariableX": graph.float_variable(default)}
     ports["Output"]["Property"]["Variables"] = {"VariableX": graph.float_variable(0)}
     for key in ("EnableMin", "EnableMax"):

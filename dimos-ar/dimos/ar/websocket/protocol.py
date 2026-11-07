@@ -11,6 +11,8 @@ from typing import Any, Literal, TypedDict
 from dimos.ar.localization.types import CapturePolicy, Intrinsics, LocalizationResult, Observation
 from dimos.ar.manipulation.protocol import ManipulationRequest, decode_request
 from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavJoystickRequest, NavState
+from dimos.ar.replication.interaction import InteractionRequest
+from dimos.ar.replication.protocol import decode_interaction_request, identifier, sequence
 from dimos.ar.robot.capabilities import (
     NAVIGATION_INPUT_NAMES,
     Capability,
@@ -122,6 +124,22 @@ class LocalizationStartRequest:
 
 
 @dataclass(frozen=True)
+class LocalizationTracking:
+    tracking_reference_id: str
+    travel_m: float
+    active: bool
+    alignment_id: str | None = None
+
+
+@dataclass(frozen=True)
+class LocalizationCaptureProgress:
+    episode_id: str
+    phase: str
+    travel_m: float
+    capture_ts: float | None = None
+
+
+@dataclass(frozen=True)
 class LidarSettingsRequest(LidarSettings):
     pass
 
@@ -155,7 +173,8 @@ class ClientError:
 
 
 Inbound = (
-    ClientError
+    InteractionRequest
+    | ClientError
     | ManipulationRequest
     | NavGoalRequest
     | NavJoystickRequest
@@ -163,6 +182,8 @@ Inbound = (
     | LidarSettingsRequest
     | StateRequest
     | LocalizationStartRequest
+    | LocalizationTracking
+    | LocalizationCaptureProgress
     | UserMessageRequest
     | ClientPose
 )
@@ -204,9 +225,13 @@ def decode_inbound(text: str) -> Inbound:
         if isinstance(suppressed, bool) or not isinstance(suppressed, int) or suppressed < 0:
             raise ValueError("suppressed_count must be a nonnegative integer")
         return ClientError(
-            message_type=values["message_type"], detail=values["detail"],
-            excerpt=values["excerpt"], ts=ts, message_ts=message_ts,
-            request_id=request_id, suppressed_count=suppressed,
+            message_type=values["message_type"],
+            detail=values["detail"],
+            excerpt=values["excerpt"],
+            ts=ts,
+            message_ts=message_ts,
+            request_id=request_id,
+            suppressed_count=suppressed,
         )
 
     if msg_type == "hello_request":
@@ -214,6 +239,9 @@ def decode_inbound(text: str) -> Inbound:
 
     if msg_type == "manipulation_request":
         return decode_request(data)
+
+    if msg_type == "interaction_request":
+        return decode_interaction_request(data)
 
     if msg_type == "nav_goal_request":
         preview_id = _require_type(data, "preview_id", str) if "preview_id" in data else None
@@ -226,6 +254,10 @@ def decode_inbound(text: str) -> Inbound:
             orientation=_finite_quat(data, "orientation"),
             preview=_require_type(data, "preview", bool) if "preview" in data else False,
             preview_id=preview_id,
+            epoch=identifier(data, "epoch"),
+            lease_id=identifier(data, "lease_id"),
+            sequence=sequence(data),
+            target_revision=sequence(data, "target_revision"),
         )
 
     if msg_type == "estop_request":
@@ -250,6 +282,40 @@ def decode_inbound(text: str) -> Inbound:
 
     if msg_type == "localization_start_request":
         return LocalizationStartRequest()
+
+    if msg_type == "localization_tracking":
+        reference = _require_type(data, "tracking_reference_id", str)
+        alignment = data.get("alignment_id")
+        if not 1 <= len(reference) <= 128:
+            raise ValueError("invalid tracking_reference_id")
+        if alignment is not None and (
+            not isinstance(alignment, str) or not 1 <= len(alignment) <= 128
+        ):
+            raise ValueError("invalid alignment_id")
+        travel = _finite_float(data, "travel_m")
+        if travel < 0:
+            raise ValueError("travel_m must be nonnegative")
+        return LocalizationTracking(
+            reference, travel, _require_type(data, "active", bool), alignment
+        )
+
+    if msg_type == "localization_capture_progress":
+        episode = _require_type(data, "episode_id", str)
+        phase = _require_type(data, "phase", str)
+        if not 1 <= len(episode) <= 128 or phase not in (
+            "waiting",
+            "capturing",
+            "submitted",
+            "unavailable",
+        ):
+            raise ValueError("invalid localization capture progress")
+        travel = _finite_float(data, "travel_m")
+        if travel < 0:
+            raise ValueError("travel_m must be nonnegative")
+        timestamp = _finite_float(data, "capture_ts") if "capture_ts" in data else None
+        if phase == "submitted" and timestamp is None:
+            raise ValueError("submitted progress requires capture_ts")
+        return LocalizationCaptureProgress(episode, phase, travel, timestamp)
 
     if msg_type == "user_message_request":
         text = _require_type(data, "text", str)
@@ -291,7 +357,14 @@ def _decode_nav_joystick_request(data: dict[str, Any]) -> NavJoystickRequest:
             )
         if duration == 0.0:
             duration = None
-    return NavJoystickRequest(linear=linear, angular=angular, duration=duration)
+    return NavJoystickRequest(
+        linear=linear,
+        angular=angular,
+        duration=duration,
+        epoch=identifier(data, "epoch"),
+        lease_id=identifier(data, "lease_id"),
+        sequence=sequence(data),
+    )
 
 
 @dataclass(frozen=True)
@@ -310,8 +383,8 @@ def decode_localization_observations(data: bytes) -> tuple[LocalizationObservati
     fourcc, observation_count = struct.unpack_from("<IH", data, 0)
     if fourcc != LOCALIZATION_OBSERVATIONS_FOURCC:
         raise ValueError(f"bad localization_observations fourcc: {fourcc:#010x}")
-    if observation_count < 1:
-        raise ValueError("localization_observations requires at least one observation")
+    if not 1 <= observation_count <= 3:
+        raise ValueError("localization_observations requires one to three requested observations")
 
     offset = 6
     observations: list[LocalizationObservation] = []
@@ -340,6 +413,8 @@ def _decode_localization_observation(
         raise ValueError("localization observation header truncated")
 
     ts_capture, jpeg_len, intrinsics_len = struct.unpack_from("<dII", data, record_start)
+    if intrinsics_len > 4096:
+        raise ValueError("localization intrinsics exceed metadata budget")
     if not math.isfinite(ts_capture):
         raise ValueError("ts_capture must be finite")
     if struct.unpack_from("<I", data, record_start + 16)[0] != 0:
@@ -460,6 +535,9 @@ class Hello:
     server_info: dict[str, str] | None = None
     odom_reference_id: str | None = None
     source: dict[str, Any] | None = None
+    bulk_url: str | None = None
+    bulk_token: str | None = None
+    bulk_epoch: str | None = None
 
 
 def _capability_wire(cap: Capability) -> dict[str, Any]:
@@ -482,6 +560,10 @@ def encode_hello(hello: Hello) -> str:
     return encode_text(
         {
             "type": "hello",
+            "protocol_version": 3,
+            "bulk_url": hello.bulk_url,
+            "bulk_token": hello.bulk_token,
+            "bulk_epoch": hello.bulk_epoch,
             "client_id": hello.client_id,
             **({"source": hello.source} if hello.source else {}),
             **({"odom_reference_id": hello.odom_reference_id} if hello.odom_reference_id else {}),
@@ -514,8 +596,15 @@ class LocalizationObservationsRequest:
     observation_count: int
     wait_timeout_s: float | None = None
     result_timeout_s: float | None = None
+    capture_id: str | None = None
 
     def __post_init__(self) -> None:
+        if self.capture_id is not None and (
+            not isinstance(self.capture_id, str)
+            or not self.capture_id.strip()
+            or len(self.capture_id) > 128
+        ):
+            raise ValueError("capture_id must contain 1 to 128 characters")
         if self.result_timeout_s is not None and (
             not math.isfinite(self.result_timeout_s) or self.result_timeout_s <= 0
         ):
@@ -541,6 +630,8 @@ def encode_localization_observations_request(request: LocalizationObservationsRe
         "capture_policy": str(request.capture_policy),
         "observation_count": request.observation_count,
     }
+    if request.capture_id is not None:
+        body["capture_id"] = request.capture_id
     if request.wait_timeout_s is not None:
         body["wait_timeout_s"] = request.wait_timeout_s
     if request.result_timeout_s is not None:
@@ -687,6 +778,7 @@ def encode_lidar_binary(
     )
     body = b"".join(struct.pack("<3f", *point) for point in points)
     return header + body
+
 
 # Manipulation commands use the shared codec. Shutdown quiescence receipts and
 # explicit model visual metadata are encoded by the service; see PROTOCOL.md.

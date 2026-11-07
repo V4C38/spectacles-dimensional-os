@@ -2,13 +2,13 @@ import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 
 test("uses compact monochrome desktop chrome in the launcher", async ({ page }, info) => {
-  for (const [url, name, contentType] of [
-    ["**/launcher-review", "index.html", "text/html"],
-    ["**/static/app.css", "app.css", "text/css"],
-    ["**/static/app.js", "app.js", "application/javascript"],
+  for (const [pathname, name, contentType] of [
+    ["/launcher-review", "index.html", "text/html"],
+    ["/static/app.css", "app.css", "text/css"],
+    ["/static/app.js", "app.js", "application/javascript"],
   ]) {
     const body = await readFile(new URL(`../../../../launcher/app/static/${name}`, import.meta.url), "utf8");
-    await page.route(url, route => route.fulfill({ contentType, body }));
+    await page.route(url => url.pathname === pathname, route => route.fulfill({ contentType, body }));
   }
   await page.route("**/api/**", route => route.fulfill({ json: { phase: "idle", check_ok: true, host_ip: "192.168.1.2", robot_ip: "192.168.123.161", refs: ["main"] } }));
   await page.addInitScript(() => { (window as any).EventSource = class { onmessage = null; }; });
@@ -30,13 +30,13 @@ async function launcherWithHardwareChecks(page: import("@playwright/test").Page,
   }));
   let canReady = false;
   const planner = {ready: plannerReady, state: plannerReady ? "ready" : "incomplete", message: plannerReady ? "Manipulation planner ready" : "RoboPlan does not match DimOS"};
-  for (const [url, name, contentType] of [
-    ["**/launcher-review", "index.html", "text/html"],
-    ["**/static/app.css", "app.css", "text/css"],
-    ["**/static/app.js", "app.js", "application/javascript"],
+  for (const [pathname, name, contentType] of [
+    ["/launcher-review", "index.html", "text/html"],
+    ["/static/app.css", "app.css", "text/css"],
+    ["/static/app.js", "app.js", "application/javascript"],
   ]) {
     const body = await readFile(new URL(`../../../../launcher/app/static/${name}`, import.meta.url), "utf8");
-    await page.route(url, route => route.fulfill({contentType, body}));
+    await page.route(url => url.pathname === pathname, route => route.fulfill({contentType, body}));
   }
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
@@ -151,18 +151,18 @@ test("launcher controls and disclosure sections use the same design tokens", asy
     if (control.select) expect(control.indicator, control.id).not.toBe("none");
   }
   await page.locator("#installBanner").evaluate((node: HTMLDetailsElement) => { node.open = false; });
-  const cards = page.locator("#ipCard, #installBanner, #locCard, #logCard");
+  const cards = page.locator("#ipCard, #installBanner, #logCard");
   const surfaces = await cards.evaluateAll(nodes => nodes.map(node => {
     const style = getComputedStyle(node); return {height: node.getBoundingClientRect().height, background: style.backgroundColor, radius: style.borderRadius, shadow: style.boxShadow};
   }));
-  expect(surfaces.length).toBe(4);
+  expect(surfaces.length).toBe(3);
   expect(surfaces.every(surface => surface.height === 44)).toBe(true);
   expect(new Set(surfaces.map(surface => surface.background)).size).toBe(1);
   expect(new Set(surfaces.map(surface => surface.radius)).size).toBe(1);
   await page.screenshot({path: info.outputPath("launcher-unified-collapsed.png")});
   await page.locator("#ipCard > summary").click();
   await page.locator("#installBanner > summary").click();
-  await page.locator("#locCard > summary").click();
+  await expect(page.locator("#locCard .localization-policy")).toBeVisible();
   for (const control of await readMetrics()) {
     expect(control.height, control.id).toBe(control.id.includes("tag-summary") ? 64 : 44);
     expect(control.font, control.id).toBe("14px");

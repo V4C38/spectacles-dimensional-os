@@ -1,3 +1,4 @@
+import { PairedBulk } from "../fixtures/PairedBulk";
 import { describe, expect, it } from "vitest";
 import { ClientTrackingOriginStore } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingOrigin";
 import { requestNavGoal } from "../../Assets/Scripts/DimOSARClient/navigation/navGoalRequest";
@@ -14,6 +15,8 @@ class FakeClock implements ClientClock {
 }
 
 class FakeTransport implements WebSocketTransport {
+  readonly bulk = new PairedBulk();
+  createSibling() { return this.bulk; }
   texts: string[] = [];
 
   connect(): void {}
@@ -26,7 +29,7 @@ class FakeTransport implements WebSocketTransport {
 
 function helloAt(tsClient: number, capabilities?: Partial<Capabilities>): Hello {
   return {
-    type: "hello",
+    type: "hello", protocol_version: 3, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
     client_id: "c3f1a9",
     time_sync: { ts_client: tsClient, ts_server: 100 },
     robot: {
@@ -83,6 +86,15 @@ function handshake(
   );
 }
 
+function grant(session: ARModuleSession, transport: FakeTransport): void {
+  session.onTransportText(JSON.stringify({ type: "interaction_state", epoch: "epoch", revision: 0, mode: "manual", authority: null, target: null, preview: null, active_goal: null }) + "\n");
+  session.collaboration.begin("live", "test");
+  const request = JSON.parse(transport.texts[transport.texts.length - 1]);
+  session.onTransportText(JSON.stringify({ type: "interaction_state", epoch: "epoch", revision: 1, mode: "manual", target: null, preview: null, active_goal: null,
+    authority: { client_id: "c3f1a9", source_id: "test", acquisition_id: request.acquisition_id, lease_id: "lease", kind: "live", held: true, expires_at: 1, sequence: -1 } }) + "\n");
+  session.onTransportText(JSON.stringify({ type: "interaction_result", request_id: request.request_id, epoch: "epoch", revision: 1, status: "accepted", code: "acquired", lease_id: "lease" }) + "\n");
+}
+
 const GOAL = {
   position: [1, 2, 0] as [number, number, number],
   orientation: [0, 0, 0, 1] as [number, number, number, number],
@@ -92,9 +104,10 @@ describe("requestNavGoal", () => {
   it("sends nav_goal_request JSON including the trailing newline", () => {
     const { session, transport, clock } = makeSession();
     handshake(session, clock);
+    grant(session, transport);
     requestNavGoal(session, GOAL);
     expect(transport.texts[transport.texts.length - 1]).toBe(
-      '{"type":"nav_goal_request","position":[1,2,0],"orientation":[0,0,0,1]}\n',
+      '{"type":"nav_goal_request","epoch":"epoch","lease_id":"lease","sequence":1,"position":[1,2,0],"orientation":[0,0,0,1]}\n',
     );
   });
 
@@ -136,8 +149,9 @@ describe("requestNavGoal", () => {
   });
 
   it("rejects a non-finite pose through encode", () => {
-    const { session, clock } = makeSession();
+    const { session, transport, clock } = makeSession();
     handshake(session, clock);
+    grant(session, transport);
     expect(() =>
       requestNavGoal(session, {
         position: [1, Number.NaN, 0],
@@ -151,18 +165,20 @@ describe("requestNavJoystick", () => {
   it("sends nav_joystick_request JSON including the trailing newline", () => {
     const { session, transport, clock } = makeSession();
     handshake(session, clock);
+    grant(session, transport);
     requestNavJoystick(session, { linear: [0.4, 0, 0], angular: [0, 0, 0.3] });
     expect(transport.texts[transport.texts.length - 1]).toBe(
-      '{"type":"nav_joystick_request","linear":[0.4,0,0],"angular":[0,0,0.3]}\n',
+      '{"type":"nav_joystick_request","epoch":"epoch","lease_id":"lease","sequence":1,"linear":[0.4,0,0],"angular":[0,0,0.3]}\n',
     );
   });
 
   it("includes duration when provided", () => {
     const { session, transport, clock } = makeSession();
     handshake(session, clock);
+    grant(session, transport);
     requestNavJoystick(session, { linear: [0.4, 0, 0], angular: [0, 0, 0], duration: 0.5 });
     expect(transport.texts[transport.texts.length - 1]).toBe(
-      '{"type":"nav_joystick_request","linear":[0.4,0,0],"angular":[0,0,0],"duration":0.5}\n',
+      '{"type":"nav_joystick_request","epoch":"epoch","lease_id":"lease","sequence":1,"linear":[0.4,0,0],"angular":[0,0,0],"duration":0.5}\n',
     );
   });
 

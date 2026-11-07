@@ -5,7 +5,8 @@ import type { ARModuleSessionState } from "../../Assets/Scripts/DimOSARClient/we
 function fixture() {
   const view = { connection: "ready", capabilities: { navigation: { available: true, nav_goal: { available: true, preview: true } } }, state: null, nav_preview: null } as unknown as ARModuleSessionState;
   const sendText = vi.fn();
-  const coordinator = new NavigationPreviewCoordinator({ view: () => view, sendText });
+  const assets = new Map<string, number>();
+  const coordinator = new NavigationPreviewCoordinator({ view: () => view, sendText, assetTransferDeadline: id => assets.get(id) ?? null });
   const origin = { position: [1, 2, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 1 };
   coordinator.apply(origin);
   const aim = (x = 2) => coordinator.aim([x, 0, 0], [0, 0, 0, 1]);
@@ -14,7 +15,7 @@ function fixture() {
     view.nav_preview = { type: "nav_goal", preview: true, preview_id, pose: [3, 2, 0, 0], path_poses: [[3, 2, 0, 0]], ts: 1 };
     coordinator.apply(origin);
   };
-  return { view, sendText, coordinator, origin, aim, id, reply };
+  return { view, sendText, coordinator, origin, aim, id, reply, assets };
 }
 
 it("retires timeouts, rejects late replies and only accepts the newest correlated aim", () => {
@@ -28,12 +29,12 @@ it("retires timeouts, rejects late replies and only accepts the newest correlate
   f.coordinator.clear(); expect(f.coordinator.previewPath()).toBeNull();
 });
 
-it("invalidates costmap and origin generations, suppresses stale aim episodes and resets on disconnect", () => {
+it("refreshes costmaps without rejecting replies, invalidates origin changes and resets on disconnect", () => {
   const f = fixture(); f.aim(); f.coordinator.tick(0); const old = f.id();
   f.coordinator.clear(); f.aim(5); f.reply(old); expect(f.coordinator.previewPath()).toBeNull();
   f.coordinator.tick(0.5); const pending = f.id();
   f.view.state = { nav_preview_costmap_ts: 2 } as ARModuleSessionState["state"];
-  f.coordinator.apply(f.origin); f.reply(pending); expect(f.coordinator.previewPath()).toBeNull();
+  f.coordinator.apply(f.origin); f.reply(pending); expect(f.coordinator.previewPath()).toEqual([[3, 2, 0, 0]]);
   f.coordinator.tick(1); const beforeOrigin = f.id();
   f.coordinator.apply({ ...f.origin, ts: 2 }); f.reply(beforeOrigin); expect(f.coordinator.previewPath()).toBeNull();
   f.view.connection = "disconnected"; f.coordinator.apply(null);
@@ -59,7 +60,7 @@ it("retains a successful route while newer aims and costmaps are pending, but cl
   f.coordinator.tick(0.8);
   f.view.state = { nav_preview_costmap_ts: 3 } as ARModuleSessionState["state"];
   f.coordinator.apply(f.origin); expect(f.coordinator.previewPath()).toBe(path);
-  f.reply(f.id()); expect(f.coordinator.previewPath()).toBe(path);
+  f.reply(f.id()); expect(f.coordinator.previewPath()).toBe(f.view.nav_preview!.path_poses);
   f.coordinator.tick(1.2); const current = f.id();
   f.view.nav_preview = { type: "nav_goal", preview: true, preview_id: current, pose: null, path_poses: [], ts: 3 };
   f.coordinator.apply(f.origin); expect(f.coordinator.previewPath()).toEqual([]);
@@ -74,4 +75,34 @@ it("clears retained previews immediately on origin change and capability loss", 
   f.coordinator.apply(f.origin); f.aim(); f.coordinator.tick(0.5); f.reply(f.id());
   f.view.capabilities!.navigation.nav_goal.preview = false;
   f.coordinator.apply(f.origin); expect(f.coordinator.previewPath()).toBeNull();
+});
+
+it("continues displaying replies while costmaps change on every update", () => {
+  const f = fixture(); f.aim();
+  for (let i = 0; i < 10; i++) {
+    f.coordinator.tick(i * 0.5);
+    expect(f.sendText).toHaveBeenCalledTimes(i + 1);
+    f.view.state = { nav_preview_costmap_ts: i + 1 } as ARModuleSessionState["state"];
+    f.coordinator.apply(f.origin);
+    f.reply(f.id());
+    expect(f.coordinator.previewPath()).toBe(f.view.nav_preview!.path_poses);
+  }
+});
+
+
+it("accepts a correlated preview after five seconds while its bulk asset deadline remains valid", () => {
+  const f = fixture(); f.aim(); f.coordinator.tick(0); const pending = f.id();
+  f.assets.set(pending, 15);
+  f.coordinator.tick(6);
+  expect(f.sendText).toHaveBeenCalledOnce();
+  f.reply(pending);
+  expect(f.coordinator.previewPath()).toEqual([[3, 2, 0, 0]]);
+});
+
+it("still retires a preview after its bounded bulk deadline and rejects the old asset reply", () => {
+  const f = fixture(); f.aim(); f.coordinator.tick(0); const pending = f.id();
+  f.assets.set(pending, 15); f.coordinator.tick(15);
+  expect(f.id()).not.toBe(pending);
+  f.reply(pending);
+  expect(f.coordinator.previewPath()).toBeNull();
 });

@@ -1,3 +1,4 @@
+import { SpecsReplicationPresenter } from "../replication/SpecsReplicationPresenter";
 import { Frame } from "SpectaclesUIKit.lspkg/Scripts/Components/Frame/Frame";
 import { endEffectorAngles } from "../../DimOSARClient/manipulation/ManipulationVisuals";
 import { ARM_PANEL_STYLE, clampArmPanelScale, PANEL_PIN_SEGMENTS, PANEL_SCAN_SEGMENTS } from "../../DimOSARClient/presentation/PanelFrameStyle";
@@ -34,6 +35,7 @@ export class ManipulationRenderer {
   private readonly label: Text;
   private readonly nameLabel: Text;
   private readonly activityLabel: Text;
+  private readonly blockedCross: WorldMeshRenderer;
   private readonly sphere: WorldMeshRenderer;
   private readonly speedLabel: Text;
   private readonly panelTitle: Text;
@@ -65,6 +67,8 @@ export class ManipulationRenderer {
   private context = "";
   private pathKey = "";
   private pathPoints: Vec3[] = [];
+  private pathDistances: number[] = [];
+  private uploadedPath = "";
   private lastTime = 0;
   private hoverUntil = 0;
   private hoverProgress = 0;
@@ -89,6 +93,10 @@ export class ManipulationRenderer {
     const geometry = sphereMesh(0.9, 20, 16);
     this.sphere = new WorldMeshRenderer(this.handle, "EndEffectorSphere", ARM_MATERIAL);
     configureArmMaterial(this.sphere.material);
+    this.blockedCross = new WorldMeshRenderer(this.handle, "ReplicationBlockedCross");
+    const cross = SpecsReplicationPresenter.cross(0.5);
+    this.blockedCross.triangles(cross.positions, cross.indices, SpecsReplicationPresenter.color(1));
+    this.blockedCross.hide();
     (this.sphere.material.mainPass as Pass & { fill: number }).fill = 1;
     const handleGeometry = sphereMesh(1.2, 20, 16);
     this.sphere.triangles(handleGeometry.positions, handleGeometry.indices, [0.82, 0.82, 0.82, 1], undefined, handleGeometry.normals);
@@ -293,6 +301,8 @@ export class ManipulationRenderer {
     }
     const model = state.model, interaction = this.core.interaction, intent = interaction.snapshot();
     const group = state.groups?.find(g => g.id === interaction.groupId), observed = state.observations?.[interaction.groupId ?? ""];
+    this.blockedCross.object.enabled = intent.blocked === true;
+    this.sphere.setColor(intent.blocked ? SpecsReplicationPresenter.color(0.7) : [0.8, 0.9, 1, 0.7]);
     const dt = this.lastTime ? Math.max(0, Math.min(0.1, now - this.lastTime)) : 1 / 60; this.lastTime = now;
     const context = armMotionContext(model.revision, interaction.groupId, origin);
     if (this.context !== context) { this.jointFilter.reset(); this.previewFilter.reset(); this.progress.reset(); this.context = context; }
@@ -478,14 +488,25 @@ export class ManipulationRenderer {
     if (!intent.executing) this.progress.reset();
     const points: Vec3[] = [];
     if (plan && group?.tip_frame) {
-      const key = JSON.stringify([plan.plan_id, time, origin, root]);
+      const key = JSON.stringify([plan.plan_id, model.revision, origin, root]);
       if (key !== this.pathKey) {
         this.pathKey = key;
-        this.pathPoints = manipulationPlanPath(model, plan, group.tip_frame, all, root, time).map(position => world({ position, orientation: [0, 0, 0, 1] }).position);
+        this.pathPoints = manipulationPlanPath(model, plan, group.tip_frame, observedValues, root).map(position => world({ position, orientation: [0, 0, 0, 1] }).position);
+        this.pathDistances = [0];
+        for (let i = 1; i < this.pathPoints.length; i++) this.pathDistances.push(this.pathDistances[i - 1] + Math.hypot(...this.pathPoints[i].map((v, axis) => v - this.pathPoints[i - 1][axis])));
       }
       if (displaced || playback.playing || intent.executing) points.push(...this.pathPoints);
     } else if (displaced && interaction.target && observed?.pose) points.push(world(observed.pose).position, world(interaction.target).position);
-    this.path.segments(points.slice(0, -1).flatMap((p, i) => [p, points[i + 1]]), WORLD_DASH_STYLE.widthM * 65, manipulationPathOpacity(intent, !selected && state.following === true && !interaction.rejection, !!plan), 1.2, 1, true);
+    const geometryKey = plan ? this.pathKey : JSON.stringify(points);
+    if (geometryKey !== this.uploadedPath) {
+      this.uploadedPath = geometryKey;
+      this.path.segments(points.slice(0, -1).flatMap((p, i) => [p, points[i + 1]]), WORLD_DASH_STYLE.widthM * 65, 1, 1.2, 1, true);
+    }
+    this.path.object.enabled = points.length >= 2;
+    const cursor = plan ? Math.min(this.pathDistances.length - 1, time / Math.max(1e-6, plan.duration) * (this.pathDistances.length - 1)) : 0;
+    const lower = Math.max(0, Math.floor(cursor)), upper = Math.min(this.pathDistances.length - 1, lower + 1);
+    const startDistance = plan && this.pathDistances.length ? this.pathDistances[lower] + (this.pathDistances[upper] - this.pathDistances[lower]) * (cursor - lower) : 0;
+    this.path.style(WORLD_DASH_STYLE.widthM * 65, manipulationPathOpacity(intent, !selected && state.following === true && !interaction.rejection, !!plan), [1,1,1], startDistance);
   }
   private place(object: SceneObject, pose: ManipulationPose, origin: ClientTrackingOrigin): void {
     const p = clientTrackingToSpecsPose(odomToClientTrackingPose(pose, origin));

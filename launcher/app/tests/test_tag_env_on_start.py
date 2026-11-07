@@ -172,7 +172,7 @@ async def test_start_webxr_composes_local_and_network_urls(
 
 
 @pytest.mark.asyncio
-async def test_webxr_exit_stops_armodule(tmp_path: Path) -> None:
+async def test_backend_exit_retains_gateway(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
     mgr.status.phase = Phase.RUNNING
     mgr.status.check_ok = True
@@ -183,13 +183,13 @@ async def test_webxr_exit_stops_armodule(tmp_path: Path) -> None:
         patch.object(mgr, "_stop_one", new=AsyncMock(return_value=True)),
         patch.object(mgr, "_cancel_task", new=AsyncMock()),
     ):
-        await mgr._finalize_exit("WebXR Vite exited")
+        await mgr._finalize_exit("Backend exited")
 
     assert mgr.status.phase == Phase.ERROR
-    assert mgr.status.error == "WebXR Vite exited"
+    assert mgr.status.error == "Backend exited"
     assert mgr.status.webxr_url is None
     assert mgr._proc is None
-    assert mgr._webxr_proc is None
+    assert mgr._webxr_proc is not None
 
 
 @pytest.mark.asyncio
@@ -236,4 +236,4 @@ async def test_clear_before_start_kills_dimos_then_ports(tmp_path: Path) -> None
         await ProcessManager._clear_before_start(mgr, client="webxr")
 
     stop_pids.assert_awaited_once_with([111], "existing DimOS process(es)")
-    assert killed == [8787, 3030, 9877, 5173]
+    assert killed == [8787, 3030, 9877]

@@ -217,3 +217,21 @@ it("gives Cancel an opaque red body with the same reduced thickness as panel con
   expect(geometryDispose).toHaveBeenCalledOnce();
   expect(materialDispose).toHaveBeenCalledOnce();
 });
+
+it("shows a grey cross and disables only motion picking when another client owns the robot", () => {
+  const view = new WebXRNavGoalView();
+  view.show(); view.setBlocked(true); view.tick(1);
+  const cross = view.object.getObjectByName("Navigation blocked cross")!;
+  const ring = view.object.getObjectByName("NavigationCircle") as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+  expect(cross.visible).toBe(true);
+  expect(ring.material.color.getHex()).toBe(0x8e969e);
+  expect(ring.userData.rayDisabled).toBe(true);
+  expect(view.object.getObjectByName("NavigationHeading")!.visible).toBe(false);
+  view.setCancelVisible(true); view.tick(1);
+  expect(view.cancelVisible()).toBe(true);
+  view.setBlocked(false); view.tick(1);
+  expect(cross.visible).toBe(false);
+  expect(ring.material.color.getHex()).toBe(0xffffff);
+  expect(ring.userData.rayDisabled).toBe(false);
+  view.dispose();
+});

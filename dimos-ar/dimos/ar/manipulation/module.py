@@ -45,6 +45,8 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
 
     @rpc
     def start(self) -> None:
+        if self._lifecycle_thread is not None and self._lifecycle_thread.is_alive():
+            raise RuntimeError("prior manipulation lifecycle has not stopped; restart the process")
         self._closing = False
         self._adapter.configure_rpc()
         super().start()
@@ -127,12 +129,26 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
 
     @rpc
     def ar_manipulation_snapshot(self) -> dict[str, Any]:
-        return self._runtime.snapshot()
+        return self._runtime.snapshot(include_bulk=False)
 
     @rpc
     def ar_manipulation_disconnect(self, client_id: str) -> None:
         self._runtime.disconnect(client_id)
 
     @rpc
-    def ar_manipulation_stop(self) -> None:
-        self._runtime.emergency_stop()
+    def ar_manipulation_stop(self, epoch: str | None = None, revision: int | None = None) -> None:
+        self._runtime.emergency_stop(epoch=epoch, revision=revision)
+
+    @rpc
+    def ar_manipulation_revoke(
+        self, epoch: str, lease_id: str, revision: int, reason: str = "released"
+    ) -> None:
+        self._runtime.revoke_authority(epoch, lease_id, revision, reason)
+
+    @rpc
+    def ar_manipulation_heartbeat(self, epoch: str, revision: int, deadline: float) -> None:
+        self._runtime.heartbeat(epoch, revision, deadline)
+
+    @rpc
+    def ar_manipulation_asset(self, kind: str, revision: str) -> dict[str, Any] | None:
+        return self._runtime.asset(kind, revision)

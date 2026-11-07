@@ -13,6 +13,11 @@
       <section class="landing-panel" aria-label="dimOS AR setup">
       <header>dimOS AR</header>
       <main>
+        <div id="connection-controls">
+          <label for="pin">ARModule PIN</label>
+          <input id="pin" type="text" inputmode="numeric" autocomplete="off" maxlength="6" pattern="[0-9]{6}" placeholder="6-digit PIN" aria-describedby="status" />
+          <button id="connect" type="button" disabled>Connect</button>
+        </div>
         <label for="hmd">Headset</label>
         <select id="hmd" disabled></select>
         <button id="enter" type="button" disabled>Connect</button>

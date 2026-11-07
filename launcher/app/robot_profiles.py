@@ -13,7 +13,7 @@ from typing import Any
 from uuid import uuid4
 
 from dimos_config import dimos_config_path, read_armodule_config
-from tag_config import armodule_config_from_ui
+from tag_config import merge_armodule_settings
 
 _LOCK = threading.RLock()
 BLUEPRINT_ROBOTS = {
@@ -112,16 +112,9 @@ class RobotProfiles:
             if name is not None:
                 profile["name"] = self._name(name)
             if settings is not None:
-                profile["armodule"].update(
-                    armodule_config_from_ui(
-                        fiducial_marker=settings["fiducial_marker"],
-                        vps=settings["vps"],
-                        map_code=settings.get("map_code"),
-                        mounts=settings.get("mounts"),
-                    )
+                profile["armodule"] = merge_armodule_settings(
+                    profile["armodule"], settings
                 )
-                if not settings["fiducial_marker"]:
-                    profile["armodule"]["fiducial_marker_mounts"] = None
             self._save(profiles)
             return copy.deepcopy(profile)
 

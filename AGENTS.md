@@ -28,7 +28,9 @@ Use pytest/pytest-asyncio for Python (`test_*.py`) and Vitest for TypeScript (`*
 
 ## Commit & Pull Request Guidelines
 
-History uses short descriptive subjects, such as “Joystick navigation support”; follow that style. PRs should explain behavior changes, reference relevant issues, report validation, and include screenshots for visual changes. Run the full CI script before opening a PR.
+History uses short descriptive subjects, such as “Joystick navigation support”; follow that style. PRs should explain behavior changes, reference relevant issues, report validation, and include screenshots for visual changes.
+
+Before every commit, amend, or push, run `./launcher/scripts/run-ci.sh` on the exact code being committed and require all jobs to pass. This includes Python lint/type/unit checks, launcher tests, both client suites, WebXR build, integration tooling tests, and the complete WebXR browser integration suite. Selected tests, previous runs against different code, and native Lens compilation do not replace this gate. After a code change or failure, fix it and rerun the full script before committing or pushing. Report the result; if the full gate cannot run, explain the blocker and do not commit or push unless the user explicitly authorizes skipping it.
 
 ## Architecture & Protocol Rules
 
