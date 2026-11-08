@@ -56,9 +56,19 @@ async def test_force_stop_bypasses_pending_grace_lock(tmp_path: Path) -> None:
     mgr._stopping_pids.add(42424242)
     await mgr._lock.acquire()
     try:
-        with patch("armodule.os.kill") as kill:
+        process_list = Mock(communicate=AsyncMock(return_value=(b"", b"")))
+        def kill_process(pid: int, sig: int) -> None:
+            if sig == 0:
+                raise ProcessLookupError(pid)
+
+        with (
+            patch("armodule.os.kill", side_effect=kill_process) as kill,
+            patch("armodule.asyncio.create_subprocess_exec", AsyncMock(return_value=process_list)),
+        ):
             await asyncio.wait_for(mgr.stop_armodule(force=True), timeout=0.5)
-        kill.assert_called_once_with(42424242, signal.SIGKILL)
+        assert [call.args for call in kill.call_args_list if call.args[1] != 0] == [
+            (42424242, signal.SIGKILL)
+        ]
     finally:
         mgr._lock.release()
 

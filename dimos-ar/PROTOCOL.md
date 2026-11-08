@@ -29,15 +29,15 @@ clients update their protocol module in the same change.
   `estop`, `agent`, plus optional `manipulation`. Any key may be `available=false` with `reason`. Nested
   `navigation.nav_goal` and `navigation.nav_joystick` are always present.
 
-## Protocol v3 control and bulk lanes
+## Protocol v2 control and bulk lanes
 
 The control WebSocket carries authority, small command results, target samples,
 mode, operation status, and references to immutable presentation assets. Hello
-includes `protocol_version:3`, `bulk_url`, `bulk_token`, and `bulk_epoch`. The same
+includes `protocol_version:2`, `bulk_url`, `bulk_token`, and `bulk_epoch`. The same
 client opens the advertised bulk path and sends:
 
 ```json
-{"type":"bulk_hello_request","protocol_version":3,"client_id":"from-hello","token":"from-hello"}
+{"type":"bulk_hello_request","protocol_version":2,"client_id":"from-hello","token":"from-hello"}
 ```
 
 The bulk connection has no independent robot authority. It is bound to the live
@@ -47,7 +47,7 @@ checked trajectories, and route points use that lane. A control record is at mos
 dropped; control overload retires the connection and its authority.
 
 Examples below show assembled model/plan/route domain values where useful;
-actual v3 control frames carry references in place of those arrays.
+actual v2 control frames carry references in place of those arrays.
 
 Control `model_ref`, `plan_ref`, and `route_ref` values contain `{epoch,id,revision}`.
 A complete revision is reconstructed from ordered `bulk_record` values with the
@@ -73,7 +73,7 @@ hardware failure; physical Emergency Stop remains necessary.
 The default aggregate 1 MiB/s token bucket and fair shares apply only to outgoing
 model/trajectory/route assets and LiDAR downloads. Incoming localization pixels
 do not wait on this optional-data budget: each client still has one upload of at
-most 4 MiB, each ARB3 record remains at most 16 KiB, and the server yields after
+most 4 MiB, each ARB2 record remains at most 16 KiB, and the server yields after
 every chunk so controls can run. Client upload pumping is bounded to 16 chunks
 per display tick, a 256 KiB socket high-water mark, and the same 2 ms work budget.
 Admitted JPEG chunks are pumped before optional asset-record parsing consumes
@@ -215,7 +215,7 @@ origins, paths, previews and points cannot mix old/new coordinate models.
 
 ## Multiple clients and replication
 
-The collaboration protocol is version **3**, advertised as `hello.protocol_version`.
+The collaboration protocol is version **2**, advertised as `hello.protocol_version`.
 ARModule owns the robot's shared targets, authority, manual/agent mode, accepted
 preview and active goal. Headset tracking origins, input capture and interpolation
 remain local. The supported validation target is two to five simultaneous clients.
@@ -345,7 +345,7 @@ connection, and replies with `hello`.
 ```json
 {
   "type": "hello",
-  "protocol_version": 3,
+  "protocol_version": 2,
   "client_id": "c3f1a9",
   "time_sync": {
     "ts_client": 1234.567,
@@ -374,7 +374,7 @@ connection, and replies with `hello`.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `protocol_version` | integer | Required collaboration protocol version; current value is `3`. |
+| `protocol_version` | integer | Required collaboration protocol version; current value is `2`. |
 | `client_id` | string | Server-assigned, unique per connection. |
 | `time_sync.ts_client` | float | Echo of `hello_request.ts_client`. |
 | `time_sync.ts_server` | float | Server time when `hello_request` arrived. |
@@ -581,7 +581,7 @@ a new prompt, manual start, or disconnect invalidates it.
 
 This envelope correlation changes neither LOCA bytes nor camera-pose acceptance,
 frame spacing, nearest-pose fallback, capture geometry, or result timeouts. The
-Python request type permits an omitted ID for internal construction; the v3
+Python request type permits an omitted ID for internal construction; the v2
 transport supplies one on every delivered capture request.
 
 ### `localization_result`
@@ -1526,7 +1526,7 @@ Execute still requires the exact checked `plan_id` and target revision.
 
 ### Bounded reconnect recovery and following transport
 
-Updated v3 clients request `resumable: true` and `server_follow_stream: true` in
+Updated v2 clients request `resumable: true` and `server_follow_stream: true` in
 `hello_request`. Supporting servers return an opaque `resume_token` and
 `server_follow_stream: true` in `hello`. Resend the token only to the same backend
 when reconnecting. The token resumes the same logical client for strictly less

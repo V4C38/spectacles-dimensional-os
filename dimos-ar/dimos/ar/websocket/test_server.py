@@ -66,7 +66,7 @@ async def _upload_localization(harness: ServerHarness, control, hello: dict, pay
         "type": "localization_observations_request", "capture_policy": "any_angle", "observation_count": 1}) + "\n")
     capture = json.loads(await control.recv())
     async with websockets.connect(f"ws://127.0.0.1:{harness.port}{hello['bulk_url']}") as bulk:
-        await bulk.send(json.dumps({"type": "bulk_hello_request", "protocol_version": 3,
+        await bulk.send(json.dumps({"type": "bulk_hello_request", "protocol_version": 2,
                                    "client_id": hello["client_id"], "token": hello["bulk_token"]}))
         assert json.loads(await bulk.recv())["type"] == "bulk_hello"
         await bulk.send(json.dumps({"type": "bulk_upload_begin", "kind": "localization",
@@ -190,7 +190,7 @@ async def test_connect_receives_hello_after_hello_request(harness: ServerHarness
         assert "client_id" in msg
         assert msg["time_sync"]["ts_client"] == 42.0
         assert isinstance(msg["time_sync"]["ts_server"], float)
-        assert msg["protocol_version"] == 3
+        assert msg["protocol_version"] == 2
 
 
 @pytest.mark.asyncio

@@ -558,7 +558,7 @@ class WebSocketServer:
                     while (client_id not in self._connections
                            and secrets.compare_digest(self._bulk_tokens.get(client_id, ""), token)):
                         await asyncio.sleep(0.005)
-                if (hello.get("type") != "bulk_hello_request" or hello.get("protocol_version") != 3
+                if (hello.get("type") != "bulk_hello_request" or hello.get("protocol_version") != 2
                         or not isinstance(client_id, str) or not isinstance(token, str)
                         or client_id not in self._connections
                         or not secrets.compare_digest(self._bulk_tokens.get(client_id, ""), token)
@@ -571,7 +571,7 @@ class WebSocketServer:
                     lambda: any(item.pending for item in self._outbound.values()),
                 )
                 self._bulk_peers[identity] = peer
-                await websocket.send(json.dumps({"type": "bulk_hello", "protocol_version": 3,
+                await websocket.send(json.dumps({"type": "bulk_hello", "protocol_version": 2,
                                                   "epoch": self.bulk.epoch}) + "\n")
                 peer.task = asyncio.create_task(peer.run())
                 def sender_done(task: asyncio.Task[None]) -> None:

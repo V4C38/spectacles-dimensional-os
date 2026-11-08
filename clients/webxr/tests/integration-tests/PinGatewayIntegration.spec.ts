@@ -54,7 +54,7 @@ async function record(socket: WebSocket, type: string): Promise<Record<string, a
   });
 }
 
-test("HTTPS PIN gateway pairs independent v3 control and bulk sessions with real ARModule", async ({}, info) => {
+test("HTTPS PIN gateway pairs independent v2 control and bulk sessions with real ARModule", async ({}, info) => {
   const gateway = new PinGateway(async pin => pin === "001234" ? { ip: "127.0.0.1", port: backendPort } : null,
     value => (value as { ip?: string } | null)?.ip === "127.0.0.1");
   // Playwright's production Vite webServer has already generated its development certificate.
@@ -84,7 +84,7 @@ test("HTTPS PIN gateway pairs independent v3 control and bulk sessions with real
     const hello = await Promise.all(routes.map(async route => {
       const control = await socket(route.controlUrl);
       const result = record(control, "hello");
-      control.send(JSON.stringify({ type: "hello_request", protocol_version: 3, ts_client: 1 }));
+      control.send(JSON.stringify({ type: "hello_request", protocol_version: 2, ts_client: 1 }));
       return result;
     }));
     expect(hello[0].client_id).not.toEqual(hello[1].client_id);
@@ -92,14 +92,14 @@ test("HTTPS PIN gateway pairs independent v3 control and bulk sessions with real
     const bulk = await Promise.all(routes.map(async (route, index) => {
       const channel = await socket(route.bulkUrl);
       const ready = record(channel, "bulk_hello");
-      channel.send(JSON.stringify({ type: "bulk_hello_request", protocol_version: 3, client_id: hello[index].client_id, token: hello[index].bulk_token }));
+      channel.send(JSON.stringify({ type: "bulk_hello_request", protocol_version: 2, client_id: hello[index].client_id, token: hello[index].bulk_token }));
       return ready;
     }));
     for (let i = 0; i < bulk.length; i++) {
-      expect(bulk[i].protocol_version).toBe(3);
+      expect(bulk[i].protocol_version).toBe(2);
       expect(bulk[i].epoch).toBe(hello[i].bulk_epoch);
     }
-    await info.attach("gateway-v3-pairing", { body: JSON.stringify({ clientIds: hello.map(value => value.client_id), bulkEpochs: bulk.map(value => value.epoch), boundary: "Real HTTPS gateway and ARModule; injected PIN directory and simulated robot ports" }), contentType: "application/json" });
+    await info.attach("gateway-v2-pairing", { body: JSON.stringify({ clientIds: hello.map(value => value.client_id), bulkEpochs: bulk.map(value => value.epoch), boundary: "Real HTTPS gateway and ARModule; injected PIN directory and simulated robot ports" }), contentType: "application/json" });
   } finally {
     for (const ws of sockets) ws.terminate(); gateway.close(); server.closeAllConnections(); server.close();
     await info.attach("armodule-server", { body: log, contentType: "text/plain" });

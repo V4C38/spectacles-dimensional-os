@@ -275,7 +275,7 @@ export class ARModuleSession {
     if (this.phase !== "ready") {
       throw new Error("binary frame before hello");
     }
-    this.fail("Binary payload on v3 control channel");
+    this.fail("Binary payload on v2 control channel");
   }
 
   private applyLidar(data: Uint8Array): void {

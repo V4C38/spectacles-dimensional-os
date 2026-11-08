@@ -74,7 +74,7 @@ export function encodeHelloRequest(request: { ts_client: number; resume_token?: 
     resumable: true,
     server_follow_stream: true,
     ...(request.resume_token ? { resume_token: request.resume_token } : {}),
-    protocol_version: 3,
+    protocol_version: 2,
     ts_client: finiteNumber(request.ts_client, "ts_client"),
   });
 }
@@ -507,13 +507,13 @@ function decodeHello(data: Record<string, unknown>): Hello {
     ts_client: finiteField(timeSyncRaw, "ts_client"),
     ts_server: finiteField(timeSyncRaw, "ts_server"),
   };
-  if (data.protocol_version !== 3) {
-    throw new Error(`Incompatible ARModule protocol: expected version 3, received ${data.protocol_version ?? "missing"}. Update ARModule and the client together.`);
+  if (data.protocol_version !== 2) {
+    throw new Error(`Incompatible ARModule protocol: expected version 2, received ${data.protocol_version ?? "missing"}. Update ARModule and the client together.`);
   }
   return {
     type: "hello",
     ...(data.source === undefined ? {} : { source: decodeSource(asObject(data.source, "source")) }),
-    protocol_version: 3,
+    protocol_version: 2,
     bulk_url: requireString(data, "bulk_url"),
     bulk_token: requireString(data, "bulk_token"),
     bulk_epoch: requireString(data, "bulk_epoch"),

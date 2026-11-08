@@ -21,7 +21,7 @@ import {
 import type { LocalizationObservation } from "../../Assets/Scripts/DimOSARClient/websocket/protocolTypes";
 
 const HELLO_FIXTURE = {
-  type: "hello", protocol_version: 3, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
+  type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
   client_id: "c3f1a9",
   time_sync: { ts_client: 1234.567, ts_server: 5678.901 },
   robot: {
@@ -128,10 +128,10 @@ describe("text framing", () => {
 });
 
 describe("encode inbound JSON", () => {
-  it("omits robot_id and alignment while advertising protocol v3", () => {
+  it("omits robot_id and alignment while advertising protocol v2", () => {
     const msg = JSON.parse(encodeHelloRequest({ ts_client: 1 }));
     expect(msg).not.toHaveProperty("robot_id");
-    expect(msg.protocol_version).toBe(3);
+    expect(msg.protocol_version).toBe(2);
     expect(msg).not.toHaveProperty("alignment");
   });
 

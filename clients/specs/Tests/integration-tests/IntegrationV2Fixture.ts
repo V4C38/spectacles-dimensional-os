@@ -3,7 +3,7 @@ import type { BindableWebSocketTransport, WebSocketTransportHandlers } from "../
 type Value = Record<string, any>;
 
 /** Explicit native test peer. Production session, bulk decoder and authority gates stay active. */
-export class IntegrationV3Fixture implements BindableWebSocketTransport {
+export class IntegrationV2Fixture implements BindableWebSocketTransport {
   private handlers!: WebSocketTransportHandlers;
   private attached = false;
   private assets = new Map<string, Value[]>();
@@ -29,7 +29,7 @@ export class IntegrationV3Fixture implements BindableWebSocketTransport {
     const request = JSON.parse(text);
     if (request.type === "bulk_hello_request") {
       this.attached = true;
-      this.bulk({ type: "bulk_hello", protocol_version: 3, epoch: "fixture-epoch" });
+      this.bulk({ type: "bulk_hello", protocol_version: 2, epoch: "fixture-epoch" });
       for (const records of this.waiting) for (const record of records) this.bulk(record);
       this.waiting = [];
     }
@@ -49,7 +49,7 @@ export class IntegrationV3Fixture implements BindableWebSocketTransport {
   }
   sendBinary(data: Uint8Array): void {
     const upload = this.upload, header = new DataView(data.buffer, data.byteOffset, data.byteLength);
-    if (!upload || data.length < 12 || header.getUint32(0, true) !== 0x33425241 ||
+    if (!upload || data.length < 12 || header.getUint32(0, true) !== 0x32425241 ||
       header.getUint32(4, true) !== upload.id || header.getUint32(8, true) !== upload.offset ||
       upload.offset + data.length - 12 > upload.bytes.length) throw new Error("Invalid native fixture upload");
     upload.bytes.set(data.subarray(12), upload.offset); upload.offset += data.length - 12;
@@ -63,7 +63,7 @@ export class IntegrationV3Fixture implements BindableWebSocketTransport {
   send(value: Value): void {
     const message = this.prepare(value);
     if (message.type === "hello") Object.assign(message, {
-      protocol_version: 3, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
+      protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
     });
     if (message.type === "localization_observations_request") {
       this.captureId = `fixture-capture-${++this.serial}`;
@@ -143,7 +143,7 @@ export class IntegrationV3Fixture implements BindableWebSocketTransport {
     this.bulk({ type: "bulk_binary_begin", kind: "lidar", epoch: "fixture-epoch", id, total_bytes: data.length });
     for (let offset = 0; offset < data.length; offset += 16372) {
       const payload = data.subarray(offset, offset + 16372), packet = new Uint8Array(payload.length + 12), header = new DataView(packet.buffer);
-      header.setUint32(0, 0x33425241, true); header.setUint32(4, id, true); header.setUint32(8, offset, true);
+      header.setUint32(0, 0x32425241, true); header.setUint32(4, id, true); header.setUint32(8, offset, true);
       packet.set(payload, 12); this.handlers.onTransportBinary(packet);
     }
   }

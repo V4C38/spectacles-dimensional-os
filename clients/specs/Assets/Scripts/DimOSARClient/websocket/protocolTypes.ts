@@ -66,7 +66,7 @@ export interface Hello {
   server_follow_stream?: boolean;
   independent_ik?: boolean;
   source?: { kind: "recording"; read_only: boolean; name: string };
-  protocol_version: 3;
+  protocol_version: 2;
   bulk_url: string;
   bulk_token: string;
   bulk_epoch: string;

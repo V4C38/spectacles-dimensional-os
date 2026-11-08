@@ -92,7 +92,7 @@ def test_encode_hello_advertises_interaction_protocol_version() -> None:
     assert msg["client_id"] == "abc123"
     assert msg["time_sync"]["ts_client"] == 1000.0
     assert msg["time_sync"]["ts_server"] == 2000.0
-    assert msg["protocol_version"] == 3
+    assert msg["protocol_version"] == 2
     assert "alignment" not in msg
     assert msg["capabilities"]["estop"]["available"] is True
     assert msg["capabilities"]["navigation"]["nav_goal"]["available"] is True

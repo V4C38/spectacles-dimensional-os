@@ -2,7 +2,7 @@ import type { Page, WebSocketRoute } from "@playwright/test";
 
 type Value = Record<string, any>;
 /** Explicit protocol peer: fixtures replace hardware, never the paired transport contract. */
-export class V3BulkPeer {
+export class V2BulkPeer {
   onUpload: (bytes: Buffer) => void = () => {};
   private socket: WebSocketRoute | null = null;
   private ready = false;
@@ -17,7 +17,7 @@ export class V3BulkPeer {
       ws.onMessage(raw => {
         if (typeof raw !== "string") {
           const upload = this.upload;
-          if (!upload || raw.length < 12 || raw.readUInt32LE(0) !== 0x33425241 || raw.readUInt32LE(4) !== upload.id || raw.readUInt32LE(8) !== upload.offset) throw new Error("Invalid fixture upload");
+          if (!upload || raw.length < 12 || raw.readUInt32LE(0) !== 0x32425241 || raw.readUInt32LE(4) !== upload.id || raw.readUInt32LE(8) !== upload.offset) throw new Error("Invalid fixture upload");
           raw.copy(upload.bytes, upload.offset, 12); upload.offset += raw.length - 12;
           if (upload.offset === upload.bytes.length) {
             this.upload = null;
@@ -29,7 +29,7 @@ export class V3BulkPeer {
         }
         const request = JSON.parse(raw);
         if (request.type === "bulk_hello_request") {
-          this.ready = true; this.bulk({ type: "bulk_hello", protocol_version: 3, epoch: "fixture-epoch" });
+          this.ready = true; this.bulk({ type: "bulk_hello", protocol_version: 2, epoch: "fixture-epoch" });
           for (const records of this.waiting) for (const record of records) this.bulk(record);
           this.waiting = [];
         }
@@ -55,16 +55,16 @@ export class V3BulkPeer {
       this.captureId = `fixture-capture-${++this.captureSerial}`;
       transformed.capture_id = this.captureId;
     }
-    if (transformed.type === "hello") Object.assign(transformed, { protocol_version: 3, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch" });
+    if (transformed.type === "hello") Object.assign(transformed, { protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch" });
     const text = JSON.stringify(transformed) + "\n";
-    if (Buffer.byteLength(text) > 16384) throw new Error("Fixture control payload exceeds v3 budget");
+    if (Buffer.byteLength(text) > 16384) throw new Error("Fixture control payload exceeds v2 budget");
     peer.send(text);
   }
   lidar(data: Buffer): void {
     this.bulk({ type: "bulk_binary_begin", kind: "lidar", epoch: "fixture-epoch", id: 1, total_bytes: data.length });
     for (let offset = 0; offset < data.length; offset += 16372) {
       const payload = data.subarray(offset, offset + 16372), packet = Buffer.alloc(payload.length + 12);
-      packet.writeUInt32LE(0x33425241, 0); packet.writeUInt32LE(1, 4); packet.writeUInt32LE(offset, 8); payload.copy(packet, 12);
+      packet.writeUInt32LE(0x32425241, 0); packet.writeUInt32LE(1, 4); packet.writeUInt32LE(offset, 8); payload.copy(packet, 12);
       this.socket!.send(packet);
     }
   }

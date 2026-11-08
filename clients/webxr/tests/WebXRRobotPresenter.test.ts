@@ -25,7 +25,7 @@ function view(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionSta
     connection: "ready",
     hasTrackingOrigin: false,
     hello: {
-      type: "hello", protocol_version: 3, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
+      type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
       client_id: "c",
       time_sync: { ts_client: 0, ts_server: 0 },
       robot: {

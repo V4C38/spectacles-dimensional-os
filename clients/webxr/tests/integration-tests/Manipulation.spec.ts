@@ -1196,3 +1196,16 @@ test("keeps advisory IK progressing for a minute through delayed plans, regrabs 
     fixture.close();
   }
 });
+
+test.afterEach(async ({ page }, info) => {
+  if (info.status === info.expectedStatus) return;
+  const diagnostics = await page.evaluate(() => {
+    const app = (window as any).xb?.core.scene.children.find((o: any) => o.client?.manipulation);
+    const interaction = app?.client.manipulation.interaction;
+    return { captures: interaction?.captureEvents, status: interaction?.status,
+      dragging: interaction?.dragging, feedbackFresh: interaction?.feedbackFresh };
+  }).catch(() => null);
+  await info.attach("manipulation-diagnostics", {
+    body: JSON.stringify(diagnostics), contentType: "application/json",
+  });
+});

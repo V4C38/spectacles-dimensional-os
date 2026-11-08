@@ -75,7 +75,7 @@ Selected navigation planning retains its reservation between placement gestures;
 ordinary release preserves the shared target and makes authority available again.
 Native arm execution remains robot-owned after the editing lease ends.
 
-Protocol v3 pairs the control session with a separate bulk WebSocket. Control carries
+Protocol v2 pairs the control session with a separate bulk WebSocket. Control carries
 small authority/target facts and revision references; models, routes, trajectories,
 LiDAR and localization images use the bulk channel. A bulk connection does not
 represent another client and never grants motion authority. ClientCore assembles
@@ -726,7 +726,7 @@ An ARModule PIN identifies a discoverable backend, not a client or an editing le
 Specs connects directly to the resolved backend. WebXR resolves the PIN through its
 optional LAN HTTPS service and uses the same service for secure control and bulk
 WebSocket proxying. Multiple clients may reuse one PIN; different PINs on the same
-WebXR service retain separate immutable routes. Protocol v3 and server authority
+WebXR service retain separate immutable routes. Protocol v2 and server authority
 remain unchanged.
 
 The WebXR service and ARModule have independent lifetimes. Starting or stopping the
@@ -815,3 +815,7 @@ recomposing tracking origins per endpoint. Picking uses a separate immutable mes
 so visual opacity updates cannot invalidate its physics geometry. Arm menu surfaces
 and rows update when their size/layout changes; the end-effector marker keeps a
 single final color per frame. Device FPS still requires measurement on Spectacles.
+
+Browser integration tests use ANGLE Metal on macOS and SwiftShader on other platforms,
+including Linux CI. Software rendering on macOS can stall feedback delivery beyond
+the arm safety deadlines; keep those deadlines unchanged.

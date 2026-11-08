@@ -14,7 +14,7 @@ from websockets.exceptions import ConnectionClosed
 
 
 async def prepare_shutdown() -> None:
-    """Use compact v3 control facts; parking requires no visual model assets."""
+    """Use compact v2 control facts; parking requires no visual model assets."""
     bulk_task: asyncio.Task[None] | None = None
     try:
         async with asyncio.timeout(60):
@@ -32,8 +32,8 @@ async def prepare_shutdown() -> None:
                     for line in raw.splitlines():
                         message = json.loads(line)
                         if message.get("type") == "hello":
-                            if message.get("protocol_version") != 3:
-                                raise ValueError("shutdown requires protocol v3")
+                            if message.get("protocol_version") != 2:
+                                raise ValueError("shutdown requires protocol v2")
                             hello = True
                             if message.get("bulk_url") and message.get("bulk_token"):
                                 from urllib.parse import urljoin
@@ -47,7 +47,7 @@ async def prepare_shutdown() -> None:
                                             json.dumps(
                                                 {
                                                     "type": "bulk_hello_request",
-                                                    "protocol_version": 3,
+                                                    "protocol_version": 2,
                                                     "client_id": info["client_id"],
                                                     "token": info["bulk_token"],
                                                 }

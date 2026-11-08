@@ -1,4 +1,4 @@
-import { V3BulkPeer } from "./V3BulkPeer";
+import { V2BulkPeer } from "./V2BulkPeer";
 import { expect, type Page, type WebSocketRoute } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
@@ -25,7 +25,7 @@ export async function bootstrap(
   options: { unavailable?: boolean; manipulation?: boolean; planDelayMs?: number; evaluationDelayMs?: number; planJointDelta?: number; armIntervalMs?: number; armReference?: string; independentIK?: boolean; interactionDelayMs?: number; evaluationTargetScale?: number } = {},
 ) {
   const commands: any[] = [];
-  const bulk = new V3BulkPeer(); await bulk.install(page);
+  const bulk = new V2BulkPeer(); await bulk.install(page);
   const arm = options.manipulation ? JSON.parse(readFileSync(new URL("./OpenYAM.json", import.meta.url), "utf8")) : null;
   let armTimer: ReturnType<typeof setInterval> | undefined;
   let armClockBase = 0, armClockStarted = 0;
@@ -124,7 +124,7 @@ export async function bootstrap(
       if (command.type === "hello_request") {
         armClockBase = command.ts_client; armClockStarted = performance.now();
         send({
-          type: "hello", protocol_version: 3, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
+          type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
           client_id: "integration",
           ...(options.independentIK ? { independent_ik: true } : {}),
           ...(options.armReference ? {odom_reference_id:options.armReference} : {}),

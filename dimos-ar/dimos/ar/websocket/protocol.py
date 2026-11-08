@@ -587,7 +587,7 @@ def encode_hello(hello: Hello) -> str:
     return encode_text(
         {
             "type": "hello",
-            "protocol_version": 3,
+            "protocol_version": 2,
             "bulk_url": hello.bulk_url,
             "bulk_token": hello.bulk_token,
             "bulk_epoch": hello.bulk_epoch,

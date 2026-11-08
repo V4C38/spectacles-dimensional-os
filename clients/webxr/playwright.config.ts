@@ -10,7 +10,7 @@ export default defineConfig({
     baseURL: "https://localhost:5175",
     ignoreHTTPSErrors: true,
     viewport: { width: 1280, height: 900 },
-    launchOptions: { args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] },
+    launchOptions: { args: [process.platform === "darwin" ? "--use-angle=metal" : "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] },
     screenshot: "only-on-failure",
     video: { mode: "on", size: { width: 1280, height: 900 } },
   },

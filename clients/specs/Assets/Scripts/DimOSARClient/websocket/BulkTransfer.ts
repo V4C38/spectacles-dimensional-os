@@ -8,7 +8,7 @@ export const BULK_ASSET_WAIT_S = 120;
 export const BULK_FRAME_BUDGET_S = 0.002;
 export const BULK_UPLOAD_BUFFER_BYTES = 262144;
 export const BULK_UPLOAD_CHUNKS_PER_TICK = 16;
-const BINARY_MAGIC = 0x33425241;
+const BINARY_MAGIC = 0x32425241;
 type RecordObject = Record<string, unknown>;
 export interface BulkRef { epoch: string; id: string; revision: string | number; }
 type Kind = "model" | "trajectory" | "route";
@@ -114,7 +114,7 @@ export class BulkTransfer {
     this.reset(); this.port = port; this.epoch = hello.bulk_epoch; this.deadline = this.clock.now() + 5;
     const generation = this.generation;
     port.bind({ onTransportOpen: () => {
-      if (generation === this.generation) this.send({ type: "bulk_hello_request", protocol_version: 3, client_id: hello.client_id, token: hello.bulk_token });
+      if (generation === this.generation) this.send({ type: "bulk_hello_request", protocol_version: 2, client_id: hello.client_id, token: hello.bulk_token });
     }, onTransportClose: () => { if (generation === this.generation) this.fail("Bulk connection closed"); },
     onTransportText: text => { if (generation === this.generation) this.enqueue(text); },
     onTransportBinary: data => {
@@ -244,7 +244,7 @@ export class BulkTransfer {
   }
   private receive(raw: RecordObject, bytes: number): void {
     if (raw.type === "bulk_hello") {
-      if (raw.protocol_version !== 3 || raw.epoch !== this.epoch) throw new Error("Incompatible bulk handshake");
+      if (raw.protocol_version !== 2 || raw.epoch !== this.epoch) throw new Error("Incompatible bulk handshake");
       this.ready = true; this.changed(); return;
     }
     if (!this.ready) throw new Error("Bulk payload before handshake");

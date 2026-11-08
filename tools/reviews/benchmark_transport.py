@@ -219,7 +219,7 @@ async def run():
                     json.dumps(
                         {
                             "type": "bulk_hello_request",
-                            "protocol_version": 3,
+                            "protocol_version": 2,
                             "client_id": hello["client_id"],
                             "token": hello["bulk_token"],
                         }

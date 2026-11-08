@@ -427,7 +427,7 @@ interpolation capped at 50 ms, finite measured velocities when available, and vi
 prediction bounded to 30 ms. Execution uses raw feedback, with 30 mm / 8° arrival
 settled for 500 ms; the deferred gripper must acknowledge before terminal completion.
 
-## Multi-client protocol v3
+## Multi-client protocol v2
 
 Editing uses a 500 ms robot-wide lease, renewed every 100 ms. Selected checked
 plans remain robot-owned after editing release and bind to the exact canonical

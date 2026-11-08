@@ -1,4 +1,4 @@
-"""Bounded v3 bulk assets, incremental records, and upload framing.
+"""Bounded v2 bulk assets, incremental records, and upload framing.
 
 This lane carries presentation data and localization pixels, never authority.
 An asset revision is immutable and scoped to this server instance.
@@ -21,7 +21,7 @@ from uuid import uuid4
 
 CHUNK_BYTES = 16_384
 BINARY_HEADER = struct.Struct("<4sII")
-BINARY_MAGIC = b"ARB3"
+BINARY_MAGIC = b"ARB2"
 UPLOAD_MAX_BYTES = 4_194_304
 ASSET_MAX_BYTES = 16_777_216
 CACHE_MAX_BYTES = 67_108_864

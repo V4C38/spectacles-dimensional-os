@@ -12,7 +12,7 @@ import { WorldMeshRenderer, circleMesh } from "../Scripts/DimOSSpecsClient/prese
 import { FLOOR_MARKER_STYLE, WORLD_DASH_STYLE } from "../Scripts/DimOSARClient/presentation/WorldVisualStyle";
 import { composeLidarPoint } from "../Scripts/DimOSSpecsClient/sensors/PointCloudRenderer";
 import { IntegrationInput } from "./IntegrationInput";
-import { IntegrationV3Fixture } from "./IntegrationV3Fixture";
+import { IntegrationV2Fixture } from "./IntegrationV2Fixture";
 import { INTEGRATION_CATALOG as CATALOG } from "./IntegrationCatalog";
 const CAMERA_FIXTURE = requireAsset("./CameraFixture.png") as Texture;
 type Step = {
@@ -26,7 +26,7 @@ export class ReviewScenario extends BaseScriptComponent {
   @input
   profile = "golden";
   private root: any;
-  private peer!: IntegrationV3Fixture;
+  private peer!: IntegrationV2Fixture;
   private input: IntegrationInput | null = null;
   private steps: Step[] = [];
   private index = -1;
@@ -114,7 +114,7 @@ export class ReviewScenario extends BaseScriptComponent {
     if (!this.root)
       throw new Error("Production composition root missing");
     const root = this.root;
-    this.peer = new IntegrationV3Fixture(value => root.session.onTransportText(JSON.stringify(value) + "\n"), "native-integration", () => getTime());
+    this.peer = new IntegrationV2Fixture(value => root.session.onTransportText(JSON.stringify(value) + "\n"), "native-integration", () => getTime());
     this.peer.onUpload = data => {
       this.batches.push(decodeLocalizationObservations(data));
       if (this.autoLocalize) this.after(0.1, () => this.acceptLocalization());
@@ -139,7 +139,7 @@ export class ReviewScenario extends BaseScriptComponent {
         this.command(message);
       }
     };
-    root.transport.sendBinary = () => { throw new Error("v3 control channel cannot carry binary data"); };
+    root.transport.sendBinary = () => { throw new Error("v2 control channel cannot carry binary data"); };
     root.cameraSource.start = () => { };
     root.cameraSource.stop = () => { };
     root.episode.capture = {
@@ -210,7 +210,7 @@ export class ReviewScenario extends BaseScriptComponent {
     if (!session.wantConnected) session.start();
     session.onTransportOpen();
     const request = [...this.sent].reverse().find(row => row.type === "hello_request");
-    this.wire({ type: "hello", protocol_version: 3, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "native-integration", odom_reference_id: "native-fixture-odom", time_sync: { ts_client: request.ts_client, ts_server: getTime() },
+    this.wire({ type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "native-integration", odom_reference_id: "native-fixture-odom", time_sync: { ts_client: request.ts_client, ts_server: getTime() },
       robot: CATALOG.fixtures.robot, capabilities });
     this.peer.reset();
     this.state("idle", null);

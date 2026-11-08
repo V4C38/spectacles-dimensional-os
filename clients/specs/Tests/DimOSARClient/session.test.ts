@@ -50,7 +50,7 @@ class FakeTransport implements WebSocketTransport {
 
 function helloAt(tsClient: number, capabilities?: Partial<Capabilities>): Hello {
   return {
-    type: "hello", protocol_version: 3, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
+    type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
     client_id: "c3f1a9",
     time_sync: { ts_client: tsClient, ts_server: 100 },
     robot: {
@@ -123,7 +123,7 @@ function handshake(
   session.onTransportText(`${JSON.stringify(hello)}\n${JSON.stringify(STATE)}\n`);
   expect(session.view().connection).toBe("ready");
   expect(transport.texts).toHaveLength(1);
-  expect(JSON.parse(transport.texts[0])).toEqual({ type: "hello_request", resumable: true, server_follow_stream: true, protocol_version: 3, ts_client: clock.nowS });
+  expect(JSON.parse(transport.texts[0])).toEqual({ type: "hello_request", resumable: true, server_follow_stream: true, protocol_version: 2, ts_client: clock.nowS });
   return hello;
 }
 
@@ -137,12 +137,12 @@ function pythonLidar(ts: number, points: [number, number, number][]): Uint8Array
 }
 
 describe("session handshake", () => {
-  it.each([undefined, 1, 2])("rejects incompatible hello version %s with an actionable error", version => {
+  it.each([undefined, 1, 3])("rejects incompatible hello version %s with an actionable error", version => {
     const { session } = makeSession();
     session.start(); session.onTransportOpen();
     session.onTransportText(JSON.stringify({ ...helloAt(0), protocol_version: version }) + "\n");
     expect(session.view().connection).toBe("failed");
-    expect(session.view().lastError).toContain("Incompatible ARModule protocol: expected version 3");
+    expect(session.view().lastError).toContain("Incompatible ARModule protocol: expected version 2");
     expect(session.view().hello).toBeNull();
   });
   it("sends hello_request as the first text frame and becomes ready on hello", () => {

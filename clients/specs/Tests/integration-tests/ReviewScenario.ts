@@ -171,7 +171,7 @@ export class ReviewScenario extends BaseScriptComponent {
       { name: "setup-align", run: () => {
         root.session.start(); root.session.onTransportOpen();
         const available = { available: true, reason: null };
-        this.wire({ type: "hello", protocol_version: 3, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "specs-review", time_sync: { ts_client: getTime(), ts_server: getTime() },
+        this.wire({ type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "specs-review", time_sync: { ts_client: getTime(), ts_server: getTime() },
           robot: { display_name: "Unitree Go2", body_bounds_m: [0.7, 0.5, 0.55], footprint_m: [0.7, 0.5], base_height_m: 0.33 },
           capabilities: { lidar: available, localization: available, estop: available, agent: available,
             navigation: { ...available, nav_goal: available, nav_joystick: { available: false, reason: "Hands only" } } } });

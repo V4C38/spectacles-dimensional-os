@@ -15,7 +15,7 @@ function fixture() {
   return { peer, bulk, failures, uploaded, requests, ref, spend: (seconds: number) => { now += seconds; },
     advance: (seconds: number) => { now += seconds; bulk.tick(); } };
 }
-describe("paired v3 bulk records", () => {
+describe("paired v2 bulk records", () => {
   it("assembles typed model records incrementally and reuses the same cached object", () => {
     const f = fixture();
     const message = { type: "manipulation_state", available: true, model_ref: f.ref };
@@ -49,7 +49,7 @@ describe("paired v3 bulk records", () => {
     const g = fixture(); g.peer.receive({ type: "bulk_record", ...g.ref, kind: "model", part: 0, parts: 1, data: { padding: "x".repeat(17000) } });
     expect(g.failures).toContain("Bulk receive budget exceeded");
   });
-  it("uploads original localization bytes only through bounded ARB3 chunks", () => {
+  it("uploads original localization bytes only through bounded ARB2 chunks", () => {
     const f = fixture(), bytes = new Uint8Array(100000).map((_, i) => i % 251);
     f.bulk.uploadLocalization(bytes, "capture-1"); f.bulk.tick();
     expect(f.uploaded[0]).toEqual(bytes); expect(f.bulk.uploading).toBe(false);

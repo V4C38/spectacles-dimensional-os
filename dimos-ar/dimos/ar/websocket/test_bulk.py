@@ -97,7 +97,7 @@ def test_bulk_upload_rejects_reordering_oversize_and_expiry(monkeypatch) -> None
 
 async def _attach(stack: AsyncExitStack, harness: ServerHarness, hello: dict):
     bulk = await stack.enter_async_context(websockets.connect(f"ws://127.0.0.1:{harness.port}{hello['bulk_url']}"))
-    await bulk.send(json.dumps({"type": "bulk_hello_request", "protocol_version": 3,
+    await bulk.send(json.dumps({"type": "bulk_hello_request", "protocol_version": 2,
                                "client_id": hello["client_id"], "token": hello["bulk_token"]}))
     ready = json.loads(await asyncio.wait_for(bulk.recv(), 1))
     assert ready["epoch"] == hello["bulk_epoch"]
@@ -128,7 +128,7 @@ async def test_bulk_pairing_never_counts_as_control_and_stale_tokens_cannot_reat
             assert h._server.connection_count == 1
             await control.close()
         async with websockets.connect(f"ws://127.0.0.1:{h.port}/ws/bulk") as stale:
-            await stale.send(json.dumps({"type": "bulk_hello_request", "protocol_version": 3,
+            await stale.send(json.dumps({"type": "bulk_hello_request", "protocol_version": 2,
                                         "client_id": hello["client_id"], "token": hello["bulk_token"]}))
             with pytest.raises(websockets.ConnectionClosed):
                 await stale.recv()

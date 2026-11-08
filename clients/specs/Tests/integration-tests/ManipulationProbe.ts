@@ -4,7 +4,7 @@ import { DimOSSpecsClient } from "../../Assets/Scripts/DimOSSpecsClient/DimOSSpe
 import { clientTrackingToSpecsPose } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
 import { ARM_FIXTURE } from "./IntegrationArmFixture";
 import { IntegrationInput } from "./IntegrationInput";
-import { IntegrationV3Fixture } from "./IntegrationV3Fixture";
+import { IntegrationV2Fixture } from "./IntegrationV2Fixture";
 import { InteractorInputType } from "SpectaclesInteractionKit.lspkg/Core/Interactor/Interactor";
 import { INTEGRATION_CATALOG as CATALOG } from "./IntegrationCatalog";
 
@@ -12,7 +12,7 @@ import { INTEGRATION_CATALOG as CATALOG } from "./IntegrationCatalog";
 export class ReviewScenario extends BaseScriptComponent {
   @input startDelayS = 5;
   private root: any;
-  private peer!: IntegrationV3Fixture;
+  private peer!: IntegrationV2Fixture;
   private tailGeneration = 0;
   private validatedTarget: any = null;
   private elapsed = 0;
@@ -41,7 +41,7 @@ export class ReviewScenario extends BaseScriptComponent {
     for (let i = 0; i < global.scene.getRootObjectsCount(); i++) { this.root = find(global.scene.getRootObject(i)); if (this.root) break; }
     if (!this.root) throw new Error("Production root missing");
     const root = this.root;
-    this.peer = new IntegrationV3Fixture(value => root.session.onTransportText(JSON.stringify(value) + "\n"), "native-manipulation", () => getTime());
+    this.peer = new IntegrationV2Fixture(value => root.session.onTransportText(JSON.stringify(value) + "\n"), "native-manipulation", () => getTime());
     this.peer.onTakeover = () => {
       if (this.state) { this.state.following_tail = null; this.wire(this.state); }
     };
@@ -56,7 +56,7 @@ export class ReviewScenario extends BaseScriptComponent {
     };
     root.transport.connect = () => {}; root.transport.close = () => {};
     root.transport.createSibling = () => this.peer;
-    root.transport.sendBinary = () => { throw new Error("v3 control binary is forbidden"); };
+    root.transport.sendBinary = () => { throw new Error("v2 control binary is forbidden"); };
     root.transport.sendText = (text: string) => {
       for (const line of text.trim().split("\n")) {
         const command = JSON.parse(line); this.sent.push(command);

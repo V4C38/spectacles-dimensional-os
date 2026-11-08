@@ -1,4 +1,4 @@
-import { V3BulkPeer } from "./fixtures/V3BulkPeer";
+import { V2BulkPeer } from "./fixtures/V2BulkPeer";
 import { saveCaseProof } from "./fixtures/CaseProof";
 import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
 import { startVisualReview, markVisualReview, saveVisualReview } from "./fixtures/VisualReview";
@@ -63,7 +63,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       w.questDevice.primaryInputMode = inputMode;
       w.questDevice.installRuntime({ forceInstall: true });
     }, mode);
-    const bulk = new V3BulkPeer(); await bulk.install(page);
+    const bulk = new V2BulkPeer(); await bulk.install(page);
     let socket: WebSocketRoute | undefined;
     let interactionRevision = 0, interactionMode = "manual";
     let authority: any = null, target: any = null, preview: any = null, activeGoal: any = null;
@@ -173,7 +173,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
         if (command.type === "hello_request") {
           handshakes++;
           const available = { available: true, reason: null };
-          send({ type: "hello", protocol_version: 3, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "browser-test", time_sync: { ts_client: command.ts_client, ts_server: command.ts_client },
+          send({ type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "browser-test", time_sync: { ts_client: command.ts_client, ts_server: command.ts_client },
             server_info: { robot_ip: "192.168.1.42", dimos_version: "0.4.0", armodule_version: "0.2.0" },
             robot: { display_name: "Unitree Go2", body_bounds_m: [0.7, 0.5, 0.55], footprint_m: [0.7, 0.3], base_height_m: 0.33 },
             capabilities: { lidar: available, localization: available, estop: available, agent: available,

@@ -65,7 +65,7 @@ async def test_shutdown_request_and_estop_skip(monkeypatch, stopped):
 
         def __aiter__(self):
             async def frames():
-                yield json.dumps({"type": "hello", "protocol_version": 3})
+                yield json.dumps({"type": "hello", "protocol_version": 2})
                 yield json.dumps(
                     {
                         "type": "interaction_state",
