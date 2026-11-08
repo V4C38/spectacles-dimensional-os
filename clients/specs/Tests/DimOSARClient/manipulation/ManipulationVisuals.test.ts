@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { ARM_VISUAL_STYLE, armPointWeight, armShapeEdges, armLinkWeight, gripperBounds, armLinkPresentation, ArmMeshFade } from "../../../Assets/Scripts/DimOSARClient/manipulation/ManipulationVisuals";
+import { endEffectorDisplayPose, ARM_VISUAL_STYLE, armPointWeight, armShapeEdges, armLinkWeight, gripperBounds, armLinkPresentation, ArmMeshFade } from "../../../Assets/Scripts/DimOSARClient/manipulation/ManipulationVisuals";
 import { linkPoses } from "../../../Assets/Scripts/DimOSARClient/manipulation/ModelKinematics";
 import { ARM_FIXTURE } from "../../integration-tests/IntegrationArmFixture";
 
@@ -81,4 +81,66 @@ it("prepared point displacement agrees with rigid-pose evaluation", async () => 
       expect(weight(...point)).toBeCloseTo(armPointWeight(point,a,b), 10);
     }
   }
+});
+
+it("keeps inactive retained targets at measured feedback and displays active displacement", () => {
+  const measured = { position: [0, 0, 0], orientation: [0, 0, 0, 1] } as any;
+  const target = { ...measured, position: [1, 0, 0] };
+  const idle = { selected: false, following: false, dragging: false, finishing: false, offset: true };
+  expect(endEffectorDisplayPose(measured, target, idle)).toBe(measured);
+  for (const flag of ["selected", "following", "dragging", "finishing"]) {
+    expect(endEffectorDisplayPose(measured, target, { ...idle, [flag]: true })).toBe(target);
+  }
+  expect(endEffectorDisplayPose(measured, target, { ...idle, selected: true, offset: false })).toBe(measured);
+  expect(endEffectorDisplayPose(measured, target, { ...idle, dragging: true, offset: false })).toBe(target);
+  expect(endEffectorDisplayPose(measured, null, { ...idle, selected: true })).toBe(measured);
+});
+
+it("does no further per-vertex work for a settled 10,000-point arm", async () => {
+  const { ArmPointOpacity } = await import("../../../Assets/Scripts/DimOSARClient/manipulation/ManipulationVisuals");
+  const opacity = new ArmPointOpacity();
+  const points = Array.from({ length: 10000 }, () => [0, 0, 0] as [number, number, number]);
+  let samples = 0, fades = 0;
+  const target = () => { samples++; return .25; };
+  const fade = (_previous: number, value: number) => { fades++; return value; };
+  expect(opacity.sample(points, "selected", target, fade)).toBe(true);
+  for (let frame = 0; frame < 600; frame++) expect(opacity.sample(points, "selected", target, fade)).toBe(false);
+  expect(samples).toBe(10000); expect(fades).toBe(10000);
+  expect(opacity.sample(points, "hidden", () => 0, fade)).toBe(true);
+  expect(opacity.values.every(value => value === 0)).toBe(true);
+});
+
+it("batch transforms retain the original pose-composition result", async () => {
+  const { transformPoints, composePose } = await import("../../../Assets/Scripts/DimOSARClient/manipulation/ModelKinematics");
+  const pose = { position: [3, -2, 1], orientation: [0, 0, Math.sin(.37), Math.cos(.37)] } as any;
+  const points = [[1, 0, 0], [0, -2, .3], [.6, .4, .2]] as [number, number, number][];
+  const transformed = transformPoints(pose, points);
+  points.forEach((position, i) => {
+    const expected = composePose(pose, { position, orientation: [0, 0, 0, 1] }).position;
+    expected.forEach((value, axis) => expect(transformed[i][axis]).toBeCloseTo(value, 12));
+  });
+});
+
+it("batch transforms preserve odometry-to-Specs coordinates", async () => {
+  const { transformPoints, composePose } = await import("../../../Assets/Scripts/DimOSARClient/manipulation/ModelKinematics");
+  const { clientTrackingToSpecsPoint, clientTrackingToSpecsPose } = await import("../../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates");
+  const { odomToClientTrackingPose } = await import("../../../Assets/Scripts/DimOSARClient/localization/clientTrackingTransforms");
+  const pose = { position: [2, 1, .4], orientation: [0, 0, Math.sin(.3), Math.cos(.3)] } as any;
+  const origin = { position: [.4, -.7, 1.5], orientation: [0, 0, Math.sin(.2), Math.cos(.2)], confidence: 1, ts: 0 } as any;
+  const points = [[.2, 0, 0], [0, -.3, .1], [.6, .1, -.2]] as [number, number, number][];
+  const transformed = transformPoints(clientTrackingToSpecsPose(odomToClientTrackingPose(pose, origin)), points.map(clientTrackingToSpecsPoint));
+  points.forEach((position, i) => {
+    const expected = clientTrackingToSpecsPoint(odomToClientTrackingPose(composePose(pose, { position, orientation: [0, 0, 0, 1] }), origin).position);
+    expected.forEach((value, axis) => expect(transformed[i][axis]).toBeCloseTo(value, 9));
+  });
+});
+
+it("samples opacity at 10 Hz without queuing missed samples", async () => {
+  const { ArmOpacityCadence } = await import("../../../Assets/Scripts/DimOSARClient/manipulation/ManipulationVisuals");
+  const cadence = new ArmOpacityCadence(); let count = 0;
+  for (let frame = 0; frame <= 60; frame++) if (cadence.sample(frame / 60) !== null) count++;
+  expect(count).toBe(11);
+  expect(cadence.sample(10)).toBeCloseTo(9);
+  expect(cadence.sample(10)).toBeNull();
+  expect(cadence.sample(0)).toBe(.1);
 });

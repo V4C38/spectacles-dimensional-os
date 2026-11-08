@@ -1,3 +1,4 @@
+import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 import { odomToClientTrackingPose } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingTransforms";
 import { DimOSSpecsClient } from "../../Assets/Scripts/DimOSSpecsClient/DimOSSpecsClient";
 import { clientTrackingToSpecsPose } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
@@ -27,7 +28,10 @@ export class ReviewScenario extends BaseScriptComponent {
   private check(name: string, passed: boolean): void { this.failed ||= !passed; this.emit({ type: "result", name, passed }); }
   private wire(message: any): void { this.peer.send(message); }
   private scene(id: string): void { this.emit({ type: "scene", id, name: id, label: id, videoOnly: true, durationS: 3 }); }
-  onAwake(): void { this.createEvent("OnStartEvent").bind(() => this.createEvent("UpdateEvent").bind(() => this.tick())); }
+  private outlineUploadStart = 0;
+  private outlineSampleStarted = 0;
+  onAwake(): void {
+    if (!integrationTestsEnabled(this.getSceneObject())) return; this.createEvent("OnStartEvent").bind(() => this.createEvent("UpdateEvent").bind(() => this.tick())); }
   private prepare(): void {
     const find = (object: SceneObject): any => {
       const root = object.getComponent(DimOSSpecsClient.getTypeName()); if (root) return root;
@@ -121,13 +125,26 @@ export class ReviewScenario extends BaseScriptComponent {
     if (this.phase === 0) {
       this.emit({ type: "diagnostic", setup: root.uiPresenter.isSetupCompleted(), mode: root.uiPresenter.getOperatingMode(), connection: root.session.view().connection, error: root.session.view().lastError, origin: root.clientTrackingOriginStore.T_odom_client !== null, meshes: arm.renderer.meshes.size });
       this.check("manipulation_model", arm.renderer.meshes.size > 0 && arm.renderer.object.enabled);
+      const presenter = arm.renderer.panelPresenter;
+      this.check("manipulation_native_frame", presenter.root.enabled &&
+        arm.renderer.panel.getParent() === presenter.frame.content);
+      const expected = arm.renderer.base.getTransform().getWorldPosition().add(
+        root.cameraObject.getTransform().getWorldRotation().multiplyVec3(new vec3(0, -13, 0)));
+      const top = presenter.root.getTransform().getWorldPosition().add(
+        root.cameraObject.getTransform().getWorldRotation().multiplyVec3(new vec3(0,
+          arm.renderer.menuHeight.height * 50 * presenter.root.getTransform().getWorldScale().x, 0)));
+      this.check("manipulation_frame_anchor", top.distance(expected) < .1);
+      presenter.reset();
+
       const mesh = arm.renderer.meshes.values().next().value;
-      this.check("manipulation_material", !!mesh && Math.abs(mesh.material.mainPass.fill - mesh.material.mainPass.edgeOpacity) < 0.0001 && mesh.material.mainPass.power < 0 && arm.renderer.edges.size > 0);
+      this.check("manipulation_material", !!mesh && Number.isFinite(mesh.material.mainPass.opacityScale) && arm.renderer.edges.size > 0);
       this.check("manipulation_stroke_width", Math.abs(arm.renderer.path.material.mainPass.nearWidthScale - 0.75) < 0.0001);
       this.check("manipulation_pose", handle.getTransform().getWorldPosition().distance(new vec3(...clientTrackingToSpecsPose(odomToClientTrackingPose(ARM_FIXTURE.pose as any, root.clientTrackingOriginStore.T_odom_client)).position)) < 0.01);
       this.check("manipulation_gripper_meshes", ["gripper", "tip_left", "tip_right"].every(link => arm.renderer.picks.get(link)?.enabled === true));
       root.selection.setSelected(true); this.scene("manipulation_target");
     } else if (this.phase === 1) {
+      this.outlineUploadStart = [...arm.renderer.edges.values()].reduce((n: number, edge: any) => n + edge.stroke.geometryUploads, 0);
+      this.outlineSampleStarted = getTime();
       this.check("selected_idle_mesh_visible", [...arm.renderer.meshes.values()].every((mesh: any) => mesh.object.enabled));
       this.check("measured_ee_sphere_present", arm.renderer.measured.object.enabled);
       const interactable = handle.getComponent("ScriptComponent") as any;
@@ -135,12 +152,14 @@ export class ReviewScenario extends BaseScriptComponent {
       this.dragFrom = this.drag!.from;
       this.drag!.start(interactable);
     } else if (this.phase === 2) {
+      const uploads = [...arm.renderer.edges.values()].reduce((n: number, edge: any) => n + edge.stroke.geometryUploads, 0) - this.outlineUploadStart;
+      this.check("manipulation_outline_upload_budget", uploads <= arm.renderer.edges.size * (Math.ceil((getTime() - this.outlineSampleStarted) * 10) + 2));
       this.drag!.end(); this.check("manipulation_evaluate", this.sent.some(c => c.action === "evaluate"));
       arm.core.action("gripper");
       this.check("manipulation_gripper_draft_only", !this.sent.some(c => c.action === "execute" || c.action === "gripper"));
       arm.core.action("plan"); this.scene("manipulation_preview");
     } else if (this.phase === 3) {
-      this.check("selected_ee_execute", arm.renderer.gripper.labelText.text === "Execute");
+      this.check("selected_ee_gripper", ["Open", "Close"].includes(arm.renderer.gripper.labelText.text));
       this.check("manipulation_plan", !!arm.core.interaction.plan);
       arm.core.action("execute"); this.check("manipulation_execute", this.sent.some(c => c.action === "execute" && c.plan_id === "native-plan"));
       this.state.execution = "idle"; this.peer.setBusy(false); root.selection.setSelected(false); this.scene("manipulation_follow");

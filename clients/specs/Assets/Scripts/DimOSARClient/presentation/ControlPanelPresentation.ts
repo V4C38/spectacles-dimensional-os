@@ -50,3 +50,27 @@ export function robotBadgeText(name: string, connection: string, selected: boole
 export function sensorStatusText(available: boolean, received: number, camera = "Not capturing", tracking = "Not tracking", surfaces: number | string = 0): string {
   return `${available ? `Received: ${received} points · Range shared with clients` : "LiDAR unavailable"}\nCamera: ${camera}\n${tracking} · Surfaces: ${surfaces}`;
 }
+
+export interface PanelProfile { height: number; rows: Record<string, number>; }
+export type LayoutRow = readonly [name: string, height: number, gapBefore?: number];
+
+/** Unit-independent row placement; hosts supply their calibrated geometry. */
+export function layoutPanelRows(startY: number, rows: readonly LayoutRow[], geometry: {
+  top: number; gap: number; bottom: number; action: number; maximumHeight: number; quantum: number;
+}, footer: boolean, footerGap = geometry.gap): PanelProfile {
+  let cursor = startY;
+  const positions: Record<string, number> = {};
+  rows.forEach(([name, height, gapBefore], index) => {
+    if (index) cursor -= gapBefore ?? geometry.gap;
+    positions[name] = cursor - height / 2;
+    cursor -= height;
+  });
+  if (footer) {
+    cursor -= footerGap;
+    positions.footer = cursor - geometry.action / 2;
+    cursor -= geometry.action;
+  }
+  const height = Math.ceil((geometry.top - cursor + geometry.bottom) / geometry.quantum - 1e-8) * geometry.quantum;
+  if (height > geometry.maximumHeight) throw new Error(`Panel profile exceeds calibrated height: ${height}`);
+  return { height, rows: positions };
+}

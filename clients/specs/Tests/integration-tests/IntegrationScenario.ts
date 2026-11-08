@@ -1,5 +1,7 @@
+import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 // Hardware inputs are deterministic fixtures. Production state owners, SIK/SUK controls and renderers run unchanged.
 import { DimOSSpecsClient } from "../Scripts/DimOSSpecsClient/DimOSSpecsClient";
+import { SetupWizardStep } from "../Scripts/DimOSSpecsClient/presentation/SetupWizardView";
 import { getFrameComponent } from "../Scripts/DimOSSpecsClient/presentation/UIKit";
 import { RUNTIME_LAYOUTS, RUNTIME_PANEL_SCALE, SETUP_LAYOUTS } from "../Scripts/DimOSSpecsClient/presentation/PanelLayout";
 import { specsToClientTrackingPoint, clientTrackingToSpecsPoint } from "../Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
@@ -59,6 +61,7 @@ export class ReviewScenario extends BaseScriptComponent {
   private wristFixture: WristMenuController | null = null;
   private wristUpdate: (() => void) | null = null;
   onAwake(): void {
+    if (!integrationTestsEnabled(this.getSceneObject())) return;
     this.createEvent("OnStartEvent").bind(() => this.createEvent("UpdateEvent").bind(() => this.tick()));
     this.createEvent("OnDestroyEvent").bind(() => this.input?.restore());
   }
@@ -258,8 +261,10 @@ export class ReviewScenario extends BaseScriptComponent {
   private runtime(): void {
     this.ready();
     this.root.clientTrackingOriginStore.restore({ position: this.origin, orientation: [0, 0, 0, 1], confidence: 1, ts: getTime() });
-    if (!this.root.uiPresenter.isSetupCompleted())
+    if (!this.root.uiPresenter.isSetupCompleted()) {
+      this.root.uiPresenter.setupWizardController.flow.finish();
       this.root.uiPresenter.finishWizard();
+    }
     this.root.uiPresenter.setupWizardController.hide();
     this.showMenu();
   }
@@ -525,7 +530,7 @@ export class ReviewScenario extends BaseScriptComponent {
         break;
       }
       case "sensors_full":
-        this.press(this.button("Sensors button"));
+        this.press(this.button("Capabilities button"));
         this.after(0.2, () => this.press(menu.lidarButtons[2]));
         this.lidar();
         this.later(0.7, () => menu.page === "sensors" && ui.getLidarMode() === "full" && root.session.view().lidar.points.length === CATALOG.fixtures.pointLimit && root.lidarPresenter.visual.enabled);
@@ -559,7 +564,7 @@ export class ReviewScenario extends BaseScriptComponent {
       case "relocalize":
         this.showMenu();
         this.autoLocalize = true;
-        this.after(0.2, () => this.press(this.button("Global settings")));
+        this.after(0.2, () => this.press(this.button("Capabilities button")));
         this.after(0.4, () => this.press(menu.realign.button));
         this.later(0.7, () => controller.isVisible() && controller.flow.step === "localization" && !root.clientTrackingOriginStore.hasTrackingOrigin);
         break;
@@ -640,14 +645,20 @@ export class ReviewScenario extends BaseScriptComponent {
     const root = this.root, ui = root.uiPresenter, menu = ui.mainMenuView, controller = ui.setupWizardController;
     switch (id) {
       case "setup_navigation": {
+        root.session.stop();
+        controller.start(false);
         const backHidden = !controller.view.previous.sceneObject.enabled;
-        this.press(controller.view.next.button);
+        this.after(0.2, () => this.press(controller.view.next.button));
         let skipped = false;
         this.after(0.5, () => { skipped = ui.isSetupCompleted() && menu.page === "main"; this.press(this.button("Global settings")); });
         this.after(0.8, () => this.press(this.button("Setup")));
         let runtimeBack = false;
         this.after(1.3, () => { runtimeBack = controller.view.previous.sceneObject.enabled; this.press(controller.view.previous.button); });
-        this.later(1.6, () => backHidden && skipped && runtimeBack && ui.isSetupCompleted());
+        this.later(1.6, () => {
+          const completed = ui.isSetupCompleted();
+          print(`SETUP_NAVIGATION ${JSON.stringify({ backHidden, skipped, runtimeBack, completed, step: controller.flow.step })}`);
+          return backHidden && skipped && runtimeBack && completed;
+        });
         break;
       }
       case "connection_recovery": {
@@ -704,9 +715,10 @@ export class ReviewScenario extends BaseScriptComponent {
         const before = this.count("interaction_request", row => row.action === "confirm");
         let lost = false;
         this.after(0.9, () => { this.input!.active = false; this.input!.held = false; });
-        this.after(1.2, () => { lost = !root.navigationController.isAiming(); this.aim(); this.input!.start(null); });
-        this.after(1.5, () => this.input!.end());
-        this.later(1.8, () => lost && root.navigationController.isAiming() && this.count("interaction_request", row => row.action === "confirm") === before);
+        this.after(1.2, () => { lost = !root.navigationController.isAiming(); this.aim(); });
+        this.after(1.4, () => this.input!.start(null));
+        this.after(1.7, () => this.input!.end());
+        this.later(2, () => lost && root.navigationController.isAiming() && this.count("interaction_request", row => row.action === "confirm") === before);
         this.after(2.2, () => { this.input!.active = false; this.input!.cancel(); });
         break;
       }
@@ -766,12 +778,17 @@ export class ReviewScenario extends BaseScriptComponent {
       }
       case "sensor_limits": {
         this.runtime();
-        this.after(.3, () => { this.press(this.button("Sensors button")); });
+        this.after(.3, () => { this.press(this.button("Capabilities button")); });
         let off = false, low = false, high = false;
-        this.after(.6, () => { this.press(menu.lidarButtons[0]); off = ui.getLidarMode() === "off"; this.press(menu.lidarButtons[2]); for (let i = 0; i < 24; i++)
-          this.press(this.button("Sensor-1:-1")); low = ui.getLidarPreferences().pointLimit === 250; for (let i = 0; i < 24; i++)
-          this.press(this.button("Sensor-1:1")); high = ui.getLidarPreferences().pointLimit === 4000; });
-        this.later(1.5, () => off && low && high && ui.getLidarPreferences().fullRangeM <= 10);
+        this.after(.6, () => this.press(menu.lidarButtons[0]));
+        this.after(.8, () => { off = ui.getLidarMode() === "off"; this.press(menu.lidarButtons[2]); });
+        for (let i = 0; i < 24; i++) {
+          this.after(1 + i * .05, () => this.press(this.button("Sensor-1:-1")));
+          this.after(2.5 + i * .05, () => this.press(this.button("Sensor-1:1")));
+        }
+        this.after(2.3, () => { low = ui.getLidarPreferences().pointLimit === 250; });
+        this.after(3.8, () => { high = ui.getLidarPreferences().pointLimit === 4000; });
+        this.later(4, () => off && low && high && ui.getLidarPreferences().fullRangeM <= 10);
         break;
       }
       case "viewport_aspect": {
@@ -839,7 +856,7 @@ export class ReviewScenario extends BaseScriptComponent {
         const measure = (key: keyof typeof SETUP_LAYOUTS) => { valid &&= Math.abs(frame.totalSize.x - 90) < .01 && Math.abs(frame.totalSize.y - SETUP_LAYOUTS[key].height) < .01 && top().distance(anchor) < .05; };
         controller.view.setConnectionState({ phase: "error", text: "Fixture error", color: new vec4(1, .3, .3, 1) });
         this.after(.5, () => { controller.view.tick(.5); measure("error"); controller.view.setConnectionState({ phase: "connected", text: "Connected", details: "Ready to localize", color: vec4.one() }); });
-        this.after(1, () => { controller.view.tick(.5); measure("connected"); controller.view.setCaptureLayout(false); controller.view.applyStepLayout(2); });
+        this.after(1, () => { controller.view.tick(.5); measure("connected"); controller.view.setCaptureLayout(false); controller.view.applyStepLayout(SetupWizardStep.Localization); });
         this.after(1.5, () => { controller.view.tick(.5); measure("message"); controller.view.celebrate(1, "Robot"); });
         this.after(2, () => { controller.view.tick(.5); measure("success"); this.check(id, valid, id); controller.tick = tick; });
         break;

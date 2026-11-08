@@ -1,3 +1,4 @@
+import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 // Optional native regression harness: run tools/review.py --harness Tests/integration-tests/NativeInteractionProbe.ts.
 // Uses real SIK events and the real TTS adapter; only network connection attempts are suppressed.
 import { DimOSSpecsClient } from "../Scripts/DimOSSpecsClient/DimOSSpecsClient";
@@ -15,7 +16,8 @@ export class ReviewScenario extends BaseScriptComponent {
   private originalOwner = true;
   private emit(value: Record<string, unknown>): void { print(`SPECS_REVIEW ${JSON.stringify({ ...value, unixMs: Date.now() })}`); }
   private check(name: string, passed: boolean): void { this.failed ||= !passed; this.emit({ type: "result", name, passed }); }
-  onAwake(): void { this.createEvent("OnStartEvent").bind(() => this.createEvent("UpdateEvent").bind(() => this.tick())); }
+  onAwake(): void {
+    if (!integrationTestsEnabled(this.getSceneObject())) return; this.createEvent("OnStartEvent").bind(() => this.createEvent("UpdateEvent").bind(() => this.tick())); }
   private press(button: any): void {
     const target = button.interactable;
     const actor = InteractionManager.getInstance().getInteractorsByType(InteractorInputType.Mouse)[0];

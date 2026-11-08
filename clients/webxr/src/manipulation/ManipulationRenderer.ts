@@ -1,4 +1,4 @@
-import { endEffectorAngles } from "@dimos-ar-client/manipulation/ManipulationVisuals";
+import { endEffectorAngles, endEffectorDisplayPose } from "@dimos-ar-client/manipulation/ManipulationVisuals";
 import { ARM_PANEL_STYLE } from "@dimos-ar-client/presentation/PanelFrameStyle";
 import { armMotionContext } from "@dimos-ar-client/manipulation/ArmJointFilter";
 import { Text } from "troika-three-text";
@@ -443,9 +443,10 @@ export class ManipulationRenderer {
     if (observed?.pose)
       this.place(
         this.handle.object,
-        targetVisible && (offset || dragging) && target
-          ? target
-          : observed.pose,
+        endEffectorDisplayPose(observed.pose, target, {
+          selected, following: state.following === true, dragging,
+          finishing: intent.finishing === true, offset,
+        })!,
         origin,
       );
 

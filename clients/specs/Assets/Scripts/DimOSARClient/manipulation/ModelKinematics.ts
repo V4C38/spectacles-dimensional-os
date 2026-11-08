@@ -125,3 +125,13 @@ export function toolSubtree(
       if (links.has(joint.parent)) links.add(joint.child);
   return { root, links };
 }
+
+/** Transform a rigid point batch with one rotation matrix and no intermediate poses. */
+export function transformPoints(pose: ManipulationPose, points: readonly Vec3[]): Vec3[] {
+  const [x, y, z, w] = pose.orientation, [px, py, pz] = pose.position;
+  const r00 = 1 - 2 * (y*y + z*z), r01 = 2 * (x*y - z*w), r02 = 2 * (x*z + y*w);
+  const r10 = 2 * (x*y + z*w), r11 = 1 - 2 * (x*x + z*z), r12 = 2 * (y*z - x*w);
+  const r20 = 2 * (x*z - y*w), r21 = 2 * (y*z + x*w), r22 = 1 - 2 * (x*x + y*y);
+  return points.map(([a, b, c]) => [px + r00*a + r01*b + r02*c,
+    py + r10*a + r11*b + r12*c, pz + r20*a + r21*b + r22*c]);
+}

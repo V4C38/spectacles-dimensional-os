@@ -20,6 +20,20 @@ import generate as shader_generator
 
 
 class ReviewEvidenceTests(unittest.TestCase):
+    def test_every_native_harness_uses_the_scene_auto_run_gate(self) -> None:
+        gate = (TOOLS.parent / "Assets/Scripts/Integration Test Harness.ts").read_text()
+        self.assertIn("@input autoRun: boolean = false;", gate)
+        self.assertIn("if (!global.deviceInfoSystem.isEditor()) return false;", gate)
+        for path in Path(__file__).parent.glob("*.ts"):
+            source = path.read_text()
+            if "export class ReviewScenario extends BaseScriptComponent" not in source:
+                continue
+            with self.subTest(harness=path.name):
+                awake = source.split("onAwake(): void {", 1)[1]
+                self.assertTrue(awake.lstrip().startswith(
+                    "if (!integrationTestsEnabled(this.getSceneObject())) return;"))
+        self.assertIn("autoRun = true", review.script_attach_code(Path("/tmp/review"), 5))
+
     def test_native_errors_and_sik_caught_errors_cannot_pass_a_review(self) -> None:
         lines = [
             'I Preview UpdateDispatcher: Error in event "SpecsLaserUpdate": InternalError: pass',
@@ -149,6 +163,20 @@ class ReviewEvidenceTests(unittest.TestCase):
 
 
 class ReviewLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_focus_abort_skips_source_restoration_and_requires_authorization(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            (output / "focus-budget.aborted").write_text("focus lost")
+            args = review.argparse.Namespace(keep_open=False, mcp_config=output / "unused")
+            with mock.patch.object(review, "run_review", new_callable=mock.AsyncMock,
+                                   side_effect=review.ReviewError("recorder failed")), \
+                    mock.patch.object(review, "restore_source_project", new_callable=mock.AsyncMock) as restore, \
+                    mock.patch.object(review, "LensMcp", side_effect=RuntimeError("offline")):
+                with self.assertRaisesRegex(review.ReviewError, "recorder failed"):
+                    await review.review_and_restore(args, output, Path("workspace"))
+            restore.assert_not_awaited()
+            self.assertTrue(json.loads((output / "editor-restoration.json").read_text())["requiresUserAuthorization"])
+
     async def test_restores_source_after_success(self) -> None:
         args = review.argparse.Namespace(keep_open=False)
         with mock.patch.object(review, "run_review", new_callable=mock.AsyncMock, return_value={"passed": True}), \
@@ -330,7 +358,7 @@ class McpSdkContractTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(review.asyncio, "sleep", new_callable=mock.AsyncMock):
             await review.attach_scenario(Client(), Path("/disposable"), 5)
         self.assertEqual(len(codes), 3)
-        self.assertEqual(sum('createSceneObject("ReviewScenarioHost")' in code for code in codes), 1)
+        self.assertEqual(sum('createSceneObject("Integration Test Harness")' in code for code in codes), 1)
         self.assertNotIn("project.save()", codes[0])
 
     async def test_supports_sdk_snake_case_model_and_json_aliases(self) -> None:

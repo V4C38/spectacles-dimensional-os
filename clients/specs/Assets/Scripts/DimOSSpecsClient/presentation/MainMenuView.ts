@@ -161,8 +161,8 @@ export class MainMenuView {
     });
     setButtonSelected(sound.button, this.soundEnabled);
     const sensors = this.lidarRoot; this.pageTitle(this.pages.get("sensors")!, COPY.sensors, "Back from Sensors", "main");
-    this.sectionHeading(this.pages.get("sensors")!, "LiDAR", 0.225 * UNIT);
-    this.lidarButtons = this.tabs(this.pages.get("sensors")!, ["Off", "Obstacles", "Full"], 0.17 * UNIT,
+    this.sectionHeading(sensors, "LiDAR", 0.225 * UNIT);
+    this.lidarButtons = this.tabs(sensors, ["Off", "Obstacles", "Full"], 0.17 * UNIT,
       ["off", "obstacles", "full"].map(mode => () => callbacks.onLidarMode(mode as LidarDisplayMode)));
     this.rangeLabel = this.text(sensors, "Clearance", -23, 0.08 * UNIT, 34, 3.5, 18, HorizontalAlignment.Center);
     this.text(sensors, "Point limit", -23, -0.01 * UNIT, 34, 3.5, 18, HorizontalAlignment.Center);
@@ -336,10 +336,12 @@ export class MainMenuView {
   }
   private tabs(parent: SceneObject, labels: string[], y: number, actions: (() => void)[]): CapsuleButton[] {
     const groupRoot = global.scene.createSceneObject("NativeTabs"); groupRoot.setParent(parent);
+    groupRoot.getTransform().setLocalPosition(new vec3(0, y, 0));
+    this.rowNodes.push({ parent, node: groupRoot, y });
     this.surface(parent, 0, y, CONTENT, ACTION + 1.2, (ACTION + 1.2) / 2);
     return labels.map((label, i) => {
       const { x, width } = controlPanelTab(labels.length, i);
-      const result = this.button(groupRoot, label, label, x * UNIT, y, width * UNIT, ACTION, actions[i]);
+      const result = this.button(groupRoot, label, label, x * UNIT, 0, width * UNIT, ACTION, actions[i]);
       setButtonSelected(result.button, i === 0); return result.button;
     });
   }

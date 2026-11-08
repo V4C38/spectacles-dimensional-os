@@ -79,7 +79,10 @@ export class IntegrationInput {
     interactable: Interactable;
     inactive?: boolean;
   }): void { if (button.inactive || button.interactable.enabled === false)
-    return; this.hover(button.interactable); this.start(); this.end(); this.unhover(); }
+    return;
+    if (!button.interactable.getSceneObject().isEnabledInHierarchy)
+      throw new Error(`Cannot press hidden native control: ${button.interactable.getSceneObject().name}`);
+    this.hover(button.interactable); this.start(); this.end(); this.unhover(); }
   cancel(): void {
     const target = this.target;
     this.held = false;

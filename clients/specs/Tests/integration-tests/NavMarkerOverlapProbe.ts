@@ -1,3 +1,4 @@
+import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 // Actual native physics hits feed SIK's own target chooser before driving the registered input.
 import { DimOSSpecsClient } from "../Scripts/DimOSSpecsClient/DimOSSpecsClient";
 import { createIconButton } from "../Scripts/DimOSSpecsClient/presentation/UIKit";
@@ -34,6 +35,7 @@ export class ReviewScenario extends BaseScriptComponent {
   private pendingGoal: any = null;
 
   onAwake(): void {
+    if (!integrationTestsEnabled(this.getSceneObject())) return;
     this.createEvent("OnStartEvent").bind(() => this.createEvent("UpdateEvent").bind(() => this.tick()));
     this.createEvent("OnDestroyEvent").bind(() => this.input?.restore());
   }

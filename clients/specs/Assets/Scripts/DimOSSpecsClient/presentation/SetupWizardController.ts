@@ -141,6 +141,7 @@ export class SetupWizardController {
     this.connection = new SpecsConnectionController({
       script: deps.script, session: deps.session, transport: deps.transport,
       hostStore: deps.hostStore, ipRelayClient: deps.ipRelayClient,
+      onPinConsumed: () => this.view.clearInput(),
       onChanged: () => { this.showConnectStatus(); this.refreshFooterButtons(); },
       onConnectionTargetChanged: () => {
         this.invalidateBaseline(); this.deps.episode.reset();
@@ -302,7 +303,7 @@ export class SetupWizardController {
       this.showConnectStatus();
       return;
     }
-    if (savedPin) this.startAutoconnect();
+    if (savedPin) this.startAutoconnect(true);
     else this.showConnectStatus();
   }
 
@@ -324,7 +325,7 @@ export class SetupWizardController {
     if (this._connectionMethod === "pin") {
       const savedPin = this.loadStoredPin();
       this.fillConnectField(savedPin);
-      if (savedPin) this.startAutoconnect();
+      if (savedPin) this.startAutoconnect(true);
       else this.showConnectStatus();
       return;
     }
@@ -408,9 +409,9 @@ export class SetupWizardController {
     return true;
   }
 
-  private startAutoconnect(): void {
+  private startAutoconnect(loadedPin = false): void {
     if (!this.disposed && this._currentStep === SetupWizardStep.Connect)
-      this.connection.start(this._connectionMethod, this.view.getInputText());
+      this.connection.start(this._connectionMethod, this.view.getInputText(), loadedPin);
   }
 
   private invalidatePending(): void { this.connection.cancel(); }

@@ -1,3 +1,4 @@
+import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 import { DimOSSpecsClient } from "../Scripts/DimOSSpecsClient/DimOSSpecsClient";
 import { IntegrationInput } from "./IntegrationInput";
 import { getFrameComponent } from "../Scripts/DimOSSpecsClient/presentation/UIKit";
@@ -13,7 +14,8 @@ export class ReviewScenario extends BaseScriptComponent {
   private failed = false;
   private emit(v: Record<string, unknown>): void { print(`SPECS_REVIEW ${JSON.stringify({ ...v, unixMs: Date.now() })}`); }
   private check(name: string, passed: boolean): void { this.failed ||= !passed; this.emit({ type: "result", name, passed }); }
-  onAwake(): void { this.createEvent("OnStartEvent").bind(() => this.createEvent("UpdateEvent").bind(() => this.tick())); }
+  onAwake(): void {
+    if (!integrationTestsEnabled(this.getSceneObject())) return; this.createEvent("OnStartEvent").bind(() => this.createEvent("UpdateEvent").bind(() => this.tick())); }
   private tick(): void {
     this.elapsed += Math.min(0.1, getDeltaTime());
     if (!this.root) {

@@ -1,3 +1,5 @@
+import { layoutPanelRows, type PanelProfile, type LayoutRow } from "../../DimOSARClient/presentation/ControlPanelPresentation";
+export type { PanelProfile, LayoutRow } from "../../DimOSARClient/presentation/ControlPanelPresentation";
 import { CONTROL_PANEL_SCALE } from "../../DimOSARClient/presentation/ControlPanelPresentation";
 
 /** Scale each native frame and its descendants together. */
@@ -6,25 +8,9 @@ export const RUNTIME_PANEL_SCALE = CONTROL_PANEL_SCALE.runtime * 0.75;
 
 /** Specs-only design centimetres. Native content keeps its calibrated scale. */
 export const PANEL_GEOMETRY = { width: 90, maximumHeight: 76, top: 38, gap: 2, sectionGap: 3, bottom: 5, action: 6.4 } as const;
-export interface PanelProfile { height: number; rows: Record<string, number>; }
-export type LayoutRow = readonly [name: string, height: number, gapBefore?: number];
 
 export function panelProfile(startY: number, rows: readonly LayoutRow[], footer = true): PanelProfile {
-  let cursor = startY;
-  const positions: Record<string, number> = {};
-  rows.forEach(([name, height, gapBefore], index) => {
-    if (index) cursor -= gapBefore ?? PANEL_GEOMETRY.gap;
-    positions[name] = cursor - height / 2;
-    cursor -= height;
-  });
-  if (footer) {
-    cursor -= PANEL_GEOMETRY.gap;
-    positions.footer = cursor - PANEL_GEOMETRY.action / 2;
-    cursor -= PANEL_GEOMETRY.action;
-  }
-  const height = Math.ceil(PANEL_GEOMETRY.top - cursor + PANEL_GEOMETRY.bottom);
-  if (height > PANEL_GEOMETRY.maximumHeight) throw new Error(`Panel profile exceeds calibrated height: ${height}`);
-  return { height, rows: positions };
+  return layoutPanelRows(startY, rows, { ...PANEL_GEOMETRY, quantum: 1 }, footer);
 }
 export function panelContentOffset(height: number): number { return (height - PANEL_GEOMETRY.maximumHeight) / 2; }
 export function panelFooterY(height: number): number {

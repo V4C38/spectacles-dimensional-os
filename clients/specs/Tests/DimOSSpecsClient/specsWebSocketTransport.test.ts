@@ -185,3 +185,21 @@ it("cancels native timeout and watchdog events after open and close", () => {
   h.connectTimeout.cancel.mockClear(); h.connectWatchdog.cancel.mockClear(); h.transport.close();
   expect(h.connectTimeout.cancel).toHaveBeenCalledOnce(); expect(h.connectWatchdog.cancel).toHaveBeenCalledOnce();
 });
+
+it("bounds native CONNECTING sockets across repeated failed reconnects", () => {
+  const { transport, internetModule, connectTimeout, sockets } = makeTransport();
+  transport.connect(); connectTimeout.callback?.();
+  for (let i = 0; i < 50; i++) transport.connect();
+  expect(internetModule.createWebSocket).toHaveBeenCalledOnce();
+  expect(sockets[0].close).not.toHaveBeenCalled();
+  sockets[0].readyState = 3; sockets[0].onclose?.();
+  transport.connect();
+  expect(internetModule.createWebSocket).toHaveBeenCalledTimes(2);
+});
+
+it("reuses the bulk transport and its native timers across handshakes", () => {
+  const { transport } = makeTransport();
+  const sibling = transport.createSibling("/bulk");
+  for (let i = 0; i < 50; i++) expect(transport.createSibling("/bulk")).toBe(sibling);
+  expect(sibling.getUrl()).toBe("ws://192.168.1.10:8787/bulk");
+});

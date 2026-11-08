@@ -108,7 +108,7 @@ function sameNumbers(a: readonly number[], b: readonly number[]): boolean {
 /** Adaptive stroke quads encode the same segment metric used by the WebXR shader. */
 export class AdaptiveStrokeRenderer extends WorldMeshRenderer {
   private baseWidth = 1;
-  constructor(parent: SceneObject, name: string) { super(parent, name, WORLD_STROKE_MATERIAL, true); this.style(1, 1); }
+  constructor(parent: SceneObject, name: string, material: Material = WORLD_STROKE_MATERIAL) { super(parent, name, material, true); this.style(1, 1); }
   style(widthCm: number, opacity: number, color: readonly [number, number, number] = [1, 1, 1], startDistance = 0): void {
     const pass = this.material.mainPass as Pass & { opacityScale: number; colorR: number; colorG: number; colorB: number; widthScale: number; startDistance: number };
     pass.opacityScale = opacity; pass.colorR = color[0]; pass.colorG = color[1]; pass.colorB = color[2];

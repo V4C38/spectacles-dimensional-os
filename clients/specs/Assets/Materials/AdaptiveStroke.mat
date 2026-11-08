@@ -22,10 +22,31 @@
     PreviewEnabled:
       typeIdx: 0
       value: 0
+    colorB:
+      typeIdx: 1
+      value: 1.000000
+    colorG:
+      typeIdx: 1
+      value: 1.000000
+    colorR:
+      typeIdx: 1
+      value: 1.000000
+    minimumPixels:
+      typeIdx: 1
+      value: 2.000000
     nearWidthScale:
       typeIdx: 1
       value: 0.750000
+    opacityScale:
+      typeIdx: 1
+      value: 1.000000
+    startDistance:
+      typeIdx: 1
+      value: 0.000000
     viewportHeightPx:
       typeIdx: 1
       value: 1024.000000
+    widthScale:
+      typeIdx: 1
+      value: 1.000000
   Pass: !<reference> ab3580c8-7451-440e-a23f-6ca967a62640

@@ -1,3 +1,4 @@
+import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 // Disposable-project diagnostic. GPU dot centers must coincide with the hollow
 // native reference brackets at 1, 2 and 3 metres, before and after moving the camera.
 import { DimOSSpecsClient } from "../Scripts/DimOSSpecsClient/DimOSSpecsClient";
@@ -17,6 +18,7 @@ export class ReviewScenario extends BaseScriptComponent {
   private originalPosition = vec3.zero();
   private originalRotation = quat.quatIdentity();
   onAwake(): void {
+    if (!integrationTestsEnabled(this.getSceneObject())) return;
     this.createEvent("OnStartEvent").bind(() => this.createEvent("UpdateEvent").bind(() => this.tick()));
     this.createEvent("OnDestroyEvent").bind(() => {
       if (!this.root) return;

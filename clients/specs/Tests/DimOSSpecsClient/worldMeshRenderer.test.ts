@@ -45,3 +45,21 @@ it("keeps the native stroke vertex contract while supporting arm color and pixel
   expect(vertices.slice(19, 22)).toEqual([10, 20, 30]);
   expect((stroke.material.mainPass as any).minimumPixels).toBe(0.75);
 });
+
+it("arm rigid motion updates pose uniforms without uploading geometry", async () => {
+  const { ArmStrokeRenderer } = await import("../../Assets/Scripts/DimOSSpecsClient/manipulation/ArmStrokeRenderer");
+  const position = vi.fn(), rotation = vi.fn(), upload = vi.fn();
+  vi.stubGlobal("vec3", class { constructor(public x: number, public y: number, public z: number) {} });
+  vi.stubGlobal("quat", class { constructor(public w: number, public x: number, public y: number, public z: number) {} });
+  const stroke = Object.assign(Object.create(ArmStrokeRenderer.prototype), {
+    material: { mainPass: {} }, object: { getTransform: () => ({ setWorldPosition: position, setWorldRotation: rotation }) }, upload,
+  });
+  try {
+    stroke.pose({ position: [10, 20, 30], orientation: [0, 0, 0, 1] });
+    stroke.pose({ position: [10, 20, 30], orientation: [0, 0, 0, 1] });
+    expect(position).toHaveBeenCalledOnce();
+    stroke.pose({ position: [11, 20, 30], orientation: [0, 0, 0, 1] });
+    expect(stroke.material.mainPass.positionX).toBe(11);
+    expect(upload).not.toHaveBeenCalled();
+  } finally { vi.unstubAllGlobals(); }
+});

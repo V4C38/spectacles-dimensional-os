@@ -111,8 +111,11 @@ resets still discard old pose samples and capture generations.
 (`requestNavGoal`, `requestLidarSettings`, `requestUserMessage`,
 `session.requestEstop`, `session.requestState`, `episode.requestStart`).
 Specs setup retains PIN/IP connection entry followed by camera localization. A valid saved
-PIN is tried automatically when Connect opens without an established session, and when
-switching back to PIN mode. Editing the connection field cancels pending resolution/retries.
+PIN is tried automatically when Connect opens. Setup permits one initial attempt
+and up to three retries, one second after each failure. Only a PIN loaded from
+storage is removed and cleared after all four attempts fail. Newly entered PINs
+remain in the field and storage; successful loaded PINs remain saved. Editing the
+field or switching modes cancels the current attempt and its pending retry.
 Restart is queued until the next update, after native button dispatch, and invalidates
 panel scale animations before reopening Connect. Pending connection timers use
 `DelayedCallbackEvent.cancel()`; `reset(0)` schedules a callback instead of cancelling it.
@@ -666,8 +669,10 @@ server settings; point budgets and saved range preferences stay local.
 `SetupFlow` exposes read-only facts and command transitions using the canonical
 `SetupStep`. Both hosts consume Core activity derivation and `RobotSelection`
 eligibility. Coupled controls are applied from one snapshot per view.
-`SpecsConnectionController` owns connection entry, initial PIN resolution, retry/poll events and invalidation;
-portable `ConnectionResolution` fences discovery on subsequent transport reconnects.
+`SpecsConnectionController` owns bounded connection attempts, loaded-PIN expiry, retry/timeout/poll events and invalidation.
+It stops failed initial sessions before their reconnect loop can restart. Established
+Specs sessions reconnect to their resolved host; WebXR uses portable
+`ConnectionResolution` to fence discovery on subsequent reconnects.
 UI disposal retires those operations before the session stops. Native views remove
 their subscriptions and destroy their generated UI, retaining authored scene hosts.
 `WebXRSessionController` owns immersive events, stable reference spaces and tracking
@@ -798,6 +803,15 @@ settings live in Capabilities and are omitted when unavailable. Arm presentation
 interpolates new joint samples with velocity continuity over their preceding arrival interval (capped at 50 ms); raw measured
 feedback remains authoritative for commands, safety, and execution completion.
 PIN resolution belongs to connection establishment, outside the application message
-path. Reconnects resolve again, while bulk sockets retain their control connection's
-backend route. Cancelled connection attempts must never open late sockets or restore
+path. WebXR reconnects resolve again; Specs reconnects
+to the resolved host after successful setup. Bulk sockets retain their control connection's backend route.
+Specs reuses bulk transports and refuses to accumulate native CONNECTING sockets,
+which cannot safely be closed on the device. Cancelled connection attempts must never open late sockets or restore
 state from a previously selected backend.
+
+Specs arm presentation caches settled per-vertex opacity targets and unchanged outline
+geometry. Moving outlines use one rigid point-batch transform per link, rather than
+recomposing tracking origins per endpoint. Picking uses a separate immutable mesh,
+so visual opacity updates cannot invalidate its physics geometry. Arm menu surfaces
+and rows update when their size/layout changes; the end-effector marker keeps a
+single final color per frame. Device FPS still requires measurement on Spectacles.

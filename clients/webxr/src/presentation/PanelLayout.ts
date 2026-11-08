@@ -1,30 +1,15 @@
+import { layoutPanelRows, type PanelProfile, type LayoutRow } from "@dimos-ar-client/presentation/ControlPanelPresentation";
+export type { PanelProfile, LayoutRow } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 import { CONTROL_PANEL_LAYOUT, CONTROL_PANEL_CONTROLS } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 
 /** Metre-space profiles; controls keep their calibrated physical size. */
-export interface PanelProfile { height: number; rows: Record<string, number>; }
-export type LayoutRow = readonly [name: string, height: number, gapBefore?: number];
 export const PANEL_TOP = CONTROL_PANEL_LAYOUT.height / 2;
 export const PANEL_BOTTOM_PADDING = 0.05;
 /** Keep Emergency Stop visually separate from the runtime page content. */
 export const RUNTIME_FOOTER_GAP = 0.04;
 
 export function panelProfile(startY: number, rows: readonly LayoutRow[], footer = true, footerGap: number = CONTROL_PANEL_CONTROLS.gap): PanelProfile {
-  let cursor = startY;
-  const positions: Record<string, number> = {};
-  rows.forEach(([name, height, gapBefore], index) => {
-    if (index) cursor -= gapBefore ?? CONTROL_PANEL_CONTROLS.gap;
-    positions[name] = cursor - height / 2;
-    cursor -= height;
-  });
-  if (footer) {
-    cursor -= footerGap;
-    positions.footer = cursor - CONTROL_PANEL_CONTROLS.height / 2;
-    cursor -= CONTROL_PANEL_CONTROLS.height;
-  }
-  // Match Specs' centimetre rounding, accounting for floating-point row sums.
-  const height = Math.ceil((PANEL_TOP - cursor + PANEL_BOTTOM_PADDING) * 100 - 1e-8) / 100;
-  if (height > CONTROL_PANEL_LAYOUT.height) throw new Error(`Panel profile exceeds calibrated height: ${height}`);
-  return { height, rows: positions };
+  return layoutPanelRows(startY, rows, { top: PANEL_TOP, gap: CONTROL_PANEL_CONTROLS.gap, bottom: PANEL_BOTTOM_PADDING, action: CONTROL_PANEL_CONTROLS.height, maximumHeight: CONTROL_PANEL_LAYOUT.height, quantum: 0.01 }, footer, footerGap);
 }
 
 export function panelFooterY(height: number): number {

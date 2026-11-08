@@ -1,3 +1,4 @@
+import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 import { RUNTIME_LAYOUTS, RUNTIME_PANEL_SCALE, SETUP_LAYOUTS, panelContentOffset } from "../Scripts/DimOSSpecsClient/presentation/PanelLayout";
 // Copied into disposable Assets/Review by tools/review.py; never shipped to hardware.
 import { DimOSSpecsClient } from "../Scripts/DimOSSpecsClient/DimOSSpecsClient";
@@ -29,6 +30,7 @@ export class ReviewScenario extends BaseScriptComponent {
   private goal: Vec3 = [2.5, 0.5, -0.63];
 
   onAwake(): void {
+    if (!integrationTestsEnabled(this.getSceneObject())) return;
     this.createEvent("OnStartEvent").bind(() => {
       const delay = this.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
       delay.bind(() => this.start()); delay.reset(this.startDelayS);

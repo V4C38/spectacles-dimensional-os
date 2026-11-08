@@ -1,3 +1,4 @@
+import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 import { DimOSSpecsClient } from "../Scripts/DimOSSpecsClient/DimOSSpecsClient";
 @component
 export class ReviewScenario extends BaseScriptComponent {
@@ -5,7 +6,8 @@ export class ReviewScenario extends BaseScriptComponent {
   startDelayS = 5;
   private elapsed = 0;
   private captured = false;
-  onAwake(): void { this.createEvent("OnStartEvent").bind(() => this.createEvent("UpdateEvent").bind(() => this.tick())); }
+  onAwake(): void {
+    if (!integrationTestsEnabled(this.getSceneObject())) return; this.createEvent("OnStartEvent").bind(() => this.createEvent("UpdateEvent").bind(() => this.tick())); }
   private tick(): void {
     this.elapsed += Math.min(0.1, getDeltaTime());
     if (this.elapsed < this.startDelayS)

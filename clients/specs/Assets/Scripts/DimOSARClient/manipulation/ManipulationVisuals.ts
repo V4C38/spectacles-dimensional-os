@@ -143,3 +143,61 @@ export function endEffectorAngles(base: ManipulationPose, ee: ManipulationPose):
   const yaw = Math.atan2(2*(w*z+x*y), 1-2*(y*y+z*z));
   return `R ${(roll*180/Math.PI).toFixed(1)}° P ${(pitch*180/Math.PI).toFixed(1)}° Y ${(yaw*180/Math.PI).toFixed(1)}°`;
 }
+
+/** A retained target is displayed only while its interaction is active. */
+export function endEffectorDisplayPose(
+  measured: ManipulationPose | null | undefined,
+  target: ManipulationPose | null | undefined,
+  input: { selected: boolean; following: boolean; dragging: boolean; finishing: boolean; offset: boolean },
+): ManipulationPose | null | undefined {
+  const active = input.selected || input.following || input.dragging || input.finishing;
+  return active && (input.offset || input.dragging) && target ? target : measured;
+}
+
+/** Recompute per-point targets only when presentation changes; stop scanning settled fades. */
+export class ArmPointOpacity {
+  readonly values: number[] = [];
+  private targets: number[] = [];
+  private key: string | null = null;
+  private pending = false;
+
+  sample(points: readonly Vec3[], key: string, target: (point: Vec3) => number,
+    fade: (previous: number, target: number) => number): boolean {
+    if (this.key !== key || this.values.length !== points.length) {
+      if (this.values.length !== points.length) {
+        this.values.length = points.length; this.values.fill(0);
+      }
+      this.targets = points.map(target);
+      this.key = key; this.pending = true;
+    }
+    if (!this.pending) return false;
+    this.pending = false;
+    let changed = false;
+    for (let i = 0; i < this.values.length; i++) {
+      const previous = this.values[i], next = fade(previous, this.targets[i]);
+      this.values[i] = next;
+      changed ||= next !== previous;
+      this.pending ||= next !== this.targets[i];
+    }
+    return changed;
+  }
+}
+
+export function armPointOpacityKey(measured: ManipulationPose, proposed: ManipulationPose,
+  visible: boolean, floor: number, boost: number): string {
+  if (!visible) return "hidden";
+  const relative = composePose(inversePose(measured), proposed);
+  return JSON.stringify([relative.position.map(v => Math.round(v * 1e9)),
+    relative.orientation.map(v => Math.round(v * 1e9)), floor, boost]);
+}
+
+/** Latest-state sampling only: missed opacity samples never accumulate. */
+export class ArmOpacityCadence {
+  private last: number | null = null;
+  sample(now: number): number | null {
+    if (this.last !== null && now >= this.last && now - this.last < 0.1 - 1e-9) return null;
+    const elapsed = this.last === null || now < this.last ? 0.1 : now - this.last;
+    this.last = now;
+    return elapsed;
+  }
+}

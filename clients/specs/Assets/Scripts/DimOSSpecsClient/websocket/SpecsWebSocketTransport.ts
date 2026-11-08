@@ -22,6 +22,7 @@ export class SpecsWebSocketTransport implements WebSocketTransport {
   private connecting = false;
   private hostClosing = false;
   private readonly retiredSockets = new Set<WebSocket>();
+  private bulkSibling: SpecsWebSocketTransport | null = null;
   private readonly sibling: (path: string) => SpecsWebSocketTransport;
 
   constructor(deps: {
@@ -36,7 +37,12 @@ export class SpecsWebSocketTransport implements WebSocketTransport {
       timer.bind(callback); timer.reset(seconds);
       return () => { timer.cancel(); deps.script.removeEvent(timer); };
     });
-    this.sibling = path => new SpecsWebSocketTransport({ ...deps, url: /^wss?:\/\//.test(path) ? path : this.url.replace(/^(wss?:\/\/[^/]+).*$/, "$1") + path });
+    this.sibling = path => {
+      const url = /^wss?:\/\//.test(path) ? path : this.url.replace(/^(wss?:\/\/[^/]+).*$/, "$1") + path;
+      if (!this.bulkSibling) this.bulkSibling = new SpecsWebSocketTransport({ ...deps, url });
+      else { this.bulkSibling.close(); this.bulkSibling.setUrl(url); }
+      return this.bulkSibling;
+    };
     this.url = deps.url;
     this.connectTimeoutS = requirePositive(
       deps.connectTimeoutS ?? AR_MODULE_CLIENT_CONFIG.connectTimeoutS,
@@ -87,6 +93,11 @@ export class SpecsWebSocketTransport implements WebSocketTransport {
       this.socket = null;
     }
     this.drainRetiredOpen();
+    // A timed-out native CONNECTING socket cannot safely be closed. Do not pile
+    // more native connections on top of it while it is still unresolved.
+    if (Array.from(this.retiredSockets).some(socket => socket.readyState === WS_CONNECTING)) {
+      this.emitClose(); return;
+    }
     this.connecting = true;
 
     let socket: WebSocket;
@@ -245,6 +256,7 @@ export class SpecsWebSocketTransport implements WebSocketTransport {
       return;
     }
     this.detachHandlers(socket);
+    if (socket.readyState !== WS_CONNECTING && socket.readyState !== WS_OPEN) return;
     this.retiredSockets.add(socket);
     socket.onopen = () => {
       if (this.retiredSockets.has(socket) && socket.readyState === WS_OPEN) {

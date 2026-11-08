@@ -1,20 +1,21 @@
+import { SpecsArmPanelPresenter } from "./SpecsArmPanelPresenter";
+import { ArmStrokeRenderer } from "./ArmStrokeRenderer";
 import { EndEffectorStatusPill } from "./EndEffectorStatusPill";
-import { Frame } from "SpectaclesUIKit.lspkg/Scripts/Components/Frame/Frame";
-import { endEffectorAngles } from "../../DimOSARClient/manipulation/ManipulationVisuals";
-import { ARM_PANEL_STYLE, clampArmPanelScale, PANEL_PIN_SEGMENTS, PANEL_SCAN_SEGMENTS } from "../../DimOSARClient/presentation/PanelFrameStyle";
+import { endEffectorAngles, endEffectorDisplayPose } from "../../DimOSARClient/manipulation/ManipulationVisuals";
+import { ARM_PANEL_STYLE, PANEL_PIN_SEGMENTS, PANEL_SCAN_SEGMENTS } from "../../DimOSARClient/presentation/PanelFrameStyle";
 import { manipulationPreviewPlan, manipulationMenuRows, manipulationButtonEnabled, endEffectorAction, manipulationPathOpacity } from "../../DimOSARClient/manipulation/ManipulationPresentation";
 import { PanelHeightAnimation } from "../../DimOSARClient/presentation/PanelHeightAnimation";
 import { armMotionContext, ArmJointFilter } from "../../DimOSARClient/manipulation/ArmJointFilter";
 import { ArmTrajectoryProgress } from "../../DimOSARClient/manipulation/ArmTrajectoryProgress";
 import { gripperJointValues } from "../../DimOSARClient/manipulation/ArmToolKinematics";
-import { ARM_VISUAL_STYLE as STYLE, armShapeEdges, armPointDisplacement, armLinkWeight, armLinkPresentation, ArmMeshFade } from "../../DimOSARClient/manipulation/ManipulationVisuals";
-import { ARM_MATERIAL, configureArmMaterial } from "./ArmMaterial";
+import { ARM_VISUAL_STYLE as STYLE, armShapeEdges, armPointDisplacement, armLinkWeight, armLinkPresentation, ArmMeshFade, ArmPointOpacity, armPointOpacityKey, ArmOpacityCadence } from "../../DimOSARClient/manipulation/ManipulationVisuals";
+import { ARM_MATERIAL, configureArmMaterial, ARM_SURFACE_MATERIAL, configureArmSurface } from "./ArmMaterial";
 import type { ManipulationInputCapture } from "../../DimOSARClient/manipulation/ManipulationInputCapture";
 import { WORLD_DASH_STYLE, ROBOT_LABEL_STYLE } from "../../DimOSARClient/presentation/WorldVisualStyle";
 import { Slider } from "SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider";
 import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable";
 import { AdaptiveStrokeRenderer, WorldMeshRenderer, sphereMesh } from "../presentation/WorldMeshRenderer";
-import { createIconButton, createText, createRobotLabelText, createPanelSurface, configureControlPanelFrame, panelButtonLayer, isFrameInitialized, setButtonStyle, uiMaterialLayer, SnapOS2Styles, COLOR_WHITE, type IconButtonResult } from "../presentation/UIKit";
+import { createIconButton, createText, createRobotLabelText,  panelButtonLayer, setButtonStyle, uiMaterialLayer, SnapOS2Styles, COLOR_WHITE, type IconButtonResult } from "../presentation/UIKit";
 import { clientTrackingToSpecsPoint, clientTrackingToSpecsPose } from "../utilities/SpecsCoordinates";
 import { odomToClientTrackingPose } from "../../DimOSARClient/localization/clientTrackingTransforms";
 import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
@@ -25,7 +26,8 @@ import type { Vec3 } from "../../DimOSARClient/websocket/protocolTypes";
 import { OPENYAM_MESH } from "./OpenYAMMesh";
 
 export class ManipulationRenderer {
-  private readonly geometry = new Map<string, { positions: number[]; normals: number[]; indices: readonly number[]; points: Vec3[]; weights: number[]; color?: number }>();
+  private readonly placements = new Map<SceneObject, ManipulationPose>();
+  private readonly geometry = new Map<string, { positions: number[]; normals: number[]; indices: readonly number[]; points: Vec3[]; opacity: ArmPointOpacity; fillAlpha?: number; color?: number }>();
   readonly object: SceneObject;
   readonly handle: SceneObject;
   readonly panel: SceneObject;
@@ -45,7 +47,7 @@ export class ManipulationRenderer {
   private readonly buttons = new Map<string, IconButtonResult>();
   private readonly picks = new Map<string, SceneObject>();
   private readonly meshes = new Map<string, WorldMeshRenderer>();
-  private readonly edges = new Map<string, { stroke: AdaptiveStrokeRenderer; points: Vec3[]; weights?: number[] }>();
+  private readonly edges = new Map<string, { stroke: ArmStrokeRenderer; points: Vec3[]; localPoints: Vec3[]; opacity: ArmPointOpacity; renderKey: string }>();
   private readonly path: AdaptiveStrokeRenderer;
   private readonly measured: WorldMeshRenderer;
   private readonly subscriptions: (() => void)[] = [];
@@ -59,9 +61,10 @@ export class ManipulationRenderer {
   private readonly previewFilter = new ArmJointFilter(0.15, 0.25);
   private readonly progress = new ArmTrajectoryProgress();
   private readonly speed: Slider;
-  private readonly plate: ReturnType<typeof createPanelSurface>;
+  private readonly panelPresenter: SpecsArmPanelPresenter;
   private readonly menuHeight = new PanelHeightAnimation();
   private syncingSpeed = false;
+  private menuRows = "";
   private modelRevision = "";
   private context = "";
   private pathKey = "";
@@ -74,14 +77,10 @@ export class ManipulationRenderer {
   private state: ManipulationState | null | undefined;
   private controlsEnabled = false;
   private readonly meshFade = new ArmMeshFade();
+  private readonly opacityCadence = new ArmOpacityCadence();
   private readonly pointFade = new ArmMeshFade();
   private readonly fillFade = new ArmMeshFade();
   private selected = false;
-  private panelFrame: Frame | null = null;
-  private panelFrameRoot: SceneObject | null = null;
-  private panelPinned = false;
-  private frameHeight = -1;
-  private configuringFrame = false;
   debugEnabled = false;
   private readonly debugNodes = new Map<string, {axes: AdaptiveStrokeRenderer[]; label: Text}>();
 
@@ -92,7 +91,7 @@ export class ManipulationRenderer {
     const geometry = sphereMesh(0.9, 20, 16);
     this.sphere = new WorldMeshRenderer(this.handle, "EndEffectorSphere", ARM_MATERIAL);
     configureArmMaterial(this.sphere.material);
-    (this.sphere.material.mainPass as Pass & { fill: number }).fill = 1;
+    (this.sphere.material.mainPass as Pass & { fill: number }).fill = 0.75;
     const handleGeometry = sphereMesh(1.2, 20, 16);
     this.sphere.triangles(handleGeometry.positions, handleGeometry.indices, [0.82, 0.82, 0.82, 1], undefined, handleGeometry.normals);
     const collider = this.handle.createComponent("Physics.ColliderComponent") as ColliderComponent;
@@ -122,11 +121,9 @@ export class ManipulationRenderer {
     this.nameLabel = createRobotLabelText(labels, "ArmTitle", style.title.emM, style.title.xM, style.title.yM, style.title.widthM, true, COLOR_WHITE, 21);
     this.activityLabel = createRobotLabelText(labels, "ArmActivity", style.activity.emM, 0, style.activity.yM, style.activity.widthM, false, COLOR_WHITE, 22);
     this.label = createRobotLabelText(labels, "ArmMovementSpeed", style.detail.emM, 0, style.detail.yM, style.detail.widthM, false, new vec4(1, 1, 1, 0.5), 22);
-    this.panel = this.node(this.base, "ManipulationMenu");
-    this.panel.getTransform().setLocalPosition(new vec3(0, -13, 0));
-    this.panel.getTransform().setLocalScale(vec3.one().uniformScale((ARM_PANEL_STYLE.defaultScale * .75)));
+    this.panelPresenter = new SpecsArmPanelPresenter(this.object);
+    this.panel = this.panelPresenter.content;
     this.menuHeight.request(4 * ARM_PANEL_STYLE.rowM + ARM_PANEL_STYLE.paddingM + ARM_PANEL_STYLE.headerM, true);
-    this.plate = createPanelSurface(this.panel, "ArmMenuPlate", 22.4, 9.6, new vec3(0, -4.8, 0), ARM_PANEL_STYLE.cornerM*100);
     this.previewMenu = this.node(this.object, "PreviewMenu");
     const add = (key: string, text: string, action: () => void, style = SnapOS2Styles.Secondary) => {
       const button = createIconButton(key === "plan" || key === "execute" ? this.previewMenu : this.panel, key, text, key === "estop" ? 20 : key === "plan" || key === "execute" ? 9.5 : key === "reset" || key === "stop" ? 9.2 : 14, ARM_PANEL_STYLE.buttonHeightM*100, vec3.zero(), style);
@@ -182,73 +179,10 @@ export class ManipulationRenderer {
     };
     drawIcon(PANEL_PIN_SEGMENTS, ARM_PANEL_STYLE.pinXM);
     this.scanIcon = drawIcon(PANEL_SCAN_SEGMENTS, ARM_PANEL_STYLE.pinXM-.039);
-    this.panelFrameRoot=this.node(this.object,"ArmControlFrame");
-    this.panelFrame=this.panelFrameRoot.createComponent(Frame.getTypeName()) as Frame;
-    const configure=()=>{
-      const frame=this.panelFrame;
-      if(!isFrameInitialized(frame)) return;
-      this.configuringFrame=true;
-      configureControlPanelFrame(frame!, {width: ARM_PANEL_STYLE.widthM, height: this.menuHeight.height}, true);
-      frame!.roundedRectangle.cornerRadius = ARM_PANEL_STYLE.cornerM*100;
-      frame!.showCloseButton=false; frame!.showFollowButton=false;
-      frame!.allowTranslation=true; frame!.allowScaling=true; frame!.onlyInteractOnBorder=true;
-      frame!.setUseFollow(false); frame!.setFollowing(false);
-      this.panel.setParent(frame!.content);
-      this.panel.getTransform().setLocalScale(vec3.one());
-      frame!.content.getTransform().setLocalScale(vec3.one());
-      this.plate.getSceneObject().enabled=false;
-      this.frameHeight=-1; this.configuringFrame=false;
-    };
-    this.subscriptions.push(this.panelFrame.onInitialized.add(configure));
-    this.subscriptions.push(this.panelFrame.onTranslationStart.add(()=>{this.panelPinned=true;}));
-    this.subscriptions.push(this.panelFrame.onScalingUpdate.add(()=>{if(!this.configuringFrame){this.panelPinned=true;this.clampPanelSize();}}));
-    this.panelFrame.initialize(); configure();
     this.warning = new EndEffectorStatusPill(this.object);
   }
 
-  resetPanel(): void {
-    this.panelPinned=false; this.frameHeight=-1;
-    this.panelFrameRoot?.getTransform().setLocalScale(vec3.one().uniformScale((ARM_PANEL_STYLE.defaultScale * .75)));
-    this.panelFrame?.content.getTransform().setLocalScale(vec3.one());
-  }
-  private clampPanelSize(): void {
-    if (!this.panelFrameRoot) return;
-    const transform = this.panel.getTransform(), scale = transform.getWorldScale().x;
-    if (!(scale > 0)) return;
-    const clamped = clampArmPanelScale(scale / .75) * .75;
-    if (Math.abs(clamped - scale) < 1e-6) return;
-    this.configuringFrame = true;
-    // Clamp native content and frame size together; scaling the frame root
-    // instead would make borders grow as the user pinches below the minimum.
-    const top = transform.getWorldPosition();
-    const frame = this.panelFrame!, ratio = clamped / scale;
-    const content = frame.content.getTransform(), size = frame.innerSize;
-    frame.autoScaleContent = false;
-    frame.innerSize = new vec2(size.x * ratio, size.y * ratio);
-    content.setLocalScale(content.getLocalScale().uniformScale(ratio));
-    frame.autoScaleContent = true;
-    const root = this.panelFrameRoot.getTransform();
-    root.setWorldPosition(root.getWorldPosition().add(top.sub(transform.getWorldPosition())));
-    this.configuringFrame = false;
-  }
-  private updateFrame(camera: SceneObject): void {
-    const frame=this.panelFrame, root=this.panelFrameRoot;
-    if(!root || !isFrameInitialized(frame)) return;
-    if(!this.panelPinned){
-      const height=this.menuHeight.height*100;
-      this.configuringFrame=true;
-      if(Math.abs(height-this.frameHeight)>.001){
-        frame!.autoScaleContent=false;
-        frame!.innerSize=new vec2(22.4-frame!.border*2-frame!.padding.x,height-frame!.border*2-frame!.padding.y);
-        this.panel.getTransform().setLocalPosition(new vec3(0,height/2,0));
-        this.frameHeight=height;
-      }
-      root.getTransform().setLocalScale(vec3.one().uniformScale((ARM_PANEL_STYLE.defaultScale * .75)));
-      const anchor=this.base.getTransform().getWorldTransform().multiplyPoint(new vec3(0,-13-height*(ARM_PANEL_STYLE.defaultScale * .75)/2,0));
-      root.getTransform().setWorldPosition(anchor); root.getTransform().setWorldRotation(camera.getTransform().getWorldRotation());
-      frame!.autoScaleContent=true; this.configuringFrame=false;
-    }
-  }
+  resetPanel(): void { this.panelPresenter.reset(); }
 
   private node(parent: SceneObject, name: string): SceneObject {
     const object = global.scene.createSceneObject(name); object.setParent(parent); return object;
@@ -297,7 +231,6 @@ export class ManipulationRenderer {
     }
     const model = state.model, interaction = this.core.interaction, intent = interaction.snapshot();
     const group = state.groups?.find(g => g.id === interaction.groupId), observed = state.observations?.[interaction.groupId ?? ""];
-    this.sphere.setColor(intent.blocked ? [0.56, 0.59, 0.62, 0.7] : [0.8, 0.9, 1, 0.7]);
     const dt = this.lastTime ? Math.max(0, Math.min(0.1, now - this.lastTime)) : 1 / 60; this.lastTime = now;
     const context = armMotionContext(model.revision, interaction.groupId, origin);
     if (this.context !== context) { this.jointFilter.reset(); this.previewFilter.reset(); this.progress.reset(); this.context = context; }
@@ -316,43 +249,53 @@ export class ManipulationRenderer {
     const poses = linkPoses(model, values), measuredPoses = linkPoses(model, all);
     const displaced = !!interaction.target && intent.targetOffset;
     const markerAction = endEffectorAction(selected, intent, selected ? interaction.desiredGripper ?? observed?.gripper_target ?? observed?.gripper : observed?.gripper, group?.has_gripper === true);
-    const displayedPose = interaction.target && (selected || intent.dragging || intent.finishing || intent.targetOffset) ? interaction.target : observed?.pose;
+    const displayedPose = endEffectorDisplayPose(observed?.pose, interaction.target, {
+      selected, following: state.following === true, dragging: intent.dragging === true,
+      finishing: intent.finishing === true, offset: intent.targetOffset,
+    });
     if (this.modelRevision !== model.revision) {
       for (const unsubscribe of this.modelSubscriptions) unsubscribe(); this.modelSubscriptions.length = 0;
       for (const mesh of this.meshes.values()) mesh.destroy(); this.meshes.clear();
       for (const { stroke } of this.edges.values()) stroke.destroy(); this.edges.clear();
       for (const pick of this.picks.values()) pick.destroy(); this.picks.clear(); this.hoverSources.clear();
-      this.geometry.clear();
+      this.geometry.clear(); this.placements.clear();
       this.modelRevision = model.revision; this.pathKey = "";
       for (const link of model.links) {
         const data = OPENYAM_MESH.links[link.name];
         if (!data || model.visual_signature !== OPENYAM_MESH.signature) continue;
-        const mesh = new WorldMeshRenderer(this.object, `Arm_${link.name}`, ARM_MATERIAL);
+        const mesh = new WorldMeshRenderer(this.object, `Arm_${link.name}`, ARM_SURFACE_MATERIAL);
         const rotate = (p: Vec3): Vec3 => link.name === model.root ? [-p[1], p[0], p[2]] : p;
         const positions: number[] = [], normals: number[] = [];
         for (let i = 0; i < data.positions.length; i += 3) {
           positions.push(...clientTrackingToSpecsPoint(rotate(data.positions.slice(i, i + 3) as Vec3)));
           normals.push(...clientTrackingToSpecsPoint(rotate(data.normals.slice(i, i + 3) as Vec3)).map(v => v / 100));
         }
-        this.geometry.set(link.name, { positions, normals, indices: data.indices, weights: new Array(data.positions.length / 3).fill(0), points: Array.from({length: data.positions.length / 3}, (_, i) => rotate(data.positions.slice(i * 3, i * 3 + 3) as Vec3)) });
+        this.geometry.set(link.name, { positions, normals, indices: data.indices, opacity: new ArmPointOpacity(), points: Array.from({length: data.positions.length / 3}, (_, i) => rotate(data.positions.slice(i * 3, i * 3 + 3) as Vec3)) });
         mesh.triangles(positions, data.indices, [0.8, 0.85, 0.88, 1], undefined, normals); this.meshes.set(link.name, mesh);
         const pickRoot = this.node(this.object, `Pick_${link.name}`);
         this.picks.set(link.name, pickRoot);
         const collider = pickRoot.createComponent("Physics.ColliderComponent") as ColliderComponent;
         const shape = Shape.createMeshShape() as MeshShape;
-        shape.mesh = mesh.visual.mesh; shape.convex = false; collider.shape = shape;
+        const pickingMesh = new WorldMeshRenderer(pickRoot, `PickGeometry_${link.name}`, ARM_MATERIAL);
+        pickingMesh.triangles(positions, data.indices, [1, 1, 1, 1], undefined, normals);
+        pickingMesh.visual.enabled = false;
+        // Opacity uploads must not invalidate the physics mesh every frame.
+        shape.mesh = pickingMesh.visual.mesh; shape.convex = false; collider.shape = shape;
         const hit = pickRoot.createComponent(Interactable.getTypeName()) as Interactable;
         hit.colliders = [collider];
         this.modelSubscriptions.push(hit.onHoverEnter.add(e => this.hoverSources.add(`${link.name}:${e.interactor.inputType}`)));
         this.modelSubscriptions.push(hit.onHoverExit.add(e => this.hoverSources.delete(`${link.name}:${e.interactor.inputType}`)));
 
-        const stroke = new AdaptiveStrokeRenderer(this.object, `Outline_${link.name}`); stroke.minimumPixels = STYLE.minimumPixels;
-        this.edges.set(link.name, { stroke, points: armShapeEdges(data.positions, data.indices).map(rotate) });
+        const stroke = new ArmStrokeRenderer(this.object, `Outline_${link.name}`); stroke.minimumPixels = STYLE.minimumPixels;
+        const points = armShapeEdges(data.positions, data.indices).map(rotate);
+        this.edges.set(link.name, { stroke, points, localPoints: points.map(clientTrackingToSpecsPoint), opacity: new ArmPointOpacity(), renderKey: "" });
       }
     }
     const world = (pose: ManipulationPose): ManipulationPose => clientTrackingToSpecsPose(odomToClientTrackingPose(pose, origin));
     this.meshFade.beginFrame(now, `${model.revision}:${interaction.groupId}`);
-    this.pointFade.beginFrame(now, `${model.revision}:${interaction.groupId}`);
+    const opacityElapsed = this.opacityCadence.sample(now);
+    const sampleOpacity = opacityElapsed !== null;
+    if (sampleOpacity) this.pointFade.beginFrame(now, `${model.revision}:${interaction.groupId}`);
     this.fillFade.beginFrame(now, `${model.revision}:${interaction.groupId}`);
     for (const link of model.links) {
       const pose = composePose(root, poses[link.name]);
@@ -363,30 +306,46 @@ export class ManipulationRenderer {
       const alpha = this.meshFade.sample(link.name, style.visible ? style.alpha : 0);
       const fillAlpha = this.fillFade.sample(link.name, style.showFill ? style.alpha : 0);
       const pointWeight = armPointDisplacement(measuredPoses[link.name], poses[link.name]);
+      const opacityKey = armPointOpacityKey(measuredPoses[link.name], poses[link.name], style.pointVisible, style.floor, style.displacementBoost);
+      const pointOpacity = (point: Vec3) => style.pointVisible ? style.floor + Math.max(0, pointWeight(...point) - style.floor) * style.displacementBoost : 0;
       const visible = alpha > 0.0001;
       const mesh = this.meshes.get(link.name);
       if (mesh) {
+        configureArmSurface(mesh.material, fillAlpha, style.color);
         const data = this.geometry.get(link.name);
         if (data) {
-          let changed = data.color !== style.color;
-          for (let i = 0; i < data.points.length; i++) {
-            const point = data.points[i], previous = data.weights[i];
-            const next = this.pointFade.sampleValue(previous, style.pointVisible ? (style.floor + Math.max(0, pointWeight(...point) - style.floor) * style.displacementBoost) : 0);
-            if (next !== previous) { data.weights[i] = next; changed = true; }
-          }
+          const weightsChanged = sampleOpacity && data.opacity.sample(data.points, opacityKey, pointOpacity,
+            (previous, target) => this.pointFade.sampleValue(previous, target));
+          const changed = data.color === undefined || weightsChanged;
           if (changed) {
-            mesh.triangles(data.positions, data.indices, [((style.color >> 16) & 255) / 255, ((style.color >> 8) & 255) / 255, (style.color & 255) / 255, 1], undefined, data.normals, data.weights);
+            mesh.triangles(data.positions, data.indices, [((style.color >> 16) & 255) / 255, ((style.color >> 8) & 255) / 255, (style.color & 255) / 255, 1], undefined, data.normals, data.opacity.values);
             data.color = style.color;
           }
         }
         mesh.object.enabled = visible; this.place(mesh.object, pose, origin);
-        configureArmMaterial(mesh.material, fillAlpha);
+        const geometry = this.geometry.get(link.name);
+        if (geometry && geometry.fillAlpha !== fillAlpha) {
+          configureArmSurface(mesh.material, fillAlpha, style.color); geometry.fillAlpha = fillAlpha;
+        }
       }
       const edge = this.edges.get(link.name);
       if (edge) {
         const color: Vec3 = [((style.color >> 16) & 255) / 255, ((style.color >> 8) & 255) / 255, (style.color & 255) / 255];
-        edge.stroke.segments(visible ? edge.points.map(position => world(composePose(pose, { position, orientation: [0, 0, 0, 1] })).position) : [],
-          style.widthM * 100, STYLE.opacity * alpha, STYLE.dashM * 100, STYLE.gapM * 100, false, color, edge.points.map((point, i) => { const weights = edge.weights ??= new Array(edge.points.length).fill(0); return weights[i] = this.pointFade.sampleValue(weights[i], style.pointVisible ? (style.floor + Math.max(0, pointWeight(...point) - style.floor) * style.displacementBoost) : 0); }));
+        const weightsChanged = sampleOpacity && edge.opacity.sample(edge.points, opacityKey, pointOpacity,
+          (previous, target) => this.pointFade.sampleValue(previous, target));
+        if (!visible) { edge.stroke.hide(); }
+        else {
+          edge.stroke.object.enabled = true;
+          const renderKey = JSON.stringify([style.widthM]);
+          edge.stroke.pose(world(pose));
+          edge.stroke.style(style.widthM * 100, STYLE.opacity * alpha, color);
+          if (weightsChanged || edge.renderKey !== renderKey) {
+            edge.stroke.segments(edge.localPoints,
+              style.widthM * 100, 1, STYLE.dashM * 100, STYLE.gapM * 100, false, [1, 1, 1], edge.opacity.values);
+            edge.stroke.style(style.widthM * 100, STYLE.opacity * alpha, color);
+            edge.renderKey = renderKey;
+          }
+        }
       }
       const pickRoot = this.picks.get(link.name);
       if (pickRoot) {
@@ -449,24 +408,24 @@ export class ManipulationRenderer {
     this.rescan.button.inactive = intent.executing || intent.dragging || intent.resetting;
     this.activityLabel.text = intent.activity + (model.visual_signature !== OPENYAM_MESH.signature ? " · Preview mesh unavailable" : "");
     this.label.text = `Movement speed ${Math.round(interaction.speedScale * 100)}%`;
-    const handlePass = this.sphere.material.mainPass as Pass & { fill: number };
-    handlePass.fill = 0.75;
     this.sphere.setColor(interaction.rejection ? [1, 0.8, 0, 1] : [0.82, 0.82, 0.82, 1]);
 
     this.speedLabel.text = `Speed · ${Math.round(interaction.speedScale * 100)}%`;
-    this.syncingSpeed = true; this.speed.currentValue = (interaction.speedScale - 0.05) / 0.95; this.syncingSpeed = false;
+    const speedValue = (interaction.speedScale - 0.05) / 0.95;
+    if (this.speed.currentValue !== speedValue) {
+      this.syncingSpeed = true; this.speed.currentValue = speedValue; this.syncingSpeed = false;
+    }
     this.speed.enabled = intent.canManipulate;
     const rows = manipulationMenuRows(selected, !!state.stopped);
     this.menuHeight.request((rows.length-1) * ARM_PANEL_STYLE.rowM + ARM_PANEL_STYLE.paddingM + ARM_PANEL_STYLE.headerM); this.menuHeight.tick(dt);
-    this.plate.size = new vec2(22.4, this.menuHeight.height * 100);
-    this.plate.getSceneObject().getTransform().setLocalPosition(new vec3(0, -this.menuHeight.height * 50, 0));
-    this.updateFrame(camera);
-    this.clampPanelSize();
-    rows.forEach(key => {
+    this.panelPresenter.update(state.root_pose ? this.base : null, camera, this.menuHeight.height);
+    const menuRows = rows.join(":");
+    if (menuRows !== this.menuRows) rows.forEach(key => {
       const i = key === "stop" || key === "reset" ? 0 : key === "speed" ? 1 : 2;
       const node = key === "speed" ? this.speed.getSceneObject() : this.buttons.get(key)!.sceneObject;
       node.getTransform().setLocalPosition(new vec3(key === "reset" ? 5.3 : key === "stop" ? -5.3 : 0, -ARM_PANEL_STYLE.headerM*100-2.8-i*4-(key === "speed" ? 1 : i>1 ? 1.2 : 0),.8));
     });
+    this.menuRows = menuRows;
     for (const [key, button] of this.buttons) {
       if (key !== "plan" && key !== "execute") button.sceneObject.enabled = rows.includes(key);
       button.button.inactive = !manipulationButtonEnabled(key, intent);
@@ -503,10 +462,15 @@ export class ManipulationRenderer {
   }
   private place(object: SceneObject, pose: ManipulationPose, origin: ClientTrackingOrigin): void {
     const p = clientTrackingToSpecsPose(odomToClientTrackingPose(pose, origin));
+    const previous = this.placements.get(object);
+    if (previous && p.position.every((v, i) => v === previous.position[i]) &&
+      p.orientation.every((v, i) => v === previous.orientation[i])) return;
     object.getTransform().setWorldPosition(new vec3(...p.position));
     object.getTransform().setWorldRotation(new quat(p.orientation[3], p.orientation[0], p.orientation[1], p.orientation[2]));
+    this.placements.set(object, p);
   }
   dispose(): void {
+    this.placements.clear(); this.panelPresenter.dispose();
     for (const unsubscribe of this.modelSubscriptions) unsubscribe();
     for (const unsubscribe of this.subscriptions) unsubscribe();
     for (const pick of this.picks.values()) pick.destroy();

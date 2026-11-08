@@ -282,7 +282,14 @@ if (!script) throw new Error("ReviewScenario has not imported/compiled");
 for (const object of project.scene.rootSceneObjects) {{
   if (["ReviewScenarioHost", "InterFontProbeHost", "ColorProbeHost"].includes(object.name)) object.destroy();
 }}
-const host = project.scene.createSceneObject("ReviewScenarioHost");
+const gateAsset = project.assetManager.assets.find(a => a.name === "Integration Test Harness" && a.getTypeName() === "TypeScriptAsset");
+if (!gateAsset) throw new Error("Integration Test Harness component has not imported");
+let host = project.scene.rootSceneObjects.find(o => o.name === "Integration Test Harness");
+if (!host) host = project.scene.createSceneObject("Integration Test Harness");
+while (host.removeComponent("ScriptComponent")) {{}}
+const gate = host.addComponent("ScriptComponent") as Editor.Components.ScriptComponent;
+gate.scriptAsset = gateAsset as Editor.Assets.ScriptAsset;
+(gate as any).autoRun = true;
 const component = host.addComponent("ScriptComponent") as Editor.Components.ScriptComponent;
 component.scriptAsset = script as Editor.Assets.ScriptAsset;
 (component as any).startDelayS = {start_delay};
@@ -503,7 +510,7 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
             with (recording_dir / "recorder.log").open("wb") as recorder_log:
                 recorder = await asyncio.create_subprocess_exec(
                     str(binary), str(pid), str(recording_dir / "recording.mp4"), str(args.duration),
-                    str(recording_dir / "recording.stop"),
+                    str(recording_dir / "recording.stop"), str(args.focus_budget),
                     stdout=recorder_log, stderr=recorder_log,
                 )
                 ready = await wait_json(recording_dir / "recording.ready.json", recorder, 20)
@@ -597,7 +604,7 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
                 if recorder.returncode != 0:
                     raise ReviewError("Recorder failed; see recorder.log")
     finally:
-        if original_window is not None:
+        if original_window is not None and not args.focus_budget.with_suffix(".aborted").exists():
             resize_project_window(pid, bounds=original_window)
         if recorder and recorder.returncode is None:
             recorder.terminate()
@@ -694,6 +701,16 @@ async def run_review(args: argparse.Namespace, output: Path, workspace: Path) ->
                                  "name": "native_pass_integrity", "passed": result["passed"]})
         write_json(directory / "results.json", result)
         passes.append(result)
+    if args.suite == "all":
+        child = argparse.Namespace(**vars(args))
+        child.profile = "legacy"
+        child.harness = harnesses / "ManipulationProbe.ts"
+        child.prepared_project = project
+        directory = output / "manipulation"
+        directory.mkdir()
+        arm_result = await run_pass(child, directory, workspace)
+        write_json(directory / "results.json", arm_result)
+        passes.append(arm_result)
     command = ["node", str(REPO_ROOT / "tools/integration-tests/finalize.mjs"),
                "--client", "specs", "--run", str(output), "--scope", args.suite]
     completed = subprocess.run(command, check=False)
@@ -749,6 +766,7 @@ async def restore_source_project(args: argparse.Namespace, output: Path, workspa
 
 async def review_and_restore(args: argparse.Namespace, output: Path, workspace: Path) -> dict[str, Any]:
     failure: BaseException | None = None
+    args.focus_budget = output / "focus-budget"
     try:
         result = await run_review(args, output, workspace)
         if getattr(args, "suite", None) and getattr(args, "harness", None) is None and not args.keep_open:
@@ -758,7 +776,30 @@ async def review_and_restore(args: argparse.Namespace, output: Path, workspace: 
         failure = error
         raise
     finally:
-        if not args.keep_open:
+        if getattr(args, "mcp_config", None):
+            try:
+                async with LensMcp(args.mcp_config, output / "disable-harness") as mcp:
+                    disabled = await mcp.editor(
+                        'const p=pluginSystem.findInterface(Editor.Model.IModel).project;'
+                        f'if(p.projectDirectory.toString()!=={json.dumps(str(workspace))})return {{changed:false}};'
+                        'const h=p.scene.rootSceneObjects.find(o=>o.name==="Integration Test Harness");'
+                        'if(h)for(const raw of h.getComponents("ScriptComponent")){const c:any=raw;'
+                        'if(c.inputNames.includes("autoRun"))(c as any).autoRun=false;else c.enabled=false;}'
+                        'p.save();return {autoRun:false};'
+                    )
+                    write_json(output / "harness-disabled.json", disabled)
+            except Exception as error:
+                write_json(output / "harness-disabled.json", {"disabled": False, "error": str(error)})
+                print(f"Could not verify harness disabled: {error}", file=sys.stderr)
+        if args.focus_budget.with_suffix(".aborted").exists():
+            message = "Native test aborted after focus loss. Explicit user authorization is required before any retry or source restoration."
+            print(message, file=sys.stderr, flush=True)
+            write_json(output / "editor-restoration.json", {"restored": False, "requiresUserAuthorization": True, "error": message})
+            # Pause Preview without opening, raising or activating any editor window.
+            with contextlib.suppress(Exception):
+                async with LensMcp(args.mcp_config, output / "pause") as mcp:
+                    await mcp.editor('const p:any=pluginSystem.findInterface(Editor.Dock.IDockManager).panels.find(p=>p.id.toString().includes("Snap.Plugin.Gui.PreviewPanel"));if(p)p.pause("focus-limit");return {paused:true};')
+        elif not args.keep_open:
             try:
                 await restore_source_project(args, output, workspace)
             except Exception as error:
