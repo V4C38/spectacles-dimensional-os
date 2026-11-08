@@ -105,6 +105,8 @@ export function decodeManipulation(
   data: Record<string, unknown>,
 ): ManipulationOutbound {
   if (data.type === "manipulation_result") {
+    if (data.target_revision !== undefined && (!Number.isSafeInteger(data.target_revision) || Number(data.target_revision) < 0))
+      throw new Error("Invalid advisory target revision");
     text(data.request_id);
     text(data.group_id);
     text(data.status);
@@ -126,6 +128,7 @@ export function decodeManipulation(
     if (data.token !== undefined) text(data.token);
     if (data.joints != null) joints(data.joints);
     if (data.pose != null) pose(data.pose);
+    if (data.sample_pose !== undefined) pose(data.sample_pose, "sample_pose");
     if (data.plan_id !== undefined) plan(data);
   } else {
     if (data.evaluation != null) {

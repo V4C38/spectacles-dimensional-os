@@ -1,4 +1,4 @@
-import { SpecsReplicationPresenter } from "../replication/SpecsReplicationPresenter";
+import { EndEffectorStatusPill } from "./EndEffectorStatusPill";
 import { Frame } from "SpectaclesUIKit.lspkg/Scripts/Components/Frame/Frame";
 import { endEffectorAngles } from "../../DimOSARClient/manipulation/ManipulationVisuals";
 import { ARM_PANEL_STYLE, clampArmPanelScale, PANEL_PIN_SEGMENTS, PANEL_SCAN_SEGMENTS } from "../../DimOSARClient/presentation/PanelFrameStyle";
@@ -35,14 +35,13 @@ export class ManipulationRenderer {
   private readonly label: Text;
   private readonly nameLabel: Text;
   private readonly activityLabel: Text;
-  private readonly blockedCross: WorldMeshRenderer;
   private readonly sphere: WorldMeshRenderer;
   private readonly speedLabel: Text;
   private readonly panelTitle: Text;
   localizationAvailable = false;
   private readonly rescan: IconButtonResult;
   private scanIcon: WorldMeshRenderer | null = null;
-  private readonly warning: Text;
+  private readonly warning: EndEffectorStatusPill;
   private readonly buttons = new Map<string, IconButtonResult>();
   private readonly picks = new Map<string, SceneObject>();
   private readonly meshes = new Map<string, WorldMeshRenderer>();
@@ -57,7 +56,7 @@ export class ManipulationRenderer {
   private readonly jointFilter = new ArmJointFilter();
   private previousSolution: object | null = null;
   private solutionSequence = 0;
-  private readonly previewFilter = new ArmJointFilter(0.15);
+  private readonly previewFilter = new ArmJointFilter(0.15, 0.25);
   private readonly progress = new ArmTrajectoryProgress();
   private readonly speed: Slider;
   private readonly plate: ReturnType<typeof createPanelSurface>;
@@ -93,10 +92,6 @@ export class ManipulationRenderer {
     const geometry = sphereMesh(0.9, 20, 16);
     this.sphere = new WorldMeshRenderer(this.handle, "EndEffectorSphere", ARM_MATERIAL);
     configureArmMaterial(this.sphere.material);
-    this.blockedCross = new WorldMeshRenderer(this.handle, "ReplicationBlockedCross");
-    const cross = SpecsReplicationPresenter.cross(0.5);
-    this.blockedCross.triangles(cross.positions, cross.indices, SpecsReplicationPresenter.color(1));
-    this.blockedCross.hide();
     (this.sphere.material.mainPass as Pass & { fill: number }).fill = 1;
     const handleGeometry = sphereMesh(1.2, 20, 16);
     this.sphere.triangles(handleGeometry.positions, handleGeometry.indices, [0.82, 0.82, 0.82, 1], undefined, handleGeometry.normals);
@@ -208,8 +203,7 @@ export class ManipulationRenderer {
     this.subscriptions.push(this.panelFrame.onTranslationStart.add(()=>{this.panelPinned=true;}));
     this.subscriptions.push(this.panelFrame.onScalingUpdate.add(()=>{if(!this.configuringFrame){this.panelPinned=true;this.clampPanelSize();}}));
     this.panelFrame.initialize(); configure();
-    this.warning = createText({ parent: this.object, name: "RejectedTarget", fontSize: 36, color: new vec4(1, 0.65, 0, 1),
-      position: vec3.zero(), horizontalAlignment: HorizontalAlignment.Center, worldSpaceRect: Rect.create(-20, 20, -3, 3) });
+    this.warning = new EndEffectorStatusPill(this.object);
   }
 
   resetPanel(): void {
@@ -280,6 +274,8 @@ export class ManipulationRenderer {
       for (const [key, button] of this.buttons) button.button.inactive = key !== "estop" && key !== "stop";
       this.gripper.button.inactive = true; this.speed.enabled = false;
       if(this.core.interaction.target) this.place(this.handle,this.core.interaction.target,origin);
+      this.warning.apply({ blocked: false, fresh: false, stopped: false, moving: false,
+        rejection: null }, this.handle, camera, now);
       this.activityLabel.text="No feedback"; return;
     }
     this.state = state; this.controlsEnabled = enabled; this.selected = selected;
@@ -292,8 +288,8 @@ export class ManipulationRenderer {
       for (const pick of this.picks.values()) pick.enabled = false;
       for (const edge of this.edges.values()) edge.stroke.hide();
       this.path.hide();
-      this.warning.text = state?.message ?? "Feedback unavailable";
-      this.warning.getSceneObject().enabled = true;
+      this.warning.apply({ blocked: false, fresh: false, stopped: false, moving: false,
+        rejection: null }, this.handle, camera, now);
       this.controlsEnabled = false;
       for (const [key, button] of this.buttons) button.button.inactive = key === "estop" ? !(this.core.interaction.snapshot().canStop || this.core.interaction.snapshot().canResume) : key !== "stop" || !this.core.interaction.snapshot().canStop;
       this.speed.enabled = false;
@@ -301,8 +297,7 @@ export class ManipulationRenderer {
     }
     const model = state.model, interaction = this.core.interaction, intent = interaction.snapshot();
     const group = state.groups?.find(g => g.id === interaction.groupId), observed = state.observations?.[interaction.groupId ?? ""];
-    this.blockedCross.object.enabled = intent.blocked === true;
-    this.sphere.setColor(intent.blocked ? SpecsReplicationPresenter.color(0.7) : [0.8, 0.9, 1, 0.7]);
+    this.sphere.setColor(intent.blocked ? [0.56, 0.59, 0.62, 0.7] : [0.8, 0.9, 1, 0.7]);
     const dt = this.lastTime ? Math.max(0, Math.min(0.1, now - this.lastTime)) : 1 / 60; this.lastTime = now;
     const context = armMotionContext(model.revision, interaction.groupId, origin);
     if (this.context !== context) { this.jointFilter.reset(); this.previewFilter.reset(); this.progress.reset(); this.context = context; }
@@ -479,10 +474,8 @@ export class ManipulationRenderer {
     const emergency = this.buttons.get("estop")!;
     emergency.labelText.text = state.stopped ? "Resume operation" : "E-stop";
     setButtonStyle(emergency.button, state.stopped ? SnapOS2Styles.Primary : SnapOS2Styles.Special);
-    this.warning.getSceneObject().enabled = interaction.rejection !== null || !intent.fresh;
-    this.warning.text = interaction.rejection?.message ?? "Feedback unavailable";
-    if (displayedPose) this.place(this.warning.getSceneObject(), displayedPose, origin);
-    this.warning.getSceneObject().getTransform().setWorldRotation(camera.getTransform().getWorldRotation());
+    this.warning.apply({ blocked: intent.blocked === true, fresh: intent.fresh, stopped: intent.stopped,
+      moving: intent.executing || intent.resetting, rejection: interaction.rejection }, this.handle, camera, now);
     const time = plan && intent.executing && observed?.joints ? this.progress.advance(plan, observed.joints,
       new Set(model.joints.filter(j => j.kind === "continuous").map(j => j.name)), state.operation_id ?? plan.plan_id) : 0;
     if (!intent.executing) this.progress.reset();

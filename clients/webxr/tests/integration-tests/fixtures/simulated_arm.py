@@ -161,6 +161,9 @@ class SimulatedArm:
     def ar_manipulation_revoke(self, epoch: str, lease: str, revision: int, reason: str) -> None:
         self.runtime.revoke_authority(epoch, lease, revision, reason)
 
+    def ar_manipulation_suspend(self, client: str, deadline: float) -> None:
+        self.runtime.suspend(client, deadline)
+
     def ar_manipulation_disconnect(self, client: str) -> None:
         self.runtime.disconnect(client)
 

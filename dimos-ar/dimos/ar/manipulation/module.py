@@ -23,6 +23,7 @@ class ARManipulationModuleConfig(ManipulationModuleConfig):  # type: ignore[misc
     model_visual_profile: str | None = None
     gripper_open_at_lower: list[str] = Field(default_factory=list)
     wire_from_world: ReferencePose = Field(default_factory=ReferencePose)
+    joint_arrival_tolerance_rad: float = Field(default=0.02, gt=0, le=0.1)
     feedback_max_age_s: float = Field(default=0.5, gt=0, allow_inf_nan=False)
 
 
@@ -94,6 +95,9 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
             self._auxiliary_thread = None
         if self._runtime.session.quiesced:
             self._adapter.prepare_teardown()
+        if self._adapter.evaluation_worker is not None:
+            self._adapter.evaluation_worker.close()
+            self._adapter.evaluation_worker = None
         if self._adapter.worker is not None:
             self._adapter.worker.close()
             self._adapter.worker = None
@@ -130,6 +134,10 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
     @rpc
     def ar_manipulation_snapshot(self) -> dict[str, Any]:
         return self._runtime.snapshot(include_bulk=False)
+
+    @rpc
+    def ar_manipulation_suspend(self, client_id: str, deadline: float) -> None:
+        self._runtime.suspend(client_id, deadline)
 
     @rpc
     def ar_manipulation_disconnect(self, client_id: str) -> None:

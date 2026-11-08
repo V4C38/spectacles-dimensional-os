@@ -125,6 +125,7 @@ class WebSocketServer:
         on_client_pose: ClientPoseHandler | None = None,
         on_nav_joystick_request: NavJoystickRequestHandler | None = None,
         on_disconnect: DisconnectHandler | None = None,
+        on_suspend: Callable[[str, float], None] | None = None,
         on_interaction_request: Callable[[InteractionRequest, str], None] | None = None,
         on_manipulation_request: Callable[[ManipulationRequest, str, float], None] | None = None,
         on_localization_progress: Callable[
@@ -132,6 +133,10 @@ class WebSocketServer:
         ]
         | None = None,
     ) -> None:
+        self._shared_stream_clients: set[str] = set()
+        self._resume_tokens: dict[str, str] = {}
+        self._disconnect_handles: dict[str, asyncio.TimerHandle] = {}
+        self._on_suspend = on_suspend
         self._relay_url = relay_url
         self._port = port
         self._loop = loop
@@ -187,6 +192,9 @@ class WebSocketServer:
     @property
     def port(self) -> int:
         return self._port
+
+    def streams_following(self, client_id: str) -> bool:
+        return client_id in self._shared_stream_clients
 
     @property
     def connection_count(self) -> int:
@@ -265,6 +273,11 @@ class WebSocketServer:
                 ready.set_exception(exc)
             raise
         finally:
+            for handle in self._disconnect_handles.values():
+                handle.cancel()
+            self._disconnect_handles.clear()
+            self._resume_tokens.clear()
+            self._shared_stream_clients.clear()
             ws_logger.removeFilter(_handshake_noise_filter)
             monitor.cancel()
             tasks = tuple(self._bulk_preparations)
@@ -311,7 +324,7 @@ class WebSocketServer:
         handshake_pending = True
         try:
             async with asyncio.timeout(HELLO_TIMEOUT_S):
-                await self._complete_handshake(websocket, client_id)
+                client_id = await self._complete_handshake(websocket, client_id)
             self._pending_handshakes -= 1
             handshake_pending = False
             self._connections[client_id] = websocket
@@ -399,7 +412,20 @@ class WebSocketServer:
                 self._retired_connections.add(websocket)
                 if self._on_disconnect is not None:
                     try:
-                        self._on_disconnect(websocket, client_id)
+                        if client_id in self._resume_tokens and self._stop_event is not None and not self._stop_event.is_set():
+                            deadline = time.monotonic() + 1.0
+                            if self._on_suspend is not None:
+                                self._on_suspend(client_id, deadline)
+                            def expire() -> None:
+                                self._disconnect_handles.pop(client_id, None)
+                                self._resume_tokens.pop(client_id, None)
+                                self._shared_stream_clients.discard(client_id)
+                                if self._on_disconnect is not None:
+                                    self._on_disconnect(websocket, client_id)
+                            self._disconnect_handles[client_id] = self._loop.call_later(1.0, expire)
+                        else:
+                            self._resume_tokens.pop(client_id, None)
+                            self._on_disconnect(websocket, client_id)
                     except Exception:
                         logger.exception("AR client disconnect callback failed", client_id=client_id)
             try:
@@ -428,6 +454,8 @@ class WebSocketServer:
     ) -> None:
         if websocket in self._retired_connections:
             return
+        self._resume_tokens.pop(client_id, None)
+        self._shared_stream_clients.discard(client_id)
         self._retired_connections.add(websocket)
         self._bulk_tokens.pop(client_id, None)
         self._capture_ids.pop(client_id, None)
@@ -451,7 +479,7 @@ class WebSocketServer:
         self,
         websocket: ws_server.ServerConnection,
         client_id: str,
-    ) -> None:
+    ) -> str:
         message = await websocket.recv()
         if not isinstance(message, str):
             raise TypeError("hello_request must be a text frame")
@@ -459,6 +487,19 @@ class WebSocketServer:
         if len(lines) != 1:
             raise ValueError("hello_request must be the only JSON object in the first text frame")
         hello_request = decode_hello_request(lines[0])
+        if (hello_request.resume_token is None
+                and len(self._connections) + len(self._disconnect_handles)
+                    + self._pending_handshakes - 1 >= MAX_CONTROL_CLIENTS):
+            await websocket.close(1013, "client capacity reached")
+            raise ValueError("client capacity reached")
+        resume_handle = None
+        if hello_request.resume_token is not None:
+            matched = next((key for key, value in self._resume_tokens.items()
+                            if secrets.compare_digest(value, hello_request.resume_token)), None)
+            if matched is None or matched not in self._disconnect_handles:
+                raise ValueError("resume session expired or still connected")
+            client_id = matched
+            resume_handle = self._disconnect_handles[client_id]
         ts_server = time.time()
         time_sync = TimeSync(ts_client=hello_request.ts_client, ts_server=ts_server)
         self._time_sync[websocket] = time_sync
@@ -483,8 +524,22 @@ class WebSocketServer:
             bulk_url="/ws/bulk" if req is not None and req.path == "/ws" else "/bulk",
             bulk_token=token,
             bulk_epoch=self.bulk.epoch,
+            server_follow_stream=hello_request.server_follow_stream,
+            independent_ik=True,
+            resume_token=(hello_request.resume_token or secrets.token_hex(32))
+            if hello_request.resumable else None,
         )
+        if resume_handle is not None and self._disconnect_handles.get(client_id) is not resume_handle:
+            raise ValueError("resume deadline expired during handshake")
         await websocket.send(encode_hello(hello))
+        if resume_handle is not None:
+            resume_handle.cancel()
+            self._disconnect_handles.pop(client_id, None)
+        if hello.server_follow_stream:
+            self._shared_stream_clients.add(client_id)
+        if hello.resume_token is not None:
+            self._resume_tokens[client_id] = hello.resume_token
+        return client_id
 
     async def _handle_bulk(self, websocket: ws_server.ServerConnection) -> None:
         client_id: str | None = None

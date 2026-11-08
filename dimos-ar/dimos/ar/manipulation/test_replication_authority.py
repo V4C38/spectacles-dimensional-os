@@ -244,7 +244,7 @@ def test_shared_ik_evaluation_does_not_authorize_execution():
     module.adapter.execute.assert_not_called()
 
 
-def test_delayed_ik_evaluation_cannot_publish_after_shared_target_changes():
+def test_delayed_ik_is_visual_only_and_cannot_publish_as_the_new_shared_target():
     module = runtime()
     module.adapter.ready = True
     module.evaluation = None
@@ -277,7 +277,7 @@ def test_delayed_ik_evaluation_cannot_publish_after_shared_target_changes():
         finish.set()
         worker.join(3)
     assert not worker.is_alive()
-    assert replies[0]["status"] == "rejected"
+    assert replies[0]["status"] == "feasible"
     assert module.evaluation is None
 
 
@@ -302,3 +302,53 @@ def test_target_edit_revokes_older_work_but_admits_the_edit_revision():
     )
     assert reply["status"] == "feasible"
     assert module.evaluation["target_revision"] == 8
+
+
+def test_independent_local_ik_result_cannot_validate_the_current_canonical_target():
+    module = runtime()
+    module.evaluation = None
+    module.adapter.ready = True
+    module.adapter.evaluate = Mock(return_value=SimpleNamespace(
+        success=True, message="valid",
+        target_joints=SimpleNamespace(name=["joint"], position=[0.2]), group_poses={},
+    ))
+    result = module.command("a", _request(
+        "evaluate", advisory_current=False, advisory_target_revision=6,
+        position=[0.2, 0, 0], orientation=[0, 0, 0, 1],
+    ))
+    assert result["status"] == "feasible"
+    assert result["sample_pose"] == {"position": [0.2, 0, 0], "orientation": [0, 0, 0, 1]}
+    assert module.evaluation is None
+    assert module.operation.plan is None
+    module.adapter.execute.assert_not_called()
+
+
+def test_slow_full_plan_does_not_block_fast_advisory_ik():
+    module = runtime()
+    module.evaluation_planning = threading.Lock()
+    _planning_backend(module)
+    module.adapter.ready = True
+    planned = module.adapter.plan_to_poses.return_value
+    entered, finish = threading.Event(), threading.Event()
+
+    def plan(*_args, **_kwargs):
+        entered.set()
+        assert finish.wait(2)
+        return planned
+
+    module.adapter.plan_to_poses.side_effect = plan
+    module.adapter.evaluate = lambda *_: SimpleNamespace(
+        success=True, message="valid",
+        target_joints=SimpleNamespace(name=["joint"], position=[0.2]), group_poses={},
+    )
+    worker = threading.Thread(target=lambda: module.dispatch("a", _plan_request()))
+    worker.start()
+    try:
+        assert entered.wait(1)
+        reply = module.dispatch("a", _request("evaluate", revision=2, target=8,
+                                position=[0.2, 0, 0], orientation=[0, 0, 0, 1]))
+        assert reply["status"] == "feasible"
+        assert worker.is_alive()
+    finally:
+        finish.set()
+        worker.join(3)

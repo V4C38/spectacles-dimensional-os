@@ -55,10 +55,20 @@ class DimOSManipulationAdapter:
         self._protection_lock = threading.Lock()
         self._feedback_fk: Any = None
         self.worker: PlanningWorker | None = None
+        self.evaluation_worker: PlanningWorker | None = None
         self._planning_generation = 0
 
     def prepare_feedback(self) -> None:
         self.worker = PlanningWorker(self.config)
+        advisory = self.config.model_copy(deep=True)
+        if advisory.kinematics.backend == "pink":
+            advisory.kinematics.max_iterations = 12
+        try:
+            self.evaluation_worker = PlanningWorker(advisory)
+        except BaseException:
+            self.worker.close()
+            self.worker = None
+            raise
         model = self.config.model
         frames = tuple(g.tip_link for g in model.planning_groups if g.tip_link)
         self._feedback_fk = PinkPoseTargetSolver(
@@ -147,8 +157,9 @@ class DimOSManipulationAdapter:
 
     def evaluate(self, group: str, pose: Any) -> Any:
         try:
-            assert self.worker is not None
-            return self.worker.call(
+            worker = self.evaluation_worker or self.worker
+            assert worker is not None
+            return worker.call(
                 "evaluate", self.feedback, group, pose, seed_context=self._planning_generation
             )
         except Exception as exc:

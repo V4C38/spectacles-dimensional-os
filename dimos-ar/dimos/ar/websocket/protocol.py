@@ -121,6 +121,9 @@ def _finite_quat(data: dict[str, Any], key: str) -> tuple[float, float, float, f
 @dataclass(frozen=True)
 class HelloRequest:
     ts_client: float
+    resumable: bool = False
+    server_follow_stream: bool = False
+    resume_token: str | None = None
 
 
 @dataclass(frozen=True)
@@ -207,7 +210,13 @@ def decode_hello_request(text: str) -> HelloRequest:
     msg_type = _require_type(data, "type", str)
     if msg_type != "hello_request":
         raise ValueError(f"Expected hello_request, got {msg_type!r}")
-    return HelloRequest(ts_client=_finite_float(data, "ts_client"))
+    token = data.get("resume_token")
+    if token is not None and (not isinstance(token, str) or len(token) != 64):
+        raise ValueError("invalid resume token")
+    resumable = data.get("resumable", False)
+    if not isinstance(resumable, bool):
+        raise TypeError("resumable must be boolean")
+    return HelloRequest(_finite_float(data, "ts_client"), resumable, data.get("server_follow_stream") is True, token)
 
 
 def decode_inbound(text: str) -> Inbound:
@@ -548,6 +557,9 @@ class Hello:
     bulk_url: str | None = None
     bulk_token: str | None = None
     bulk_epoch: str | None = None
+    resume_token: str | None = None
+    server_follow_stream: bool = False
+    independent_ik: bool = False
 
 
 def _capability_wire(cap: Capability) -> dict[str, Any]:
@@ -575,6 +587,9 @@ def encode_hello(hello: Hello) -> str:
             "bulk_token": hello.bulk_token,
             "bulk_epoch": hello.bulk_epoch,
             "client_id": hello.client_id,
+            **({"server_follow_stream": True} if hello.server_follow_stream else {}),
+            **({"independent_ik": True} if hello.independent_ik else {}),
+            **({"resume_token": hello.resume_token} if hello.resume_token else {}),
             **({"source": hello.source} if hello.source else {}),
             **({"odom_reference_id": hello.odom_reference_id} if hello.odom_reference_id else {}),
             "time_sync": {

@@ -10,7 +10,7 @@ export class ManipulationController {
   readonly presentation = new ManipulationPresentation();
   private selected = false;
   private suspended = false;
-  private target: object | null = null;
+  private target = "null";
   private speed = 0.5;
   private group: string | null = null;
   private readonly unsubscribeHealth?: () => void;
@@ -40,7 +40,7 @@ export class ManipulationController {
         break;
       }
       case "gripper": {
-        const opening = this.selected && interaction.desiredGripper != null ? interaction.desiredGripper
+        const opening = interaction.desiredGripper != null ? interaction.desiredGripper
           : this.session.view().manipulation?.observations?.[interaction.groupId ?? ""]?.gripper_target ?? this.session.view().manipulation?.observations?.[interaction.groupId ?? ""]?.gripper;
         if (opening != null) { this.presentation.reset(); interaction.setGripper(opening < 0.5 ? 1 : 0); }
         break;
@@ -53,9 +53,9 @@ export class ManipulationController {
     if (!enabled) { this.suspend(); this.interaction.tick(); return; }
     this.suspended = false;
     const interaction = this.interaction;
-    if (this.target !== interaction.target || this.speed !== interaction.speedScale || this.group !== interaction.groupId)
+    if (this.target !== JSON.stringify(interaction.target) || this.speed !== interaction.speedScale || this.group !== interaction.groupId)
       this.presentation.reset();
-    this.target = interaction.target; this.speed = interaction.speedScale; this.group = interaction.groupId;
+    this.target = JSON.stringify(interaction.target); this.speed = interaction.speedScale; this.group = interaction.groupId;
     interaction.tick();
   }
   suspend(): void {

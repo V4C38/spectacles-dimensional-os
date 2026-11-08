@@ -13,14 +13,14 @@ const model = {
 it("interpolates measured updates using their interval", () => {
  const f=new ArmJointFilter();f.sample(model,{joint:0},"a",0);
  expect(f.sample(model,{joint:1},"a",.1).joint).toBe(0);
- expect(f.sample(model,{joint:1},"a",.125).joint).toBeCloseTo(.5);
+ expect(f.sample(model,{joint:1},"a",.15).joint).toBeCloseTo(.5);
  expect(f.sample(model,{joint:1},"a",.2).joint).toBeCloseTo(1);
  expect(f.sample(model,{joint:2},"b",.3).joint).toBe(2);
 });
 it("continuous joints cross the short arc",()=>{
  const f=new ArmJointFilter();f.sample(model,{joint:Math.PI-.1},"a",0);
  f.sample(model,{joint:-Math.PI+.1},"a",.1);
- expect(f.sample(model,{joint:-Math.PI+.1},"a",.125).joint).toBeCloseTo(Math.PI);
+ expect(f.sample(model,{joint:-Math.PI+.1},"a",.15).joint).toBeCloseTo(Math.PI);
 });
 
 const plan: ManipulationPlan = {

@@ -62,6 +62,9 @@ export interface ServerInfo {
 }
 
 export interface Hello {
+  resume_token?: string;
+  server_follow_stream?: boolean;
+  independent_ik?: boolean;
   source?: { kind: "recording"; read_only: boolean; name: string };
   protocol_version: 3;
   bulk_url: string;
@@ -229,6 +232,9 @@ export interface ClientError {
 
 export interface HelloRequest {
   type: "hello_request";
+  resumable?: boolean;
+  resume_token?: string;
+  server_follow_stream?: boolean;
   ts_client: number;
 }
 

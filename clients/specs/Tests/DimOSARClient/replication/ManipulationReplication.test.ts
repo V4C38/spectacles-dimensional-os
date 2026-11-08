@@ -29,6 +29,29 @@ function fixture() {
   return { core, collaboration, state, sent, native, grant, ackTarget, view, tick: () => { clock += 0.1; view.manipulation.observations.arm.measured_at = clock; collaboration.tick(); core.tick(); }, reply: (command: any, payload: object) => listener({ type: "manipulation_result", request_id: command.request_id, action: command.action, group_id: "arm", status: "completed", ...payload } as Outbound) };
 }
 describe("manipulation shared authority", () => {
+  it("retains idle slider speed until a new shared target arrives", () => {
+    const f = fixture();
+    f.state.target = { ...pose(0.3), domain: "manipulation", group_id: "arm", speed_scale: 0.2, revision: 1, phase: "draft", sample_ts: 100, sequence: 1 };
+    f.state.revision++;
+    f.collaboration.apply({ ...f.state }); f.tick();
+    expect(f.core.speedScale).toBe(0.2);
+    f.core.setSpeedScale(0.8);
+    f.tick(); f.tick();
+    expect(f.core.speedScale).toBe(0.8);
+    f.core.resetJoints();
+    expect(f.sent.find(c => c.type === "interaction_request" && c.action === "acquire")).toMatchObject({ speed_scale: 0.8 });
+  });
+  it("adopts a remote speed change on a new shared target", () => {
+    const f = fixture();
+    f.state.target = { ...pose(0.3), domain: "manipulation", group_id: "arm", speed_scale: 0.2, revision: 1, phase: "draft", sample_ts: 100, sequence: 1 };
+    f.state.revision++;
+    f.collaboration.apply({ ...f.state }); f.tick();
+    f.core.setSpeedScale(0.8); f.tick();
+    f.state.target = { ...f.state.target, speed_scale: 0.4, revision: 2 };
+    f.state.revision++;
+    f.collaboration.apply({ ...f.state }); f.tick();
+    expect(f.core.speedScale).toBe(0.4);
+  });
   it("blocks arm actions while the same client owns the robot's navigation lease", () => {
     const f = fixture(); f.collaboration.begin("live", "nav-hand", pose(0)); f.grant();
     expect(f.collaboration.snapshot("navigation").ownsAuthority).toBe(true);
@@ -37,15 +60,12 @@ describe("manipulation shared authority", () => {
     expect(f.native()).toEqual([]);
     expect(f.collaboration.snapshot("navigation").ownsAuthority).toBe(true);
   });
-  it("replicates discrete gripper intent before sending a native command", () => {
+  it("sends gripper intent after the grant without waiting for a moving target ACK", () => {
     const f = fixture(); f.state.revision = 1;
     f.state.target = { ...pose(0.3), domain: "manipulation", group_id: "arm", speed_scale: 0.2, gripper: 0, revision: 1, phase: "draft", sample_ts: 100, sequence: 1 };
     f.collaboration.apply({ ...f.state }); f.tick(); f.core.setGripper(1);
     expect(f.native()).toEqual([]); f.grant(); f.tick();
-    expect(f.native()).toEqual([]);
-    expect(f.sent.filter(c => c.type === "interaction_request" && c.action === "update").at(-1)).toMatchObject({ gripper: 1, position: [0,0,0.3] });
-    f.ackTarget(); f.tick();
-    expect(f.native().at(-1)).toMatchObject({ action: "gripper", value: 1, target_revision: 2 });
+    expect(f.native().at(-1)).toMatchObject({ action: "gripper", value: 1 });
   });
   it("keeps immediate targets while advisory planning uses acknowledged canonical samples after grant", () => {
     const f = fixture(); f.core.setSelected(true); expect(f.core.begin()).toBe(true); f.core.aim(pose(0.3)); f.tick();
@@ -60,6 +80,22 @@ describe("manipulation shared authority", () => {
     f.reply(f.native().at(-1), { status: "feasible", joints: { j: 0.3 }, pose: pose(0.3) });
     expect(f.core.previewJoints).toEqual({ j: 0.3 });
     f.core.execute(); expect(f.native().some(command => command.action === "execute")).toBe(false);
+  });
+  it("updates live IK throughout a drag without waiting for canonical target acknowledgements", () => {
+    const f = fixture(); f.view.hello = { independent_ik: true };
+    f.core.setSelected(true); f.core.begin(); f.core.aim(pose(.3)); f.grant(); f.tick();
+    let request = f.native().at(-1);
+    expect(request).toMatchObject({ action: "evaluate", position: [0, 0, .3], target_revision: 1 });
+    for (let i = 1; i <= 30; i++) {
+      f.core.aim(pose(.3 + i / 100));
+      f.reply(request, { status: "feasible", joints: { j: i / 100 }, sample_pose: { position: request.position, orientation: request.orientation } });
+      expect(f.core.previewJoints).toEqual({ j: i / 100 });
+      expect(f.core.dragging).toBe(true);
+      f.tick(); request = f.native().at(-1);
+      expect(request).toMatchObject({ action: "evaluate", position: [0, 0, .3 + i / 100], target_revision: 1 });
+    }
+    expect(f.native().filter(c => c.action === "evaluate")).toHaveLength(31);
+    expect(f.native().some(c => c.action === "plan" || c.action === "execute")).toBe(false);
   });
   it("defers native following acquisition until the robot-wide lease is granted", () => {
     const f = fixture(); expect(f.core.begin()).toBe(true); expect(f.native()).toEqual([]);
@@ -171,4 +207,116 @@ it("replicates evaluated arm joints only for the observer's canonical group and 
   f.tick();
   expect(f.core.previewJoints).toEqual({ j: 0.5 });
   expect(f.native()).toEqual([]);
+});
+
+it("reacquires a retired native token only while the shared following lease remains owned", () => {
+  const f = fixture();
+  f.view.hello = { server_follow_stream: true };
+  f.core.begin(); f.grant(); f.tick();
+  f.reply(f.native().at(-1), { status: "acquired", token: "expired" });
+  f.reply({ request_id: "shared-follow-expired-1", action: "update" }, { status: "rejected", code: "retired", sequence: 1 });
+  f.tick();
+  expect(f.native().at(-1)).toMatchObject({ action: "acquire" });
+  expect(f.native().filter(c => c.action === "acquire")).toHaveLength(2);
+  f.reply(f.native().at(-1), { status: "acquired", token: "renewed" });
+  f.reply({ request_id: "shared-follow-renewed-1", action: "update" }, { status: "feasible", sequence: 1, pose: pose(.3), joints: { j: .3 } });
+  expect(f.core.previewJoints).toEqual({ j: .3 });
+});
+
+function sharedFollowingFixture() {
+  const f = fixture(); f.view.hello = { independent_ik: true, server_follow_stream: true };
+  f.core.begin(); f.grant(); f.tick();
+  f.reply(f.native().at(-1), { status: "acquired", token: "native" });
+  f.core.aim(pose(.3));
+  f.reply({ request_id: "shared-follow-native-1", action: "update" }, {
+    status: "feasible", sequence: 1, sample_pose: pose(.3), pose: pose(.3), joints: { j: .3 },
+  });
+  f.core.aim(pose(100));
+  return f;
+}
+
+it("keeps a failed shared following grab until manual release and then snaps its shared sphere", () => {
+  const f = sharedFollowingFixture();
+  f.reply({ request_id: "shared-follow-native-2", action: "update" }, {
+    status: "infeasible", sequence: 2, sample_pose: pose(100), code: "ik_failed",
+  });
+  expect(f.core.dragging).toBe(true); expect(f.core.target).toEqual(pose(100));
+  expect(f.core.rejection?.message).toBe("IK failed");
+  expect(f.core.previewJoints).toEqual({ j: .3 });
+  f.core.end();
+  expect(f.core.target).toEqual(pose(.3)); expect(f.core.dragging).toBe(false);
+  expect(f.sent.at(-1)).toMatchObject({ type: "interaction_request", action: "release", position: [0, 0, .3] });
+  expect(f.native().some(c => c.action === "update")).toBe(false);
+});
+
+it("reconciles a delayed shared follow failure after manual release without a motor return command", () => {
+  const f = sharedFollowingFixture(); f.core.end();
+  f.reply({ request_id: "shared-follow-native-2", action: "update" }, {
+    status: "infeasible", sequence: 2, sample_pose: pose(100), code: "ik_failed",
+  });
+  expect(f.core.target).toEqual(pose(.3)); expect(f.core.dragging).toBe(false);
+  expect(f.sent.at(-1)).toMatchObject({ type: "interaction_request", action: "acquire", kind: "manipulation_planning" });
+  expect(f.native().some(c => c.action === "update" || c.action === "execute")).toBe(false);
+});
+
+it("a new grab cancels a pending released-target correction", () => {
+  const f = sharedFollowingFixture(); f.core.end();
+  f.reply({ request_id: "shared-follow-native-2", action: "update" }, {
+    status: "infeasible", sequence: 2, sample_pose: pose(100), code: "ik_failed",
+  });
+  expect(f.core.begin()).toBe(true);
+  expect(f.sent.slice(-2).map(packet => packet.action)).toEqual(["cancel_acquire", "acquire"]);
+  expect(f.sent.at(-1)).toMatchObject({ kind: "manipulation_following" });
+});
+
+it("ignores a released follow failure after another client takes ownership", () => {
+  const f = sharedFollowingFixture(); f.core.end();
+  f.state.authority = { ...f.state.authority!, client_id: "other", lease_id: "successor" };
+  f.state.target = { ...f.state.target!, ...pose(.8), revision: 2, sequence: 20 };
+  f.state.revision++; f.collaboration.apply({ ...f.state }); f.tick();
+  const before = f.sent.length;
+  const target = f.core.target;
+  f.reply({ request_id: "shared-follow-native-2", action: "update" }, {
+    status: "infeasible", sequence: 2, sample_pose: pose(100), code: "ik_failed",
+  });
+  expect(f.core.target).toEqual(target); expect(f.sent).toHaveLength(before);
+  expect(f.core.rejection).toBeNull();
+});
+
+it.each(["successor released", "confirmed stop"])("does not restore a released follow target after %s before the next input tick", reason => {
+  const f = sharedFollowingFixture(); f.core.end();
+  f.state.authority = null;
+  f.state.target = reason === "confirmed stop" ? null : { ...f.state.target!, ...pose(.8), revision: 3, sequence: 20 };
+  if (reason === "confirmed stop") f.view.manipulation.stopped = true;
+  f.state.revision++; f.collaboration.apply({ ...f.state });
+  const before = f.sent.length, beforeTarget = f.core.target;
+  f.reply({ request_id: "shared-follow-native-2", action: "update" }, {
+    status: "infeasible", sequence: 2, sample_pose: pose(100), code: "ik_failed",
+  });
+  expect(f.sent).toHaveLength(before);
+  expect(f.core.target).toEqual(beforeTarget);
+});
+
+it("does not restore a discarded draft from repeated server snapshots", () => {
+  const f = fixture();
+  f.state.target = { ...pose(.3), domain: "manipulation", group_id: "arm", speed_scale: .5, revision: 1, phase: "draft", sample_ts: 100, sequence: 1 };
+  f.state.revision++; f.collaboration.apply({ ...f.state }); f.tick();
+  expect(f.core.target).not.toBeNull();
+  f.core.cancel(); f.tick(); f.tick();
+  expect(f.core.target).toBeNull();
+  expect(f.native().at(-1)).toMatchObject({ action: "cancel", epoch: "robot", lease_id: "unowned" });
+  f.state.target = { ...f.state.target, ...pose(.4), revision: 2 };
+  f.state.revision++; f.collaboration.apply({ ...f.state }); f.tick();
+  expect(f.core.target?.position).toEqual([0, 0, .4]);
+});
+
+it("suspending an observer does not cancel another client's shared draft", () => {
+  const f = fixture();
+  f.state.target = { ...pose(.3), domain: "manipulation", group_id: "arm", speed_scale: .5, revision: 1, phase: "draft", sample_ts: 100, sequence: 1 };
+  f.state.revision++; f.collaboration.apply({ ...f.state }); f.tick();
+  f.sent.length = 0;
+  f.core.invalidateTarget(); f.tick();
+  expect(f.native()).toEqual([]);
+  expect(f.sent.filter(c => c.action === "acquire")).toEqual([]);
+  expect(f.core.target).not.toBeNull();
 });

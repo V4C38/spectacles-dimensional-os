@@ -1,58 +1,34 @@
 import * as THREE from "three";
 import { NotificationPill } from "../presentation/NotificationPill";
-/** Lifetime and anchor policy for one reusable warning pill and rejected target. */
+import { EndEffectorStatus, END_EFFECTOR_STATUS_STYLE, type EndEffectorStatusInput } from "@dimos-ar-client/manipulation/EndEffectorStatus";
+
+/** Non-interactive status beside the end effector, clear of its marker buttons. */
 export class TargetWarning {
   private readonly pill = new NotificationPill();
   readonly object = this.pill.object;
-  readonly rejected = new THREE.Mesh(
-    new THREE.SphereGeometry(0.007, 16, 12),
-    new THREE.MeshBasicMaterial({
-      color: 0xff453a,
-      transparent: true,
-      depthTest: false,
-      depthWrite: false,
-    }),
-  );
-  private started = -Infinity;
-  private revision = -1;
-  private message = "";
+  private readonly status = new EndEffectorStatus();
+  private readonly anchor = new THREE.Vector3();
+  private readonly offset = new THREE.Vector3();
   constructor() {
-    this.object.visible = this.rejected.visible = false;
-    this.rejected.raycast = () => {};
+    this.object.name = "End effector status";
+    this.object.visible = false;
   }
-  show(
-    revision: number,
-    message: string,
-    position: THREE.Vector3,
-    now: number,
-  ) {
-    if (revision === this.revision) return;
-    this.revision = revision;
-    this.started = now;
-    this.message = message;
-    this.rejected.position.copy(position);
+  update(position: THREE.Vector3, now: number, input: EndEffectorStatusInput): void {
+    const sample = this.status.sample(input, now);
+    this.object.visible = sample.notification !== null;
+    this.anchor.copy(position);
+    if (!sample.notification) return;
+    this.object.scale.setScalar(0.8 * sample.scale);
+    this.pill.draw(sample.notification, sample.elapsedS, sample.opacity);
   }
-  update(position: THREE.Vector3, now: number, persistent = false) {
-    const age = persistent ? Math.min(0.5, now - this.started) : now - this.started;
-    this.object.visible = this.rejected.visible = age >= 0 && age < 1.5;
-    if (!this.object.visible) return;
-    const opacity = Math.min(1, age / 0.12, (1.5 - age) / 0.18);
-    this.object.position.copy(position).add(new THREE.Vector3(0, -0.065, 0));
-    this.object.scale.setScalar(0.8 * (0.9 + 0.1 * opacity));
-    this.pill.draw(
-      { text: this.message, tone: "warning", glyph: "warning" },
-      age,
-      opacity,
-    );
-    this.rejected.material.opacity = opacity;
-  }
-  faceViewer(eye: THREE.Vector3) {
+  faceViewer(eye: THREE.Vector3): void {
+    this.object.position.copy(this.anchor);
     this.object.lookAt(eye);
+    this.offset.set(END_EFFECTOR_STATUS_STYLE.rightM, END_EFFECTOR_STATUS_STYLE.upM, 0)
+      .applyQuaternion(this.object.quaternion);
+    this.object.position.add(this.offset);
   }
-  dispose() {
+  dispose(): void {
     this.pill.dispose();
-    this.rejected.removeFromParent();
-    this.rejected.geometry.dispose();
-    this.rejected.material.dispose();
   }
 }

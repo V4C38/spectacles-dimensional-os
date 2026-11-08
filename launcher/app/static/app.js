@@ -973,19 +973,18 @@
   function applyConnectionStatus(status) {
     setText(hostIp, status.host_ip);
     setText(hostIpSummary, status.host_ip);
+    const isWebxr = client === "webxr";
+    $("hostIpSummaryLabel").classList.add("hidden");
+    hostIpSummary.classList.add("hidden");
     $("hostIpRow").classList.remove("hidden");
-    $("hostIpSummaryLabel").classList.remove("hidden");
-    hostIpSummary.classList.remove("hidden");
-    $("pinRow").classList.remove("hidden");
-    setText(pinValue, status.pin);
+    $("pinRow").classList.toggle("hidden", isWebxr);
+    setText(pinValue, isWebxr ? null : status.pin);
     $("connectionSummaryLabel").textContent = "PIN";
     setText(pinSummary, status.pin);
+    setHref($("urlSummary"), status.webxr_url, "Address available after Start");
     setText(robotValue, displayRobotIp(status.robot_ip));
-    webxrNetworkRow.classList.toggle("hidden", !status.webxr_url);
-    webxrHint.classList.toggle("hidden", !status.webxr_url);
-    $("webxrServiceStatus").textContent = status.webxr_error || status.webxr_phase || "stopped";
-    $("startWebxrBtn").disabled = ["starting", "running"].includes(status.webxr_phase);
-    $("stopWebxrBtn").disabled = !["starting", "running"].includes(status.webxr_phase);
+    webxrNetworkRow.classList.toggle("hidden", !isWebxr);
+    webxrHint.classList.toggle("hidden", !isWebxr);
     setHref(webxrNetwork, status.webxr_url);
   }
 
@@ -1345,19 +1344,6 @@
       appendLog(`Stop error: ${err}`);
     }
   });
-
-  for (const [id, endpoint] of [["startWebxrBtn", "/api/webxr/start"], ["stopWebxrBtn", "/api/webxr/stop"], ["stopBackendBtn", "/api/backend/stop"]]) {
-    $(id).addEventListener("click", async () => {
-      $(id).disabled = true;
-      try {
-        const response = await fetch(endpoint, { method: "POST" });
-        const data = await response.json();
-        if (!response.ok) appendLog(data.detail || "Service operation failed");
-        if (data.phase) applyStatus(data);
-      } catch (error) { appendLog(String(error)); }
-      finally { applyStatus(lastStatus); }
-    });
-  }
 
   async function loadConfig() {
     try {

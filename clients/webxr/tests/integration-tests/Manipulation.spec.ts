@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
 import { bootstrap } from "./fixtures/Runtime";
 import { setSelection } from "./fixtures/Input";
 import { saveCaseProof } from "./fixtures/CaseProof";
@@ -918,7 +919,7 @@ test("compact controls share a row and recalibration starts the localization flo
   } finally {fixture.close();}
 });
 
-for(const selected of [false,true]) test(`feedback loss preserves the ${selected ? "planning" : "following"} grab and model for two seconds`,async({page},info)=> {
+for(const selected of [false,true]) test(`feedback loss preserves the ${selected ? "planning" : "following"} grab and model for one second`,async({page},info)=> {
   test.setTimeout(60000);
   const fixture=await bootstrap(page,"controller",{manipulation:true,armIntervalMs:33});
   try {
@@ -942,7 +943,7 @@ for(const selected of [false,true]) test(`feedback loss preserves the ${selected
     await expect.poll(async()=>(await read()).retained).toBe(true);
     const held=await read(), count=fixture.commands.length;
     await page.evaluate(()=>{(window as any).questDevice.controllers.right.position.x+=.06;});
-    await page.waitForTimeout(700);
+    await page.waitForTimeout(250);
     const moved=await read();
     expect(moved).toMatchObject({held:true,visible:true,retained:true,model:held.model,current:held.current});
     expect(moved.target).not.toEqual(held.target);
@@ -953,7 +954,7 @@ for(const selected of [false,true]) test(`feedback loss preserves the ${selected
     if(!selected) await expect.poll(()=>fixture.commands.filter(c=>c.type === "manipulation_request" && c.action==="acquire").length).toBe(2);
     fixture.pauseArmFeedback(true);
     await expect.poll(async()=>(await read()).retained).toBe(true);
-    await page.waitForTimeout(2300);
+    await page.waitForTimeout(1100);
     await expect.poll(async()=>(await read()).held).toBe(false);
     expect((await read()).visible).toBe(false);
     await page.screenshot({path:info.outputPath(`feedback-loss-${selected ? "planning" : "following"}.png`)});
@@ -996,4 +997,92 @@ for(const selected of [false,true]) test(`socket reconnect retains the ${selecte
     if(!selected) await expect.poll(()=>fixture.commands.filter(c=>c.type === "manipulation_request" && c.action==="acquire").length).toBe(2);
     await setSelection(page,0);
   } finally {fixture.close();}
+});
+
+test("a sustained selected controller grab animates live IK through delayed snapshots and failure recovery", async ({ page }, info) => {
+  test.setTimeout(120000);
+  const fixture = await bootstrap(page, "controller", { manipulation: true, independentIK: true,
+    interactionDelayMs: 120, evaluationDelayMs: 100, evaluationTargetScale: 3 });
+  const read = () => page.evaluate(() => {
+    const app = (window as any).xb.core.scene.children.find((o: any) => o.client?.manipulation);
+    const interaction = app.client.manipulation.interaction;
+    const observed = app.client.session.view().manipulation.observations.manipulator;
+    const expectedJoint = interaction.target
+      ? observed.joints.yam_joint2 + 0.2 + 3 * (interaction.target.position[2] - observed.pose.position[2])
+      : null;
+    return { held: interaction.dragging, failed: interaction.rejection !== null, plan: interaction.plan?.plan_id,
+      readyToRelease: interaction.dragging && interaction.snapshot().hasDraft && expectedJoint !== null &&
+        Math.abs((interaction.previewJoints?.yam_joint2 ?? Infinity) - expectedJoint) < 0.01 };
+  });
+  const sweep = () => page.evaluate(async () => {
+    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
+    const manipulation = app.client.manipulation, renderer = manipulation.renderer;
+    const controller = w.questDevice.controllers.right, initialY = controller.position.y;
+    const baseline = renderer.modelRenderer.previewMeshes.get("link2").quaternion.clone();
+    const xr = w.xb.core.renderer.xr.getSession(), started = performance.now();
+    const samples: { angle: number; joint: number | null; held: boolean; visible: boolean }[] = [];
+    for (let frame = 0; frame < 48 || performance.now() - started < 2400; frame++) {
+      await new Promise<void>(resolve => xr.requestAnimationFrame(() => resolve()));
+      controller.position.y = initialY + (frame + 1) * 0.0015;
+      const mesh = renderer.modelRenderer.previewMeshes.get("link2");
+      samples.push({ angle: mesh.quaternion.angleTo(baseline), visible: mesh.visible,
+        joint: manipulation.interaction.previewJoints?.yam_joint2 ?? null,
+        held: manipulation.interaction.dragging });
+    }
+    return { samples, elapsedMs: performance.now() - started };
+  });
+  try {
+    await fixture.localized();
+    await expect.poll(() => page.evaluate(() => {
+      const app = (window as any).xb.core.scene.children.find((o: any) => o.client?.manipulation);
+      return app.client.manipulation.renderer.modelRenderer.previewMeshes.has("link2");
+    })).toBe(true);
+    await page.evaluate(() => {
+      const app = (window as any).xb.core.scene.children.find((o: any) => o.client?.manipulation);
+      app.client.setRobotSelected(true);
+    });
+    // Establish an actual reviewed endpoint before testing failure recovery during a later grab.
+    await aimHandle(page); await setSelection(page, 1);
+    await expect.poll(() => page.evaluate(() => {
+      const app = (window as any).xb.core.scene.children.find((o: any) => o.client?.manipulation);
+      return app.client.session.collaboration.snapshot("manipulation", "manipulator").ownsAuthority;
+    })).toBe(true);
+    await page.evaluate(() => { (window as any).questDevice.controllers.right.position.y += 0.04; });
+    await expect.poll(async () => (await read()).readyToRelease).toBe(true);
+    await setSelection(page, 0);
+    await expect.poll(async () => (await read()).plan).toMatch(/^fixture-plan-/);
+    const reviewedPlans = fixture.commands.filter(c => c.type === "manipulation_request" && c.action === "plan").length;
+    await aimHandle(page); await setSelection(page, 1);
+    await expect.poll(async () => (await read()).held).toBe(true);
+    const first = await sweep();
+    expect(first.elapsedMs).toBeGreaterThanOrEqual(2400);
+    expect(first.samples.every(s => s.held && s.visible)).toBe(true);
+    expect(new Set(first.samples.filter(s => s.joint !== null).map(s => s.joint!.toFixed(4))).size).toBeGreaterThan(6);
+    expect(new Set(first.samples.map(s => s.angle.toFixed(4))).size).toBeGreaterThan(10);
+    expect(Math.max(...first.samples.map(s => s.angle))).toBeGreaterThan(0.05);
+    await page.screenshot({ path: info.outputPath("sustained-live-ik-before-release.png") });
+    fixture.setIKFailure({ code: "ik_failed" });
+    await page.evaluate(() => { (window as any).questDevice.controllers.right.position.y += 0.08; });
+    await expect.poll(async () => (await read()).failed).toBe(true);
+    expect((await read()).held).toBe(true);
+    fixture.setIKFailure(null);
+    const recovered = await sweep();
+    expect(recovered.samples.every(s => s.held && s.visible)).toBe(true);
+    expect(new Set(recovered.samples.filter(s => s.joint !== null).map(s => s.joint!.toFixed(4))).size).toBeGreaterThan(6);
+    expect(new Set(recovered.samples.map(s => s.angle.toFixed(4))).size).toBeGreaterThan(10);
+    expect(Math.max(...recovered.samples.map(s => s.angle))).toBeGreaterThan(0.05);
+    expect(fixture.commands.some(c => c.type === "manipulation_request" && c.action === "execute")).toBe(false);
+    expect(fixture.commands.filter(c => c.type === "manipulation_request" && c.action === "plan")).toHaveLength(reviewedPlans);
+    expect((await read()).held).toBe(true);
+    const sampleFile = info.outputPath("held-grab-mesh-samples.json");
+    await writeFile(sampleFile, JSON.stringify({ first, recovered }));
+    await info.attach("held-grab-mesh-samples", { path: sampleFile, contentType: "application/json" });
+    await page.screenshot({ path: info.outputPath("sustained-live-ik-recovered-before-release.png") });
+    await setSelection(page, 0);
+  } finally {
+    const commandFile = info.outputPath("held-grab-control-commands.json");
+    await writeFile(commandFile, JSON.stringify(fixture.commands));
+    await info.attach("held-grab-control-commands", { path: commandFile, contentType: "application/json" });
+    fixture.close();
+  }
 });

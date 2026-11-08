@@ -71,7 +71,14 @@ class SpeedScaledPoseTargetSolver(PinkPoseTargetSolver):  # type: ignore[misc]
         super().reset()
         self._stream_velocity = None
         self._arrival_hold = None
-        self.target_joints = None
+
+    def _before_solve(self, tasks: Any, configuration: Any, dt: float) -> None:
+        super()._before_solve(tasks, configuration, dt)
+        for name, task in tasks.items():
+            if name.startswith("frame/"):
+                # FrameTask gain is per tick. A fixed planning gain at 100 Hz
+                # requests late braking that the acceleration envelope cannot follow.
+                task.gain = min(0.5, 2 * dt)
 
     def _apply_streaming_command_envelope(self, **kwargs: Any) -> Any:
         previous = kwargs["previous"]
@@ -88,36 +95,7 @@ class SpeedScaledPoseTargetSolver(PinkPoseTargetSolver):  # type: ignore[misc]
         velocity = getattr(self, "_stream_velocity", None)
         if velocity is None:
             velocity = np.zeros_like(previous)
-        # Brake toward the validated goal, then bound the change in
-        # commanded velocity. Execute uses these same model acceleration limits.
-        validated = getattr(self, "target_joints", None)
-        remaining = (
-            (
-                np.array([validated[name] for name in kwargs["context"].mapping.dimos_joint_names])
-                - previous
-            )
-            if validated
-            else None
-        )
         desired = (bounded - previous) / dt
-        if remaining is not None:
-            moving = np.abs(remaining) > 1e-8
-            if np.any(moving):
-                names = kwargs["context"].mapping.dimos_joint_names
-                velocity_limits = np.array(
-                    [
-                        kwargs["joint_velocity_limits"].get(name, kwargs["max_joint_velocity"])
-                        for name in names
-                    ]
-                )
-                rate = min(
-                    1 / dt,
-                    float(np.min(velocity_limits[moving] / np.abs(remaining[moving]))),
-                    float(np.min(np.sqrt(2 * acceleration[moving] / np.abs(remaining[moving])))),
-                )
-                desired = remaining * rate
-            else:
-                desired = np.zeros_like(previous)
         if getattr(self, "_arrival_hold", None):
             desired = np.zeros_like(previous)
         desired = np.clip(desired, velocity - acceleration * dt, velocity + acceleration * dt)
@@ -163,6 +141,8 @@ class SpeedScaledCartesianIKTask(CartesianIKTask):  # type: ignore[misc]
         )
         if self._solver.failure is not None and getattr(self, "_failed_target", None) == key:
             return None
+        if key != getattr(self, "_failed_target", None):
+            self._solver._arrival_hold = None
         self._failed_target = key
         self._solver.failure = None
         return super().on_cartesian_command(pose, t_now=t_now)
@@ -189,7 +169,6 @@ class SpeedScaledCartesianIKTask(CartesianIKTask):  # type: ignore[misc]
     def set_validated_target(self, key: list[float], joints: dict[str, float]) -> None:
         if tuple(key) == getattr(self, "_failed_target", None):
             self._solver.failure = None
-            self._solver.target_joints = joints
 
     def get_tracking_status(self) -> dict[str, Any]:
         velocity = getattr(self._solver, "_stream_velocity", None)
@@ -343,7 +322,8 @@ class ARManipulationCoordinator(ArmPoseCoordinator):  # type: ignore[misc]
             "ar_joint_trajectory", "dimos.ar.manipulation.protection:create_trajectory_task"
         )
         control_task_registry.register_bindings(
-            "ar_joint_trajectory", exposes=["execute", "cancel", "get_status", "reset", "get_endpoint_status"]
+            "ar_joint_trajectory",
+            exposes=["execute", "cancel", "get_status", "reset", "get_endpoint_status"],
         )
         for task in self.config.tasks:
             if task.type == "trajectory":

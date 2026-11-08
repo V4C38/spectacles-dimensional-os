@@ -13,6 +13,7 @@ import websockets
 import websockets.asyncio.server as ws_server
 
 from dimos.ar.timing_diagnostics import TimingSummary
+from dimos.ar.websocket.bulk import TokenBucket
 from dimos.ar.websocket.performance import LatencyHistogram
 from dimos.utils.logging_config import setup_logger
 
@@ -56,6 +57,7 @@ class ClientSendQueue:
         )
         self._coalesce_latest: dict[str, str] = {}
         self._coalesce_latest_binary: bytes | None = None
+        self._snapshot_budget = TokenBucket(57344, 16384)
         self._sequence = 0
         self._queued_bytes = 0
         self._timing = TimingSummary(
@@ -171,16 +173,22 @@ class ClientSendQueue:
         if self._closed:
             return
         if self._coalesce_latest:
-            values = list(self._coalesce_latest.values())
-            self._coalesce_latest.clear()
             batch = ""
-            for value in values:
-                if batch and len(batch.encode()) + len(value.encode()) > CONTROL_BATCH_MAX_BYTES:
+            for kind, value in tuple(self._coalesce_latest.items()):
+                size = len(value.encode())
+                if not self._snapshot_budget.take(size):
+                    continue
+                self._coalesce_latest.pop(kind, None)
+                if batch and len(batch.encode()) + size > CONTROL_BATCH_MAX_BYTES:
                     await self._send_text(batch)
                     batch = ""
                 batch += value
             if batch:
                 await self._send_text(batch)
+            elif self._queue.empty():
+                # Yield while capacity replenishes; essential FIFO traffic preempts
+                # optional snapshots on the next pass. Latest snapshots replace old ones.
+                await asyncio.sleep(0.005)
         if not self._closed and self._coalesce_latest_binary is not None:
             data = self._coalesce_latest_binary
             self._coalesce_latest_binary = None

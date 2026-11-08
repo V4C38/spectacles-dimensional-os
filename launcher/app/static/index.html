@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>DimOS ARModule</title>
-    <link rel="stylesheet" href="/static/app.css?v=localization-layout-3" />
+    <link rel="stylesheet" href="/static/app.css?v=launcher-controls-6" />
   </head>
   <body>
     <div class="app">
@@ -26,7 +26,7 @@
         <div class="panel-bottom" id="actionsBar">
           <div class="actions">
             <button type="button" class="btn primary" id="startBtn">Start</button>
-            <button type="button" class="btn" id="stopBtn">Stop all</button>
+            <button type="button" class="btn" id="stopBtn">Stop</button>
           </div>
         </div>
       </header>
@@ -40,6 +40,8 @@
                 <span class="value mono" id="hostIpSummary">—</span>
                 <span class="label" id="connectionSummaryLabel">PIN</span>
                 <span class="value mono" id="pinSummary">—</span>
+                <span class="label">URL</span>
+                <span class="value mono" id="urlSummary">—</span>
               </span>
               <span class="ip-summary-expanded label">Connection</span>
             </summary>
@@ -168,21 +170,13 @@
               </div>
             </div>
 
-            <div class="selector-group">
-              <span class="selector-label">WebXR service · <span id="webxrServiceStatus">stopped</span></span>
-              <button type="button" class="btn" id="startWebxrBtn">Start WebXR</button>
-              <button type="button" class="btn" id="stopWebxrBtn" disabled>Stop WebXR</button>
-              <button type="button" class="btn" id="stopBackendBtn">Stop ARModule only</button>
-              <p class="hint">Specs and WebXR can share the PIN. Specs does not need this service.</p>
-            </div>
-
-            <section class="card config-card" id="locCard" aria-label="Localization">
-              <div class="config-heading">
+            <details class="card config-card" id="locCard" aria-label="Localization">
+              <summary class="config-summary">
                 <span class="deps-summary-collapsed">
                   <span class="label">Localization</span>
                   <span class="value" id="locSummary"></span>
                 </span>
-              </div>
+              </summary>
               <div class="config-body">
                 <section class="localization-policy" aria-label="Localization policy">
                   <p class="policy-box" id="policyExplanation">
@@ -261,7 +255,7 @@
                   </div>
                 </div>
               </div>
-            </section>
+            </details>
 
             <details class="card config-card hidden" id="agentConfig">
               <summary class="config-summary">
@@ -356,6 +350,6 @@
         <pre class="log" id="log" aria-live="polite"></pre>
       </main>
     </div>
-    <script src="/static/app.js?v=localization-layout-3"></script>
+    <script src="/static/app.js?v=launcher-controls-6"></script>
   </body>
 </html>

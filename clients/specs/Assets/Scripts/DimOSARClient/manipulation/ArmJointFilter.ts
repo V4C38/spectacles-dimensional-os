@@ -16,7 +16,7 @@ export function sameArmTrackingOrigin(a: ClientTrackingOrigin | null, b: ClientT
 
 /** Presentation-only Hermite interpolation. Raw feedback always controls motion/arrival. */
 export class ArmJointFilter {
-  constructor(private readonly defaultIntervalS = 1 / 30) {}
+  constructor(private readonly defaultIntervalS = 1 / 30, private readonly maximumIntervalS = 0.15) {}
   private values: Record<string, number> = {};
   private from: Record<string, number> = {};
   private velocity: Record<string, number> = {};
@@ -80,7 +80,7 @@ export class ArmJointFilter {
     if (signature !== this.signature) {
       const first = this.receivedAt === null;
       const interval = first ? initialIntervalS : Math.max(.001, now - this.receivedAt!);
-      this.duration = Math.max(.02, Math.min(.05, interval));
+      this.duration = Math.max(.02, Math.min(this.maximumIntervalS, interval));
       this.receivedAt = now; this.signature = signature;
       for (const joint of model.joints) {
         const name = joint.name, value = target[name];

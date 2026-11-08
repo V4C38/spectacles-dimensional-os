@@ -162,6 +162,8 @@ test("launcher controls and disclosure sections use the same design tokens", asy
   await page.screenshot({path: info.outputPath("launcher-unified-collapsed.png")});
   await page.locator("#ipCard > summary").click();
   await page.locator("#installBanner > summary").click();
+  await expect(page.locator("#locCard .localization-policy")).toBeHidden();
+  await page.locator("#locCard > summary").click();
   await expect(page.locator("#locCard .localization-policy")).toBeVisible();
   for (const control of await readMetrics()) {
     expect(control.height, control.id).toBe(control.id.includes("tag-summary") ? 64 : 44);

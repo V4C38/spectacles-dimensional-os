@@ -1348,7 +1348,7 @@ Environment-depth data is host-local and is never part of this protocol.
 `manipulation_request` adds `reset_joints` and `prepare_shutdown`, both using the
 existing `request_id`, `group_id`, and optional `speed_scale` in (0, 1].
 Reset defaults to 0.5; shutdown parking defaults to 0.2. They plan a collision-checked joint-zero arm move, preserving the gripper,
-and reply only after fresh joint feedback confirms zero within 0.02 radians for
+and reply only after fresh joint feedback confirms zero within the configured joint tolerance (0.02 radians by default, 0.05 for OpenYAM) for
 0.5 seconds, or report failure. They never clear emergency stop. Shutdown parking
 is capped at 20% and a 55-second operation budget inside the supervisor’s
 60-second response deadline; the launcher then proceeds with shutdown even
@@ -1490,7 +1490,7 @@ or m/s) and `gripper_target` (accepted normalized command, or null) accompany ra
 joint feedback. `gripper` remains measured opening: an object can prevent full
 closure without failing a successful command. Clients publish no hardware targets
 when feedback exceeds 500 ms. They retain the grab, draft, current model and paused
-Preview for up to two seconds of feedback or connection loss; the local target can
+Preview for up to one second of feedback or connection loss; the local target can
 continue following the hand. Recovery invalidates checked plans and following
 leases. Reconnection never clears motor Stop or resumes it automatically.
 
@@ -1504,8 +1504,9 @@ Deferred gripper actions run once; a rejected action fails the whole operation.
 Selected dragging requests nonmoving seeded IK at most 20 Hz, one in flight with
 newest intent coalesced. Release, Preview and Execute request a checked full path.
 Presentation uses update-timed Hermite interpolation with velocity continuity,
-a 50 ms interpolation cap and at most 30 ms of bounded visual prediction. Filtered
-positions never enter control or completion checks.
+an adaptive 150 ms measured-feedback cap and 250 ms advisory-preview cap, plus at
+most 30 ms of bounded visual prediction. Filtered positions never enter control
+or completion checks.
 
 ### Replicated arm IK preview
 
@@ -1517,3 +1518,73 @@ manipulation target. Observers use it only for that group and target revision.
 It is a visual preview, never an executable plan or measured robot feedback.
 Changed targets and retired requests cannot publish evaluations for newer revisions;
 Execute still requires the exact checked `plan_id` and target revision.
+
+### Bounded reconnect recovery and following transport
+
+Updated v3 clients request `resumable: true` and `server_follow_stream: true` in
+`hello_request`. Supporting servers return an opaque `resume_token` and
+`server_follow_stream: true` in `hello`. Resend the token only to the same backend
+when reconnecting. The token resumes the same logical client for strictly less
+than one second after socket loss; it is invalid after expiry or server restart.
+Bulk pairing always gets fresh credentials. Explicit stop, stale native feedback,
+and hardware faults bypass recovery. Existing input/feedback deadlines remain in
+force outside the bounded recovery window. Recovery can continue only the last
+validated native target; no missing input or discrete commands are replayed.
+Clients without these optional fields retain the legacy transport behavior.
+
+With server following enabled, manipulation uses the existing shared target update
+stream plus idle renewals. The server forwards accepted following targets using its
+native token. Clients do not send a second native update stream. Native advisory
+replies use `shared-follow-<token>-<sequence>` request IDs; feasible replies are visual
+feedback, never authorization to execute an unchecked target. A superseded advisory
+result may be returned to its initiating client for continuity, but cannot be
+published as validation of the new shared target. Full plans remain strictly fenced.
+Gripper set-value requests require the current manipulation lease but do not wait
+for a matching moving-pose revision. Selected gripper changes remain draft intent.
+
+OpenYAM reset allows 0.05 rad joint error with 0.5 s of fresh settled feedback.
+Released following completes within 10 mm / 3 degrees of its validated TCP pose
+after 0.5 s of distinct fresh measurements and joint speed below 0.05 rad/s.
+When TCP feedback is absent, the configured joint tolerance is the fallback.
+Two seconds without progress outside arrival tolerance fails the released target
+after native clearing confirms; it does not report success. Reset errors remain
+relative to the commanded safe-zero pose.
+Completed operation IDs identify outcomes and do not reserve robot authority.
+
+A retired native token in a shared following stream produces `rejected` with code
+`retired`. A still-held gesture may reacquire a native token only under its current
+shared lease; an expired, revoked, or stopped lease never grants automatic recovery.
+
+Explicit Cancel/Stop can be admitted without acquiring an editing lease when no
+editor owns the robot. Native operation ownership and epoch fences still apply.
+Confirmed cancellation clears that group's shared draft, without clearing a
+successor's target. A locally discarded draft cannot be restored by repeated
+snapshots of its old revision. Suspending an observer only retires local state;
+it must not issue a native cancellation for another client's shared draft.
+
+### Independent advisory IK and manual failed-target release
+
+`hello.independent_ik: true` advertises nonmoving IK that does not require a
+per-sample canonical acknowledgement. With this optional flag, an owning client
+evaluates its latest local pose under the current epoch, manipulation lease and
+group. Without it, clients retain the legacy canonical-target evaluation path.
+The server validates editing authority independently of the sample's revision;
+full Plan and Execute requests still require the exact canonical target revision.
+Only a sample matching the current canonical pose and revision can populate
+`manipulation_state.evaluation`. Older samples may update the initiating client's
+visual preview but never authorize motion or validate a newer target.
+
+`manipulation_result.sample_pose` optionally identifies the attempted source pose
+for feasible and infeasible `evaluate`/`update` outcomes. It has the usual finite
+position and unit-quaternion shape. `pose` remains the solved end-effector pose;
+`target_revision`, request ID, native token and sequence retain their existing
+correlation roles. No additional acknowledgement is required for every target
+update: regular authoritative snapshots acknowledge accumulated input sequences.
+Acquisition, release, execution, cancellation and gripper outcomes remain reliable.
+
+An IK failure preserves the user's grab. The latest validated model pose remains
+visible while the sphere follows held input. Only manual release restores a failed
+sphere to the latest validated pose, or its measured grab-start pose if no target
+was validated. This shared-draft reconciliation sends no native return movement.
+Late replies are scoped to their source episode, epoch and editing lease; they
+cannot restore an old target after another client has taken ownership.

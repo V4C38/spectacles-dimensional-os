@@ -22,7 +22,7 @@ test("prioritizes robot features with compact technical footnotes on desktop and
     lookups.push(route.request().postDataJSON());
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ controlUrl: "/api/connections/landing/control", bulkUrl: "/api/connections/landing/bulk" }) });
   });
-  await page.routeWebSocket("**/api/connections/landing/control", socket => {
+  await page.routeWebSocket("**/ar", socket => {
     const sendState = () => socket.send(JSON.stringify(state) + "\n");
     socket.onMessage(raw => {
       if (typeof raw !== "string") return;
@@ -42,13 +42,10 @@ test("prioritizes robot features with compact technical footnotes on desktop and
     });
   });
   await page.goto("/");
-  await expect(page.locator("#pin")).toBeVisible();
-  await expect(page.locator("#enter")).toBeDisabled();
-  await page.locator("#pin").fill("012345");
-  await page.locator("#connect").click();
+  await expect(page.locator("#pin")).toHaveCount(0);
+  await expect(page.locator("#connect")).toHaveCount(0);
   await expect(page.locator("#enter")).toBeEnabled();
-  expect(lookups).toEqual([{ pin: "012345" }]);
-  expect(await page.evaluate(() => localStorage.getItem("dimos_ar_module_pin"))).toBe("012345");
+  expect(lookups).toEqual([]);
   await expect(page.getByRole("heading", { name: "Unitree Go2" })).toBeVisible();
   await expect(page.locator(".feature-list li:visible")).toHaveCount(5);
   await expect(page.locator(".connection-footnote")).toContainText("192.168.1.42");

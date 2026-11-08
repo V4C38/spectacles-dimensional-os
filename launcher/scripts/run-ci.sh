@@ -12,6 +12,7 @@
 #   CI_PYTHON   Python 3.12 interpreter (default: python3.12, python3)
 #   CI_VENV     Path to reuse/create for dimos-ar deps (default: /tmp/spectacles-dimensional-os-ci-venv)
 #   CI_WEBXR_BUILD_DIR  Optional build output directory, to preserve a running headset build
+#   CI_PLAYWRIGHT_SYSTEM_DEPS=preinstalled  Use installed OS libraries without sudo; all tests still run
 
 set -euo pipefail
 
@@ -118,7 +119,7 @@ run_client_webxr_job() {
   npm ci
   npm test
   npm run build -- --outDir "${CI_WEBXR_BUILD_DIR:-dist}"
-  if [[ "$(uname -s)" == "Linux" ]]; then
+  if [[ "$(uname -s)" == "Linux" && "${CI_PLAYWRIGHT_SYSTEM_DEPS:-install}" != "preinstalled" ]]; then
     npx playwright install --with-deps chromium
   else
     npx playwright install chromium

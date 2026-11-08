@@ -154,6 +154,14 @@ it("validates motion poses before encoding", () => {
     }),
   ).toThrow();
 });
+it("validates source poses on successful and failed advisory results", () => {
+  for (const status of ["feasible", "infeasible"]) {
+    const result = { type: "manipulation_result", request_id: "r", action: "evaluate", group_id: "arm", status, sample_pose: pose };
+    expect(decodeManipulation(result)).toMatchObject({ sample_pose: pose });
+    expect(() => decodeManipulation({ ...result, sample_pose: { ...pose, orientation: [0, 0, 0, 0] } })).toThrow(/sample_pose/);
+    expect(() => decodeManipulation({ ...result, sample_pose: { ...pose, position: [NaN, 0, 0] } })).toThrow(/sample_pose/);
+  }
+});
 it("rejects malformed timed trajectories", () => {
   expect(() =>
     decodeManipulation({
@@ -682,7 +690,7 @@ it("retains the arm IK preview when only the selected gripper draft changes", ()
 });
 
 
-it("retains validated preview without commanding an older goal on invalid release", () => {
+it("snaps an invalid following sphere to the valid pose without commanding a return", () => {
   const f = fixture(); f.interaction.begin(); f.reply(f.sent.at(-1), { status: "acquired", token: "t" });
   f.interaction.aim(pose); f.advance(0.04); const valid = f.sent.at(-1);
   f.reply(valid, { status: "feasible", sequence: valid.sequence, joints: { joint: 0.3 } });
@@ -694,7 +702,7 @@ it("retains validated preview without commanding an older goal on invalid releas
   expect(f.interaction.rejection?.failedJoints).toEqual(["joint"]);
   f.interaction.end();
   expect(f.interaction.dragging).toBe(false);
-  expect(f.interaction.target?.position).toEqual([10, 0, 0]);
+  expect(f.interaction.target?.position).toEqual(pose.position);
   expect(f.interaction.previewJoints).toEqual({ joint: 0.3 });
   expect(f.sent.at(-1).action).toBe("release");
   const count = f.sent.length;
@@ -789,12 +797,12 @@ it("validates a new released follow goal rather than restoring an older rejected
   const count = f.sent.length; f.advance(0.1); expect(f.sent).toHaveLength(count);
 });
 
-it("retains a grab during unavailable feedback, reacquires safely, and expires after two seconds", () => {
+it("retains a grab during unavailable feedback, reacquires safely, and expires after one second", () => {
   const f=fixture(); f.interaction.begin();
   f.reply(f.sent.at(-1),{status:"acquired",token:"old"}); f.interaction.aim(pose); f.advance(.04);
   f.view.manipulation.available=false;
   const count=f.sent.length; f.advance(.1,false);
-  f.interaction.aim({...pose,position:[.1,0,.3]}); f.advance(1.9,false);
+  f.interaction.aim({...pose,position:[.1,0,.3]}); f.advance(.9,false);
   expect(f.interaction.dragging).toBe(true); expect(f.sent).toHaveLength(count + 1);
   expect(f.sent.at(-1).action).toBe("release");
   f.reply(f.sent.at(-1), { status: "released" });
@@ -802,7 +810,7 @@ it("retains a grab during unavailable feedback, reacquires safely, and expires a
   expect(f.sent.at(-1).action).toBe("acquire");
   f.reply(f.sent.at(-1),{status:"acquired",token:"new"}); f.advance(.04);
   expect(f.sent.at(-1)).toMatchObject({action:"update",token:"new",position:[.1,0,.3]});
-  f.view.manipulation.available=false; f.advance(.01,false); f.advance(2.001,false);
+  f.view.manipulation.available=false; f.advance(.01,false); f.advance(1.001,false);
   expect(f.interaction.dragging).toBe(false);
   expect(f.sent.some(c=>c.action==="cancel")).toBe(true);
 });
@@ -918,7 +926,7 @@ it("retains a failed execution target and replans rather than reusing its cancel
   expect(f.sent.slice(before).some(c=>c.action === "plan")).toBe(true);
 });
 
-it.each(["planning", "following"])("preserves %s capture and last valid model for exactly two seconds of socket loss", mode => {
+it.each(["planning", "following"])("preserves %s capture and last valid model for exactly one second of socket loss", mode => {
   const f=fixture(); f.interaction.setSelected(mode === "planning"); f.interaction.begin();
   if(mode === "following") f.reply(f.sent.at(-1),{status:"acquired",token:"old"});
   f.interaction.aim(pose); f.advance(.05); const old=f.sent.at(-1);
@@ -926,7 +934,7 @@ it.each(["planning", "following"])("preserves %s capture and last valid model fo
   const valid=f.interaction.previewJoints;
   f.view.connection="disconnected"; f.advance(0,false);
   const count=f.sent.length;
-  f.interaction.aim({...pose,position:[.2,0,.3]}); f.advance(1.999,false);
+  f.interaction.aim({...pose,position:[.2,0,.3]}); f.advance(.999,false);
   expect(f.interaction.dragging).toBe(true);
   expect(f.interaction.previewJoints).toEqual(valid);
   expect(f.interaction.target?.position).toEqual([.2,0,.3]);

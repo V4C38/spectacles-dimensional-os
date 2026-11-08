@@ -632,6 +632,70 @@ it("retires late model loads after replacement and disposal", () => {
   }
 });
 
+it("retries transient model failures with backoff and immediately after rendering recovers", () => {
+  const callbacks: Array<(gltf: any) => void> = [];
+  const errors: Array<() => void> = [];
+  const loader = vi.spyOn(GLTFLoader.prototype, "load").mockImplementation((_url, loaded, _progress, failed) => {
+    callbacks.push(loaded); errors.push(() => failed!(new Error("offline")));
+  });
+  const renderer = new ManipulationRenderer();
+  const modelState = structuredClone(state); modelState.model!.asset_url = "/retry.glb";
+  const apply = (now: number, active = true) => applyRenderer(renderer, modelState,
+    active ? origin : null, "arm", true, null, null, null, now, "");
+  try {
+    apply(1); errors[0]();
+    apply(1.49); expect(loader).toHaveBeenCalledTimes(1);
+    apply(1.5); expect(loader).toHaveBeenCalledTimes(2); errors[1]();
+    apply(2.49); expect(loader).toHaveBeenCalledTimes(2);
+    apply(2.5); expect(loader).toHaveBeenCalledTimes(3); errors[2]();
+    apply(2.6, false); apply(2.7);
+    expect(loader).toHaveBeenCalledTimes(4);
+    const scene = new THREE.Group();
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial());
+    mesh.name = "tool"; scene.add(mesh); callbacks[3]({ scene });
+    apply(2.8);
+    expect((renderer as any).modelRenderer.previewMeshes.get("tool")?.visible).toBe(true);
+    expect((renderer as any).modelRenderer.assetMessage).toBe("");
+    apply(20); expect(loader).toHaveBeenCalledTimes(4);
+    renderer.dispose();
+    (renderer as any).modelRenderer.tick(30, true); expect(loader).toHaveBeenCalledTimes(4);
+  } finally { renderer.dispose(); loader.mockRestore(); }
+});
+
+it("keeps the selected mesh moving between sparse live IK updates throughout a held grab", () => {
+  const loader = vi.spyOn(GLTFLoader.prototype, "load").mockImplementation((_url, loaded) => {
+    const scene = new THREE.Group();
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.03), new THREE.MeshBasicMaterial());
+    mesh.name = "tool"; scene.add(mesh); loaded({ scene } as never);
+  });
+  const renderer = new ManipulationRenderer();
+  const moving = structuredClone(state);
+  moving.model!.asset_url = "/moving.glb";
+  moving.model!.joints[0] = { ...moving.model!.joints[0], name: "j", kind: "revolute" };
+  moving.groups![0].joint_names = ["j"];
+  moving.observations!.arm.joints = { j: 0 };
+  let solution = { j: 0 }, previous = new THREE.Quaternion(), moved = 0, largestStep = 0;
+  try {
+    for (let frame = 0; frame < 270; frame++) {
+      if (frame % 18 === 0) solution = { j: frame / 18 * 0.04 };
+      applyRenderer(renderer, moving, origin, "arm", true,
+        { ...pose, position: [0.2, 0, 0.3] }, solution, null, 1 + frame / 90, "", true,
+        "Arm", { dragging: true });
+      const mesh = (renderer as any).modelRenderer.previewMeshes.get("tool") as THREE.Object3D;
+      if (frame > 45) {
+        expect(mesh.visible).toBe(true);
+        const step = previous.angleTo(mesh.quaternion);
+        if (step > 0.00001) moved++;
+        largestStep = Math.max(largestStep, step);
+      }
+      previous.copy(mesh.quaternion);
+    }
+    expect(moved).toBeGreaterThan(210);
+    expect(largestStep).toBeLessThan(0.005);
+    expect(previous.angleTo(new THREE.Quaternion())).toBeGreaterThan(0.4);
+  } finally { renderer.dispose(); loader.mockRestore(); }
+});
+
 it("disposes shared model geometry once across measured, preview and tool clones", () => {
   const loader = vi
     .spyOn(GLTFLoader.prototype, "load")

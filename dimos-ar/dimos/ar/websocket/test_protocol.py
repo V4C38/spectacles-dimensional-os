@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 import struct
 
@@ -102,6 +103,12 @@ def test_encode_hello_advertises_interaction_protocol_version() -> None:
 def test_decode_hello_request() -> None:
     req = decode_hello_request(json.dumps({"type": "hello_request", "ts_client": 99.5}))
     assert req.ts_client == 99.5
+
+
+def test_independent_ik_support_is_an_optional_server_advertisement() -> None:
+    assert "independent_ik" not in _parse_json_line(encode_hello(_sample_hello()))
+    hello = replace(_sample_hello(), independent_ik=True)
+    assert _parse_json_line(encode_hello(hello))["independent_ik"] is True
 
 
 def test_decode_inbound_rejects_hello_request() -> None:

@@ -152,6 +152,11 @@ describe("encode inbound JSON", () => {
 });
 
 describe("decodeOutbound fixtures", () => {
+  it("negotiates independent advisory IK only when advertised by the server", () => {
+    expect(decodeOutbound(JSON.stringify({ ...HELLO_FIXTURE, independent_ik: true }))).toHaveProperty("independent_ik", true);
+    expect(decodeOutbound(JSON.stringify(HELLO_FIXTURE))).not.toHaveProperty("independent_ik");
+    expect(() => decodeOutbound(JSON.stringify({ ...HELLO_FIXTURE, independent_ik: "true" }))).toThrow(/independent_ik/);
+  });
   it("decodes hello from PROTOCOL.md", () => {
     const hello = decodeOutbound(JSON.stringify(HELLO_FIXTURE));
     expect(hello).toEqual({ ...HELLO_FIXTURE, capabilities: { ...HELLO_FIXTURE.capabilities, navigation: { ...HELLO_FIXTURE.capabilities.navigation, nav_goal: { ...HELLO_FIXTURE.capabilities.navigation.nav_goal, preview: false } } } });

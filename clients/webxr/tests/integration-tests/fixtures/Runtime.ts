@@ -22,7 +22,7 @@ export const shared = JSON.parse(
 export async function bootstrap(
   page: Page,
   mode: "hand" | "controller" = "hand",
-  options: { unavailable?: boolean; manipulation?: boolean; planDelayMs?: number; evaluationDelayMs?: number; planJointDelta?: number; armIntervalMs?: number; armReference?: string } = {},
+  options: { unavailable?: boolean; manipulation?: boolean; planDelayMs?: number; evaluationDelayMs?: number; planJointDelta?: number; armIntervalMs?: number; armReference?: string; independentIK?: boolean; interactionDelayMs?: number; evaluationTargetScale?: number } = {},
 ) {
   const commands: any[] = [];
   const bulk = new V3BulkPeer(); await bulk.install(page);
@@ -81,6 +81,11 @@ export async function bootstrap(
   };
   const send = (value: object) => {
     if (!socket) throw new Error("Fixture WebSocket is not connected");
+    if (options.interactionDelayMs && (value as { type?: string }).type === "interaction_state") {
+      const snapshot = structuredClone(value);
+      delayedReplies.push(setTimeout(() => { if (socket) bulk.send(socket, snapshot); }, options.interactionDelayMs));
+      return;
+    }
     bulk.send(socket, value);
   };
   await page.addInitScript({
@@ -121,6 +126,7 @@ export async function bootstrap(
         send({
           type: "hello", protocol_version: 3, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
           client_id: "integration",
+          ...(options.independentIK ? { independent_ik: true } : {}),
           ...(options.armReference ? {odom_reference_id:options.armReference} : {}),
           time_sync: {
             ts_client: command.ts_client,
@@ -258,7 +264,9 @@ export async function bootstrap(
       }
       if (command.type === "manipulation_request" && arm) {
         let result: any = {status: "completed"};
-        if (command.action === "evaluate") result = {status: "feasible", joints: {...arm.joints, yam_joint2: arm.joints.yam_joint2 + 0.2}, pose: command};
+        if (command.action === "evaluate") result = {status: "feasible", joints: {...arm.joints,
+          yam_joint2: arm.joints.yam_joint2 + 0.2 + (options.evaluationTargetScale ?? 0) * (command.position[2] - arm.pose.position[2]) },
+          pose: command, sample_pose: { position: command.position, orientation: command.orientation } };
         if (command.action === "plan") {
           plan = {plan_id: `fixture-plan-${++planSequence}`, joint_names: Object.keys(arm.joints), duration: 2,
             trajectory: [{time: 0, positions: Object.values(arm.joints)}, {time: 2, positions: Object.values(arm.joints).map((v: any, i) => i === 1 ? v + (options.planJointDelta ?? 0.2) : v)}]};

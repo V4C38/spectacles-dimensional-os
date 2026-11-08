@@ -465,7 +465,7 @@ def test_reset_requires_new_measurements_and_recovers_from_stale_feedback(monkey
 
 
 def test_reset_outside_tolerance_times_out_and_leaves_no_motion_lease(monkeypatch):
-    module, _, _ = zero_fixture(monkeypatch, position=0.03)
+    module, _, _ = zero_fixture(monkeypatch, position=0.06)
     with pytest.raises(ValueError, match="settling deadline"):
         command(module, "reset_joints")
     assert module.adapter.reset.call_count == 2
@@ -543,7 +543,7 @@ def test_reset_unconfirmed_stop_stays_latched(monkeypatch):
 
 
 def test_reset_cleanup_rpc_failure_keeps_motion_disabled(monkeypatch):
-    module, _, _ = zero_fixture(monkeypatch, position=0.03)
+    module, _, _ = zero_fixture(monkeypatch, position=0.06)
     module.adapter.reset.side_effect = [
         SimpleNamespace(succeeded=True),
         TimeoutError("coordinator unavailable"),
@@ -564,8 +564,8 @@ def test_snapshot_does_not_touch_unfinalized_world_before_start():
 
 
 def test_zero_settling_failure_returns_promptly_with_joint_error(monkeypatch):
-    module, _, clock = zero_fixture(monkeypatch, position=0.03, duration=1.0)
-    with pytest.raises(ValueError, match="joint error 0.0300 rad"):
+    module, _, clock = zero_fixture(monkeypatch, position=0.06, duration=1.0)
+    with pytest.raises(ValueError, match="joint error 0.0600 rad"):
         command(module, "reset_joints")
     assert clock[0] < 5.1
     assert module.session.owner is None
@@ -956,7 +956,6 @@ def test_live_steps_preserve_model_velocity_acceleration_and_settle(speed):
     initial = np.array(model.home_joints)
     goal = initial.copy()
     goal[0] += 0.2
-    solver.target_joints = dict(zip(model.joint_names, goal, strict=True))
     target = solver.frame_poses(
         JointState(name=list(model.joint_names), position=goal.tolist()), ["gripper_tip"]
     )["gripper_tip"]
@@ -1076,3 +1075,10 @@ def test_resume_refreshes_cached_protection_before_runtime_can_advance():
     module.advance()
     module.adapter.set_estop.assert_not_called()
     native.reset.assert_called_once()
+
+
+def test_openyam_reset_accepts_fresh_settled_feedback_inside_configured_tolerance(monkeypatch):
+    module, _, _ = zero_fixture(monkeypatch, position=0.04)
+    module.config.joint_arrival_tolerance_rad = 0.05
+    assert command(module, "reset_joints")["status"] == "completed"
+    assert module.session.owner is None

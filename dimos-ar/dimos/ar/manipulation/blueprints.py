@@ -35,6 +35,7 @@ openyam_ar_planner = autoconnect(
         model_asset_url="/models/openyam.glb",
         model_visual_profile="openyam",
         gripper_open_at_lower=["joint7", "joint8"],
+        joint_arrival_tolerance_rad=0.05,
     ),
     coordinator(
         cls=ARManipulationCoordinator,

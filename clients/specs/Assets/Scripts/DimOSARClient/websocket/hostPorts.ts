@@ -5,7 +5,7 @@ export const AR_MODULE_CLIENT_CONFIG = {
   connectTimeoutS: 8,
   session: {
     helloTimeoutS: 5,
-    reconnectDelayS: 1,
+    reconnectDelayS: 0.1,
   },
   capture: {
     geometry: {

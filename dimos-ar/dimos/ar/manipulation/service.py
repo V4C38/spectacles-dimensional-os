@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 import logging
 import time
@@ -62,12 +63,33 @@ class ManipulationService:
         self._authority_epoch: str | None = None
         self._authority_revision = -1
         self._pending_revoke: tuple[str, str, int, str] | None = None
+        self._gripper_results: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
+        self._gripper_inflight: set[tuple[str, str]] = set()
         self._snapshot_generation = 0
+        self._shared_targets: dict[str, tuple[str, dict[str, Any]]] = {}
+        self._shared_tokens: dict[str, tuple[str, str]] = {}
+        self._shared_sequences: dict[str, int] = {}
 
     def start(self) -> None:
         self._poll = asyncio.create_task(self._poll_state())
         if self._control_state is not None:
             self._heartbeat = asyncio.create_task(self._heartbeat_loop())
+
+    def follow_shared(self, client_id: str, group: str, body: dict[str, Any]) -> None:
+        self._shared_targets[client_id] = (group, body)
+        owned = self._shared_tokens.get(client_id)
+        if owned is None or owned[0] != body["authority_lease"]:
+            return
+        token = owned[1]
+        sequence = self._shared_sequences.get(client_id, 0) + 1
+        self._shared_sequences[client_id] = sequence
+        self.submit(ManipulationRequest(
+            f"shared-follow-{token}-{sequence}", "update", group,
+            {**body, "token": token, "sequence": sequence}), client_id)
+
+    def suspend(self, client_id: str, deadline: float) -> None:
+        self._spawn(self._rpc.call("ar_manipulation_suspend", client_id, deadline),
+                    (client_id, "suspend"))
 
     def connect(self, client_id: str) -> None:
         self._clients.add(client_id)
@@ -79,6 +101,14 @@ class ManipulationService:
     def submit(self, request: ManipulationRequest, client_id: str, clock_offset: float = 0) -> None:
         if self._closed or client_id not in self._clients:
             return
+        if request.action == "gripper":
+            request_key = (client_id, request.request_id)
+            cached = self._gripper_results.get(request_key)
+            if cached is not None:
+                self._reply(client_id, request, dict(cached))
+                return
+            if request_key in self._gripper_inflight:
+                return
         self._record_authority(
             request.payload.get("authority_epoch"), request.payload.get("authority_revision")
         )
@@ -112,6 +142,8 @@ class ManipulationService:
                 {"status": "rejected", "message": "request already pending or server busy"},
             )
             return
+        if request.action == "gripper":
+            self._gripper_inflight.add((client_id, request.request_id))
         self._spawn(self._dispatch(request, client_id, clock_offset), key)
 
     def _spawn(self, coroutine: Any, key: tuple[str, str]) -> None:
@@ -203,6 +235,10 @@ class ManipulationService:
                 "message": str(exc),
             }
         if request.action == "update":
+            if (request.request_id.startswith("shared-follow-")
+                    and result.get("status") == "following"
+                    and result.get("message") == "Following retired"):
+                result = {**result, "status": "rejected", "code": "retired"}
             result.setdefault("sequence", request.payload["sequence"])
         if request.action != "update" or result.get("status") in {
             "rejected",
@@ -222,6 +258,27 @@ class ManipulationService:
             self._snapshot_generation += 1
 
     def _reply(self, client_id: str, request: ManipulationRequest, result: dict[str, Any]) -> None:
+        if request.action in {"evaluate", "update"}:
+            position, orientation = request.payload.get("position"), request.payload.get("orientation")
+            if position is not None and orientation is not None:
+                result["sample_pose"] = {"position": list(position), "orientation": list(orientation)}
+            revision = request.payload.get("advisory_target_revision", request.payload.get("target_revision"))
+            if revision is not None:
+                result["target_revision"] = revision
+        if request.action == "gripper":
+            key = (client_id, request.request_id)
+            self._gripper_inflight.discard(key)
+            self._gripper_results[key] = dict(result)
+            self._gripper_results.move_to_end(key)
+            while len(self._gripper_results) > 128:
+                self._gripper_results.popitem(last=False)
+        if request.action == "acquire" and isinstance(result.get("token"), str):
+            lease = request.payload.get("authority_lease")
+            if isinstance(lease, str):
+                self._shared_tokens[client_id] = (lease, result["token"])
+                pending = self._shared_targets.get(client_id)
+                if pending is not None:
+                    self.follow_shared(client_id, *pending)
         if self._on_result is not None:
             self._on_result(request, result)
         if client_id in self._clients and not self._closed:
@@ -306,7 +363,7 @@ class ManipulationService:
                         )
                     )
             await self._rpc.wait_readers()
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(1 / 30)
 
     def _record_authority(self, epoch: object, revision: object) -> None:
         if (
@@ -362,6 +419,9 @@ class ManipulationService:
 
     def disconnect(self, client_id: str) -> None:
         self._clients.discard(client_id)
+        self._shared_targets.pop(client_id, None)
+        self._shared_tokens.pop(client_id, None)
+        self._shared_sequences.pop(client_id, None)
         self._updates.pop(client_id, None)
         if self._closed or self._quiescent:
             return

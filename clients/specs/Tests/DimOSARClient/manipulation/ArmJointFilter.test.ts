@@ -93,3 +93,16 @@ it("does not predict advisory IK beyond its accepted endpoint", () => {
   }
   expect(previous).toBeCloseTo(.6);
 });
+
+it("spans sparse preview updates without extending the measured-feedback horizon", () => {
+  const preview = new ArmJointFilter(0.15, 0.25);
+  const measured = new ArmJointFilter();
+  for (const filter of [preview, measured]) {
+    filter.sample(model, { j: 0 }, "arm", 0);
+    filter.sample(model, { j: 1 }, "arm", 0.2);
+  }
+  expect(preview.sample(model, { j: 1 }, "arm", 0.36).j).toBeGreaterThan(0.8);
+  expect(preview.sample(model, { j: 1 }, "arm", 0.36).j).toBeLessThan(1);
+  expect(measured.sample(model, { j: 1 }, "arm", 0.36).j).toBe(1);
+  expect(preview.sample(model, { j: 1 }, "arm", 0.4).j).toBeCloseTo(1);
+});

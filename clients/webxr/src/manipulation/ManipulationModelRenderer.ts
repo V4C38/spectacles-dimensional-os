@@ -27,11 +27,34 @@ export class ManipulationModelRenderer {
   assetMessage = "";
   private assetGeneration = 0;
   private disposed = false;
+  private now = 0;
+  private active = false;
+  private retryAt: number | null = null;
+  private retryAttempt = 0;
+  private loading = false;
+
+  tick(now: number, active: boolean): void {
+    this.now = now;
+    if (active && !this.active && this.retryAt !== null) this.retryAt = now;
+    this.active = active;
+    if (!this.disposed && active && !this.loading && this.model &&
+        this.retryAt !== null && now >= this.retryAt) {
+      this.load(this.model, this.assetGeneration);
+    }
+  }
+
   rebuild(model: ManipulationModel): void {
+    if (this.disposed) return;
     this.clear();
     this.model = model;
     const generation = ++this.assetGeneration;
-    if (model.asset_url)
+    this.load(model, generation);
+  }
+
+  private load(model: ManipulationModel, generation: number): void {
+    if (model.asset_url) {
+      this.loading = true;
+      this.retryAt = null;
       new GLTFLoader().load(
         model.asset_url,
         (gltf) => {
@@ -39,6 +62,7 @@ export class ManipulationModelRenderer {
             disposeObjectTrees([gltf.scene]);
             return;
           }
+          this.loading = false;
           if (
             model.visual_signature &&
             gltf.scene.userData.visual_signature !== model.visual_signature
@@ -121,13 +145,19 @@ export class ManipulationModelRenderer {
           }
           disposeObjectTrees([gltf.scene], sourceMaterials);
           this.assetMessage = "";
+          this.retryAttempt = 0;
         },
         undefined,
         () => {
-          if (generation === this.assetGeneration)
+          if (!this.disposed && generation === this.assetGeneration) {
+            this.loading = false;
             this.assetMessage = "\nPreview mesh unavailable";
+            const delays = [0.5, 1, 2, 4, 5];
+            this.retryAt = this.now + delays[Math.min(this.retryAttempt++, delays.length - 1)];
+          }
         },
       );
+    }
   }
   clear(): void {
     this.assetGeneration++;
@@ -139,6 +169,9 @@ export class ManipulationModelRenderer {
     this.ghosts.clear();
     this.model = null;
     this.assetMessage = "";
+    this.retryAt = null;
+    this.retryAttempt = 0;
+    this.loading = false;
   }
   dispose(): void {
     this.disposed = true;

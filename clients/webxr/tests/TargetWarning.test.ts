@@ -1,10 +1,22 @@
 import { expect, it } from "vitest";
 import * as THREE from "three";
 import { TargetWarning } from "../src/manipulation/TargetWarning";
-it("replaces one anchored pill and rejected sphere, expiring after 1.5 seconds",()=>{
- const warning=new TargetWarning(), marker=new THREE.Vector3(1,1,1);
- warning.show(1,"Unreachable",new THREE.Vector3(2,1,1),1);warning.update(marker,1.1);
- expect(warning.object.visible).toBe(true);expect(warning.object.position.y).toBeCloseTo(.935);expect(warning.rejected.position.x).toBe(2);
- warning.show(1,"same response",new THREE.Vector3(3,1,1),2);warning.update(marker,2.6);expect(warning.object.visible).toBe(false);
- warning.show(2,"Joint limit",new THREE.Vector3(4,1,1),3);warning.update(marker,3.2);expect(warning.rejected.position.x).toBe(4);expect(warning.object.visible).toBe(true);warning.dispose();
+it("keeps a non-interactive pill beside the EE and fades it out on recovery", () => {
+  const warning = new TargetWarning(), marker = new THREE.Vector3(1, 1, 1);
+  const failed = { blocked: false, fresh: true, stopped: false, moving: false,
+    rejection: { message: "Unreachable" } };
+  warning.update(marker, 1, failed);
+  warning.update(marker, 3, { ...failed });
+  warning.faceViewer(new THREE.Vector3(1, 1, 3));
+  expect(warning.object.visible).toBe(true);
+  expect(warning.object.position.x).toBeCloseTo(1.16);
+  expect(warning.object.position.y).toBeCloseTo(1.01);
+  expect(warning.object.getObjectByName("ReplicationBlockedCross")).toBeUndefined();
+  expect(new THREE.Raycaster(new THREE.Vector3(1.16, 1.01, 3), new THREE.Vector3(0, 0, -1))
+    .intersectObject(warning.object, true)).toHaveLength(0);
+  warning.update(marker, 3.1, { ...failed, rejection: null });
+  expect(warning.object.visible).toBe(true);
+  warning.update(marker, 3.3, { ...failed, rejection: null });
+  expect(warning.object.visible).toBe(false);
+  warning.dispose();
 });

@@ -1,7 +1,6 @@
 import { sameArmTrackingOrigin } from "@dimos-ar-client/manipulation/ArmJointFilter";
 import { ARM_PANEL_STYLE } from "@dimos-ar-client/presentation/PanelFrameStyle";
 import {updatePanelGesture, type PanelGesture} from "../presentation/PanelGesture";
-import { WebXRReplicationPresenter } from "../replication/WebXRReplicationPresenter";
 import * as THREE from "three";
 import { ManipulationGesture } from "@dimos-ar-client/manipulation/ManipulationGesture";
 import { ManipulationController, type ManipulationControlAction } from "@dimos-ar-client/manipulation/ManipulationController";
@@ -21,7 +20,6 @@ export class WebXRManipulationController {
   private readonly gesture = new ManipulationGesture();
   private lastOrigin: ClientTrackingOrigin | null = null;
   private selected = false;
-  private readonly replication = new WebXRReplicationPresenter();
   private lastPanelUpdate = 0;
   private panelGesture: PanelGesture | null = null;
   beginPanel(position: Vec3, orientation: Quat, zone: "bar" | "left" | "right" | "body" = "bar", ray?: {origin: Vec3; direction: Vec3}): void {
@@ -48,7 +46,6 @@ export class WebXRManipulationController {
     this.interaction = this.core.interaction;
     this.renderer = new ManipulationRenderer(this.core.presentation);
     this.object = this.renderer.object;
-    this.renderer.handle.object.add(this.replication.object);
   }
   setSelected(selected: boolean): void {
     if (this.selected !== selected) this.interrupt();
@@ -121,14 +118,14 @@ export class WebXRManipulationController {
       speedScale: this.interaction.speedScale,
     });
     const blocked = this.session.collaboration.snapshot("manipulation", this.interaction.groupId ?? undefined).blocked;
-    this.replication.apply(blocked, [this.renderer.handle.collider], false);
+    this.renderer.handle.collider.userData.rayDisabled = blocked;
     const material = this.renderer.handle.visual.material as THREE.ShaderMaterial;
-    material.uniforms.uCenterColor.value.setHex(blocked ? WebXRReplicationPresenter.blockedColor : 0xb3b3b3);
+    material.uniforms.uCenterColor.value.setHex(blocked ? 0x8e969e : 0xb3b3b3);
   }
 
   dispose(): void {
     this.end();
     this.core.dispose();
-    this.replication.dispose(); this.renderer.dispose();
+    this.renderer.dispose();
   }
 }

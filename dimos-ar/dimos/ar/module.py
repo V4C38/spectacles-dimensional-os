@@ -295,6 +295,7 @@ class ARModule(Module):  # type: ignore[misc]
             on_localization_progress=self._on_localization_progress,
             on_nav_joystick_request=self._on_nav_joystick_request,
             on_disconnect=self._on_client_disconnect,
+            on_suspend=self._on_client_suspend,
             on_interaction_request=self._on_interaction_request,
             on_manipulation_request=self._on_manipulation_request,
         )
@@ -624,6 +625,14 @@ class ARModule(Module):  # type: ignore[misc]
         if requested_client_id is not None:
             self._send_observations_request(requested_client_id)
 
+    def _on_client_suspend(self, client_id: str, deadline: float) -> None:
+        authority = self._interaction.authority
+        if authority is not None and authority.client_id == client_id:
+            self._interaction.authority = replace(authority, expires_at=deadline)
+            self._interaction.revision += 1
+            if self._manipulation_service is not None:
+                self._manipulation_service.suspend(client_id, deadline)
+
     def _on_client_disconnect(self, _websocket: ws_server.ServerConnection, client_id: str) -> None:
         self._previews.cancel(client_id)
         self._interaction.disconnect(client_id)
@@ -800,11 +809,30 @@ class ARModule(Module):  # type: ignore[misc]
                     "superseded",
                 )
             reply = result.wire()
+        if (reply.get("status") == "accepted"
+                and request.action in {"update", "renew"}
+                and getattr(self._ws_server, "streams_following", lambda _: False)(client_id)
+                and self._manipulation_service is not None):
+            authority = self._interaction.authority
+            target = self._interaction.target
+            if (authority is not None and authority.kind == "manipulation_following"
+                    and target is not None and authority.group_id is not None):
+                self._manipulation_service.follow_shared(client_id, authority.group_id, {
+                    "position": list(target.position), "orientation": list(target.orientation),
+                    "speed_scale": target.speed_scale, "sequence": authority.sequence,
+                    "ts": time.time(), "authority_epoch": self._interaction.epoch,
+                    "authority_lease": authority.lease_id,
+                    "authority_revision": self._interaction.revision,
+                    "authority_deadline": authority.expires_at,
+                    "target_revision": target.revision,
+                })
         self._drain_interaction_retirements()
-        self._ws_server.schedule_send_to_client(client_id, encode_text(reply))
+        if not (request.action in {"update", "renew"} and reply.get("status") == "accepted"
+                and getattr(self._ws_server, "streams_following", lambda _: False)(client_id)):
+            self._ws_server.schedule_send_to_client(client_id, encode_text(reply))
         # High-rate target samples are coalesced by the 20Hz loop. Authority
         # transitions and their exact final poses are delivered immediately.
-        if request.action != "update":
+        if request.action not in {"update", "renew"}:
             self._broadcast_interaction(force=True)
 
     def _interaction_reply(
@@ -973,7 +1001,7 @@ class ARModule(Module):  # type: ignore[misc]
         execution = snapshot.get("execution")
         self._interaction.set_following_tail(snapshot.get("following_tail"))
         self._arm_native_busy = (
-            snapshot.get("operation_id") is not None
+            snapshot.get("operation") in {"resetting", "parking"}
             or execution in {"accepted", "executing", "uncertain", "fault"}
         )
         # Live following is scoped to the editing lease; a normal release must
@@ -999,9 +1027,28 @@ class ARModule(Module):  # type: ignore[misc]
         )
 
     def _on_manipulation_result(self, request: ManipulationRequest, result: dict[str, Any]) -> None:
-        if request.action in {"execute", "reset_joints", "prepare_shutdown"}:
+        retired = getattr(self, "_arm_retired_motion", None)
+        revision = request.payload.get("authority_revision", -1)
+        if (retired is not None and request.payload.get("authority_epoch") == retired[0]
+                and revision <= retired[1]):
             self._pending_arm_motion.discard(request.request_id)
-            if result.get("status") in {"uncertain", "fault"}:
+            return
+        if (request.action == "cancel" and request.request_id in self._pending_arm_motion
+                and result.get("status") in {"cancelled", "completed", "aborted", "no_execution", "succeeded"}):
+            self._arm_retired_motion = (self._interaction.epoch, revision)
+            self._pending_arm_motion.clear()
+            self._arm_native_busy = self._arm_uncertain = self._arm_stop_pending = False
+            self._interaction.set_motion_busy(False)
+            return
+        if request.action == "gripper" and result.get("status") == "completed":
+            authority = self._interaction.authority
+            if (request.payload.get("authority_epoch") == self._interaction.epoch
+                    and (authority is None or authority.lease_id == request.payload.get("authority_lease"))):
+                self._interaction.set_manipulation_gripper(request.group_id, request.payload["value"])
+        if request.action in {"execute", "reset_joints", "prepare_shutdown", "cancel"}:
+            self._pending_arm_motion.discard(request.request_id)
+            if (result.get("status") in {"uncertain", "fault"}
+                    or (request.action == "cancel" and result.get("status") not in {"cancelled", "completed", "aborted", "no_execution", "succeeded"})):
                 self._arm_uncertain = True
             self._interaction.set_motion_busy(
                 bool(self._pending_arm_motion)
@@ -1053,8 +1100,12 @@ class ARModule(Module):  # type: ignore[misc]
                 and authority is not None
                 and authority.kind == "manipulation_following"
             )
-        elif request.action in {"plan", "evaluate", "execute", "gripper"}:
+        elif request.action == "evaluate":
+            allowed = allowed and owns and target is not None
+        elif request.action in {"plan", "execute"}:
             allowed = allowed and valid_target
+        elif request.action == "gripper":
+            allowed = allowed and owns
         if not allowed:
             self._ws_server.schedule_send_to_client(
                 client_id,
@@ -1071,7 +1122,15 @@ class ARModule(Module):  # type: ignore[misc]
                 ),
             )
             return
-        if request.action in {"update", "plan", "evaluate"} and target is not None:
+        advisory_current = False
+        if request.action == "evaluate" and target is not None:
+            advisory_current = bool(
+                math.dist(payload["position"], target["position"]) < 1e-6
+                and abs(sum(a * b for a, b in zip(
+                    payload["orientation"], target["orientation"], strict=True
+                ))) > 1 - 1e-10
+            )
+        if request.action in {"update", "plan"} and target is not None:
             payload = {
                 **payload,
                 "position": target["position"],
@@ -1081,35 +1140,28 @@ class ARModule(Module):  # type: ignore[misc]
             payload.pop("final_gripper", None)
             if request.action == "plan" and "gripper" in target:
                 payload["final_gripper"] = target["gripper"]
-        if request.action == "gripper" and target is not None:
-            if "gripper" not in target:
-                self._ws_server.schedule_send_to_client(
-                    client_id,
-                    encode_text(
-                        {
-                            "type": "manipulation_result",
-                            "request_id": request.request_id,
-                            "action": request.action,
-                            "group_id": request.group_id,
-                            "status": "rejected",
-                            "code": "target_changed",
-                        }
-                    ),
-                )
-                return
-            payload = {**payload, "value": target["gripper"]}
+        if request.action == "cancel":
+            self._interaction.clear_manipulation_target(request.group_id)
+            # Cancel must outrank the released lease's native revocation fence.
+            self._interaction.revision += 1
         trusted = {
             **payload,
             "authority_epoch": self._interaction.epoch,
             "authority_lease": authority.lease_id if owns and authority is not None else None,
             "authority_revision": self._interaction.revision,
             "authority_deadline": authority.expires_at
-            if owns and authority is not None
+            if request.action != "cancel" and owns and authority is not None
             else time.monotonic() + 0.5,
             "target_revision": target["revision"] if target is not None else 0,
         }
-        if request.action in {"execute", "reset_joints", "prepare_shutdown"}:
-            if self._interaction.motion_busy:
+        if request.action == "evaluate":
+            trusted["advisory_target_revision"] = (
+                target["revision"] if advisory_current and target is not None
+                else payload.get("target_revision")
+            )
+            trusted["advisory_current"] = advisory_current
+        if request.action in {"execute", "reset_joints", "prepare_shutdown", "cancel"}:
+            if request.action != "cancel" and self._interaction.motion_busy:
                 self._ws_server.schedule_send_to_client(
                     client_id,
                     encode_text(

@@ -51,3 +51,17 @@ it("defers selected gripper intent and uses the injected stop owner", () => {
   expect(f.sent.some(c => c.action === "gripper")).toBe(false);
   f.core.action("estop"); expect(f.stop).toHaveBeenCalledOnce();
 });
+
+it("keeps preview playing across identical target snapshots", () => {
+  const f = fixture();
+  const pose = { position: [0, 0, .3], orientation: [0, 0, 0, 1] } as any;
+  f.core.interaction.target = pose;
+  f.core.tick();
+  f.core.presentation.togglePreview();
+  f.core.interaction.target = { position: [...pose.position], orientation: [...pose.orientation] };
+  f.core.tick();
+  expect(f.core.presentation.previewRequested).toBe(true);
+  f.core.interaction.target = { ...pose, position: [0, 0, .4] };
+  f.core.tick();
+  expect(f.core.presentation.previewRequested).toBe(false);
+});

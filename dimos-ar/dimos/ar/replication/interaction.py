@@ -320,6 +320,25 @@ class InteractionCoordinator:
             self.following_tail = copy.deepcopy(tail)
             self.revision += 1
 
+    def clear_manipulation_target(self, group_id: str) -> None:
+        previous = self._targets.pop(("manipulation", group_id), None)
+        if previous is not None:
+            if self.target is previous:
+                self.target = None
+            self.revision += 1
+
+    def set_manipulation_gripper(self, group_id: str, value: float) -> None:
+        key = ("manipulation", group_id)
+        previous = self._targets.get(key)
+        if previous is None or previous.gripper == value:
+            return
+        target = replace(previous, gripper=value, revision=previous.revision + 1,
+                         sample_ts=self._clock())
+        self._targets[key] = target
+        if self.target is previous:
+            self.target = target
+        self.revision += 1
+
     def set_motion_busy(self, busy: bool) -> None:
         if busy != self.motion_busy:
             self.motion_busy = busy

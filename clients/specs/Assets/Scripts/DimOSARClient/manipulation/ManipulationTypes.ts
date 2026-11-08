@@ -101,6 +101,7 @@ export interface ManipulationResult {
   token?: string;
   joints?: Record<string, number> | null;
   pose?: ManipulationPose | null;
+  sample_pose?: ManipulationPose;
   plan_id?: string;
   joint_names?: string[];
   trajectory?: { time: number; positions: number[] }[];

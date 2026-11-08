@@ -57,6 +57,13 @@ Preview and Execute request a collision-checked timed path for the exact target.
 curve or authorize execution. Preview plays the trajectory once. Execute names
 that exact reviewed plan; replacement or invalid start state rejects execution.
 
+Servers advertising `independent_ik` evaluate the latest local aim without waiting
+for its canonical snapshot acknowledgement. Results identify their sampled pose;
+older results may advance the visual preview but never authorize a newer Execute.
+An IK failure preserves the grab. User release restores the sphere to the latest
+validated pose, or the measured grab-start pose if none was validated. This visual
+reconciliation does not command a return movement.
+
 With the arm unselected, grabbing the end effector handle acquires following.
 Targets use absolute localized poses with a preserved grab offset. Normal release
 frees editing authority immediately and hands the last validated target to a
@@ -66,6 +73,10 @@ disconnect after release cannot cancel the detached tail or a newer client's wor
 are 500 ms; targets are sent at up to 30 Hz. These are software settings, not
 measured physical latency guarantees. Following uses official bounded Cartesian
 IK; it has no claim to the planner's checked-path world-collision guarantee.
+Advisory joint solutions do not replace Cartesian control direction. Released
+following completes from fresh, settled measured TCP feedback; joint-space arrival
+is used only when TCP feedback is unavailable. A stationary unreachable endpoint
+reports failure instead of remaining in Moving until the absolute deadline.
 
 Ordinary Stop retires the target, plans, and tokens, clears following, and cancels
 trajectories or reset. A confirmed ordinary stop permits a new gesture. Emergency

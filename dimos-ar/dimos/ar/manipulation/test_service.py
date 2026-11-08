@@ -8,6 +8,22 @@ from dimos.ar.manipulation.protocol import ManipulationRequest
 from dimos.ar.manipulation.service import ManipulationService
 
 
+@pytest.mark.parametrize("status", ["feasible", "infeasible"])
+@pytest.mark.parametrize("action", ["evaluate", "update"])
+def test_advisory_outcomes_identify_the_attempted_pose_and_source_revision(status, action):
+    replies = []
+    service = ManipulationService(object(), lambda _, frame: replies.append(json.loads(frame)), lambda _: None)
+    service.connect("owner")
+    request = ManipulationRequest("sample", action, "arm", {
+        "position": [1, 2, 3], "orientation": [0, 0, 0, 1],
+        "target_revision": 9, "advisory_target_revision": 7,
+    })
+    service._reply("owner", request, {"status": status, "pose": None})
+    assert replies[0]["sample_pose"] == {"position": [1, 2, 3], "orientation": [0, 0, 0, 1]}
+    assert replies[0]["pose"] is None
+    assert replies[0]["target_revision"] == 7
+
+
 @pytest.mark.asyncio
 async def test_stop_dispatch_is_independent_of_blocking_plan():
     entered, release, cancelled = threading.Event(), threading.Event(), threading.Event()
@@ -565,4 +581,96 @@ async def test_missing_required_model_asset_remains_an_error():
             await service._materialize({"available": True, "model_revision": "missing"})
     finally:
         service._quiescent = True
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_gripper_id_changes_hardware_only_once():
+    calls = []
+
+    class Runtime:
+        def ar_manipulation_command(self, client, body):
+            calls.append(body)
+            return {"status": "completed"}
+
+        def ar_manipulation_stop(self):
+            pass
+
+        def ar_manipulation_disconnect(self, client):
+            pass
+
+    replies = []
+    service = ManipulationService(Runtime(), lambda _, message: replies.append(message), lambda _: None)
+    service.connect("a")
+    request = ManipulationRequest("squeeze-1", "gripper", "arm", {"value": 0})
+    try:
+        service.submit(request, "a")
+        service.submit(request, "a")
+        for _ in range(100):
+            if replies:
+                break
+            await asyncio.sleep(0.01)
+        assert len(calls) == 1
+        service.submit(request, "a")
+        assert len(calls) == 1
+        assert len(replies) == 2
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_shared_following_renewals_refresh_native_input_with_new_sequences():
+    calls = []
+
+    class Runtime:
+        def ar_manipulation_command(self, client, body):
+            calls.append(body)
+            return {"status": "following"}
+
+        def ar_manipulation_evaluate_following(self, client, body):
+            return {"status": "following"}
+
+        def ar_manipulation_stop(self):
+            pass
+
+        def ar_manipulation_disconnect(self, client):
+            pass
+
+    service = ManipulationService(Runtime(), lambda *_: None, lambda _: None)
+    service.connect("a")
+    service._shared_tokens["a"] = ("lease", "token")
+    body = {"authority_lease": "lease", "sequence": 1, "ts": 0}
+    try:
+        service.follow_shared("a", "arm", body)
+        for _ in range(100):
+            if calls and ("a", "update") not in service._pending:
+                break
+            await asyncio.sleep(0.01)
+        service.follow_shared("a", "arm", body)
+        for _ in range(100):
+            if len(calls) == 2:
+                break
+            await asyncio.sleep(0.01)
+        assert [body["sequence"] for body in calls] == [1, 2]
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_retired_shared_follow_token_is_reported_instead_of_silently_stalling():
+    class Runtime:
+        def ar_manipulation_command(self, client, body):
+            return {"status": "following", "message": "Following retired"}
+
+        def ar_manipulation_stop(self):
+            pass
+
+    replies = []
+    service = ManipulationService(Runtime(), lambda _, message: replies.append(json.loads(message)), lambda _: None)
+    service.connect("a")
+    try:
+        await service._dispatch(ManipulationRequest("shared-follow-expired-1", "update", "arm", {"sequence": 1, "ts": 0}), "a", 0)
+        assert replies[0]["status"] == "rejected"
+        assert replies[0]["code"] == "retired"
+    finally:
         await service.close()

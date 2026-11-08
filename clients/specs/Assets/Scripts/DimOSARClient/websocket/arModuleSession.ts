@@ -92,6 +92,12 @@ export class ARModuleSession {
   private wantConnected = false;
   private framer = new TextFramer();
   private hello: Hello | null = null;
+  private resumeToken: string | undefined;
+  private recoveryUntil = 0;
+  private readonly pendingStreams = new Map<string, string>();
+  private readonly pendingControl = new Map<string, string>();
+  private decodeMaxMs = 0;
+  private coalescedControl = 0;
   private state: State | null = null;
   private pose: Pose | null = null;
   private nav_goal: NavGoal | null = null;
@@ -144,6 +150,8 @@ export class ARModuleSession {
   }
 
   stop(): void {
+    this.resumeToken = undefined;
+    this.recoveryUntil = 0;
     this.retainedOrigin = null;
     this.alignmentRequired = false;
     this.wantConnected = false;
@@ -164,11 +172,21 @@ export class ARModuleSession {
     this.emitView();
   }
 
-  diagnostics() { return { control: { ...this.traffic }, bulk: this.bulk.diagnostics() }; }
+  diagnostics() { return { control: { ...this.traffic, decodeMaxMs: this.decodeMaxMs, coalesced: this.coalescedControl, pending: this.pendingControl.size }, bulk: this.bulk.diagnostics() }; }
 
   tick(): void {
+    this.rollTraffic();
     const frameStart = this.clock.now();
+    this.pumpControl(frameStart, .002);
     this.bulk.tick();
+    if (this.phase === "ready") {
+      for (const [key, text] of this.pendingStreams) {
+        if (this.traffic.up + utf8Bytes(text) > 24576 || (this.transport.bufferedAmount?.() ?? 0) > 24576) break;
+        this.pendingStreams.delete(key);
+        this.traffic.up += utf8Bytes(text);
+        this.transport.sendText(text);
+      }
+    }
     if (this.assetsDirty) this.retryAssets(frameStart);
     for (const [key, pending] of this.deferredAssets) {
       if (this.clock.now() >= pending.deadline) this.retireAssetReply(key, pending.value);
@@ -200,7 +218,7 @@ export class ARModuleSession {
     this.phase = "awaiting_hello";
     this.pendingHelloTs = tsClient;
     this.helloDeadline = tsClient + this.helloTimeoutS;
-    this.transport.sendText(encodeHelloRequest({ ts_client: tsClient }));
+    this.transport.sendText(encodeHelloRequest({ ts_client: tsClient, resume_token: this.resumeToken }));
     this.emitView();
   }
 
@@ -231,7 +249,25 @@ export class ARModuleSession {
       if (this.phase !== "awaiting_hello" && this.phase !== "ready") {
         return;
       }
+      const type = /"type"\s*:\s*"([^"]+)"/.exec(line)?.[1];
+      if (this.hello?.server_follow_stream && this.phase === "ready" &&
+          ["state", "pose", "manipulation_state", "interaction_state"].includes(type ?? "")) {
+        if (this.pendingControl.has(type!)) this.coalescedControl++;
+        this.pendingControl.set(type!, line);
+      } else {
+        this.pumpControl(this.clock.now(), Infinity);
+        this.dispatchText(line);
+      }
+    }
+  }
+
+  private pumpControl(start: number, budget: number): void {
+    for (const [type, line] of this.pendingControl) {
+      if (this.phase !== "ready" || this.clock.now() - start >= budget) break;
+      this.pendingControl.delete(type);
+      const before = this.clock.now();
       this.dispatchText(line);
+      this.decodeMaxMs = Math.max(this.decodeMaxMs, (this.clock.now() - before) * 1000);
     }
   }
 
@@ -260,8 +296,15 @@ export class ARModuleSession {
     const bytes = utf8Bytes(text);
     if (bytes > 16384) throw new Error("Control frame exceeds 16KiB");
     this.rollTraffic();
-    const stream = /"(?:action)":"(?:update|renew)"|"type":"client_pose"/.test(text);
-    if (stream && (this.traffic.up + bytes > 32768 || (this.transport.bufferedAmount?.() ?? 0) > 32768)) { this.traffic.dropped++; return; }
+    const stream = /"(?:action)":"(?:update)"|"type":"client_pose"/.test(text);
+    const value = stream ? JSON.parse(text) as { type: string; action?: string; group_id?: string } : null;
+    const streamKey = value ? `${value.type}:${value.action ?? ""}:${value.group_id ?? ""}` : "";
+    this.pendingStreams.delete(streamKey);
+    if (stream && (this.traffic.up + bytes > 24576 || (this.transport.bufferedAmount?.() ?? 0) > 24576)) {
+      this.traffic.dropped++;
+      this.pendingStreams.set(streamKey, text);
+      return;
+    }
     this.traffic.up += bytes; this.transport.sendText(text);
   }
   private rollTraffic(): void {
@@ -403,6 +446,8 @@ export class ARModuleSession {
         this.alignmentRequired = false;
       }
       this.retainedOrigin = null;
+      this.resumeToken = message.resume_token;
+      this.recoveryUntil = 0;
       this.hello = message;
       this.pendingHelloTs = null;
       this.helloDeadline = null;
@@ -629,7 +674,8 @@ export class ARModuleSession {
   }
 
   private enterConnecting(): void {
-    this.clearConnectionFacts();
+    if (this.recoveryUntil && this.clock.now() >= this.recoveryUntil) this.resumeToken = undefined;
+    this.clearConnectionFacts(this.resumeToken !== undefined && this.clock.now() < this.recoveryUntil);
     this.phase = "connecting";
     this.emitView();
     this.transport.connect();
@@ -645,30 +691,33 @@ export class ARModuleSession {
     this.lastError = reason;
     this.helloDeadline = null;
     this.pendingHelloTs = null;
-    this.clearConnectionFacts();
+    if (!this.recoveryUntil) this.recoveryUntil = this.clock.now() + 1;
+    this.clearConnectionFacts(this.resumeToken !== undefined && this.clock.now() < this.recoveryUntil);
     this.phase = "failed";
     if (this.wantConnected) {
-      this.reconnectAt = this.clock.now() + this.reconnectDelayS;
+      this.reconnectAt = this.clock.now() + (this.resumeToken ? 0.05 : this.reconnectDelayS);
     }
     this.closeTransport();
     this.emitView();
   }
 
-  private clearConnectionFacts(): void {
+  private clearConnectionFacts(preserveInteraction = false): void {
+    this.pendingStreams.clear();
+    this.pendingControl.clear();
     this.captureId = null;
     this.assetConnection++; this.assetGenerations.clear();
     this.bulk.reset(); this.deferredAssets.clear(); this.uploadResultTimeout = this.resultDeadline = null;
-    this.collaboration.reset();
-    this.manipulation = null;
+    if (!preserveInteraction) this.collaboration.reset();
+    if (!preserveInteraction) this.manipulation = null;
     this.captureEpisodeId = null;
     this.localizationSubmission.reset();
-    this.hello = null;
+    if (!preserveInteraction) this.hello = null;
     this.state = null;
     this.pose = null;
     this.nav_goal = null;
     this.nav_preview = null;
     this.lidar = null;
-    this.manipulation = null;
+    if (!preserveInteraction) this.manipulation = null;
     this.manipulationError = null;
     this.agentMessage = null;
     this.clientTrackingOriginStore.clear();

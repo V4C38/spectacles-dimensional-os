@@ -15,6 +15,7 @@ export class CollaborationController {
   private sequence = 0;
   private acquisition: string | null = null;
   private acquireRequest: string | null = null;
+  private grantRevision: number | null = null;
   private lease: string | null = null;
   private kind: InteractionKind | null = null;
   private prediction: InteractionPose | null = null;
@@ -26,7 +27,7 @@ export class CollaborationController {
   private lastStateAt = -Infinity;
   private sampleOffset: number | null = null;
   private cancelled = new Set<string>();
-  private deferred: { action: "release" | "confirm"; pose?: InteractionPose } | null = null;
+  private deferred: { action: "release" | "confirm"; pose?: InteractionPose; targetRevision?: number; grantRevision?: number } | null = null;
   private denial = 0;
   private settling: { pose: InteractionPose; sequence: number; key: string; requestId: string; epoch: string } | null = null;
   constructor(private readonly port: CollaborationPort) {}
@@ -61,6 +62,8 @@ export class CollaborationController {
   apply(state: InteractionState): boolean {
     const previous = this.state;
     if (previous && previous.epoch === state.epoch && state.revision <= previous.revision) return false;
+    if (previous && previous.epoch === state.epoch &&
+        this.grantRevision !== null && state.revision < this.grantRevision) return false;
     if (previous && previous.epoch !== state.epoch) this.reset();
     this.state = state;
     this.lastStateAt = this.port.now();
@@ -103,9 +106,12 @@ export class CollaborationController {
     if (state.authority?.client_id === this.port.clientId() && state.authority.acquisition_id === this.acquisition) {
       this.lease = state.authority.lease_id;
       this.sequence = Math.max(this.sequence, state.authority.sequence);
-    } else if (this.lease && !this.acquireRequest) {
+    } else if (this.lease && !this.acquireRequest &&
+        !(this.grantRevision !== null && state.revision < this.grantRevision)) {
       this.clearLocal();
     }
+    if (this.grantRevision !== null && state.revision >= this.grantRevision) this.grantRevision = null;
+    this.finishDeferred();
     return true;
   }
   accept(result: InteractionResult): void {
@@ -124,10 +130,17 @@ export class CollaborationController {
       this.clearLocal(); this.denial++; return;
     }
     if (this.state && this.state.epoch !== result.epoch) { this.clearLocal(); return; }
+    if (this.state && this.state.revision >= result.revision &&
+        (this.state.authority?.client_id !== this.port.clientId() ||
+         this.state.authority.acquisition_id !== this.acquisition ||
+         this.state.authority.lease_id !== result.lease_id)) {
+      this.clearLocal(); this.denial++; return;
+    }
     this.lease = result.lease_id;
+    this.grantRevision = result.revision;
     if (this.deferred) {
-      const pending = this.deferred; this.deferred = null;
-      this.finish(pending.action, pending.pose);
+      this.deferred.grantRevision = result.revision;
+      this.finishDeferred();
     } else this.flush(true);
   }
   begin(kind: InteractionKind, sourceId: string, pose?: InteractionPose, settings: InteractionSettings = {}): boolean {
@@ -152,7 +165,7 @@ export class CollaborationController {
     if (!this.lease || !this.state || !this.owns()) return null;
     return { epoch: this.state.epoch, lease_id: this.lease, sequence: ++this.sequence };
   }
-  release(pose?: InteractionPose, kinds?: readonly InteractionKind[]): void { if (this.matchesKinds(kinds)) this.finish("release", pose); }
+  release(pose?: InteractionPose, kinds?: readonly InteractionKind[]): number | null { return this.matchesKinds(kinds) ? this.finish("release", pose) : null; }
   confirm(pose?: InteractionPose, kinds?: readonly InteractionKind[]): void { if (this.matchesKinds(kinds)) this.finish("confirm", pose); }
   cancel(kinds?: readonly InteractionKind[]): void {
     if (!this.matchesKinds(kinds)) return;
@@ -172,6 +185,7 @@ export class CollaborationController {
   tick(): void {
     if (!this.port.ready()) return;
     const now = this.port.now();
+    this.flush();
     if (this.lease && this.state && now - this.lastRenewed >= AUTHORITY_RENEW_INTERVAL_S) {
       this.send({ action: "renew", epoch: this.state.epoch, lease_id: this.lease });
       this.lastRenewed = now;
@@ -184,15 +198,31 @@ export class CollaborationController {
       (this.lease === this.state.authority.lease_id || this.acquisition === this.state.authority.acquisition_id);
   }
   private matchesKinds(kinds?: readonly InteractionKind[]): boolean { return kinds === undefined || this.kind !== null && kinds.includes(this.kind); }
-  private finish(action: "release" | "confirm", pose?: InteractionPose): void {
+  private finishDeferred(): void {
+    const pending = this.deferred;
+    if (!pending || !this.lease || pending.grantRevision === undefined) return;
+    if (pending.targetRevision !== undefined) {
+      if (!this.state || this.state.revision < pending.grantRevision) return;
+      if (!this.owns() || this.targetFor(this.domain(), this.settings.group_id)?.revision !== pending.targetRevision) {
+        this.send({ action: "cancel", epoch: this.state.epoch, lease_id: this.lease });
+        this.clearLocal(); this.denial++; return;
+      }
+    }
+    this.deferred = null;
+    this.finish(pending.action, pending.pose);
+  }
+  private finish(action: "release" | "confirm", pose?: InteractionPose): number | null {
     const finalPose = pose ?? this.prediction ?? undefined;
     if (finalPose) this.prediction = clone(finalPose);
     if (this.acquireRequest) {
-      if (action === "release" && this.kind !== "navigation_planning") this.cancel();
-      else this.deferred = { action, pose: finalPose };
-      return;
+      if (action === "release" && this.kind !== "navigation_planning" && this.kind !== "manipulation_planning") this.cancel();
+      else this.deferred = { action, pose: finalPose,
+        ...(this.kind === "manipulation_planning"
+          ? { targetRevision: this.targetFor("manipulation", this.settings.group_id)?.revision }
+          : {}) };
+      return null;
     }
-    if (!this.lease || !this.state) return;
+    if (!this.lease || !this.state) return null;
     this.queued = null;
     const finalSequence = ++this.sequence;
     const requestId = this.id();
@@ -202,16 +232,18 @@ export class CollaborationController {
     this.send({ request_id: requestId, action, epoch: this.state.epoch, lease_id: this.lease, sequence: finalSequence,
       ...this.settings, ...(finalPose ? clone(finalPose) : {}) });
     if (terminal) this.clearLocal();
+    return finalSequence;
   }
   private flush(force = false): void {
     if (!this.queued || !this.lease || !this.state || this.acquireRequest ||
         !force && this.port.now() - this.lastSent < TARGET_SEND_INTERVAL_S) return;
     this.send({ action: "update", epoch: this.state.epoch, lease_id: this.lease,
       sequence: ++this.sequence, ...this.settings, ...clone(this.queued) });
-    this.queued = null; this.lastSent = this.port.now();
+    this.queued = null; this.lastSent = this.lastRenewed = this.port.now();
   }
   private clearLocal(): void {
     this.acquisition = this.acquireRequest = this.lease = this.kind = null;
+    this.grantRevision = null;
     this.prediction = this.queued = null; this.deferred = null;
     this.lastSent = this.lastRenewed = -Infinity;
   }

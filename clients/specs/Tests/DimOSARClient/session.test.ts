@@ -123,7 +123,7 @@ function handshake(
   session.onTransportText(`${JSON.stringify(hello)}\n${JSON.stringify(STATE)}\n`);
   expect(session.view().connection).toBe("ready");
   expect(transport.texts).toHaveLength(1);
-  expect(JSON.parse(transport.texts[0])).toEqual({ type: "hello_request", protocol_version: 3, ts_client: clock.nowS });
+  expect(JSON.parse(transport.texts[0])).toEqual({ type: "hello_request", resumable: true, server_follow_stream: true, protocol_version: 3, ts_client: clock.nowS });
   return hello;
 }
 
@@ -789,4 +789,29 @@ describe("deferred asset state ordering", () => {
     expect(session.view().manipulation?.execution).toBe("executing");
     expect(session.view().manipulation?.plan).toBeNull();
   });
+});
+
+it("coalesces snapshot bursts before bounded frame processing", () => {
+  const { session } = makeSession();
+  session.start(); session.onTransportOpen();
+  session.onTransportText(JSON.stringify({ ...helloAt(0), server_follow_stream: true }) + "\n");
+  for (let clients = 1; clients <= 100; clients++) {
+    session.onTransportText(JSON.stringify({ ...STATE, server: { connected_clients: clients } }) + "\n");
+  }
+  expect(session.diagnostics().control.pending).toBe(1);
+  session.tick();
+  expect(session.view().state?.server.connected_clients).toBe(100);
+  expect(session.diagnostics().control.coalesced).toBe(99);
+});
+
+it("retains the latest congested update while sending a lease renewal", () => {
+  const { session, transport, clock } = makeSession();
+  session.start(); session.onTransportOpen(); session.onTransportText(JSON.stringify(helloAt(0)) + "\n");
+  for (let n = 0; n < 70; n++) {
+    session.sendText(JSON.stringify({ type: "interaction_request", action: "update", sequence: n, payload: "x".repeat(1000) }) + "\n");
+  }
+  session.sendText('{"type":"interaction_request","action":"renew"}\n');
+  expect(JSON.parse(transport.texts.at(-1)!)).toMatchObject({ action: "renew" });
+  clock.nowS = 1.1; session.tick();
+  expect(JSON.parse(transport.texts.at(-1)!)).toMatchObject({ action: "update", sequence: 69 });
 });

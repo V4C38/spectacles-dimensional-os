@@ -22,6 +22,7 @@ class JointZeroOperation:
 
     def run(self, client_id: str, group: str, speed: float, shutdown: bool) -> dict[str, Any]:
         runtime = self.runtime
+        tolerance = getattr(runtime.config, "joint_arrival_tolerance_rad", 0.02)
         with runtime.lock:
             if shutdown:
                 if runtime.session.stopped or runtime.session.cancelling:
@@ -93,7 +94,7 @@ class JointZeroOperation:
             observed = runtime.fresh(group)
             actual = dict(zip(observed.joints.name, observed.joints.position, strict=True))
             already_zero = all(
-                abs(actual.get(name, float("inf")) - expected[name]) <= 0.02 for name in joints
+                abs(actual.get(name, float("inf")) - expected[name]) <= tolerance for name in joints
             )
             planned = (
                 None
@@ -123,13 +124,13 @@ class JointZeroOperation:
                 actual = dict(zip(observed.joints.name, observed.joints.position, strict=True))
                 now = time.monotonic()
                 if now - last_log >= 0.5:
-                    worst = max(joints, key=lambda name: abs(actual.get(name, float("inf"))))
+                    worst = max(joints, key=lambda name: abs(actual.get(name, float("inf")) - expected[name]))
                     logger.info(
                         "Arm settling",
                         operation=runtime.operation.kind,
                         elapsed_s=round(now - started, 2),
                         joint=worst,
-                        error_rad=round(abs(actual.get(worst, float("inf"))), 4),
+                        error_rad=round(abs(actual.get(worst, float("inf")) - expected[worst]), 4),
                         feedback_age_s=round(time.time() - observed.joints.ts, 3),
                     )
                     last_log = now
@@ -144,7 +145,7 @@ class JointZeroOperation:
                 if observed.joints.ts > last_measurement:
                     last_measurement = observed.joints.ts
                     if now >= nominal_end and all(
-                        abs(actual.get(name, float("inf")) - expected[name]) <= 0.02
+                        abs(actual.get(name, float("inf")) - expected[name]) <= tolerance
                         for name in joints
                     ):
                         if settled is None:
@@ -171,11 +172,11 @@ class JointZeroOperation:
                     else:
                         settled = None
                 time.sleep(0.05)
-            worst = max(joints, key=lambda name: abs(actual.get(name, float("inf"))))
+            worst = max(joints, key=lambda name: abs(actual.get(name, float("inf")) - expected[name]))
             raise ValueError(
                 f"Zero pose not confirmed: {worst} error "
-                f"{abs(actual.get(worst, float('inf'))):.4f} rad "
-                "(tolerance 0.0200 rad); settling deadline reached"
+                f"{abs(actual.get(worst, float('inf')) - expected[worst]):.4f} rad "
+                f"(tolerance {tolerance:.4f} rad); settling deadline reached"
             )
         except Exception:
             with runtime.lock:

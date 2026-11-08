@@ -105,7 +105,7 @@ export class ManipulationRenderer {
   private readonly jointFilter = new ArmJointFilter();
   private previousSolution: object | null = null;
   private solutionSequence = 0;
-  private readonly previewFilter = new ArmJointFilter(0.15);
+  private readonly previewFilter = new ArmJointFilter(0.15, 0.25);
   private readonly trajectoryProgress = new ArmTrajectoryProgress();
   private filterContext = "";
   readonly warning = new TargetWarning();
@@ -118,7 +118,7 @@ export class ManipulationRenderer {
     this.object.name = "Manipulation";
     this.path.userData.environmentDepth = true;
     this.path.raycast = () => {};
-    this.object.add(this.warning.object, this.warning.rejected);
+    this.object.add(this.warning.object);
     (this.handle.visual.material as THREE.Material).transparent = true;
     (this.handle.visual.material as THREE.Material).depthWrite = false;
     this.handle.collider.scale.setScalar(1.04);
@@ -183,12 +183,16 @@ export class ManipulationRenderer {
       intent,
     } = input;
     const fresh = intent.fresh;
+    this.modelRenderer.tick(now, fresh && !!state?.available && !!origin);
     if (intent.retainingFeedback && origin) {
       this.preview.hold(now);
       this.jointFilter.hold(now); this.previewFilter.hold(now);
       for (const [key, button] of this.controlsView.buttons) button.setEnabled(key === "estop" || key === "stop");
       this.speedSlider.hit.userData.interactionEnabled = false;
       if(target) this.place(this.handle.object,target,origin);
+      this.warning.update(this.handle.object.position, now, { blocked: false, fresh: false,
+        stopped: intent.stopped, moving: false, rejection: null });
+      this.warning.faceViewer(this.viewerPosition);
       this.controlsView.baseLabel.setFeedback(robotTitle,"No feedback",`Movement speed ${Math.round(input.speedScale*100)}%`,0xff9f0a);
       return;
     }
@@ -205,6 +209,9 @@ export class ManipulationRenderer {
       this.controlsView.baseLabel.setFeedback(robotTitle, "No feedback", `Movement speed ${Math.round(input.speedScale * 100)}%`, 0xff9f0a);
       for (const [key, button] of this.controlsView.buttons) button.setEnabled(key === "estop" ? intent.canStop || intent.canResume : key === "stop" && intent.canStop);
       this.speedSlider.hit.userData.interactionEnabled = false;
+      this.warning.update(this.handle.object.position, now, { blocked: false, fresh: false,
+        stopped: intent.stopped, moving: false, rejection: null });
+      this.warning.faceViewer(this.viewerPosition);
       return;
     }
     if (this.modelRenderer.model?.revision !== state.model.revision) {
@@ -489,27 +496,17 @@ export class ManipulationRenderer {
       now,
       delta: dtOutline,
     });
-    const failed = !fresh || this.warning.object.visible;
-    if (input.rejection) {
-      const pose = clientTrackingToWebxrPose(
-        odomToClientTrackingPose(input.rejection.pose, origin),
-      );
-      this.warning.show(
-        input.rejection.revision,
-        input.rejection.message,
-        new THREE.Vector3(...pose.position),
-        now,
-      );
-    }
     this.warning.update(
       this.handle.object.position,
       now,
-      intent.dragging === true && input.rejection !== null,
+      { blocked: intent.blocked === true, fresh, stopped: intent.stopped,
+        moving: intent.executing || intent.resetting, rejection: input.rejection },
     );
+    this.warning.faceViewer(this.viewerPosition);
     const handleMaterial = this.handle.collider
       .material as THREE.ShaderMaterial;
     handleMaterial.uniforms?.uCenterColor?.value.set(
-      failed ? DIMOS_AR_DESIGN.colors.warning : DIMOS_AR_DESIGN.colors.chrome,
+      !fresh || input.rejection ? DIMOS_AR_DESIGN.colors.warning : DIMOS_AR_DESIGN.colors.chrome,
     );
     const copy = `${robotTitle} · ${!fresh ? "Feedback unavailable" : stateText}${this.modelRenderer.assetMessage}`;
     if (this.controlsView.status.text !== copy) {

@@ -691,3 +691,53 @@ async def test_stop_at_rate_limit_is_honored_then_flooding_peer_retires():
             assert len(stops) == 2
     finally:
         h.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delay", [0.1, 0.5, 0.9])
+async def test_resumable_socket_preserves_identity_without_disconnect_callback(harness, delay):
+    url = f"ws://127.0.0.1:{harness.port}/"
+    async with websockets.connect(url) as first:
+        await first.send(json.dumps({"type": "hello_request", "ts_client": 1,
+                                     "resumable": True, "server_follow_stream": True}))
+        hello = json.loads(await first.recv())
+    await asyncio.sleep(delay)
+    assert harness.disconnected_client_ids == []
+    async with websockets.connect(url) as second:
+        await second.send(json.dumps({"type": "hello_request", "ts_client": 2,
+                                      "resumable": True, "resume_token": hello["resume_token"]}))
+        resumed = json.loads(await second.recv())
+        assert resumed["client_id"] == hello["client_id"]
+        assert resumed["bulk_token"] != hello["bulk_token"]
+        await asyncio.sleep(0.15)
+        assert harness.disconnected_client_ids == []
+
+
+@pytest.mark.asyncio
+async def test_expired_resume_cannot_restore_authority(harness):
+    url = f"ws://127.0.0.1:{harness.port}/"
+    async with websockets.connect(url) as first:
+        await first.send(json.dumps({"type": "hello_request", "ts_client": 1, "resumable": True}))
+        hello = json.loads(await first.recv())
+    await asyncio.sleep(1.1)
+    assert harness.disconnected_client_ids == [hello["client_id"]]
+    async with websockets.connect(url) as second:
+        await second.send(json.dumps({"type": "hello_request", "ts_client": 2,
+                                      "resumable": True, "resume_token": hello["resume_token"]}))
+        with pytest.raises(websockets.ConnectionClosed):
+            await second.recv()
+
+
+@pytest.mark.asyncio
+async def test_resume_uses_its_reserved_slot_when_capacity_is_full(harness, monkeypatch):
+    monkeypatch.setattr("dimos.ar.websocket.server.MAX_CONTROL_CLIENTS", 1)
+    url = f"ws://127.0.0.1:{harness.port}/"
+    async with websockets.connect(url) as first:
+        await first.send(json.dumps({"type": "hello_request", "ts_client": 1, "resumable": True}))
+        hello = json.loads(await first.recv())
+    await asyncio.sleep(0.05)
+    async with websockets.connect(url) as second:
+        await second.send(json.dumps({"type": "hello_request", "ts_client": 2,
+                                      "resumable": True, "resume_token": hello["resume_token"]}))
+        assert json.loads(await second.recv())["client_id"] == hello["client_id"]
+    assert harness.disconnected_client_ids == []

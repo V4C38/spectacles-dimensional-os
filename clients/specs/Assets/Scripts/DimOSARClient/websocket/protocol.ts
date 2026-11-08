@@ -65,9 +65,12 @@ export class TextFramer {
   }
 }
 
-export function encodeHelloRequest(request: { ts_client: number }): string {
+export function encodeHelloRequest(request: { ts_client: number; resume_token?: string }): string {
   return encodeText({
     type: "hello_request",
+    resumable: true,
+    server_follow_stream: true,
+    ...(request.resume_token ? { resume_token: request.resume_token } : {}),
     protocol_version: 3,
     ts_client: finiteNumber(request.ts_client, "ts_client"),
   });
@@ -494,6 +497,8 @@ function decodePlayback(data: Record<string, unknown>): NonNullable<State["playb
 }
 
 function decodeHello(data: Record<string, unknown>): Hello {
+  if (data.independent_ik !== undefined && typeof data.independent_ik !== "boolean")
+    throw new Error("independent_ik must be boolean");
   const timeSyncRaw = asObject(requireKey(data, "time_sync"), "time_sync");
   const time_sync: TimeSync = {
     ts_client: finiteField(timeSyncRaw, "ts_client"),
@@ -510,6 +515,9 @@ function decodeHello(data: Record<string, unknown>): Hello {
     bulk_token: requireString(data, "bulk_token"),
     bulk_epoch: requireString(data, "bulk_epoch"),
     client_id: requireString(data, "client_id"),
+    ...(data.server_follow_stream === true ? { server_follow_stream: true } : {}),
+    ...(data.independent_ik === true ? { independent_ik: true } : {}),
+    ...(data.resume_token === undefined ? {} : { resume_token: requireString(data, "resume_token") }),
     ...(data.odom_reference_id === undefined ? {} : { odom_reference_id: requireString(data, "odom_reference_id") }),
     ...(data.server_info === undefined ? {} : { server_info: decodeServerInfo(asObject(data.server_info, "server_info")) }),
     time_sync,

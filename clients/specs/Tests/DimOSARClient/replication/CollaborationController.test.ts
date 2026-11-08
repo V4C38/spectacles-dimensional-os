@@ -63,6 +63,67 @@ describe("robot replication", () => {
       status: "accepted", code: "acquired", lease_id: "lease" });
     expect(messages[messages.length - 1]).toMatchObject({ action: "release", lease_id: "lease", position: [2, 0, 0] });
   });
+  it("keeps a normal arm grant through delayed pre-grant release snapshots", () => {
+    const { core, messages } = fixture();
+    core.begin("manipulation_planning", "hand", pose(1), { group_id: "arm" });
+    const request = messages.at(-1);
+    core.accept({ type: "interaction_result", request_id: request.request_id, epoch: "robot", revision: 5,
+      status: "accepted", code: "acquired", lease_id: "new-grant" });
+    core.apply({ ...state(4), authority: null });
+    expect(core.snapshot("manipulation", "arm").pending).toBe(true);
+    const granted = { ...state(5), authority: { client_id: "a", source_id: "hand", acquisition_id: request.acquisition_id,
+      lease_id: "new-grant", kind: "manipulation_planning" as const, group_id: "arm", held: true, sequence: -1, expires_at: 5 } };
+    core.apply(granted);
+    expect(core.snapshot("manipulation", "arm").ownsAuthority).toBe(true);
+    expect(core.credentials()?.lease_id).toBe("new-grant");
+    core.apply({ ...state(6), authority: null });
+    expect(core.snapshot("manipulation", "arm").ownsAuthority).toBe(false);
+    expect(core.snapshot("manipulation", "arm").pending).toBe(false);
+    expect(core.credentials()).toBeNull();
+  });
+  it.each([false, true])("cannot restore a superseded grant or cross an epoch (%s)", changedEpoch => {
+    const { core, messages } = fixture();
+    core.begin("manipulation_planning", "hand", pose(1), { group_id: "arm" });
+    const request = messages.at(-1);
+    core.apply({ ...state(6), epoch: changedEpoch ? "replacement" : "robot", authority: null });
+    core.accept({ type: "interaction_result", request_id: request.request_id, epoch: "robot", revision: 5,
+      status: "accepted", code: "acquired", lease_id: "retired" });
+    expect(core.snapshot("manipulation", "arm").pending).toBe(false);
+    expect(core.credentials()).toBeNull();
+  });
+  it.each(["foreign owner", "motion busy", "agent"])("ignores pre-grant %s snapshots before applying blockers or presentation", blocker => {
+    const { core, messages } = fixture();
+    core.begin("manipulation_planning", "hand", pose(1), { group_id: "arm" });
+    const request = messages.at(-1);
+    core.accept({ type: "interaction_result", request_id: request.request_id, epoch: "robot", revision: 5,
+      status: "accepted", code: "acquired", lease_id: "new-grant" });
+    const stale = state(4);
+    if (blocker === "motion busy") stale.motion_busy = true;
+    else if (blocker === "agent") stale.mode = "agent";
+    else stale.authority = { client_id: "other", source_id: "hand", acquisition_id: "old", lease_id: "old",
+      kind: "manipulation_planning", group_id: "arm", held: true, sequence: 1, expires_at: 1 };
+    expect(core.apply(stale)).toBe(false);
+    expect(core.raw()?.revision).toBe(0);
+    expect(core.snapshot("manipulation", "arm").blocked).toBe(false);
+    expect(core.snapshot("manipulation", "arm").pending).toBe(true);
+  });
+  it.each([false, true])("fences a pending arm correction against a changed canonical target (%s)", changed => {
+    const { core, messages } = fixture();
+    const target = { ...pose(4), domain: "manipulation" as const, group_id: "arm", revision: 7, phase: "draft" as const, sample_ts: 1, sequence: 1 };
+    core.apply({ ...state(1), target });
+    core.begin("manipulation_planning", "correction", undefined, { group_id: "arm" });
+    const request = messages.at(-1); core.release(pose(2));
+    core.accept({ type: "interaction_result", request_id: request.request_id, epoch: "robot", revision: 3,
+      status: "accepted", code: "acquired", lease_id: "correction" });
+    expect(messages.some(packet => packet.action === "release")).toBe(false);
+    core.apply({ ...state(3), target: changed ? { ...target, ...pose(8), revision: 8 } : target,
+      authority: { client_id: "a", source_id: "correction", acquisition_id: request.acquisition_id,
+        lease_id: "correction", kind: "manipulation_planning", group_id: "arm", held: true, sequence: -1, expires_at: 5 } });
+    if (changed) {
+      expect(messages.at(-1)).toMatchObject({ action: "cancel", lease_id: "correction" });
+      expect(messages.some(packet => packet.action === "release")).toBe(false);
+    } else expect(messages.at(-1)).toMatchObject({ action: "release", position: [2, 0, 0] });
+  });
   it("interpolates canonical poses using server time deltas despite receiver jitter", () => {
     const { core, clock } = fixture();
     const a = state(1); a.target = { ...pose(0), revision: 1, phase: "live", sample_ts: 100, sequence: 1 };

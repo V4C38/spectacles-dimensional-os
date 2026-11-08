@@ -309,3 +309,118 @@ test("a replicated selected arm plan can be executed by another client after edi
     throw error;
   } finally { await ca.close(); await cb.close(); await cc.close(); }
 });
+
+test("a brief socket reconnect retains the arm grab without E-stop or duplicate movement streams", async ({ browser }) => {
+  const context = await armContext(browser);
+  const page = await context.newPage();
+  try {
+    await connectArm(page);
+    await grabArm(page, .2);
+    const before = await armState(page);
+    await page.evaluate(() => {
+      const { session } = (window as any).multi;
+      session.transport.socket.close(4000, "test transient connection loss");
+    });
+    await expect.poll(async () => (await armState(page)).client).toBe(before.client);
+    await expect.poll(() => page.evaluate(() => (window as any).multi.session.view().connection)).toBe("ready");
+    expect((await armState(page)).native.stopped).toBe(false);
+    expect((await armState(page)).intent.dragging).toBe(true);
+    await page.evaluate(() => (window as any).multi.arm.interaction.aim({ position: [.4, 0, 0], orientation: [0, 0, 0, 1] }));
+    await expect.poll(async () => (await armState(page)).joints?.slide).toBeCloseTo(.4);
+    const after = await armState(page);
+    expect(after.sent.some((packet: any) => packet.type === "manipulation_request" && packet.action === "update")).toBe(false);
+    expect(after.results.some((packet: any) => packet.request_id?.startsWith("shared-follow-"))).toBe(true);
+  } finally {
+    await context.close();
+  }
+});
+
+test("explicit Stop cancels server-owned arm execution and clears the shared draft", async ({ browser }) => {
+  const context = await armContext(browser);
+  const page = await context.newPage();
+  try {
+    await connectArm(page);
+    await expect.poll(async () => (await armState(page)).shared.authority).toBeNull();
+    if ((await armState(page)).native.stopped) {
+      await page.evaluate(() => (window as any).multi.arm.interaction.resume());
+      await expect.poll(async () => (await armState(page)).native.stopped).toBe(false);
+    }
+    await expect.poll(async () => (await armState(page)).intent.canManipulate).toBe(true);
+    await grabArm(page, .6, true);
+    await page.evaluate(() => (window as any).multi.arm.interaction.end());
+    await expect.poll(async () => (await armState(page)).native.plan?.trajectory?.length).toBe(2);
+    await expect.poll(async () => (await armState(page)).shared.authority).toBeNull();
+    await page.evaluate(() => (window as any).multi.arm.interaction.execute());
+    await expect.poll(async () => (await armState(page)).native.execution).toBe("executing");
+    await page.evaluate(() => (window as any).multi.arm.interaction.cancel());
+    await expect.poll(async () => (await armState(page)).native.execution).toBe("idle");
+    await expect.poll(async () => (await armState(page)).shared.target).toBeNull();
+    await expect.poll(async () => (await armState(page)).intent.blocked).toBe(false);
+    expect((await armState(page)).target).toBeNull();
+  } finally {
+    await context.close();
+  }
+});
+
+test("continuous selected IK reaches the renderer without per-sample canonical acknowledgements", async ({ browser }) => {
+  test.setTimeout(60000);
+  const context = await armContext(browser);
+  const page = await context.newPage();
+  try {
+    await connectArm(page);
+    await expect.poll(async () => (await armState(page)).shared.authority).toBeNull();
+    await grabArm(page, .1, true);
+    const proof = await page.evaluate(async () => {
+      const { session, arm, results, sent } = (window as any).multi;
+      const original = session.onTransportText.bind(session);
+      let withheld = 0;
+      session.onTransportText = (chunk: string) => {
+        const lines = chunk.split("\n").filter(line => {
+          if (!line.trim()) return false;
+          if (JSON.parse(line).type === "interaction_state") { withheld++; return false; }
+          return true;
+        });
+        if (lines.length) original(lines.join("\n") + "\n");
+      };
+      const start = performance.now(), resultStart = results.length, sentStart = sent.length;
+      const canonicalRevision = session.collaboration.raw().target.revision;
+      const samples: { ik: number; rendered: number; held: boolean }[] = [];
+      try {
+        await new Promise<void>(resolve => {
+          const timer = setInterval(() => {
+            const elapsed = (performance.now() - start) / 1000;
+            arm.interaction.aim({ position: [.1 + Math.min(.5, elapsed / 4), 0, 0], orientation: [0, 0, 0, 1] });
+            samples.push({ ik: arm.interaction.previewJoints?.slide,
+              rendered: arm.renderer.previewFilter.values.slide, held: arm.interaction.dragging });
+            if (elapsed >= 2) { clearInterval(timer); resolve(); }
+          }, 1000 / 60);
+        });
+        return {
+          support: session.view().hello.independent_ik,
+          withheld, canonicalUnchanged: session.collaboration.raw().target.revision === canonicalRevision,
+          updates: results.slice(resultStart).filter((result: any) => result.action === "evaluate" && result.status === "feasible").length,
+          failures: results.slice(resultStart).filter((result: any) => result.action === "evaluate" && result.status !== "feasible"),
+          allHeld: samples.every(sample => sample.held),
+          ikPositions: new Set(samples.map(sample => sample.ik?.toFixed(3))).size,
+          renderedPositions: new Set(samples.map(sample => sample.rendered?.toFixed(3))).size,
+          motionRequests: sent.slice(sentStart).filter((packet: any) => packet.type === "manipulation_request" && ["plan", "execute", "update"].includes(packet.action)),
+        };
+      } finally {
+        session.onTransportText = original;
+        session.collaboration.requestSnapshot();
+      }
+    });
+    expect(proof.support).toBe(true);
+    expect(proof.withheld).toBeGreaterThan(10);
+    expect(proof.canonicalUnchanged).toBe(true);
+    expect(proof.updates).toBeGreaterThan(15);
+    expect(proof.failures).toEqual([]);
+    expect(proof.allHeld).toBe(true);
+    expect(proof.ikPositions).toBeGreaterThan(15);
+    expect(proof.renderedPositions).toBeGreaterThan(30);
+    expect(proof.motionRequests).toEqual([]);
+    await page.evaluate(() => (window as any).multi.arm.interaction.cancel());
+  } finally {
+    await context.close();
+  }
+});

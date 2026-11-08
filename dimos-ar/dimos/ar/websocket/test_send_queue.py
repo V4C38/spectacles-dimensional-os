@@ -241,3 +241,22 @@ async def test_preview_reply_never_coalesces_with_active_goal(preview_first: boo
         active,
         preview,
     ]
+
+
+@pytest.mark.asyncio
+async def test_essential_reply_preempts_snapshot_bandwidth_pressure():
+    ws = _FakeWebSocket()
+    queue = ClientSendQueue(ws)
+    queue._snapshot_budget.tokens = 0
+    queue.enqueue('{"type":"manipulation_state","available":true}\n')
+    queue.enqueue('{"type":"interaction_result","code":"acquired"}\n')
+    queue.start()
+    try:
+        for _ in range(100):
+            if ws.sent_text:
+                break
+            await asyncio.sleep(0.001)
+        assert json.loads(ws.sent_text[0])["type"] == "interaction_result"
+        assert queue.failure_reason is None
+    finally:
+        await queue.stop()

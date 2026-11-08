@@ -32,15 +32,14 @@ def arm_module():
     return module
 
 
-@pytest.mark.parametrize("action", ["plan", "evaluate"])
-def test_native_plan_uses_exact_canonical_shared_target(action):
+def test_native_plan_uses_exact_canonical_shared_target():
     module = arm_module()
     target = module._interaction.target
     authority = module._interaction.authority
     assert target is not None and authority is not None
     request = ManipulationRequest(
         "native",
-        action,
+        "plan",
         "arm",
         {
             "epoch": module._interaction.epoch,
@@ -57,10 +56,66 @@ def test_native_plan_uses_exact_canonical_shared_target(action):
     assert actual["position"] == [1, 2, 3]
     assert actual["orientation"] == [0, 0, 0, 1]
     assert actual["speed_scale"] == 0.3
-    if action == "plan":
-        assert actual["final_gripper"] == 0.7
-    else:
-        assert "final_gripper" not in actual
+    assert actual["final_gripper"] == 0.7
+
+
+def test_continuous_advisory_ik_does_not_wait_for_shared_target_acknowledgements():
+    module = arm_module()
+    authority = module._interaction.authority
+    assert authority is not None
+    for sequence in range(1, 61):
+        previous = module._interaction.target
+        assert previous is not None
+        module._on_interaction_request(
+            InteractionRequest(
+                f"sample-{sequence}", "update", module._interaction.epoch,
+                lease_id=authority.lease_id, sequence=sequence,
+                position=(1 + sequence / 100, 2, 3), orientation=(0, 0, 0, 1),
+            ), "owner",
+        )
+        latest_local = [1 + (sequence + 1) / 100, 2, 3]
+        module._on_manipulation_request(ManipulationRequest(
+            f"ik-{sequence}", "evaluate", "arm", {
+                "epoch": module._interaction.epoch, "lease_id": authority.lease_id,
+                "target_revision": previous.revision, "position": latest_local,
+                "orientation": [0, 0, 0, 1],
+            },
+        ), "owner", 0)
+        actual = module._manipulation_service.submit.call_args.args[0].payload
+        assert actual["position"] == latest_local
+        assert actual["advisory_target_revision"] == previous.revision
+        assert actual["advisory_current"] is False
+        assert actual["target_revision"] == module._interaction.target.revision
+    assert module._manipulation_service.submit.call_count == 60
+
+
+@pytest.mark.parametrize("action", ["plan", "execute"])
+def test_motion_plan_actions_still_require_exact_canonical_revision(action):
+    module = arm_module()
+    authority = module._interaction.authority
+    assert authority is not None
+    module._on_manipulation_request(ManipulationRequest("stale", action, "arm", {
+        "epoch": module._interaction.epoch, "lease_id": authority.lease_id,
+        "target_revision": 0, "position": [1, 2, 3], "orientation": [0, 0, 0, 1],
+        "plan_id": "old-plan",
+    }), "owner", 0)
+    module._manipulation_service.submit.assert_not_called()
+
+
+def test_advisory_ik_requires_the_current_owner_and_accepts_antipodal_pose():
+    module = arm_module()
+    authority = module._interaction.authority
+    assert authority is not None
+    request = ManipulationRequest("ik", "evaluate", "arm", {
+        "epoch": module._interaction.epoch, "lease_id": authority.lease_id,
+        "target_revision": 0, "position": [1, 2, 3], "orientation": [0, 0, 0, -1],
+    })
+    module._on_manipulation_request(request, "other", 0)
+    module._manipulation_service.submit.assert_not_called()
+    module._on_manipulation_request(request, "owner", 0)
+    admitted = module._manipulation_service.submit.call_args.args[0].payload
+    assert admitted["advisory_current"] is True
+    assert admitted["advisory_target_revision"] == 1
 
 
 def test_repeated_equal_target_does_not_revoke_selected_plan():
@@ -166,3 +221,48 @@ async def test_native_agent_resume_refusal_restores_manual_mode():
     await module._mode_task
     assert module._interaction.mode == "manual"
     assert not module._native_mode_uncertain
+
+
+def test_terminal_operation_identity_does_not_keep_the_robot_locked():
+    module = arm_module()
+    module._pending_arm_motion.clear()
+    module._arm_uncertain = module._arm_stop_pending = False
+    for execution in ("completed", "aborted", "idle"):
+        module._on_manipulation_snapshot({
+            "available": True, "execution": execution,
+            "operation_id": "retained-outcome", "operation": None,
+        })
+        assert not module._interaction.motion_busy
+
+
+@pytest.mark.parametrize("current_lease", [True, False])
+def test_confirmed_cancel_clears_its_draft_but_never_a_successor(current_lease):
+    module = arm_module()
+    authority = module._interaction.authority
+    module._on_manipulation_request(ManipulationRequest("cancel", "cancel", "arm", {
+        "epoch": module._interaction.epoch, "sequence": 1,
+        "lease_id": authority.lease_id if current_lease else "retired-lease",
+    }), "owner", 0)
+    assert (module._interaction.target is None) is current_lease
+
+
+def test_cancel_bypasses_motion_busy_and_confirmed_stop_fences_late_acceptance():
+    module = arm_module()
+    authority = module._interaction.authority
+    module._arm_uncertain = module._arm_native_busy = True
+    module._interaction.set_motion_busy(True)
+    prior_revision = module._interaction.revision
+    module._on_manipulation_request(ManipulationRequest("stop", "cancel", "arm", {
+        "epoch": module._interaction.epoch, "lease_id": authority.lease_id, "sequence": 1,
+    }), "owner", 0)
+    admitted = module._manipulation_service.submit.call_args.args[0]
+    assert admitted.action == "cancel"
+    assert admitted.payload["authority_revision"] > prior_revision
+    module._on_manipulation_result(admitted, {"status": "aborted"})
+    assert not module._interaction.motion_busy
+    old = ManipulationRequest("old-execute", "execute", "arm", {
+        "authority_epoch": module._interaction.epoch,
+        "authority_revision": admitted.payload["authority_revision"] - 1,
+    })
+    module._on_manipulation_result(old, {"status": "accepted"})
+    assert not module._interaction.motion_busy
