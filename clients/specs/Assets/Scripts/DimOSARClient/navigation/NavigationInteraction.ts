@@ -63,7 +63,7 @@ export class NavigationInteraction {
   }
   applyView(view: ARModuleSessionState, origin: ClientTrackingOrigin | null, floor: NavigationPose | null, _now: number): void {
     this.previews.apply(origin);
-    const available = view.connection === "ready" && view.hasTrackingOrigin && view.capabilities?.navigation.nav_goal.available === true && origin !== null;
+    const available = view.connection === "ready" && view.hasTrackingOrigin && view.capabilities?.navigation.available === true && view.capabilities.navigation.nav_goal.available === true && origin !== null;
     if (!available || this.origin !== origin) this.cancelDrag();
     this.origin = available ? origin : null; this.floor = floor; this.armed = available;
     if (!available) this.selected = false;

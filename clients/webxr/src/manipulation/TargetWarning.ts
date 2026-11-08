@@ -4,7 +4,9 @@ import { EndEffectorStatus, END_EFFECTOR_STATUS_STYLE, type EndEffectorStatusInp
 
 /** Non-interactive status beside the end effector, clear of its marker buttons. */
 export class TargetWarning {
-  private readonly pill = new NotificationPill();
+  private readonly pill = new NotificationPill({ ...END_EFFECTOR_STATUS_STYLE,
+    fontSizeM: 0.0136, iconInsetM: 0.0272, textOffsetM: 0.0232, rightPaddingM: 0.0136,
+  });
   readonly object = this.pill.object;
   private readonly status = new EndEffectorStatus();
   private readonly anchor = new THREE.Vector3();
@@ -18,7 +20,7 @@ export class TargetWarning {
     this.object.visible = sample.notification !== null;
     this.anchor.copy(position);
     if (!sample.notification) return;
-    this.object.scale.setScalar(0.8 * sample.scale);
+    this.object.scale.setScalar(sample.scale);
     this.pill.draw(sample.notification, sample.elapsedS, sample.opacity);
   }
   faceViewer(eye: THREE.Vector3): void {

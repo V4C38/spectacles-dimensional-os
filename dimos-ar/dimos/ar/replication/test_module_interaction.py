@@ -266,3 +266,59 @@ def test_cancel_bypasses_motion_busy_and_confirmed_stop_fences_late_acceptance()
     })
     module._on_manipulation_result(old, {"status": "accepted"})
     assert not module._interaction.motion_busy
+
+
+@pytest.mark.parametrize("rejection", ["owner", "lease", "epoch", "busy"])
+def test_reset_rejection_preserves_the_canonical_draft(rejection):
+    module = arm_module()
+    target = module._interaction.target
+    authority = module._interaction.authority
+    assert target is not None and authority is not None
+    payload = {
+        "epoch": module._interaction.epoch,
+        "lease_id": authority.lease_id,
+        "sequence": 1,
+        "speed_scale": 0.5,
+    }
+    client = "owner"
+    if rejection == "owner":
+        client = "other"
+    elif rejection == "lease":
+        payload["lease_id"] = "old-lease"
+    elif rejection == "epoch":
+        payload["epoch"] = "old-epoch"
+    else:
+        module._interaction.set_motion_busy(True)
+    module._on_manipulation_request(
+        ManipulationRequest("reset", "reset_joints", "arm", payload), client, 0
+    )
+    module._manipulation_service.submit.assert_not_called()
+    assert module._interaction.target is target
+    assert module._interaction.snapshot()["targets"][0]["gripper"] == 0.7
+
+
+def test_reset_admission_clears_only_its_group_draft_and_fences_native_work():
+    from dataclasses import replace
+
+    module = arm_module()
+    target = module._interaction.target
+    authority = module._interaction.authority
+    assert target is not None and authority is not None
+    other = replace(target, group_id="other-arm")
+    module._interaction._targets[("manipulation", "other-arm")] = other
+    prior_revision = module._interaction.revision
+    module._on_manipulation_request(
+        ManipulationRequest("reset", "reset_joints", "arm", {
+            "epoch": module._interaction.epoch,
+            "lease_id": authority.lease_id,
+            "sequence": 1,
+            "speed_scale": 0.5,
+        }), "owner", 0,
+    )
+    admitted = module._manipulation_service.submit.call_args.args[0]
+    assert admitted.action == "reset_joints"
+    assert admitted.payload["authority_revision"] > prior_revision
+    assert module._interaction.target is None
+    assert module._interaction.snapshot()["targets"] == [other.wire()]
+    assert module._interaction.motion_busy
+    assert "reset" in module._pending_arm_motion

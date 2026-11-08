@@ -175,6 +175,9 @@ export class ManipulationInteraction {
       lease: string | null;
       group: string;
       pose: ManipulationPose | null;
+      speed: number;
+      gripper: number | null;
+      startedAt: number;
       deadline: number;
     }
   >();
@@ -184,6 +187,13 @@ export class ManipulationInteraction {
   private tokenSequence = 0;
   private lastUpdate = -Infinity;
   private lastEvaluation = -Infinity;
+  private readonly advisoryTiming = { requests: 0, completions: 0, failures: 0, timeouts: 0, maximumDurationS: 0 };
+  diagnostics() {
+    let pendingAgeS = 0;
+    for (const request of this.pending.values()) if (request.action === "evaluate")
+      pendingAgeS = Math.max(pendingAgeS, this.now() - request.startedAt);
+    return { ...this.advisoryTiming, pendingAgeS };
+  }
   private evaluatedGeneration = -1;
   private planQueued = false;
   private offset = false;
@@ -303,9 +313,7 @@ export class ManipulationInteraction {
       !this.finishing && ["accepted", "executing"].includes(state?.execution ?? "");
     const resetting =
       !!state?.operation ||
-      [...this.pending.values()].some(
-        (p) => p.action === "reset_joints" && p.generation === this.generation,
-      );
+      this.hasPending("reset_joints");
     const stopped = state?.stopped === true;
     const fresh = this.feedbackFresh;
     const observedGripper = state?.observations?.[this.groupId ?? ""]?.gripper;
@@ -353,25 +361,16 @@ export class ManipulationInteraction {
     const next = Math.max(0.05, Math.min(1, value));
     if (next === this.speedScale) return;
     this.speedScale = next;
-    if (this.target) this.session.collaboration?.update(this.target, this.sharedSettings());
+    if (this.target) this.publishSettings();
     this.generation++;
     this.plan = null;
     this.planGeneration = -1;
-    this.planQueued = this.selected && this.target !== null;
+    this.planQueued = this.selected && !this.dragging && this.target !== null;
     this.executeAfterPlan = false;
   }
   resetJoints(): void {
     if (!this.snapshot().canReset) return;
-    this.interrupt();
-    this.generation++;
-    this.plan = null;
-    this.target = null;
-    this.lastValidTarget = null;
-    this.desiredGripper = null;
-    this.rejection = null;
-    this.solution = null;
-    this.planQueued = false;
-    this.executeAfterPlan = false;
+    this.discard("reset requested");
     this.status = "Returning to zero";
     this.send("reset_joints", { speed_scale: this.speedScale });
   }
@@ -399,12 +398,7 @@ export class ManipulationInteraction {
     return this.finishingAt !== null || tail?.status === "finishing" && tail.group_id === this.groupId;
   }
   get busy(): boolean {
-    return [...this.pending.values()].some(
-      (p) =>
-        p.action === "plan" ||
-        p.action === "execute" ||
-        p.action === "reset_joints",
-    );
+    return this.hasPending("plan", "execute", "reset_joints");
   }
   get feedbackFresh(): boolean {
     const view = this.session.view(),
@@ -485,6 +479,11 @@ export class ManipulationInteraction {
     if (!this.token) this.episode++;
     this.lastValidTarget ??= this.session.view().manipulation?.observations?.[this.groupId]?.pose ?? null;
     this.releasedGeneration = null;
+    this.planQueued = false;
+    this.generation++;
+    this.plan = null;
+    this.planGeneration = -1;
+    if (this.deferredNative?.action === "plan") this.deferredNative = null;
     this.gesture = this.selected ? "planning" : "following";
     if (this.gesture === "following") {
       const group = this.session
@@ -600,7 +599,9 @@ export class ManipulationInteraction {
         this.planQueued = false; this.executeAfterPlan = false;
       }
       this.lastDenial = collaboration.denialRevision;
-      if (this.transientAuthority && shared.ownsAuthority && shared.rawTarget) {
+      if (this.transientAuthority && this.deferredNative &&
+          ["plan", "execute", "evaluate"].includes(this.deferredNative.action) &&
+          shared.ownsAuthority && shared.rawTarget && !shared.settling) {
         // Preview/Execute operate on the exact checked target, never on the
         // observer's interpolated presentation pose.
         this.target = {
@@ -618,11 +619,12 @@ export class ManipulationInteraction {
           if (tail.joints) this.solution = tail.joints;
         }
         // Repeated snapshots of the same target must not undo an idle slider edit.
-        if (shared.rawTarget?.revision !== this.sharedSpeedRevision && shared.rawTarget?.speed_scale !== undefined)
-          this.speedScale = shared.rawTarget.speed_scale;
-        if (shared.rawTarget?.gripper !== undefined) this.desiredGripper = shared.rawTarget.gripper;
+        if (shared.settings.speed_scale !== undefined &&
+            (shared.settling || shared.rawTarget?.revision !== this.sharedSpeedRevision))
+          this.speedScale = shared.settings.speed_scale;
+        if (shared.settings.gripper !== undefined) this.desiredGripper = shared.settings.gripper;
         const plan = view.manipulation?.plan;
-        if (plan && plan.target_revision === shared.rawTarget?.revision && (!plan.group_id || plan.group_id === this.groupId)) {
+        if (!shared.settling && plan && plan.target_revision === shared.rawTarget?.revision && (!plan.group_id || plan.group_id === this.groupId)) {
           this.plan = this.previewPlan = plan; this.planGeneration = this.generation;
         } else if (!this.busy) this.plan = this.previewPlan = null;
         const evaluation = view.manipulation?.evaluation;
@@ -633,6 +635,11 @@ export class ManipulationInteraction {
         }
       }
       this.sharedSpeedRevision = shared.rawTarget?.revision ?? null;
+      if (this.deferredNative && !shared.ownsAuthority && !shared.pending && !shared.blocked &&
+          !shared.settling && !shared.authority) {
+        const request = this.deferredNative; this.deferredNative = null;
+        this.send(request.action, request.payload);
+      }
       if (this.deferredNative && shared.ownsAuthority) {
         const request = this.deferredNative; this.deferredNative = null;
         if ((request.action === "plan" || request.action === "evaluate") && this.target)
@@ -680,6 +687,10 @@ export class ManipulationInteraction {
     for (const [id, request] of this.pending) {
       if (now < Math.max(request.deadline, this.session.assetTransferDeadline?.(id) ?? 0)) continue;
       this.pending.delete(id);
+      if (request.action === "evaluate") {
+        this.advisoryTiming.timeouts++;
+        this.advisoryTiming.maximumDurationS = Math.max(this.advisoryTiming.maximumDurationS, now - request.startedAt);
+      }
       if (request.action === "release") {
         this.gesture = null;
         this.status = "Following release timed out";
@@ -762,7 +773,7 @@ export class ManipulationInteraction {
       !stopped &&
       !intent.executing &&
       !intent.resetting &&
-      !this.hasPending("evaluate", "plan", "cancel", "resume")
+      !this.hasPending("plan", "cancel", "resume")
     ) {
       this.planQueued = false;
       if (this.target) {
@@ -780,21 +791,22 @@ export class ManipulationInteraction {
       this.selected &&
       !this.snapshot().blocked &&
       this.target &&
-      intent.hasDraft &&
+      intent.targetOffset &&
       this.planGeneration !== this.generation &&
       this.feedbackAvailable &&
       this.feedbackFresh &&
       !stopped &&
       !intent.executing &&
       !intent.resetting &&
-      !this.planQueued &&
+      (!this.planQueued || this.dragging) &&
+      (this.dragging || !this.hasPending("plan")) &&
 
       this.gesture !== "following" &&
       !this.deferredNative &&
       this.evaluatedGeneration !== this.generation &&
       now - this.lastEvaluation >= MANIPULATION_PLAN_INTERVAL_S &&
       ![...this.pending.values()].some((p) =>
-        ["evaluate", "plan", "cancel", "resume"].includes(p.action),
+        ["evaluate", "cancel", "resume"].includes(p.action),
       )
     ) {
       this.evaluatedGeneration = this.generation;
@@ -850,8 +862,7 @@ export class ManipulationInteraction {
       this.reconcilingTarget = false;
       if (!this.session.collaboration && token) this.send("release", { token });
     }
-    if (planOnRelease && complete && this.snapshot().hasDraft && this.feedbackFresh && this.planGeneration !== this.generation &&
-        !this.hasPending("plan")) { this.planQueued = true; this.status = "Planning"; }
+    if (planOnRelease && complete && this.snapshot().hasDraft && this.feedbackFresh && this.planGeneration !== this.generation) { this.planQueued = true; this.status = "Planning"; }
     for (const [id, request] of this.pending) if (request.action === "acquire") {
       this.retiredAcquisitions.set(id, request.group); this.pending.delete(id);
     }
@@ -893,7 +904,6 @@ export class ManipulationInteraction {
       return;
     if (!intent.targetOffset && this.desiredGripper != null) {
       this.send("gripper", { value: this.desiredGripper });
-      this.desiredGripper = null;
       return;
     }
     if (!this.plan || this.planGeneration !== this.generation) {
@@ -969,7 +979,7 @@ export class ManipulationInteraction {
           ?.pose ?? null;
       this.updateOffset();
       this.desiredGripper = value;
-      if (this.target) this.session.collaboration?.update(this.target, this.sharedSettings());
+      if (this.target) this.publishSettings();
       this.planQueued = this.snapshot().targetOffset && this.target !== null && this.gesture === null;
       this.executeAfterPlan = false;
       return;
@@ -1021,18 +1031,26 @@ export class ManipulationInteraction {
     this.reset();
   }
 
+  private publishSettings(): void {
+    const collaboration = this.session.collaboration;
+    if (!collaboration || !this.target) return;
+    if (!this.ensureAuthority("manipulation_planning")) return;
+    collaboration.update(this.target, this.sharedSettings());
+    if (!this.dragging) collaboration.release(this.target, ["manipulation_planning"]);
+  }
   private sharedSettings() {
     return { group_id: this.groupId ?? undefined, speed_scale: this.speedScale,
       ...(this.desiredGripper === null ? {} : { gripper: this.desiredGripper }) };
   }
-  private ensureAuthority(kind: "manipulation_planning" | "manipulation_following"): boolean {
+  private ensureAuthority(kind: "manipulation_planning" | "manipulation_following", targetDependent = true): boolean {
     const collaboration = this.session.collaboration;
     if (!collaboration || collaboration.snapshot("manipulation", this.groupId ?? undefined).ownsAuthority) return true;
     const measured = this.session.view().manipulation?.observations?.[this.groupId ?? ""]?.pose;
     const shared = collaboration.snapshot("manipulation", this.groupId ?? undefined);
     // An existing target survives acquisition. Sending a rendered pose here
     // could replace it while it is still interpolating or awaiting a final ACK.
-    const initial = shared.rawTarget ? undefined : this.target ?? measured ?? undefined;
+    const initial = !targetDependent ? undefined
+      : shared.rawTarget ? undefined : this.target ?? measured ?? undefined;
     return collaboration.begin(kind, `manipulation:${this.groupId}`, initial, this.sharedSettings());
   }
   private authorityFields() {
@@ -1080,13 +1098,14 @@ export class ManipulationInteraction {
     const unownedCancel = action === "cancel" && collaboration?.raw()?.authority === null;
     if (collaboration && !unownedCancel && !collaboration.snapshot("manipulation", this.groupId).ownsAuthority) {
       if (action === "release") { collaboration.cancel(["manipulation_planning", "manipulation_following"]); return; }
-      if (!this.ensureAuthority(this.gesture === "following" ? "manipulation_following" : "manipulation_planning")) return;
+      if (!this.ensureAuthority(this.gesture === "following" ? "manipulation_following" : "manipulation_planning",
+          ["plan", "evaluate", "execute", "gripper", "acquire", "update"].includes(action))) return;
       this.transientAuthority = this.gesture === null;
       this.deferredNative = { action, payload };
       return;
     }
     let advisoryPreviousSample = false;
-    if (collaboration && (["plan", "execute"].includes(action) ||
+    if (collaboration && (["plan", "execute"].includes(action) || action === "gripper" && this.selected ||
         action === "evaluate" && !this.session.view().hello?.independent_ik)) {
       const shared = collaboration.snapshot("manipulation", this.groupId);
       const desired = this.target ?? this.session.view().manipulation?.observations?.[this.groupId]?.pose;
@@ -1110,6 +1129,7 @@ export class ManipulationInteraction {
     // An advisory result for the previous ACK must not mark the newest aim as checked.
     if (advisoryPreviousSample && action === "evaluate") this.evaluatedGeneration = this.generation - 1;
     const id = `manipulation-${++this.sequence}`;
+    if (action === "evaluate") this.advisoryTiming.requests++;
     this.pending.set(id, {
       action,
       order: this.sequence,
@@ -1118,6 +1138,9 @@ export class ManipulationInteraction {
       epoch: collaboration?.raw()?.epoch ?? null,
       lease: collaboration?.snapshot("manipulation", this.groupId).authority?.lease_id ?? null,
       group: this.groupId,
+      speed: this.speedScale,
+      gripper: this.desiredGripper,
+      startedAt: this.now(),
       pose: payload.position && payload.orientation ? { position: [...payload.position], orientation: [...payload.orientation] } : this.target,
       deadline:
         this.now() +
@@ -1246,12 +1269,26 @@ export class ManipulationInteraction {
     )
       return;
     this.pending.delete(result.request_id);
+    if (request.action === "evaluate") {
+      this.advisoryTiming.completions++;
+      if (result.status !== "feasible") this.advisoryTiming.failures++;
+      this.advisoryTiming.maximumDurationS = Math.max(this.advisoryTiming.maximumDurationS, this.now() - request.startedAt);
+    }
+    if (request.episode !== this.episode) return;
+    if (this.session.collaboration &&
+        (request.epoch !== this.session.collaboration.raw()?.epoch ||
+         shared?.authority && shared.authority.lease_id !== request.lease)) return;
     if (this.session.collaboration && ["evaluate", "plan"].includes(result.action) &&
         (request.epoch !== this.session.collaboration.raw()?.epoch ||
          shared?.authority && shared.authority.lease_id !== request.lease ||
          this.session.view().manipulation?.stopped ||
          !this.gesture && !shared?.ownsAuthority && !!this.target &&
            (!shared?.rawTarget || poseChanged(this.target, shared.rawTarget, 1e-6, 1e-6)))) return;
+    if (result.action === "plan" && this.session.collaboration &&
+        (!shared?.ownsAuthority || shared.authority?.lease_id !== request.lease)) return;
+    if (result.action === "plan" && (request.generation !== this.generation ||
+        request.speed !== this.speedScale || request.gripper !== this.desiredGripper ||
+        shared?.settling)) return;
     if (result.action === "release") {
       if (result.status !== "released" && result.code !== "retired") {
         this.gesture = null;
@@ -1259,7 +1296,9 @@ export class ManipulationInteraction {
       }
     }
     if (this.session.collaboration && (result.action === "release" && !this.feedbackHeld || this.transientAuthority && !this.gesture)) {
-      this.session.collaboration.release(this.target ?? undefined, ["manipulation_planning", "manipulation_following"]);
+      if (["reset_joints", "resume", "cancel", "prepare_shutdown"].includes(result.action))
+        this.session.collaboration.cancel(["manipulation_planning", "manipulation_following"]);
+      else this.session.collaboration.release(this.target ?? undefined, ["manipulation_planning", "manipulation_following"]);
       this.transientAuthority = false;
     }
     if (result.action === "release") return;
@@ -1386,6 +1425,7 @@ export class ManipulationInteraction {
         this.plan = null;
       } else this.executionLatch = null;
     }
+    if (result.action === "gripper" && result.status === "completed") this.desiredGripper = null;
     if (result.action === "acquire" && !result.token) this.gesture = null;
   }
 }

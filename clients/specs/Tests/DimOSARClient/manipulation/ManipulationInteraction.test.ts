@@ -307,7 +307,7 @@ it("plans the exact released pose even below the live movement threshold", () =>
   f.interaction.aim({ ...pose, position: [0.002, 0, 0.3] });
   f.interaction.end();
   f.advance(0.01);
-  expect(f.sent.filter((c) => c.action === "plan")).toHaveLength(0);
+  expect(f.sent.filter((c) => c.action === "plan")).toHaveLength(1);
   f.reply(first, {status:"feasible", joints:{joint:.3}});
   f.advance(0.01);
   expect(f.sent.at(-1)).toMatchObject({
@@ -1032,4 +1032,63 @@ it("bounds a stalled checked-plan asset and ignores its completion after the ass
   expect(f.interaction.rejection?.message).toBe("Request timed out");
   f.reply(request, planned("expired-trajectory"));
   expect(f.interaction.plan).toBeNull();
+});
+
+it("keeps advisory IK progressing after held speed edits without queueing full plans", () => {
+  const f = fixture(); f.interaction.setSelected(true); f.interaction.begin();
+  f.interaction.aim(pose); f.advance(.1);
+  const first = f.sent.at(-1);
+  f.interaction.setSpeedScale(.8);
+  f.reply(first, { status: "feasible", joints: { joint: .3 } });
+  f.advance(.1);
+  expect(f.sent.at(-1)).toMatchObject({ action: "evaluate" });
+  expect(f.sent.some(c => c.action === "plan")).toBe(false);
+  expect(f.interaction.dragging).toBe(true);
+});
+
+it("supersedes queued release planning on immediate regrab and checks a repeated target", () => {
+  const f = fixture(); f.interaction.setSelected(true); f.interaction.begin();
+  f.interaction.aim(pose); f.interaction.end();
+  expect(f.interaction.begin()).toBe(true);
+  f.advance(.1);
+  expect(f.sent.at(-1)).toMatchObject({ action: "evaluate", position: pose.position });
+  expect(f.sent.some(c => c.action === "plan")).toBe(false);
+});
+
+it("runs advisory IK while an obsolete full plan remains in flight and retires its late reply", () => {
+  const f = fixture(); f.interaction.setSelected(true); f.interaction.begin();
+  f.interaction.aim(pose); f.interaction.end(); f.advance(.1);
+  const oldPlan = f.sent.at(-1); expect(oldPlan.action).toBe("plan");
+  expect(f.interaction.begin()).toBe(true);
+  f.interaction.aim({ ...pose, position: [.2, 0, .3] }); f.advance(.1);
+  const advisory = f.sent.at(-1); expect(advisory.action).toBe("evaluate");
+  f.reply(advisory, { status: "feasible", joints: { joint: .5 } });
+  f.reply(oldPlan, planned("obsolete"));
+  expect(f.interaction.plan).toBeNull();
+  expect(f.interaction.previewJoints).toEqual({ joint: .5 });
+  f.interaction.aim({ ...pose, position: [.25, 0, .3] }); f.advance(.1);
+  expect(f.sent.at(-1)).toMatchObject({ action: "evaluate", position: [.25, 0, .3] });
+  expect(f.sent.some(c => c.action === "execute")).toBe(false);
+});
+
+it("reports bounded advisory durations, failures, pending age and timeouts", () => {
+  const f = fixture(); f.interaction.setSelected(true); f.interaction.begin();
+  f.interaction.aim(pose); f.advance(.1); const first = f.sent.at(-1);
+  f.advance(.2); expect(f.interaction.diagnostics().pendingAgeS).toBeCloseTo(.2);
+  f.reply(first, { status: "infeasible", code: "ik_failed" });
+  f.interaction.aim({ ...pose, position: [.2, 0, .3] }); f.advance(.1);
+  f.advance(5.1);
+  expect(f.interaction.diagnostics()).toMatchObject({ requests: 2, completions: 1, failures: 1, timeouts: 1, pendingAgeS: 0 });
+  expect(f.interaction.diagnostics().maximumDurationS).toBeCloseTo(5.1);
+  expect(f.interaction.dragging).toBe(true);
+});
+
+it("retains the latest release demand while an obsolete plan retires", () => {
+  const f = fixture(); f.interaction.setSelected(true); f.interaction.begin();
+  f.interaction.aim(pose); f.interaction.end(); f.advance(.1); const oldPlan = f.sent.at(-1);
+  f.interaction.begin(); f.interaction.aim({ ...pose, position: [.2, 0, .3] });
+  f.interaction.end(); f.advance(.1);
+  expect(f.sent.filter(c => c.action === "plan")).toHaveLength(1);
+  f.reply(oldPlan, planned("obsolete")); f.advance(.1);
+  expect(f.sent.at(-1)).toMatchObject({ action: "plan", position: [.2, 0, .3] });
 });

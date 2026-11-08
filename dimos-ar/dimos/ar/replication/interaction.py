@@ -539,7 +539,7 @@ class InteractionCoordinator:
             and previous.speed_scale == speed
             and previous.gripper == gripper
         ):
-            self.target = replace(previous, phase=phase)
+            self.target = replace(previous, phase=phase, sequence=sequence)
             self._targets[(domain, group)] = self.target
             if previous.phase != phase:
                 self.revision += 1

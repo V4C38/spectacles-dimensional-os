@@ -228,7 +228,12 @@ Targets contain `domain`, optional `group_id`, `position`, `orientation`, `revis
 `phase` (`draft`, `live`, `committed`), `sample_ts`, `sequence`, `speed_scale` and
 optional `gripper`. `sample_ts` is a server monotonic interpolation sample time,
 not a headset clock or exposure timestamp. Apply each headset's current origin
-when rendering canonical odometry poses.
+when rendering canonical odometry poses. A target's `sequence` cumulatively
+acknowledges accepted input within its editing lease, including identical pose and
+settings updates. Identical content advances `sequence` without changing the
+content `revision` or interpolation `sample_ts`. Revision covers the complete draft:
+pose, speed and gripper. Clients retain predicted settings while a release settles
+and must compare the complete effective draft before adopting or executing a plan.
 
 Authority is robot-wide: `client_id`, `source_id`, `acquisition_id`, `lease_id`,
 `kind`, `held`, `expires_at`, `sequence`, and optional `group_id`. Kinds are `live`,
@@ -1588,3 +1593,18 @@ sphere to the latest validated pose, or its measured grab-start pose if no targe
 was validated. This shared-draft reconciliation sends no native return movement.
 Late replies are scoped to their source episode, epoch and editing lease; they
 cannot restore an old target after another client has taken ownership.
+
+Reset retires the initiating client's local draft episode before requesting authority.
+After ownership, epoch and robot-busy checks succeed, `reset_joints` admission clears
+only that group's canonical manipulation draft. A rejected Reset leaves shared drafts
+intact. Its temporary authority ends without republishing a target pose; acquisition
+and completion must not restore the discarded draft. Pending acquisition counts as
+Reset busy work. Late results must match the request episode, epoch and lease before
+changing local intent or releasing authority.
+
+Advisory IK and full planning have independent single-request lanes. New input keeps
+only the latest intent; a new grab supersedes queued release planning. Obsolete full
+plans remain tracked until completion or timeout but never block advisory IK or
+authorize Execute. Native timeout quarantine remains in effect until actual work
+returns. Advisory evaluation uses the configured solver iteration budget in its
+separate worker, preserving collision checks and exact Plan/Execute validation.

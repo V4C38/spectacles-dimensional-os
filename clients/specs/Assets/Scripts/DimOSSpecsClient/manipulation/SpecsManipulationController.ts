@@ -57,16 +57,19 @@ export class SpecsManipulationController {
   interrupt(): void { this.gesture.end(); this.core.interaction.interrupt(); }
   suspend(): void { this.input.reset(); this.core.suspend(); }
   tick(enabled: boolean): void {
-    const retained = this.core.interaction.retainingFeedback;
+    const view = this.session.view();
+    const supported = view.capabilities?.manipulation?.available === true ||
+      view.connection !== "ready" && view.capabilities === null && this.core.interaction.retainingFeedback;
+    const retained = supported && this.core.interaction.retainingFeedback;
     const origin = this.origin() ?? (retained ? this.lastOrigin : null);
-    if ((!enabled && !retained) || !sameArmTrackingOrigin(origin, this.lastOrigin)) this.suspend();
+    if (!supported || (!enabled && !retained) || !sameArmTrackingOrigin(origin, this.lastOrigin)) this.suspend();
     this.lastOrigin = origin;
-    const active = (enabled || retained) && !!origin && this.core.interaction.available;
+    const active = supported && (enabled || retained) && !!origin && this.core.interaction.available;
     this.core.tick(active);
     if (!this.core.interaction.dragging && this.input.capture.owner !== null) this.input.reset();
     this.input.tick(active);
     this.renderer.localizationAvailable = this.session.view().capabilities?.localization.available === true;
-    this.renderer.apply(this.session.view().manipulation, origin, this.selected, active, getTime(), this.camera,
+    this.renderer.apply(this.session.view().manipulation, supported ? origin : null, this.selected, active, getTime(), this.camera,
       this.session.view().hello?.robot.display_name ?? "Arm");
     this.input.updateCursor();
   }

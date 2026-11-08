@@ -441,6 +441,7 @@ export async function bootstrap(
     bulk.lidar(data);
   };
   return {
+    setArmExecution: (status: string) => { execution = status; operationId = status === "executing" ? "fixture-busy" : null; armState(); interactionState(); },
     setArmJoint: (name: string, value: number, publishImmediately = true) => { arm.joints[name] = value; if (publishImmediately) armState(); },
     send,
     setIKFailure: (failure: typeof ikFailure) => { ikFailure = failure; },

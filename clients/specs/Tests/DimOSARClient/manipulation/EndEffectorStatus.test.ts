@@ -22,7 +22,7 @@ it("derives blocking before advisory failure and preserves the separate stopped 
   const status = new EndEffectorStatus();
   expect(status.sample({ ...ready, blocked: true, rejection: { message: "IK failed" } }, 1)
     .notification?.text).toBe("Arm in use");
-  expect(status.sample({ ...ready, blocked: true, moving: true }, 2).notification?.text).toBe("Arm moving");
+  expect(status.sample({ ...ready, blocked: true, moving: true }, 2).notification?.text).toBe("Executing");
   expect(status.sample({ ...ready, fresh: false, blocked: true }, 3).notification?.text).toBe("No feedback");
   status.sample({ ...ready, stopped: true }, 4);
   expect(status.sample({ ...ready, stopped: true }, 4.2).notification).toBeNull();

@@ -391,3 +391,22 @@ def test_finishing_tail_parks_validated_endpoint_without_reverting_after_complet
     assert acquire(owner, client="b", kind="manipulation_following", group_id="arm").status == "accepted"
     owner.set_following_tail({**tail, "position": [5, 0, 0]})
     assert owner.target.position == (1, 0, 0)
+
+
+def test_identical_updates_acknowledge_cumulative_input_without_content_revision(fixture):
+    owner, now = fixture
+    assert acquire(owner, kind="manipulation_planning", group_id="arm").status == "accepted"
+    assert request(owner, "update").status == "accepted"
+    content_revision = owner.target.revision
+    sampled_at = owner.target.sample_ts
+    for sequence in range(1, 6):
+        now[0] += 0.01
+        assert request(owner, "update", sequence=sequence).status == "accepted"
+        target = owner.snapshot()["targets"][0]
+        assert target["sequence"] == sequence
+        assert target["revision"] == content_revision
+        assert target["sample_ts"] == sampled_at
+    assert request(owner, "release", sequence=6).status == "accepted"
+    assert owner.authority is None
+    assert owner.snapshot()["targets"][0]["sequence"] == 6
+    assert owner.target.revision == content_revision

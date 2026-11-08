@@ -114,12 +114,12 @@ function fixture(recognition: RecognitionPort | null = null, odomScale = 1, synt
   cleanup.push(() => client.dispose());
   client.start();
   const tick = (axes: { x: number; y: number } | null = null) => client.tick({ position: [...pose.position], orientation: [...pose.orientation] }, axes);
-  function connect() {
+  function connect(capabilities = hello.capabilities) {
     client.resumeTracking();
     const socket = sockets[sockets.length - 1];
     socket.open();
     expect(client.ui.snapshot().connectionText).toBe("Connecting…");
-    socket.receive({ ...hello, robot: { ...hello.robot, odom_scale_correction_factor: odomScale } }); socket.receive(state);
+    socket.receive({ ...hello, capabilities, robot: { ...hello.robot, odom_scale_correction_factor: odomScale } }); socket.receive(state);
     socket.receive({ type: "pose", position: [2, 0, 0.33], orientation: [0, 0, 0, 1], ts: 10 });
     return socket;
   }
@@ -460,7 +460,8 @@ it("gates selection and manual commands during alignment review and restores eli
 
 
 it("excludes the arm handle from ray picking while another client owns control", () => {
-  const f = fixture(); const socket = f.connect();
+  const f = fixture();
+  const socket = f.connect({ ...hello.capabilities, manipulation: { available: true, reason: null } });
   const shared: InteractionState = {
     type: "interaction_state", epoch: "fixture-robot", revision: 100, mode: "manual",
     authority: { client_id: "other", source_id: "hand", acquisition_id: "other-grab",

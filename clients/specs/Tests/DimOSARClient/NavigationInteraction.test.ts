@@ -321,3 +321,12 @@ it("advances Cancel confirmation identity on successful confirmations but not st
   f.apply();
   expect(f.core.snapshot().activeGoal.confirmationId).toBe(initial + 2);
 });
+
+it("retires the navigation marker when the blueprint removes navigation despite cached goal support", () => {
+  const f = fixture();
+  expect(f.core.snapshot().visible).toBe(true);
+  f.view.capabilities!.navigation.available = false;
+  f.core.applyView(f.view, f.origin, null, 1);
+  expect(f.core.snapshot().visible).toBe(false);
+  expect(f.core.isRouteVisible()).toBe(false);
+});

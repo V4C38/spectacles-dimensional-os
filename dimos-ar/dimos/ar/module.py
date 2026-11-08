@@ -1176,6 +1176,9 @@ class ARModule(Module):  # type: ignore[misc]
                     ),
                 )
                 return
+            if request.action == "reset_joints":
+                self._interaction.clear_manipulation_target(request.group_id)
+                trusted["authority_revision"] = self._interaction.revision
             self._pending_arm_motion.add(request.request_id)
             self._interaction.set_motion_busy(True)
         service.submit(replace(request, payload=trusted), client_id, clock_offset)

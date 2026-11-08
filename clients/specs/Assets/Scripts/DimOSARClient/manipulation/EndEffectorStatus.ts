@@ -1,7 +1,7 @@
 import type { ClientNotification } from "../presentation/NotificationCenter";
 
 export const END_EFFECTOR_STATUS_STYLE = {
-  widthM: 0.24, heightM: 0.052, rightM: 0.16, upM: 0.01,
+  widthM: 0.16, heightM: 0.052, rightM: 0.16, upM: 0.01,
   fadeInS: 0.12, fadeOutS: 0.18,
 } as const;
 
@@ -17,7 +17,7 @@ function notification(input: EndEffectorStatusInput): ClientNotification | null 
   if (!input.fresh) return { key: "feedback", text: "No feedback", tone: "warning", glyph: "warning" };
   if (input.stopped) return null;
   if (input.blocked) return { key: input.moving ? "moving" : "in-use",
-    text: input.moving ? "Arm moving" : "Arm in use", tone: "neutral", glyph: "stop" };
+    text: input.moving ? "Executing" : "Arm in use", tone: "neutral", glyph: "stop" };
   if (input.rejection) return { key: `ik:${input.rejection.message}`, text: input.rejection.message,
     tone: "warning", glyph: "warning" };
   return null;

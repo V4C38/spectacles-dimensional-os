@@ -237,3 +237,43 @@ describe("robot replication", () => {
     expect(core.snapshot().target?.position[0]).toBe(4);
   });
 });
+
+it("retains a complete released draft through snapshots before the final cumulative ACK", () => {
+  const { core, messages } = fixture();
+  core.begin("manipulation_planning", "hand", pose(0), { group_id: "arm", speed_scale: .8, gripper: 1 });
+  const acquire = messages.at(-1);
+  const authority = { client_id: "a", source_id: "hand", acquisition_id: acquire.acquisition_id,
+    lease_id: "lease", kind: "manipulation_planning" as const, group_id: "arm", held: true, sequence: -1, expires_at: 5 };
+  core.apply({ ...state(1), authority });
+  core.accept({ type: "interaction_result", request_id: acquire.request_id, epoch: "robot", revision: 1,
+    status: "accepted", code: "acquired", lease_id: "lease" });
+  core.release(pose(0)); const release = messages.at(-1);
+  core.apply({ ...state(2), authority: null });
+  expect(core.snapshot("manipulation", "arm")).toMatchObject({ settling: true, settings: { speed_scale: .8, gripper: 1 } });
+  const target = { ...pose(0), domain: "manipulation" as const, group_id: "arm", speed_scale: .8, gripper: 0,
+    revision: 1, phase: "draft" as const, sample_ts: 0, sequence: release.sequence };
+  core.apply({ ...state(3), target });
+  expect(core.snapshot("manipulation", "arm")).toMatchObject({ settling: true, settings: { gripper: 1 } });
+  core.apply({ ...state(4), target: { ...target, gripper: 1 } });
+  expect(core.snapshot("manipulation", "arm").settling).toBe(false);
+});
+
+it("bounds retired acquisition replies across repeated competing ownership cycles", () => {
+  const { core, messages } = fixture();
+  const retired: any[] = [];
+  for (let i = 0; i < 300; i++) {
+    core.apply(state(i * 2 + 1));
+    expect(core.begin("manipulation_planning", "hand", pose(0), { group_id: "arm" })).toBe(true);
+    retired.push(messages.at(-1));
+    core.apply({ ...state(i * 2 + 2), authority: { client_id: "other", source_id: "hand",
+      acquisition_id: `other-${i}`, lease_id: `other-${i}`, kind: "manipulation_planning",
+      group_id: "arm", held: true, sequence: 1, expires_at: 5 } });
+    expect(core.snapshot("manipulation", "arm").pending).toBe(false);
+  }
+  const before = messages.length;
+  for (const request of retired) core.accept({ type: "interaction_result", request_id: request.request_id,
+    epoch: "robot", revision: 601, status: "accepted", code: "acquired", lease_id: request.request_id });
+  const cancellations = messages.slice(before).filter(message => message.action === "cancel");
+  expect(cancellations).toHaveLength(128);
+  expect(cancellations.at(-1)).toMatchObject({ lease_id: retired.at(-1).request_id });
+});

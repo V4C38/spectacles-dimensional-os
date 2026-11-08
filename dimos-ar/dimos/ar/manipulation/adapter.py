@@ -61,8 +61,6 @@ class DimOSManipulationAdapter:
     def prepare_feedback(self) -> None:
         self.worker = PlanningWorker(self.config)
         advisory = self.config.model_copy(deep=True)
-        if advisory.kinematics.backend == "pink":
-            advisory.kinematics.max_iterations = 12
         try:
             self.evaluation_worker = PlanningWorker(advisory)
         except BaseException:

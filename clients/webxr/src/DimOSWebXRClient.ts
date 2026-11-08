@@ -108,7 +108,7 @@ export class DimOSWebXRClient {
         const status = this.speech?.snapshot().status;
         return { ttsPlaying: status === "Responding", asrRunning: status === "Listening" };
       });
-    this.ui.manipulationDiagnostics = () => JSON.stringify(this.manipulation.interaction.captureEvents);
+    this.ui.manipulationDiagnostics = () => JSON.stringify({ capture: this.manipulation.interaction.captureEvents, advisory: this.manipulation.interaction.diagnostics() });
     this.speech = new AgentDraftSession({
       recognition: deps.recognition ?? null, synthesis: deps.synthesis ?? null,
       send: text => this.ui.sendAgentText(text), estop: () => this.emergencyStop(),
@@ -431,7 +431,6 @@ export class DimOSWebXRClient {
     this.robot.setConnectorFloorY(this.navigation.interaction.snapshot().attachedToRobot ? this.navigation.marker.circleBounds().center[1] : null);
     this.robot.setCircleOpacity(this.navigation.marker.circleOpacity());
     this.robot.tick(deltaS);
-    if (view.capabilities?.manipulation?.available && !view.capabilities.navigation.available) this.robot.object.visible = false;
     if (!this.ui.setupCompleted || !view.hasTrackingOrigin || !origin) {
       this.lidar.hide();
       this.route.hide(); this.previewRoute.hide();

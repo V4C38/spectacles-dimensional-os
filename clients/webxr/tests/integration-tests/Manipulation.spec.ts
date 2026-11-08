@@ -1086,3 +1086,113 @@ test("a sustained selected controller grab animates live IK through delayed snap
     fixture.close();
   }
 });
+
+test("keeps advisory IK progressing for a minute through delayed plans, regrabs and recovery", async ({ page }, info) => {
+  test.setTimeout(150000);
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  const fixture = await bootstrap(page, "controller", {
+    manipulation: true, independentIK: true, evaluationDelayMs: 180,
+    planDelayMs: 1800, interactionDelayMs: 80, evaluationTargetScale: 3,
+  });
+  try {
+    await fixture.localized();
+    await page.evaluate(() => {
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
+      app.client.setRobotSelected(true);
+      if (app.client.ui.menuOpen) app.client.ui.toggleMenu();
+      const interaction = app.client.manipulation.interaction;
+      const initial = app.client.session.view().manipulation.observations.manipulator.pose;
+      const probe = w.advisorySoak = {
+        completions: 0, feasible: 0, failures: 0, regrabs: 0, frames: 0,
+        maxPending: 0, maxEvaluations: 0, maxPlans: 0, failedRegrabs: 0,
+        lastBeginAt: 0, running: true,
+      };
+      probe.unsubscribe = app.client.session.subscribeOutbound((message: any) => {
+        if (message.type !== "manipulation_result" || message.action !== "evaluate") return;
+        probe.completions++;
+        if (message.status === "feasible") probe.feasible++; else probe.failures++;
+      });
+      const regrab = () => {
+        if (!probe.running) return;
+        if (interaction.begin()) { probe.regrabs++; probe.lastBeginAt = performance.now(); }
+        else probe.failedRegrabs++;
+      };
+      regrab();
+      probe.timer = setInterval(() => {
+        probe.frames++;
+        const phase = probe.frames % 50;
+        // Leave enough time for a full plan to start, then grab while it is pending.
+        if (phase === 10) interaction.end();
+        if (phase === 16) regrab();
+        // Also exercise release/regrab without an intervening animation frame.
+        if (phase === 35) { interaction.end(); regrab(); }
+        if (interaction.dragging) {
+          interaction.aim({ position: [initial.position[0] + 0.015 * Math.sin(probe.frames / 7),
+            initial.position[1], initial.position[2] + 0.06 + 0.02 * Math.cos(probe.frames / 9)],
+            orientation: [...initial.orientation] });
+          if (probe.frames % 8 === 0) interaction.setSpeedScale(probe.frames % 16 === 0 ? 0.35 : 0.7);
+        }
+        const pending = [...interaction.pending.values()] as any[];
+        probe.maxPending = Math.max(probe.maxPending, pending.length);
+        probe.maxEvaluations = Math.max(probe.maxEvaluations, pending.filter(p => p.action === "evaluate").length);
+        probe.maxPlans = Math.max(probe.maxPlans, pending.filter(p => p.action === "plan").length);
+      }, 80);
+    });
+    const samples: any[] = [];
+    for (let window = 0; window < 12; window++) {
+      fixture.setIKFailure(window % 4 === 1 ? { code: "ik_failed" } : null);
+      const previous = samples.at(-1);
+      await page.waitForTimeout(5000);
+      const sample = await page.evaluate(() => {
+        const w = window as any, probe = w.advisorySoak;
+        const app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
+        const graphics = w.xb.core.renderer.info;
+        return { completions: probe.completions, feasible: probe.feasible, failures: probe.failures,
+          regrabs: probe.regrabs, maxPending: probe.maxPending,
+          maxEvaluations: probe.maxEvaluations, maxPlans: probe.maxPlans,
+          preview: !!app.client.manipulation.interaction.previewJoints,
+          geometries: graphics.memory.geometries, textures: graphics.memory.textures,
+          programs: graphics.programs.length };
+      });
+      samples.push(sample);
+      // Every five-second window must make progress, even during IK failures.
+      expect(sample.completions - (previous?.completions ?? 0)).toBeGreaterThan(2);
+      expect(sample.preview).toBe(true);
+      expect(sample.maxEvaluations).toBeLessThanOrEqual(1);
+      expect(sample.maxPlans).toBeLessThanOrEqual(1);
+      expect(sample.maxPending).toBeLessThanOrEqual(4);
+      if (window % 4 === 1) expect(sample.failures - (previous?.failures ?? 0)).toBeGreaterThan(0);
+      else expect(sample.feasible - (previous?.feasible ?? 0)).toBeGreaterThan(0);
+      if (window >= 3) {
+        // The first three windows warm text atlases and both success/failure paths.
+        expect(sample.geometries).toBeLessThanOrEqual(samples[2].geometries + 2);
+        expect(sample.textures).toBeLessThanOrEqual(samples[2].textures + 1);
+        expect(sample.programs).toBeLessThanOrEqual(samples[2].programs + 2);
+      }
+    }
+    expect(samples.at(-1).regrabs).toBeGreaterThanOrEqual(12);
+    expect(fixture.commands.some(c => c.type === "manipulation_request" && c.action === "plan")).toBe(true);
+    expect(fixture.commands.some(c => c.type === "manipulation_request" && c.action === "execute")).toBe(false);
+    expect(errors).toEqual([]);
+    await writeFile(info.outputPath("advisory-soak.json"), JSON.stringify(samples, null, 2));
+    await page.evaluate(() => {
+      const w = window as any, probe = w.advisorySoak;
+      probe.running = false; clearInterval(probe.timer);
+      w.xb.core.scene.children.find((o: any) => o.client?.manipulation).client.manipulation.interaction.end();
+    });
+    fixture.setArmExecution("executing");
+    await expect.poll(() => page.evaluate(() => {
+      const app = (window as any).xb.core.scene.children.find((o: any) => o.client?.manipulation);
+      const pill = app.client.manipulation.renderer.warning.object;
+      return pill.visible ? pill.children[1].text : null;
+    })).toBe("Executing");
+    await page.screenshot({ path: info.outputPath("ee-executing-16cm.png") });
+  } finally {
+    await page.evaluate(() => {
+      const probe = (window as any).advisorySoak;
+      if (probe) { probe.running = false; clearInterval(probe.timer); probe.unsubscribe(); }
+    });
+    fixture.close();
+  }
+});

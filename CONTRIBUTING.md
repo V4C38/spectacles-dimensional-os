@@ -734,8 +734,14 @@ and LAN reachability requirements still apply.
 ClientCore owns retained validated target/joint snapshots, IK recovery, and motion
 completion after normal unselected release. Hosts own input capture and mesh picking.
 Selected meshes stay fully revealed independently of hover; idle unselected meshes reveal fully on hover.
-Root marker spheres also toggle selection for every robot type. Normal manipulation
-speed defaults to 50%, while shutdown parking remains capped at 20%.
+Root marker spheres also toggle selection. Navigation markers require navigation
+capability; the manipulation marker at the robot root requires manipulation
+capability. Both may coexist when both capabilities are available. Cached arm visuals
+must hide when a new blueprint lacks manipulation capability; temporary feedback
+loss while manipulation remains supported retains its normal recovery behavior,
+including the brief interval before capabilities return during a socket reconnect.
+An explicit capability change from a new blueprint ends that retained presentation.
+Normal manipulation speed defaults to 50%, while shutdown parking remains capped at 20%.
 
 
 Arm mesh visibility uses the shared `ArmMeshFade` opacity animation, independently

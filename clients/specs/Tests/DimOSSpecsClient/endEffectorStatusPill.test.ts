@@ -1,13 +1,17 @@
 import { expect, it, vi } from "vitest";
 import { EndEffectorStatusPill } from "../../Assets/Scripts/DimOSSpecsClient/manipulation/EndEffectorStatusPill";
+import { ViewerNotificationPresenter } from "../../Assets/Scripts/DimOSSpecsClient/presentation/ViewerNotificationPresenter";
 import { EndEffectorStatus } from "../../Assets/Scripts/DimOSARClient/manipulation/EndEffectorStatus";
 
 it("anchors the Specs status beside the EE and fades its plate, text, and animated glyph together", () => {
   const transform = { setWorldPosition: vi.fn(), setWorldRotation: vi.fn(), setLocalScale: vi.fn() };
   const root = { enabled: false, getTransform: () => transform }, text = { text: "", textFill: { color: new vec4() } };
   const plate = { backgroundColor: new vec4() }, triangles = vi.fn();
+  const presenter = Object.assign(Object.create(ViewerNotificationPresenter.prototype), {
+    root, text, plate, icon: { triangles },
+  });
   const pill = Object.assign(Object.create(EndEffectorStatusPill.prototype), {
-    root, text, plate, icon: { triangles }, status: new EndEffectorStatus(),
+    presenter, status: new EndEffectorStatus(),
   }) as EndEffectorStatusPill;
   const anchor = { getTransform: () => ({ getWorldPosition: () => new vec3(1, 2, 3) }) } as SceneObject;
   const camera = { getTransform: () => ({ getWorldRotation: () => quat.quatIdentity() }) } as SceneObject;
@@ -27,4 +31,8 @@ it("anchors the Specs status beside the EE and fades its plate, text, and animat
   expect(triangles.mock.calls.at(-1)![2][3]).toBeCloseTo(0.5);
   pill.apply(ready, anchor, camera, 3.3);
   expect(root.enabled).toBe(false);
+  pill.apply({ ...ready, blocked: true, moving: true }, anchor, camera, 4);
+  pill.apply({ ...ready, blocked: true, moving: true }, anchor, camera, 5);
+  expect(text.text).toBe("Executing");
+  expect(triangles.mock.calls.at(-1)![2]).toEqual([1, 1, 1, 1]);
 });

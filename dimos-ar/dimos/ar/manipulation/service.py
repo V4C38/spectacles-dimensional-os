@@ -13,6 +13,7 @@ from dimos.ar.manipulation.errors import ManipulationError, spatial_error_code
 from dimos.ar.manipulation.protocol import ManipulationRequest
 from dimos.ar.manipulation.rpc import ManipulationRPC
 from dimos.ar.manipulation.spec import ARManipulationSpec
+from dimos.ar.timing_diagnostics import TimingSummary
 from dimos.ar.websocket.protocol import encode_text
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,8 @@ class ManipulationService:
         control_state: Callable[[], tuple[str, int]] | None = None,
         prepare_outbound: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     ) -> None:
+        self._advisory_timing = TimingSummary("AR advisory IK timing")
+        self._advisory_started: dict[tuple[str, str], float] = {}
         self._rpc = ManipulationRPC(runtime)
         self._send = send
         self._broadcast = broadcast
@@ -193,6 +196,25 @@ class ManipulationService:
     async def _dispatch(
         self, request: ManipulationRequest, client_id: str, clock_offset: float
     ) -> None:
+        if request.action != "evaluate":
+            await self._dispatch_command(request, client_id, clock_offset)
+            return
+        started = time.monotonic()
+        key = (client_id, request.request_id)
+        self._advisory_started[key] = started
+        self._advisory_timing.record(counts={"requests": 1}, maxima={})
+        try:
+            await self._dispatch_command(request, client_id, clock_offset)
+        finally:
+            self._advisory_started.pop(key, None)
+            self._advisory_timing.record(
+                counts={"completions": 1},
+                maxima={"duration_max_ms": (time.monotonic() - started) * 1000},
+            )
+
+    async def _dispatch_command(
+        self, request: ManipulationRequest, client_id: str, clock_offset: float
+    ) -> None:
         body = {**request.payload, "action": request.action, "group_id": request.group_id}
         if request.action == "update":
             body["ts"] += clock_offset
@@ -222,6 +244,8 @@ class ManipulationService:
                 result["failed_joints"] = exc.failed_joints
             logger.info("Manipulation request rejected: %s: %s", request.action, str(exc))
         except Exception as exc:
+            if request.action == "evaluate" and isinstance(exc, TimeoutError):
+                self._advisory_timing.record(counts={"timeouts": 1}, maxima={})
             logger.exception("Manipulation command failed")
             code = spatial_error_code(str(exc))
             recoverable = request.action in {"update", "evaluate", "plan"} and code in {
@@ -258,6 +282,8 @@ class ManipulationService:
             self._snapshot_generation += 1
 
     def _reply(self, client_id: str, request: ManipulationRequest, result: dict[str, Any]) -> None:
+        if request.action == "evaluate" and result.get("status") != "feasible":
+            self._advisory_timing.record(counts={"failures": 1}, maxima={})
         if request.action in {"evaluate", "update"}:
             position, orientation = request.payload.get("position"), request.payload.get("orientation")
             if position is not None and orientation is not None:
@@ -362,6 +388,11 @@ class ManipulationService:
                             {"type": "manipulation_state", "available": False, "message": str(exc)}
                         )
                     )
+            if self._advisory_started:
+                self._advisory_timing.record(
+                    counts={}, maxima={"pending_age_max_ms":
+                        (time.monotonic() - min(self._advisory_started.values())) * 1000},
+                )
             await self._rpc.wait_readers()
             await asyncio.sleep(1 / 30)
 

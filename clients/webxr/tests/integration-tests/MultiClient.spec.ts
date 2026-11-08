@@ -212,7 +212,16 @@ async function grabArm(page: Page, x: number, selected = false) {
   const client = (await armState(page)).client;
   await expect.poll(async () => (await armState(page)).shared.authority?.client_id).toBe(client);
   await page.evaluate(x => (window as any).multi.arm.interaction.aim({ position: [x, 0, 0], orientation: [0, 0, 0, 1] }), x);
-  await expect.poll(async () => (await armState(page)).joints?.slide).toBeCloseTo(x);
+  try {
+    await expect.poll(async () => (await armState(page)).joints?.slide).toBeCloseTo(x);
+  } catch (error) {
+    const diagnostic = JSON.stringify(await armState(page), null, 2);
+    console.error("Arm grab failed", diagnostic);
+    await test.info().attach("arm-grab-state", {
+      body: diagnostic, contentType: "application/json",
+    });
+    throw error;
+  }
 }
 
 async function armContext(browser: import("@playwright/test").Browser) {

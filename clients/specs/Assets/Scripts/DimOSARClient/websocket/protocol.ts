@@ -1,3 +1,6 @@
+// Target sequence cumulatively acknowledges accepted pose/settings input; identical
+// content preserves revision. Reset clears the group draft only after authorized,
+// non-busy admission. These semantics require no extra wire fields (PROTOCOL.md).
 import { utf8Bytes, validatedBulkArray } from "./BulkTransfer";
 import { decodeManipulation, decodeFollowingTail } from "../manipulation/ManipulationProtocol";
 import type { InteractionState, InteractionResult, InteractionAuthority, InteractionTarget, InteractionCredentials } from "../replication/CollaborationTypes";

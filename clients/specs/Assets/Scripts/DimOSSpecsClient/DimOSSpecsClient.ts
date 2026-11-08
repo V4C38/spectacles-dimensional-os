@@ -295,7 +295,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       cameraObject: this.cameraObject,
       selection: this.selection,
       emergencyStop: () => this.emergencyStop(),
-      manipulationDiagnostics: () => JSON.stringify(this.manipulation?.core.interaction.captureEvents ?? []),
+      manipulationDiagnostics: () => JSON.stringify({ capture: this.manipulation?.core.interaction.captureEvents ?? [], advisory: this.manipulation?.core.interaction.diagnostics() }),
       manipulationSpeed: () => this.manipulation?.core.interaction.speedScale ?? 0.5,
       setManipulationSpeed: value => this.manipulation?.core.interaction.setSpeedScale(value),
       manipulationEnabled: () => this.manipulation?.core.interaction.snapshot().canManipulate ?? false,
@@ -392,16 +392,16 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       }
       robotPresenter.setSelected(this.selection.isSelected());
       const controls = setup && !this.uiPresenter.isAlignmentReviewPending() && this.uiPresenter.getOperatingMode() === "manual" && view.connection === "ready";
-      const navigationEnabled = controls && view.capabilities?.navigation.available === true;
-      const armOnly = view.capabilities?.manipulation?.available === true && !view.capabilities.navigation.available;
+      const navigationAvailable = view.capabilities?.navigation.available === true;
+      const navigationEnabled = controls && navigationAvailable;
       if (this.manipulation) this.manipulation.renderer.debugEnabled = this.uiPresenter.getDebugMode();
       this.manipulation?.tick(controls && !!origin);
-      if (armOnly) robotPresenter.reset();
+      if (!navigationAvailable) robotPresenter.reset();
       navigationController.setInputEnabled(navigationEnabled);
-      if (!setup || armOnly) navigationController.hide();
+      if (!setup || !navigationAvailable) navigationController.hide();
       else navigationController.applyView(view, origin);
       navigationController.setSelected(this.selection.isSelected());
-      this.navigationInput?.tick(navigationEnabled, !armOnly && setup && !this.uiPresenter.isAlignmentReviewPending() && view.connection === "ready");
+      this.navigationInput?.tick(navigationEnabled, navigationAvailable && setup && !this.uiPresenter.isAlignmentReviewPending() && view.connection === "ready");
       navigationController.surveyFloor();
       navigationController.tick(dt);
       const nav = navigationController.interaction.snapshot();

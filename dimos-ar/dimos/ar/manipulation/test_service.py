@@ -674,3 +674,88 @@ async def test_retired_shared_follow_token_is_reported_instead_of_silently_stall
         assert replies[0]["code"] == "retired"
     finally:
         await service.close()
+
+
+@pytest.mark.asyncio
+async def test_advisory_timing_counts_outcomes_timeouts_and_maximum_duration(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    now = [100.0]
+    monkeypatch.setattr("dimos.ar.manipulation.service.time", SimpleNamespace(monotonic=lambda: now[0]))
+    service = ManipulationService(object(), lambda *_: None, lambda _: None)
+    timing = service._advisory_timing = Mock()
+    outcomes = [
+        {"status": "feasible"},
+        {"status": "infeasible", "code": "ik_failed"},
+        ValueError("collision"),
+        TimeoutError("native IK timed out"),
+    ]
+
+    async def call(*_args, **_kwargs):
+        now[0] += 0.25
+        result = outcomes.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    service._rpc.call = call
+    for i in range(4):
+        await service._dispatch(ManipulationRequest(str(i), "evaluate", "arm", {}), "a", 0)
+    counts = {}
+    maxima = {}
+    for record in timing.record.call_args_list:
+        for key, count in record.kwargs["counts"].items():
+            counts[key] = counts.get(key, 0) + count
+        for key, value in record.kwargs["maxima"].items():
+            maxima[key] = max(maxima.get(key, value), value)
+    assert counts == {"requests": 4, "completions": 4, "failures": 3, "timeouts": 1}
+    assert maxima["duration_max_ms"] == 250
+    assert not service._advisory_started
+
+
+@pytest.mark.asyncio
+async def test_advisory_pending_age_preserves_equal_request_ids_from_different_clients(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    now = [100.0]
+    monkeypatch.setattr("dimos.ar.manipulation.service.time", SimpleNamespace(monotonic=lambda: now[0]))
+    service = ManipulationService(object(), lambda *_: None, lambda _: None)
+    timing = service._advisory_timing = Mock()
+    release = {client: asyncio.Event() for client in ("a", "b")}
+
+    async def call(method, *args, **_kwargs):
+        if method == "ar_manipulation_snapshot":
+            service._closed = True
+            return {"available": False}
+        await release[args[0]].wait()
+        return {"status": "feasible"}
+
+    async def wait_readers():
+        pass
+
+    service._rpc.call = call
+    service._rpc.wait_readers = wait_readers
+    request = ManipulationRequest("same-id", "evaluate", "arm", {})
+    first = asyncio.create_task(service._dispatch(request, "a", 0))
+    await asyncio.sleep(0)
+    now[0] += 1
+    second = asyncio.create_task(service._dispatch(request, "b", 0))
+    await asyncio.sleep(0)
+    try:
+        assert len(service._advisory_started) == 2
+        release["b"].set()
+        await second
+        assert service._advisory_started == {("a", "same-id"): 100.0}
+        now[0] += 2
+        await service._poll_state()
+        assert any(
+            record.kwargs["maxima"].get("pending_age_max_ms") == 3000
+            for record in timing.record.call_args_list
+        )
+    finally:
+        release["a"].set()
+        release["b"].set()
+        await asyncio.gather(first, second)
+    assert not service._advisory_started

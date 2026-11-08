@@ -7,16 +7,16 @@ const pose = (z: number) => ({ position: [0,0,z] as [number,number,number], orie
 function fixture() {
   const sent: any[] = []; let clock = 100, listener: (m: Outbound) => void = () => {};
   const state: InteractionState = { type: "interaction_state", epoch: "robot", revision: 0, mode: "manual", authority: null, target: null, preview: null, active_goal: null };
-  const collaboration = new CollaborationController({ ready: () => true, clientId: () => "a", now: () => clock, send: s => sent.push(JSON.parse(s)) }); collaboration.apply(state);
+  const collaboration = new CollaborationController({ ready: () => true, clientId: () => "a", now: () => clock, send: s => sent.push(JSON.parse(s)) }); collaboration.apply({ ...state });
   const view: any = { connection: "ready", capabilities: { manipulation: { available: true } }, manipulation: { groups: [{ id: "arm", following: true, joint_names: ["j"] }], observations: { arm: { joints: { j: 0 }, measured_at: clock, pose: pose(0), gripper: 0 } } } };
   const core = new ManipulationInteraction({ collaboration, view: () => view, sendText: s => sent.push(JSON.parse(s)), subscribeOutbound: cb => { listener = cb; return () => {}; } }, () => clock);
   core.tick();
   const native = () => sent.filter(c => c.type === "manipulation_request");
   function grant() {
-    const request = sent.find(c => c.action === "acquire" && c.type === "interaction_request");
+    const request = sent.filter(c => c.action === "acquire" && c.type === "interaction_request").at(-1);
     state.revision++;
     state.authority = { client_id: "a", source_id: request.source_id, acquisition_id: request.acquisition_id, lease_id: "lease", kind: request.kind, group_id: request.group_id, held: true, expires_at: clock + 1, sequence: -1 };
-    state.target = { ...pose(0), ...state.target, ...(request.position ? { position: request.position, orientation: request.orientation, ...(request.gripper === undefined ? {} : { gripper: request.gripper }) } : {}), domain: "manipulation", group_id: "arm", speed_scale: 0.2, revision: state.target?.revision ?? 1, phase: "draft", sample_ts: clock, sequence: -1 };
+    state.target = { ...pose(0), ...state.target, ...(request.position ? { position: request.position, orientation: request.orientation, ...(request.gripper === undefined ? {} : { gripper: request.gripper }) } : {}), domain: "manipulation", group_id: "arm", speed_scale: state.target?.speed_scale ?? request.speed_scale ?? 0.2, revision: state.target?.revision ?? 1, phase: "draft", sample_ts: clock, sequence: -1 };
     collaboration.apply({ ...state });
     collaboration.accept({ type: "interaction_result", request_id: request.request_id, epoch: "robot", revision: state.revision, status: "accepted", code: "acquired", lease_id: "lease" });
   }
@@ -47,6 +47,7 @@ describe("manipulation shared authority", () => {
     f.state.revision++;
     f.collaboration.apply({ ...f.state }); f.tick();
     f.core.setSpeedScale(0.8); f.tick();
+    f.state.authority = { client_id: "other", source_id: "hand", acquisition_id: "remote", lease_id: "remote", kind: "manipulation_planning", group_id: "arm", held: true, expires_at: 102, sequence: 1 };
     f.state.target = { ...f.state.target, speed_scale: 0.4, revision: 2 };
     f.state.revision++;
     f.collaboration.apply({ ...f.state }); f.tick();
@@ -319,4 +320,111 @@ it("suspending an observer does not cancel another client's shared draft", () =>
   expect(f.native()).toEqual([]);
   expect(f.sent.filter(c => c.action === "acquire")).toEqual([]);
   expect(f.core.target).not.toBeNull();
+});
+
+function ackRelease(f: ReturnType<typeof fixture>) {
+  const release = f.sent.filter(c => c.type === "interaction_request" && c.action === "release").at(-1);
+  expect(release).toBeDefined();
+  f.state.authority = null;
+  f.state.target = { ...f.state.target!, position: release.position, orientation: release.orientation,
+    speed_scale: release.speed_scale, gripper: release.gripper,
+    revision: (f.state.target?.revision ?? 0) + 1, sequence: release.sequence, sample_ts: 100 };
+  f.state.revision++; f.collaboration.apply({ ...f.state });
+}
+
+it("publishes selected released gripper and speed intent and preserves both through delayed snapshots", () => {
+  const f = fixture(); f.core.setSelected(true); f.core.setGripper(1); f.core.setSpeedScale(.8);
+  expect(f.native()).toEqual([]);
+  f.grant();
+  const release = f.sent.filter(c => c.action === "release").at(-1);
+  expect(release).toMatchObject({ gripper: 1, speed_scale: .8 });
+  for (let i = 0; i < 4; i++) {
+    f.state.revision++; f.collaboration.apply({ ...f.state }); f.tick();
+    expect(f.core.desiredGripper).toBe(1); expect(f.core.speedScale).toBe(.8);
+    expect(f.native().some(c => c.action === "gripper" || c.action === "execute")).toBe(false);
+  }
+  ackRelease(f); f.tick();
+  expect(f.core.desiredGripper).toBe(1); expect(f.core.speedScale).toBe(.8);
+  f.core.execute(); f.grant(); f.tick();
+  expect(f.native().at(-1)).toMatchObject({ action: "gripper", value: 1 });
+});
+
+it("waits for settings settlement then reacquires for an immediate gripper Execute", () => {
+  const f = fixture(); f.core.setSelected(true); f.core.setGripper(1); f.core.execute();
+  f.grant(); f.tick();
+  expect(f.native()).toEqual([]);
+  expect(f.core.desiredGripper).toBe(1);
+  ackRelease(f); f.tick(); f.grant(); f.tick();
+  expect(f.native().at(-1)).toMatchObject({ action: "gripper", value: 1 });
+});
+
+it("holds Reset busy through deferred acquisition, clears local intent, and ends without republishing a pose", () => {
+  const f = fixture();
+  f.state.target = { ...pose(.3), domain: "manipulation", group_id: "arm", speed_scale: .5, gripper: 1, revision: 1, phase: "draft", sample_ts: 100, sequence: 1 };
+  f.state.revision++; f.collaboration.apply({ ...f.state }); f.tick();
+  f.core.resetJoints();
+  expect(f.core.snapshot().resetting).toBe(true); expect(f.core.target).toBeNull();
+  const acquisition = f.sent.at(-1); expect(acquisition).toMatchObject({ action: "acquire" });
+  expect(acquisition.position).toBeUndefined();
+  f.core.setGripper(1); f.core.resetJoints(); expect(f.sent.at(-1)).toEqual(acquisition);
+  f.grant(); f.tick();
+  const reset = f.native().at(-1); expect(reset).toMatchObject({ action: "reset_joints" });
+  expect(f.core.target).toBeNull(); expect(f.core.desiredGripper).toBeNull();
+  f.state.target = null; f.state.revision++; f.collaboration.apply({ ...f.state });
+  f.reply(reset, { status: "completed" });
+  expect(f.sent.at(-1)).toMatchObject({ type: "interaction_request", action: "cancel" });
+  expect(f.sent.filter(c => c.action === "release")).toEqual([]);
+  f.state.authority = null; f.state.revision++; f.collaboration.apply({ ...f.state }); f.tick();
+  expect(f.core.target).toBeNull(); expect(f.core.snapshot().resetting).toBe(false);
+  f.core.resetJoints(); expect(f.core.snapshot().resetting).toBe(true);
+});
+
+it.each(["epoch", "owner", "episode"])("ignores Reset completion after its %s changes", reason => {
+  const f = fixture(); f.core.resetJoints(); f.grant(); f.tick();
+  const reset = f.native().at(-1);
+  if (reason === "epoch") f.collaboration.apply({ ...f.state, epoch: "new", revision: 0, authority: null });
+  if (reason === "owner") f.collaboration.apply({ ...f.state, revision: f.state.revision + 1,
+    authority: { ...f.state.authority!, client_id: "other", lease_id: "other" } });
+  if (reason === "episode") f.core.discard("superseded");
+  const before = f.sent.length;
+  f.reply(reset, { status: "completed" });
+  expect(f.sent).toHaveLength(before); expect(f.core.target).toBeNull();
+});
+
+it("retires a full plan whose editing lease expired before its result arrived", () => {
+  const f = fixture(); f.core.setSelected(true);
+  f.state.target = { ...pose(.3), domain: "manipulation", group_id: "arm", speed_scale: .5, revision: 1, phase: "draft", sample_ts: 100, sequence: 1 };
+  f.state.revision++; f.collaboration.apply({ ...f.state }); f.tick();
+  f.core.requestPlan(); f.tick(); f.grant(); f.tick();
+  const plan = f.native().at(-1); expect(plan).toMatchObject({ action: "plan" });
+  f.state.authority = null; f.state.revision++; f.collaboration.apply({ ...f.state });
+  f.reply(plan, { status: "planned", plan_id: "expired", joint_names: ["j"],
+    trajectory: [{ time: 0, positions: [0] }, { time: 1, positions: [.3] }], duration: 1 });
+  expect(f.core.plan).toBeNull();
+  expect(f.core.previewPlan).toBeNull();
+  expect(f.native().some(c => c.action === "execute")).toBe(false);
+});
+
+it.each([false, true])("Resume retires temporary authority without republishing a target (canonical draft: %s)", hasDraft => {
+  const f = fixture(); f.view.manipulation.stopped = true; f.tick();
+  if (hasDraft) {
+    f.state.target = { ...pose(.3), domain: "manipulation", group_id: "arm", speed_scale: .5,
+      gripper: 1, revision: 1, phase: "draft", sample_ts: 100, sequence: 1 };
+    f.state.revision++; f.collaboration.apply({ ...f.state });
+  }
+  f.core.resume(); f.grant();
+  if (!hasDraft) {
+    f.state.target = null; f.state.revision++; f.collaboration.apply({ ...f.state });
+  }
+  f.tick(); const resume = f.native().at(-1);
+  expect(resume).toMatchObject({ action: "resume" });
+  f.view.manipulation.stopped = false;
+  f.reply(resume, { status: "resumed" });
+  expect(f.sent.at(-1)).toMatchObject({ type: "interaction_request", action: "cancel" });
+  expect(f.sent.some(c => c.type === "interaction_request" && c.action === "release")).toBe(false);
+  expect(f.core.begin()).toBe(true);
+  expect(f.sent.filter(c => c.type === "interaction_request" && c.action === "acquire").at(-1))
+    .toMatchObject({ kind: "manipulation_following" });
+  f.grant(); f.tick();
+  expect(f.native().at(-1)).toMatchObject({ action: "acquire" });
 });

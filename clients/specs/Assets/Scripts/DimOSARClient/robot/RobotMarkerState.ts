@@ -29,7 +29,7 @@ export function deriveRobotMarkerApplyInput(input: {
   view: ARModuleSessionState;
   origin: ClientTrackingOrigin | null;
 }): RobotMarkerApplyInput {
-  if (!input.setupCompleted) {
+  if (!input.setupCompleted || input.view.capabilities?.navigation.available !== true) {
     return { mode: "hidden" };
   }
   const robot = input.view.hello?.robot;

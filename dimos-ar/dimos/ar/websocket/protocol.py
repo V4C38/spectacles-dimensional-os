@@ -1,4 +1,9 @@
-"""WebSocket protocol codec — keep in sync with PROTOCOL.md."""
+"""WebSocket protocol codec — keep in sync with PROTOCOL.md.
+
+Interaction target sequence acknowledges cumulative accepted input, even when
+pose/settings content and its revision are unchanged. Reset clears its group draft
+only after ownership and busy admission; it introduces no additional wire fields.
+"""
 
 from __future__ import annotations
 

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import { deriveRobotMarkerApplyInput } from "../src/presentation/RobotMarkerState";
 import type { ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSession";
-import type { Capabilities } from "@dimos-ar-client/websocket/protocolTypes";
+import type { Capabilities, Capability } from "@dimos-ar-client/websocket/protocolTypes";
 import { WebXRRobotPresenter } from "../src/presentation/WebXRRobotPresenter";
 import { ROBOT_LINE_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
 
@@ -50,6 +50,25 @@ function view(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionSta
 }
 
 describe("robot presentation", () => {
+  it.each([[true, false], [false, true], [true, true], [false, false]])(
+    "shows its marker only with navigation (navigation=%s, manipulation=%s)", (navigation, manipulation) => {
+      const advertised = (available: boolean): Capability => available
+        ? { available: true, reason: null } : { available: false, reason: "not supported" };
+      const current = view({ capabilities: { ...capabilities,
+        navigation: { ...capabilities.navigation, ...advertised(navigation) },
+        manipulation: advertised(manipulation),
+      } });
+      const robot = new WebXRRobotPresenter();
+      robot.apply(current, null, true, [0, 0, -1]);
+      expect(robot.object.visible).toBe(navigation);
+      robot.dispose();
+    },
+  );
+
+  it("hides the marker without advertised navigation, including skipped connection", () => {
+    expect(deriveRobotMarkerApplyInput({ setupCompleted: true,
+      view: view({ hello: null, capabilities: null }), origin: null })).toEqual({ mode: "hidden" });
+  });
   it("keeps an unlocalized fallback after setup and uses base_height_m for the floor", () => {
     expect(deriveRobotMarkerApplyInput({ setupCompleted: false, view: view(), origin: null }).mode).toBe(
       "hidden",

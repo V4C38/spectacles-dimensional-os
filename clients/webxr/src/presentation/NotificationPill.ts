@@ -6,13 +6,8 @@ import { syncText, UI_FONT_REGULAR } from "./UIFonts";
 import { disposeTextResources } from "./TextResources";
 export class NotificationPill {
   readonly object = new THREE.Group();
-  private readonly plate = new GlassSurface({
-    width: 0.3,
-    height: 0.065,
-    radius: 0.0325,
-    tint: "#202022",
-    alpha: 0.94,
-  });
+  private readonly plate: GlassSurface;
+  private readonly iconX: number;
   private readonly text = new Text();
   private readonly ring = new THREE.Mesh(
     new THREE.RingGeometry(0.012, 0.015, 64),
@@ -49,7 +44,11 @@ export class NotificationPill {
     }),
   );
   private readonly bang = new Text();
-  constructor() {
+  constructor(layout: { widthM: number; heightM: number; fontSizeM?: number;
+    iconInsetM?: number; textOffsetM?: number; rightPaddingM?: number } = { widthM: 0.3, heightM: 0.065 }) {
+    this.plate = new GlassSurface({ width: layout.widthM, height: layout.heightM,
+      radius: layout.heightM / 2, tint: "#202022", alpha: 0.94 });
+    this.iconX = -layout.widthM / 2 + (layout.iconInsetM ?? 0.034);
     this.object.name = "Viewer notification";
     this.object.add(
       this.plate,
@@ -59,23 +58,23 @@ export class NotificationPill {
       this.triangle,
       this.bang,
     );
-    this.triangle.position.set(-0.116, 0, 0.009);
+    this.triangle.position.set(this.iconX, 0, 0.009);
     this.bang.text = "!";
     this.bang.font = UI_FONT_REGULAR;
-    this.bang.fontSize = 0.017;
+    this.bang.fontSize = layout.fontSizeM ?? 0.017;
     this.bang.anchorX = "center";
     this.bang.anchorY = "middle";
-    this.bang.position.set(-0.116, 0, 0.01);
+    this.bang.position.set(this.iconX, 0, 0.01);
     this.bang.color = 0xff9f0a;
     syncText(this.bang);
     this.text.font = UI_FONT_REGULAR;
-    this.text.fontSize = 0.017;
+    this.text.fontSize = layout.fontSizeM ?? 0.017;
     this.text.anchorX = "left";
     this.text.anchorY = "middle";
     this.text.color = 0xffffff;
-    this.text.position.set(-0.087, 0, 0.006);
-    this.text.maxWidth = 0.22;
-    this.ring.position.set(-0.116, 0, 0.009);
+    this.text.position.set(this.iconX + (layout.textOffsetM ?? 0.029), 0, 0.006);
+    this.text.maxWidth = layout.widthM / 2 - (layout.rightPaddingM ?? 0.017) - this.text.position.x;
+    this.ring.position.set(this.iconX, 0, 0.009);
     this.object.traverse((node) => {
       node.raycast = () => {};
       node.renderOrder = 1000;
@@ -152,7 +151,7 @@ export class NotificationPill {
       stroke.scale.x = Math.hypot(ex - x, ey - y) * progress;
       stroke.rotation.z = Math.atan2(ey - y, ex - x);
       stroke.position.set(
-        -0.116 + x + ((ex - x) * progress) / 2,
+        this.iconX + x + ((ex - x) * progress) / 2,
         y + ((ey - y) * progress) / 2,
         0.009,
       );

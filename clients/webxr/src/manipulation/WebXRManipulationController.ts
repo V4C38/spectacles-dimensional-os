@@ -96,15 +96,18 @@ export class WebXRManipulationController {
     this.renderer.previewRequested = this.core.presentation.previewRequested;
   }
   tick(enabled: boolean): void {
-    const retained = this.interaction.retainingFeedback;
+    const view = this.session.view();
+    const supported = view.capabilities?.manipulation?.available === true ||
+      view.connection !== "ready" && view.capabilities === null && this.interaction.retainingFeedback;
+    const retained = supported && this.interaction.retainingFeedback;
     const origin = this.origin() ?? (retained ? this.lastOrigin : null);
-    if ((!enabled && !retained) || !sameArmTrackingOrigin(origin, this.lastOrigin)) { this.end(); this.core.suspend(); }
+    if (!supported || (!enabled && !retained) || !sameArmTrackingOrigin(origin, this.lastOrigin)) { this.end(); this.core.suspend(); }
     this.lastOrigin = origin;
-    this.core.tick(enabled && !!origin && this.interaction.available);
+    this.core.tick(supported && enabled && !!origin && this.interaction.available);
     this.renderer.controlsView.localizationAvailable = this.session.view().capabilities?.localization.available === true;
     this.renderer.apply({
       state: this.session.view().manipulation,
-      origin: enabled || retained ? origin : null,
+      origin: supported && (enabled || retained) ? origin : null,
       groupId: this.interaction.groupId,
       selected: this.selected,
       target: this.interaction.target,
@@ -117,7 +120,7 @@ export class WebXRManipulationController {
       desiredGripper: this.interaction.desiredGripper,
       speedScale: this.interaction.speedScale,
     });
-    const blocked = this.session.collaboration.snapshot("manipulation", this.interaction.groupId ?? undefined).blocked;
+    const blocked = !supported || this.session.collaboration.snapshot("manipulation", this.interaction.groupId ?? undefined).blocked;
     this.renderer.handle.collider.userData.rayDisabled = blocked;
     const material = this.renderer.handle.visual.material as THREE.ShaderMaterial;
     material.uniforms.uCenterColor.value.setHex(blocked ? 0x8e969e : 0xb3b3b3);

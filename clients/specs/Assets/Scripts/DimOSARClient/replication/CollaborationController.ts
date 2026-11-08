@@ -29,7 +29,7 @@ export class CollaborationController {
   private cancelled = new Set<string>();
   private deferred: { action: "release" | "confirm"; pose?: InteractionPose; targetRevision?: number; grantRevision?: number } | null = null;
   private denial = 0;
-  private settling: { pose: InteractionPose; sequence: number; key: string; requestId: string; epoch: string } | null = null;
+  private settling: { acceptedRevision?: number; settings: InteractionSettings; pose: InteractionPose; sequence: number; key: string; requestId: string; epoch: string } | null = null;
   constructor(private readonly port: CollaborationPort) {}
 
   raw(): InteractionState | null { return this.state; }
@@ -55,6 +55,10 @@ export class CollaborationController {
       ? clone(this.prediction) : this.interpolate(key, now, rawTarget);
     return { blocked, pending: predicting && (this.acquireRequest !== null || this.lease !== null && !ownsAuthority), ownsAuthority, authority,
       planning: authority?.kind === "navigation_planning", mode: this.state?.mode ?? "manual",
+      settings: this.settling?.key === key ? { ...this.settling.settings }
+        : predicting && this.acquisition !== null ? { ...this.settings }
+        : { speed_scale: rawTarget?.speed_scale, gripper: rawTarget?.gripper },
+      settling: this.settling?.key === key,
       target, rawTarget, phase: rawTarget?.phase ?? null,
       stale: !!authority?.held && now - this.lastStateAt > ACTIVE_TARGET_STALE_S,
       preview: this.state?.preview ?? null, activeGoal: this.state?.active_goal ?? null };
@@ -65,6 +69,13 @@ export class CollaborationController {
     if (previous && previous.epoch === state.epoch &&
         this.grantRevision !== null && state.revision < this.grantRevision) return false;
     if (previous && previous.epoch !== state.epoch) this.reset();
+    if (state.authority && state.authority.client_id !== this.port.clientId() && this.acquisition !== null) {
+      if (this.acquireRequest) {
+        this.cancelled.add(this.acquireRequest);
+        if (this.cancelled.size > 128) this.cancelled.delete(this.cancelled.values().next().value!);
+      }
+      this.clearLocal();
+    }
     this.state = state;
     this.lastStateAt = this.port.now();
     const targets = state.targets ?? (state.target ? [state.target] : []);
@@ -92,8 +103,12 @@ export class CollaborationController {
     }
     if (this.settling && !state.authority) {
       const final = targets.find(target => this.targetKey(target.domain ?? "navigation", target.group_id) === this.settling!.key);
-      if (!final) this.settling = null;
-      else if (samePose(final, this.settling.pose) || final.sequence >= this.settling.sequence) {
+      if (!final && (!this.settling.key.startsWith("manipulation:") ||
+          this.settling.acceptedRevision !== undefined && state.revision >= this.settling.acceptedRevision)) this.settling = null;
+      else if (final && final.sequence >= this.settling.sequence &&
+          (samePose(final, this.settling.pose) || state.following_tail?.group_id === final.group_id) &&
+          (this.settling.settings.speed_scale === undefined || final.speed_scale === this.settling.settings.speed_scale) &&
+          (this.settling.settings.gripper === undefined || final.gripper === this.settling.settings.gripper)) {
         const history = this.histories.get(this.settling.key);
         if (history) history.samples = [{ at: this.port.now() - REMOTE_INTERPOLATION_S, pose: clone(final) }];
         this.settling = null;
@@ -122,6 +137,9 @@ export class CollaborationController {
     }
     if (this.settling?.requestId === result.request_id && this.settling.epoch === result.epoch) {
       if (result.status !== "accepted") { this.settling = null; this.denial++; }
+      else if (this.state && this.state.revision >= result.revision &&
+          !this.targetFor(this.settling!.key.startsWith("manipulation:") ? "manipulation" : "navigation", this.settling!.settings.group_id)) this.settling = null;
+      else this.settling!.acceptedRevision = result.revision;
       return;
     }
     if (result.request_id !== this.acquireRequest) return;
@@ -227,7 +245,7 @@ export class CollaborationController {
     const finalSequence = ++this.sequence;
     const requestId = this.id();
     const terminal = action === "confirm" || this.kind !== "navigation_planning";
-    if (terminal && finalPose) this.settling = { pose: clone(finalPose), sequence: finalSequence,
+    if (terminal && finalPose) this.settling = { settings: { ...this.settings }, pose: clone(finalPose), sequence: finalSequence,
       key: this.targetKey(this.domain(), this.settings.group_id), requestId, epoch: this.state.epoch };
     this.send({ request_id: requestId, action, epoch: this.state.epoch, lease_id: this.lease, sequence: finalSequence,
       ...this.settings, ...(finalPose ? clone(finalPose) : {}) });
