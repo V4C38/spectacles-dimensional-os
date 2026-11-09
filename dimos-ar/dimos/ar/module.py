@@ -21,7 +21,7 @@ from dimos.ar.localization.coordinator import (
 )
 from dimos.ar.localization.fiducial_marker.localizer import FiducialMarkerLocalizer
 from dimos.ar.localization.map_localization import MapLocalization
-from dimos.ar.localization.odom_map_transform import OdomMapTransform, OdomMapTransformConfig
+from dimos.ar.localization.odom_map_transform import OdomMapTransform
 from dimos.ar.localization.policy import EpisodeWork, LocalizationPolicy
 from dimos.ar.localization.runner import EPISODE_TIMEOUT_S, RESULT_TIMEOUT_S, LocalizationRunner
 from dimos.ar.localization.types import LocalizationProviderType, SnapshotLocalizer
@@ -88,6 +88,7 @@ from dimos.ar.websocket.protocol import (
     encode_pose,
     encode_state,
     encode_text,
+    navigation_payload,
     observation_from_localization,
 )
 from dimos.ar.websocket.server import WebSocketServer
@@ -121,8 +122,6 @@ class LocalizationConfig(BaseModel):
     marker_preference_s: float = Field(default=1.5, ge=0, allow_inf_nan=False)
     headset_travel_threshold_m: float = Field(default=10.0, gt=0, allow_inf_nan=False)
     episode_timeout_s: float = Field(default=EPISODE_TIMEOUT_S, gt=0, allow_inf_nan=False)
-    anchor_max_age_s: float = Field(default=60.0, gt=0, allow_inf_nan=False)
-    robot_timing_uncertainty_s: float = Field(default=0.5, ge=0, allow_inf_nan=False)
 
 
 class ARModuleConfig(ModuleConfig):  # type: ignore[misc]
@@ -200,7 +199,6 @@ class ARModule(Module):  # type: ignore[misc]
     global_costmap: In[OccupancyGrid]
     tf: In[TFMessage]
     path: In[Path]
-    goal_reached: In[Bool]
     ar_navigation_status: In[String]
     color_image: In[Image]
     camera_info: In[CameraInfo]
@@ -317,7 +315,6 @@ class ARModule(Module):  # type: ignore[misc]
                 PreviewPlanner(global_config),
                 factor=self._profile.odom_scale_correction_factor,
                 odometry=self._odometry.latest,
-                send=self._ws_server.schedule_send_to_client,
                 on_preview=self._on_navigation_preview,
             )
             self._agent_service = ARAgentService(
@@ -341,7 +338,6 @@ class ARModule(Module):  # type: ignore[misc]
             self._robot_observations = RobotObservationBuffer(
                 pose_buffer=self._odometry.history,
                 T_base_camera_optical=self._profile.T_base_camera_optical,
-                timing_uncertainty_s=self.config.localization.robot_timing_uncertainty_s,
             )
             marker, vps, map_code = self._build_localizers()
             self._capabilities = CapabilitySet.from_supported(
@@ -366,16 +362,10 @@ class ARModule(Module):  # type: ignore[misc]
                 estop_available=self._capabilities.supports(CapabilityName.ESTOP),
                 effects=(self._clear_navigation, self._publish_stop),
             )
-            transforms = OdomMapTransform(
-                config=OdomMapTransformConfig(max_age_s=self.config.localization.anchor_max_age_s)
-            )
+            transforms = OdomMapTransform()
+            self._odom_map_transform = transforms
             self._coordinator = LocalizationCoordinator(
-                policy=self._policy,
-                odom_map_transform=transforms,
-                robot_observations=self._robot_observations,
                 marker=marker,
-                vps=vps,
-                map_code=map_code,
                 worker=self._localization_worker,
                 source_generation=lambda: self._odometry.generation,
             )
@@ -400,6 +390,7 @@ class ARModule(Module):  # type: ignore[misc]
                 coordinator=self._coordinator,
                 policy=self._policy,
                 map_localization=self._map_localization,
+                vps=vps,
                 on_outcome=self._complete_localization,
                 on_prompt=self._send_observations_request,
                 timeout_s=self.config.localization.episode_timeout_s,
@@ -814,7 +805,6 @@ class ARModule(Module):  # type: ignore[misc]
             reply = result.wire()
         if (reply.get("status") == "accepted"
                 and request.action in {"update", "renew"}
-                and getattr(self._ws_server, "streams_following", lambda _: False)(client_id)
                 and self._manipulation_service is not None):
             authority = self._interaction.authority
             target = self._interaction.target
@@ -830,8 +820,7 @@ class ARModule(Module):  # type: ignore[misc]
                     "target_revision": target.revision,
                 })
         self._drain_interaction_retirements()
-        if not (request.action in {"update", "renew"} and reply.get("status") == "accepted"
-                and getattr(self._ws_server, "streams_following", lambda _: False)(client_id)):
+        if not (request.action in {"update", "renew"} and reply.get("status") == "accepted"):
             self._ws_server.schedule_send_to_client(client_id, encode_text(reply))
         # High-rate target samples are coalesced by the 20Hz loop. Authority
         # transitions and their exact final poses are delivered immediately.
@@ -901,20 +890,14 @@ class ARModule(Module):  # type: ignore[misc]
 
     def _submit_navigation_goal(self, msg: NavGoalRequest) -> bool:
         service = self._navigation_service
-        allow_fixture = getattr(self, "_allow_unfenced_navigation", False)
-        if (service is None and not allow_fixture) or getattr(
+        if service is None or getattr(
             self, "_requires_mapping_restart", False
         ):
             return False
-        if allow_fixture and self.goal_request.transport is None:
-            return False
         goal = self._nav_goal_coordinator.submit_goal(msg)
         self._broadcast_state()
-        if service is not None:
-            if not service.submit(goal, self._interaction.epoch, self._interaction.revision):
-                return False
-        else:
-            self.goal_request.publish(goal)
+        if not service.submit(goal, self._interaction.epoch, self._interaction.revision):
+            return False
         yaw = PoseStamped(position=list(msg.position), orientation=list(msg.orientation)).yaw
         self._interaction.set_active_goal(
             {"type": "nav_goal", "pose": [*msg.position, yaw], "path_poses": [], "ts": time.time()}
@@ -985,7 +968,7 @@ class ARModule(Module):  # type: ignore[misc]
             return
         if request.epoch is None or request.lease_id is None or request.target_revision is None:
             return
-        body = await self._ws_server.prepare_outbound_async(self._navigation_payload(frame))
+        body = await self._ws_server.prepare_outbound_async(navigation_payload(frame))
         if self._interaction.set_preview(
             body,
             epoch=request.epoch,
@@ -994,7 +977,6 @@ class ARModule(Module):  # type: ignore[misc]
             source_position=request.position,
             source_orientation=request.orientation,
         ):
-            self._ws_server.schedule_send_to_client(client_id, encode_text(body))
             self._broadcast_interaction()
 
     def _on_manipulation_snapshot(self, snapshot: dict[str, Any]) -> None:
@@ -1024,15 +1006,8 @@ class ARModule(Module):  # type: ignore[misc]
         )
         # Discrete commands can use a released shared target; they do not acquire
         # a persistent creator-client lock. Native operation admission stays atomic.
-        target = next(
-            (
-                t
-                for t in self._interaction.snapshot()["targets"]
-                if t["domain"] == "manipulation" and t["group_id"] == request.group_id
-            ),
-            None,
-        )
-        valid_target = target is not None and payload.get("target_revision") == target["revision"]
+        target = self._interaction.target_for("manipulation", request.group_id)
+        valid_target = target is not None and payload.get("target_revision") == target.revision
         allowed = (
             epoch == self._interaction.epoch
             and self._interaction.mode == "manual"
@@ -1070,21 +1045,21 @@ class ARModule(Module):  # type: ignore[misc]
         advisory_current = False
         if request.action == "evaluate" and target is not None:
             advisory_current = bool(
-                math.dist(payload["position"], target["position"]) < 1e-6
+                math.dist(payload["position"], target.position) < 1e-6
                 and abs(sum(a * b for a, b in zip(
-                    payload["orientation"], target["orientation"], strict=True
+                    payload["orientation"], target.orientation, strict=True
                 ))) > 1 - 1e-10
             )
         if request.action in {"update", "plan"} and target is not None:
             payload = {
                 **payload,
-                "position": target["position"],
-                "orientation": target["orientation"],
-                "speed_scale": target["speed_scale"],
+                "position": list(target.position),
+                "orientation": list(target.orientation),
+                "speed_scale": target.speed_scale,
             }
             payload.pop("final_gripper", None)
-            if request.action == "plan" and "gripper" in target:
-                payload["final_gripper"] = target["gripper"]
+            if request.action == "plan" and target.gripper is not None:
+                payload["final_gripper"] = target.gripper
         if request.action == "cancel":
             self._interaction.cancel_manipulation_target(request.group_id)
         trusted = {
@@ -1095,11 +1070,11 @@ class ARModule(Module):  # type: ignore[misc]
             "authority_deadline": authority.expires_at
             if request.action != "cancel" and owns and authority is not None
             else time.monotonic() + 0.5,
-            "target_revision": target["revision"] if target is not None else 0,
+            "target_revision": target.revision if target is not None else 0,
         }
         if request.action == "evaluate":
             trusted["advisory_target_revision"] = (
-                target["revision"] if advisory_current and target is not None
+                target.revision if advisory_current and target is not None
                 else payload.get("target_revision")
             )
             trusted["advisory_current"] = advisory_current
@@ -1328,9 +1303,6 @@ class ARModule(Module):  # type: ignore[misc]
         self._localization_runner.submit(work)
 
     def _complete_localization(self, work: EpisodeWork, outcome: LocalizationOutcome) -> None:
-        if outcome.defer_vps:
-            self._policy.defer_vps(work.client_id)
-            return
         if outcome.result is None:
             logger.warning(
                 "localization episode produced no result",
@@ -1384,7 +1356,7 @@ class ARModule(Module):  # type: ignore[misc]
             return
         if accepted is None:
             return
-        self._state_publisher.publish_odom(accepted.native_pose())
+        self._state_publisher.publish_odom(accepted.corrected)
         prompts, episodes = self._policy.on_odom()
         self._robot_observations.expire(self._policy.travel_m)
         self._flush_localization(prompts, episodes)
@@ -1407,7 +1379,8 @@ class ARModule(Module):  # type: ignore[misc]
         self._previews.cancel_all()
         self._requires_mapping_restart = True
         self._localization_runner.cancel_all()
-        self._coordinator.invalidate_source()
+        self._odom_map_transform.clear()
+        self._robot_observations.clear()
         if self._map_localization is not None:
             self._map_localization.reset()
         self._policy.reset_source()
@@ -1478,17 +1451,6 @@ class ARModule(Module):  # type: ignore[misc]
         self._pairing_accepted = 0
         self._pairing_rejected = 0
 
-    @staticmethod
-    def _navigation_payload(frame: NavGoalFrame) -> dict[str, Any]:
-        return {
-            "type": "nav_goal",
-            "ts": frame.ts,
-            **({"pose": frame.pose} if frame.pose is not None else {}),
-            "path_poses": frame.path_poses,
-            **({"preview": True} if frame.preview else {}),
-            **({"preview_id": frame.preview_id} if frame.preview_id is not None else {}),
-        }
-
     async def handle_path(self, msg: Path) -> None:
         if not self._capabilities.supports(CapabilityName.NAVIGATION):
             return
@@ -1496,24 +1458,16 @@ class ARModule(Module):  # type: ignore[misc]
         if nav_goal_frame is not None:
             epoch = self._interaction.epoch
             body = await self._ws_server.prepare_outbound_async(
-                self._navigation_payload(nav_goal_frame)
+                navigation_payload(nav_goal_frame)
             )
             if epoch != self._interaction.epoch or not self._nav_goal_coordinator.accepts_path(
                 nav_goal_frame.ts
             ):
                 return
             self._interaction.set_active_goal(body)
-            self._ws_server.schedule_broadcast_text(encode_text(body))
             self._broadcast_interaction()
         if state_changed:
             self._broadcast_state()
-
-    async def handle_goal_reached(self, msg: Bool) -> None:
-        if not self._capabilities.supports(CapabilityName.NAVIGATION):
-            return
-        if not self._nav_goal_coordinator.on_goal_reached(msg):
-            return
-        self._finish_navigation(msg.data)
 
     async def handle_ar_navigation_status(self, msg: String) -> None:
         if not self._capabilities.supports(CapabilityName.NAVIGATION):

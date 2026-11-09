@@ -104,7 +104,6 @@ class ARPersonFollowSkillContainer(PersonFollowSkillContainer):  # type: ignore[
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._ar_worker_lock = threading.Lock()
-        self._ar_workers = 0
         self._ar_threads: set[threading.Thread] = set()
         self._ar_velocity = _FollowingVelocityOutput(self)
         self.cmd_vel = self._ar_velocity
@@ -129,7 +128,7 @@ class ARPersonFollowSkillContainer(PersonFollowSkillContainer):  # type: ignore[
     def ar_following_quiescent(self) -> bool:
         with self._ar_worker_lock:
             self._ar_threads = {worker for worker in self._ar_threads if worker.is_alive()}
-            return not self._ar_threads and self._ar_workers == 0 and (
+            return not self._ar_threads and (
                 self._thread is None or not self._thread.is_alive()
             )
 
@@ -153,18 +152,13 @@ class ARPersonFollowSkillContainer(PersonFollowSkillContainer):  # type: ignore[
         if not self._ar_velocity.resume(self._ar_invocations.generation):
             self._should_stop.set()
             return "Following request was retired by Stop."
-        result = super()._follow_person(*args, **kwargs)
-        with self._ar_worker_lock:
-            if self._thread is not None:
-                self._ar_threads.add(self._thread)
-        return str(result)
+        return str(super()._follow_person(*args, **kwargs))
 
     def _follow_loop(self, *args: Any, **kwargs: Any) -> None:
         with self._ar_worker_lock:
-            self._ar_workers += 1
+            self._ar_threads.add(threading.current_thread())
         try:
             super()._follow_loop(*args, **kwargs)
         finally:
             with self._ar_worker_lock:
-                self._ar_workers -= 1
                 self._ar_threads.discard(threading.current_thread())

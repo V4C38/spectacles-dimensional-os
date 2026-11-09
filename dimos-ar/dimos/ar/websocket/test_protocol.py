@@ -37,10 +37,10 @@ from dimos.ar.websocket.protocol import (
     encode_lidar_binary,
     encode_localization_observations_request,
     encode_localization_result,
-    encode_nav_goal,
     encode_pose,
     encode_state,
     encode_text,
+    navigation_payload,
     observation_from_localization,
 )
 from test_support.websocket import TYPESCRIPT_LOCA_ONE, _encode_localization_observations_frame
@@ -66,6 +66,8 @@ def _sample_hello(client_id: str = "abc123") -> Hello:
             base_height_m=UNITREE_GO2_PROFILE.base_height_m,
         ),
         capabilities={
+            CapabilityName.OBJECT_DETECTION: Capability(available=False, reason="not configured"),
+            CapabilityName.MANIPULATION: Capability(available=False, reason="not configured"),
             CapabilityName.LIDAR: _available(),
             CapabilityName.NAVIGATION: _available(),
             CapabilityName.LOCALIZATION: _available(),
@@ -75,6 +77,10 @@ def _sample_hello(client_id: str = "abc123") -> Hello:
             ),
         },
         navigation_inputs=_sample_navigation_inputs(),
+        localization={"providers": []},
+        odom_reference_id="test-odom",
+        bulk_url="/bulk", bulk_token="b" * 64, bulk_epoch="bulk-epoch",
+        resume_token="r" * 64,
     )
 
 
@@ -94,7 +100,7 @@ def test_encode_hello_advertises_interaction_protocol_version() -> None:
     assert msg["time_sync"]["ts_server"] == 2000.0
     assert msg["protocol_version"] == 2
     assert "alignment" not in msg
-    assert "localization" not in msg  # Legacy v2 hello remains valid without inventory.
+    assert msg["localization"] == {"providers": []}
     assert msg["capabilities"]["estop"]["available"] is True
     assert msg["capabilities"]["navigation"]["nav_goal"]["available"] is True
     assert msg["capabilities"]["navigation"]["nav_joystick"]["available"] is True
@@ -102,19 +108,22 @@ def test_encode_hello_advertises_interaction_protocol_version() -> None:
 
 
 def test_decode_hello_request() -> None:
-    req = decode_hello_request(json.dumps({"type": "hello_request", "ts_client": 99.5}))
+    req = decode_hello_request(json.dumps({"type": "hello_request", "protocol_version": 2, "ts_client": 99.5}))
     assert req.ts_client == 99.5
 
 
-def test_independent_ik_support_is_an_optional_server_advertisement() -> None:
-    assert "independent_ik" not in _parse_json_line(encode_hello(_sample_hello()))
-    hello = replace(_sample_hello(), independent_ik=True)
-    assert _parse_json_line(encode_hello(hello))["independent_ik"] is True
+@pytest.mark.parametrize("version", [None, 1, 3, 4, True])
+def test_hello_rejects_other_protocol_versions(version) -> None:
+    payload = {"type": "hello_request", "ts_client": 1.0}
+    if version is not None:
+        payload["protocol_version"] = version
+    with pytest.raises(ValueError, match="protocol_version 2"):
+        decode_hello_request(json.dumps(payload))
 
 
 def test_decode_inbound_rejects_hello_request() -> None:
     with pytest.raises(ValueError, match="hello_request"):
-        decode_inbound(json.dumps({"type": "hello_request", "ts_client": 1.0}))
+        decode_inbound(json.dumps({"type": "hello_request", "protocol_version": 2, "ts_client": 1.0}))
 
 
 def test_encode_pose() -> None:
@@ -175,28 +184,28 @@ def test_encode_state_has_no_alignment_block() -> None:
     assert "alignment" not in msg
 
 
-def test_encode_nav_goal_shape() -> None:
+def test_nested_navigation_payload_shape() -> None:
     payload = _parse_json_line(
-        encode_nav_goal(
+        encode_text(navigation_payload(
             NavGoalFrame(
                 pose=(1.0, 2.0, 0.0, 0.7854),
                 path_poses=[(0.0, 0.0, 0.0, 0.0), (1.0, 2.0, 0.0, 0.7854)],
                 ts=5.0,
             )
-        )
+        ))
     )
     assert payload["type"] == "nav_goal"
     assert payload["pose"] == [1.0, 2.0, 0.0, 0.7854]
     assert payload["path_poses"] == [[0.0, 0.0, 0.0, 0.0], [1.0, 2.0, 0.0, 0.7854]]
 
     clear_payload = _parse_json_line(
-        encode_nav_goal(
+        encode_text(navigation_payload(
             NavGoalFrame(
                 pose=None,
                 path_poses=[],
                 ts=6.0,
             )
-        )
+        ))
     )
     assert clear_payload["type"] == "nav_goal"
     assert clear_payload["path_poses"] == []
@@ -229,7 +238,7 @@ def test_decode_localization_start_request() -> None:
 def test_encode_localization_observations_request_marker() -> None:
     msg = _parse_json_line(
         encode_localization_observations_request(
-            LocalizationObservationsRequest(
+            LocalizationObservationsRequest(result_timeout_s=15,
                 capture_policy=CapturePolicy.ROBOT_LOS_REQUIRED,
                 observation_count=3,
             )
@@ -244,7 +253,7 @@ def test_encode_localization_observations_request_marker() -> None:
 def test_encode_localization_observations_request_mixed() -> None:
     msg = _parse_json_line(
         encode_localization_observations_request(
-            LocalizationObservationsRequest(
+            LocalizationObservationsRequest(result_timeout_s=15,
                 capture_policy=CapturePolicy.ROBOT_LOS_PREFERRED,
                 observation_count=3,
                 wait_timeout_s=2.0,
@@ -257,7 +266,7 @@ def test_encode_localization_observations_request_mixed() -> None:
 
 def test_encode_localization_observations_request_requires_timeout_for_preferred() -> None:
     with pytest.raises(ValueError, match="wait_timeout_s"):
-        LocalizationObservationsRequest(
+        LocalizationObservationsRequest(result_timeout_s=15,
             capture_policy=CapturePolicy.ROBOT_LOS_PREFERRED,
             observation_count=3,
         )
@@ -462,10 +471,7 @@ def test_decode_nav_joystick_request_rejects_invalid() -> None:
 
 def test_encode_hello_joystick_only_parent_available() -> None:
     hello = _sample_hello()
-    hello = Hello(
-        client_id=hello.client_id,
-        time_sync=hello.time_sync,
-        robot=hello.robot,
+    hello = replace(hello,
         capabilities={
             **hello.capabilities,
             CapabilityName.NAVIGATION: _available(),
@@ -565,7 +571,7 @@ def test_nav_preview_request_defaults_and_roundtrip(preview: bool | None) -> Non
     assert isinstance(request, NavGoalRequest)
     assert request.preview is (preview is True)
     frame = NavGoalFrame(pose=None, path_poses=[], ts=1, preview=request.preview)
-    response = json.loads(encode_nav_goal(frame))
+    response = json.loads(encode_text(navigation_payload(frame)))
     assert response.get("preview", False) is request.preview
     assert "pose" not in response
 
@@ -616,7 +622,7 @@ def test_preview_identity_roundtrip() -> None:
     assert isinstance(request, NavGoalRequest)
     assert request.preview_id == "aim"
     frame = NavGoalFrame(pose=None, path_poses=[], ts=1, preview=True, preview_id="aim")
-    assert json.loads(encode_nav_goal(frame))["preview_id"] == "aim"
+    assert json.loads(encode_text(navigation_payload(frame)))["preview_id"] == "aim"
 
 
 def test_optional_server_display_metadata() -> None:
@@ -651,11 +657,11 @@ def test_localization_rejects_nonfinite_capture_timestamp() -> None:
         decode_localization_observations(bytes(frame))
 
 
-def test_hello_advertises_nonidentity_odometry_heuristic_only_when_needed() -> None:
+def test_hello_always_advertises_odometry_heuristic() -> None:
     from dataclasses import replace
 
     hello = _sample_hello()
-    assert "odom_scale_correction_factor" not in json.loads(encode_hello(hello))["robot"]
+    assert json.loads(encode_hello(hello))["robot"]["odom_scale_correction_factor"] == 1.0
     corrected = replace(hello, robot=replace(hello.robot, odom_scale_correction_factor=1.25))
     assert json.loads(encode_hello(corrected))["robot"]["odom_scale_correction_factor"] == 1.25
 

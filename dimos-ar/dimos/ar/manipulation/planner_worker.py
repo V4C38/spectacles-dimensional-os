@@ -131,21 +131,6 @@ def main(fd: int) -> None:
         module._trajectory_parametrizer = specs.trajectory_parametrizer
         module._world_monitor.load_model(config.model)
         module._world_monitor.finalize()
-        # Static collision geometry must match the execution world.
-        if config.floor_z is not None:
-            from dimos.manipulation.planning.spec.enums import ObstacleType
-            from dimos.manipulation.planning.spec.models import Obstacle
-            from dimos.msgs.geometry_msgs.Pose import Pose
-            from dimos.msgs.geometry_msgs.Vector3 import Vector3
-
-            module._world_monitor.add_obstacle(
-                Obstacle(
-                    name="floor",
-                    pose=Pose(position=Vector3(0.7, 0, config.floor_z - 0.1)),
-                    obstacle_type=ObstacleType.BOX,
-                    dimensions=(0.6, 1.2, 0.2),
-                )
-            )
         send(channel, True)
         previous_solutions: dict[str, Any] = {}
         previous_context: Any = None

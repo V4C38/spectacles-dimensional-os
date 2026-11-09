@@ -1,4 +1,3 @@
-import type { ConnectionResolver } from "../../DimOSARClient/websocket/ConnectionResolution";
 import type { ARModuleSession } from "../../DimOSARClient/websocket/arModuleSession";
 import { AR_MODULE_CLIENT_CONFIG } from "../../DimOSARClient/websocket/hostPorts";
 import { buildModuleWebSocketUrl, isValidHost, saveModuleHost, type ModuleHostStore } from "../../DimOSARClient/websocket/hostNormalization";
@@ -8,8 +7,8 @@ const PIN_STORAGE_KEY = "dimos_ar_module_pin";
 
 export interface SpecsConnectionDependencies {
   script: Pick<ScriptComponent, "createEvent" | "removeEvent">;
-  session: Pick<ARModuleSession, "view" | "start" | "stop"> & Partial<Pick<ARModuleSession, "subscribeView">>;
-  transport: { setUrl(url: string): void; setConnectionResolver?(resolver: ConnectionResolver | undefined): void };
+  session: Pick<ARModuleSession, "view" | "start" | "stop" | "subscribeView">;
+  transport: { setUrl(url: string): void };
   hostStore: ModuleHostStore;
   ipRelayClient: { resolve(pin: string): Promise<ResolvedPin | null> };
   onChanged(): void;
@@ -25,20 +24,16 @@ export class SpecsConnectionController {
   private connecting = false;
   private resolving = false;
   private error: string | null = null;
-  private polling = false;
   private attempt: { method: ConnectionMethod; field: string; loadedPin: boolean; retries: number } | null = null;
   private readonly retryEvent: DelayedCallbackEvent;
-  private readonly unsubscribe: (() => void) | undefined;
+  private readonly unsubscribe: () => void;
   private readonly resolutionTimeoutEvent: DelayedCallbackEvent;
-  private readonly pollEvent: DelayedCallbackEvent;
 
   constructor(private readonly deps: SpecsConnectionDependencies) {
-    this.pollEvent = deps.script.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
-    this.pollEvent.bind(() => this.poll());
     this.resolutionTimeoutEvent = deps.script.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
     this.retryEvent = deps.script.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
     this.retryEvent.bind(() => { if (!this.disposed && this.attempt) this.beginAttempt(); });
-    this.unsubscribe = deps.session.subscribeView?.(() => { if (this.polling) this.poll(); });
+    this.unsubscribe = deps.session.subscribeView(() => this.observeSession());
   }
 
   snapshot(): Readonly<{ connecting: boolean; resolvingPin: boolean; error: string | null }> {
@@ -82,8 +77,8 @@ export class SpecsConnectionController {
     const attempt = this.attempt;
     if (!attempt || this.disposed) return;
     this.generation++;
-    this.polling = false; this.resolving = false;
-    this.pollEvent.cancel(); this.resolutionTimeoutEvent.cancel();
+    this.resolving = false;
+    this.resolutionTimeoutEvent.cancel();
     if (this.started) { this.started = false; this.deps.session.stop(); }
     this.error = message;
     if (attempt.retries > 0) {
@@ -101,8 +96,7 @@ export class SpecsConnectionController {
   cancel(disconnect = false): void {
     this.generation++;
     this.attempt = null; this.retryEvent.cancel();
-    this.pollEvent.cancel(); this.resolutionTimeoutEvent.cancel();
-    this.polling = false;
+    this.resolutionTimeoutEvent.cancel();
     this.connecting = false; this.resolving = false; this.error = null;
     if (disconnect || this.started && this.deps.session.view().connection !== "ready") {
       this.deps.session.stop(); this.started = false;
@@ -112,10 +106,9 @@ export class SpecsConnectionController {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.unsubscribe?.();
+    this.unsubscribe();
     this.cancel();
     this.deps.script.removeEvent(this.retryEvent);
-    this.deps.script.removeEvent(this.pollEvent);
     this.deps.script.removeEvent(this.resolutionTimeoutEvent);
   }
 
@@ -147,20 +140,17 @@ export class SpecsConnectionController {
       if (this.started) this.deps.session.stop();
       this.deps.onConnectionTargetChanged?.();
       this.deps.transport.setUrl(url);
-      this.deps.transport.setConnectionResolver?.(undefined);
       saveModuleHost(this.deps.hostStore, host);
-      this.started = true; this.polling = true;
+      this.started = true;
       this.deps.session.start();
     } catch (error) {
       if (!this.current(generation)) return;
       this.failAttempt(`Connection failed: ${String(error)}`); return;
     }
-    if (!this.current(generation)) return;
-    if (this.polling) this.pollEvent.reset(0.1);
   }
 
-  private poll(): void {
-    if (this.disposed || !this.polling) return;
+  private observeSession(): void {
+    if (this.disposed || !this.attempt || !this.started) return;
     if (this.deps.session.view().connection === "ready") {
       this.cancel(); this.changed(); return;
     }
@@ -169,6 +159,5 @@ export class SpecsConnectionController {
       this.failAttempt("Connection failed. Check the launcher and submit again."); return;
     }
     this.changed();
-    if (this.polling) this.pollEvent.reset(0.1);
   }
 }

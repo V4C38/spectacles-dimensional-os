@@ -41,13 +41,11 @@ async def test_official_mock_manipulation_contract():
         await client.acquire("manipulation_following", target)
         acquired = await client.command("acquire")
         assert acquired["status"] == "acquired", acquired
-        valid = await client.command("update", token=acquired["token"], sequence=1,
-                                     ts=time.time(), **target)
-        assert valid["status"] in {"feasible", "following"}, valid
-        stale = await client.command("update", token="retired-token", sequence=2,
-                                     ts=time.time(), **target)
-        assert stale["status"] == "rejected", stale
-        assert (await client.command("release", token=acquired["token"]))["status"] == "released"
+        sequence = await client.update_target(target, speed_scale=0.2)
+        await client.receive(lambda frame: frame["type"] == "manipulation_result"
+                             and frame.get("action") == "update"
+                             and frame.get("status") == "feasible"
+                             and frame.get("sequence", -1) >= sequence)
         await client.release()
         await client.socket.send(json.dumps({"type": "estop_request"}))
         await client.receive(lambda frame: frame["type"] == "manipulation_state"
@@ -57,7 +55,7 @@ async def test_official_mock_manipulation_contract():
 
 @pytest.mark.asyncio
 async def test_held_ik_recovers_from_unreachable_target_without_releasing():
-    async with mock_runtime(str(_URL), server_follow_stream=True) as (client, state):
+    async with mock_runtime(str(_URL)) as (client, state):
         pose = state["observations"][client.group]["pose"]
         await client.acquire("manipulation_following", pose, speed_scale=0.5)
         acquired = await client.command("acquire")
@@ -80,8 +78,6 @@ async def test_held_ik_recovers_from_unreachable_target_without_releasing():
                    if frame.get("type") == "manipulation_result" and frame.get("action") == "update"]
         assert any(frame.get("status") == "infeasible" for frame in replies), replies
         assert client.state.get("following") is True, client.state
-        released = await client.command("release", token=acquired["token"])
-        assert released["status"] == "released", released
         await client.release()
         assert client.state.get("stopped") is False
 

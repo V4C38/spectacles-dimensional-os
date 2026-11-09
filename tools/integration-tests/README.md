@@ -1,15 +1,16 @@
 # Client integration contract
 
 `scenarios.json` is the shared coverage contract for WebXR and Spectacles 2024.
-It defines stable case IDs, applicability, the ordered hand-input golden path,
+It defines stable case IDs, applicability, the ordered hand-input golden pathss,
 its timing budget, and deterministic server/hardware fixtures. Cases cannot be
 substituted by similarly named screenshots: every applicable case needs a real
 passing assertion with its exact ID and a captured image. Unsupported platform
 features are listed explicitly as not applicable; missing implementations fail.
 
-Run WebXR from `clients/webxr` with `npm run test:integration`. It runs the
-existing browser regressions, the shared regressions, the hand walkthrough and
-the separate controller walkthrough, then assembles their media and coverage.
+Run WebXR from `clients/webxr` with `npm run test:integration`. It runs only the
+compact hand golden path (setup, navigation, agent, LiDAR and manipulation) and
+short controller walkthrough, then validates their media
+and coverage. Detailed behavior remains covered by backend and client unit tests.
 The native Specs command and Lens Studio prerequisites are described in
 `clients/specs/tools/README.md`. Native runs use Lens Studio 5.15 CLAD, disposable
 project copies, actual SUK/SIK controls and source-project restoration.
@@ -42,7 +43,8 @@ stable repository-root path. Older client-prefixed golden export spellings are
 removed only after a new successful publication; unrelated files remain.
 
 Each completed full run contains consecutively numbered `01_setup_entry.png` style
-images, `golden-path.mp4` (90–120 seconds), `results.json`, and diagnostics. The
+images, `golden-path.mp4` (WebXR targets one minute within 45–75 seconds;
+native Specs targets roughly 90 seconds within 75–105), `results.json`, and diagnostics. The
 canonical golden video is produced by default for both clients. Set
 `INTEGRATION_EXTRA_MEDIA=1` for WebXR or pass native `--extra-media` to also encode
 controller/probe and supplemental edited clips. Functional tests and failure
@@ -67,19 +69,6 @@ state owners. WebXR drives emulated XR joints/controllers; Specs uses native SIK
 events with a test interactor. Actual hardware hand tracking, ASR quality, robot
 motion and device performance still need on-device verification.
 
-`MultiClient.spec.ts` additionally starts one production Python ARModule and
-connects five independent browser contexts to its real WebSocket server. It checks
-selected-mode planning exclusivity across the first release, shared preview and
-target state, the observer's grey cross, confirmation, handover, and disconnect
-cleanup. Only native robot ports/planning and headset origins are simulated.
-The fixture uses `$DIMOS_PYTHON`, `$CI_VENV/bin/python`, or `python3` on `PATH`,
-in that order. The selected Python needs Python 3.12+ and the ARModule runtime
-dependencies. The GitHub WebXR job installs and verifies this backend independently
-of the Python unit-test job; the local CI script selects its backend virtualenv
-explicitly. Run it alone with
-`npx playwright test tests/integration-tests/MultiClient.spec.ts` from WebXR.
-Physical cross-headset alignment and native Lens interaction remain device checks.
-
 Validate the contract and encoder without a headset:
 
 ```sh
@@ -92,25 +81,13 @@ not-run. They cannot authorize cleanup of existing results. A fresh full native
 run also verifies restoration of the current production project without fixtures.
 
 
-## Manipulation parity review
+## Native manipulation review
 
-OpenYAM has an additional deterministic fixture shared by WebXR's
-`Manipulation.spec.ts` and Specs' `ManipulationProbe.ts`. The native fixture copy
-is checked against the browser fixture by the tooling tests. Review these paths
-in addition to the Go2 catalog:
-
-| Behavior | WebXR | Specs |
-| --- | --- | --- |
-| Measured full-pose marker, link bounds and model signature | Browser fixture | Native production renderer |
-| Selected target, checked plan, articulated preview, exact execution binding | Controller path | Native SIK interaction |
-| Unselected acquire/update/release | Controller and hands | Native SIK interaction |
-| Second-hand Open/Close during drag | Hand path | Native second interactor |
-| Speed, cancel/reset/resume, stop and tracking/session invalidation | Core/host regressions | Core/host regressions |
-| Environment-depth occlusion of bounds/path | Optional adapter | Deferred platform exception |
-
-Standalone manipulation runs retain their own screenshots, continuous video and
-assertion logs. They do not substitute for the complete shared Go2 catalog or
-physical device sign-off.
+Specs retains its deterministic manipulation fixture and native probes. Both clients include arm selection, checked Preview
+and Execute, unselected following/release, gripper, Reset and Stop/Resume in the
+same golden video. The full native run retains additional manipulation probes.
+Browser motion uses a fixture; the official ARModule mock
+contract remains the evidence for installed DimOS planning/control.
 
 ## Native execution policy
 
@@ -120,7 +97,18 @@ native run, including focused probes, must pass the source handoff audit.
 
 ## Official manipulation runtime
 
-`python dimos-ar/tools/run_mock_manipulation_contract.py` exercises the installed DimOS planning/control composition through the current AR control/bulk protocol. Install `dimos-ar[manipulation,dev]` in the selected Python 3.12 environment first. The runner always selects mock hardware, disables relay/localization, uses a temporary configuration, chooses a localhost test port, and owns cleanup of its process group. The local CI gate and dedicated GitHub job run this contract; a browser mock planner does not replace it.
+`python dimos-ar/tools/run_mock_manipulation_contract.py` exercises the installed DimOS planning/control composition through the current AR control/bulk protocol. Install `dimos-ar[manipulation,dev]` in the selected Python 3.12 environment first. The runner always selects mock hardware, disables relay/localization, uses a temporary configuration, chooses a localhost test port, and owns cleanup of its process group. The local CI gate and ARModule GitHub job run this contract; a browser mock planner does not replace it.
 
 Successful non-golden raw recordings are discarded after validation unless extra
 media is requested. Golden footage, screenshots, logs and failure recordings remain.
+
+## Browser coverage boundary
+
+Browser CI contains two walkthroughs: the compact hand golden path (including
+manipulation) and controller input. WebXR-specific chapter order and holds live in
+`golden.webxrChapters`; `golden.chapters` has the same compact order with native
+holds long enough for complete SIK gestures. Repeated panel/settings tours are
+covered by unit tests and native regressions where declared, not counted as golden coverage.
+Repeated startup, layout, rendering, manipulation soak and failure-matrix browser
+tests have been removed. The catalog explicitly limits WebXR applicability to
+these walkthroughs; native Specs regression requirements remain unchanged.

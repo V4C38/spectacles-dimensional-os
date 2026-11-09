@@ -23,7 +23,6 @@ from pydantic import BaseModel, Field
 from apriltag_assets import decode_marker_id, ensure_pdf, ensure_png
 from armodule import ProcessManager
 from config import env_path, merge_env, normalize_log_level, read_env, repo_root
-from dimos_config import merge_armodule_config, read_armodule_config
 from discovery import discover_devices, validate_replay
 from robot_profiles import RobotProfiles
 from robot_sources import SourceBody, SourceSelectionRequired, resolve_robot_source
@@ -31,7 +30,6 @@ from tag_config import (
     DEFAULT_MOUNT,
     LOCALIZATION_POLICY_DEFAULTS,
     PRESET_MARKER_IDS,
-    merge_armodule_settings,
     normalize_ui_mounts,
     ui_from_armodule_config,
 )
@@ -94,16 +92,18 @@ class SetupBody(BaseModel):
 
 
 class StartBody(BaseModel):
+    model_config = {"extra": "forbid"}
+
     takeover_pids: list[int] | None = None
-    source: SourceBody | None = None
-    profile_id: str | None = None
-    simulation: bool = False
+    source: SourceBody
+    profile_id: str
     blueprint: Literal["unitree_go2_ar", "unitree_go2_ar_agentic", "openyam_ar_planner"]
     client: Literal["specs", "webxr"] = "specs"
-    robot_ip: str | None = None
 
 
 class MountBody(BaseModel):
+    model_config = {"extra": "forbid"}
+
     marker_id: int = 0
     print_size_mm: float = 70.0
     forward_m: float = 0.18
@@ -115,6 +115,8 @@ class MountBody(BaseModel):
 
 
 class SettingsBody(BaseModel):
+    model_config = {"extra": "forbid"}
+
     travel_threshold_m: float = Field(default=0.75, gt=0, allow_inf_nan=False)
     heading_threshold_deg: float = Field(default=30, gt=0, le=180, allow_inf_nan=False)
     marker_preference_s: float = Field(default=1.5, ge=0, allow_inf_nan=False)
@@ -141,7 +143,7 @@ def _blank_to_none(value: str | None) -> str | None:
 def settings_payload(profile_id: str | None = None) -> dict[str, Any]:
     stored = read_env(env_path())
     ui = ui_from_armodule_config(
-        robot_profiles.get(profile_id)["armodule"] if profile_id else read_armodule_config()
+        robot_profiles.get(profile_id)["armodule"] if profile_id else {}
     )
     return {
         "openai_api_key": stored.get("OPENAI_API_KEY", ""),
@@ -226,11 +228,6 @@ async def api_dimos_refs() -> dict[str, Any]:
 @app.post("/api/browse-dimos-install")
 async def api_browse_dimos_install(request: Request) -> dict[str, str | None]:
     """Open a native folder chooser for an existing DimOS installation."""
-    if not await asyncio.to_thread(_has_display):
-        raise HTTPException(
-            status_code=409, detail="A desktop file chooser is unavailable"
-        )
-
     body = await request.json()
     current = str(body.get("path", "")).strip()
     start_dir = Path(current).expanduser() if current else Path.home()
@@ -239,38 +236,34 @@ async def api_browse_dimos_install(request: Request) -> dict[str, str | None]:
     if start_dir.name == ".venv":
         start_dir = start_dir.parent
     start_dir = start_dir if start_dir.is_dir() else Path.home()
+    return {"path": await _choose_path("Select DimOS installation", directory=start_dir)}
+
+
+async def _choose_path(
+    title: str, *, directory: Path | None = None, file_filter: str | None = None
+) -> str | None:
+    if not _has_display():
+        raise HTTPException(status_code=409, detail="Enter a local path; no desktop chooser is available")
+    if sys.platform == "darwin":
+        kind = "folder" if directory is not None else "file"
+        command = ["osascript", "-e", f"POSIX path of (choose {kind} with prompt {json.dumps(title)})"]
+    else:
+        chooser = shutil.which("zenity")
+        if not chooser:
+            raise HTTPException(status_code=501, detail="Enter a local path or install zenity")
+        command = [chooser, "--file-selection", f"--title={title}"]
+        if directory is not None:
+            command.extend(["--directory", f"--filename={directory}/"])
+        if file_filter:
+            command.append(f"--file-filter={file_filter}")
     try:
-        if sys.platform == "darwin":
-            proc = await asyncio.create_subprocess_exec(
-                "osascript",
-                "-e",
-                'POSIX path of (choose folder with prompt "Select DimOS installation")',
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        else:
-            chooser = shutil.which("zenity")
-            if not chooser:
-                raise HTTPException(
-                    status_code=501, detail="Install zenity to use the folder chooser"
-                )
-            proc = await asyncio.create_subprocess_exec(
-                chooser,
-                "--file-selection",
-                "--directory",
-                "--title=Select DimOS installation folder",
-                f"--filename={start_dir}/",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+        proc = await asyncio.create_subprocess_exec(
+            *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
     except FileNotFoundError as exc:
-        raise HTTPException(
-            status_code=501, detail="A native folder chooser is unavailable"
-        ) from exc
+        raise HTTPException(status_code=501, detail="A native chooser is unavailable") from exc
     out, _ = await proc.communicate()
-    if proc.returncode != 0:
-        return {"path": None}
-    return {"path": out.decode("utf-8", errors="replace").strip() or None}
+    return out.decode(errors="replace").strip() or None if proc.returncode == 0 else None
 
 
 def _has_display() -> bool:
@@ -410,10 +403,11 @@ async def api_settings_put(body: SettingsBody) -> dict[str, Any]:
             settings["mounts"] = mounts
         if body.profile_id:
             robot_profiles.update(body.profile_id, settings=settings)
-        else:
-            merge_armodule_config(
-                merge_armodule_settings(read_armodule_config(), settings)
-            )
+        elif body.model_fields_set & {
+            "fiducial_marker", "vps", "vps_vendor", "map_code", "mounts",
+            *LOCALIZATION_POLICY_DEFAULTS,
+        }:
+            raise ValueError("Calibration settings require a robot profile")
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     env_updates = {
@@ -469,63 +463,43 @@ async def api_apriltag_decode(file: Annotated[UploadFile, File()]) -> dict[str, 
 
 @app.post("/api/armodule/start")
 async def api_armodule_start(body: StartBody) -> dict[str, Any]:
-    if body.blueprint == "openyam_ar_planner" and (not body.profile_id):
-        raise HTTPException(
-            status_code=400,
-            detail="OpenYAM requires an explicit robot profile",
-        )
-    robot_ip = (
-        body.robot_ip.strip() if body.robot_ip and body.robot_ip.strip() else None
-    )
-    can_port = None
-    replay = None
-    simulation = body.simulation
-    if body.source:
-        source = body.source
-        robot = "openyam" if body.blueprint == "openyam_ar_planner" else "unitree_go2"
-        devices = (await api_discovery(robot))["devices"] if source.mode in {"auto", "device"} else []
+    source = body.source
+    robot = "openyam" if body.blueprint == "openyam_ar_planner" else "unitree_go2"
+    devices = (await api_discovery(robot))["devices"] if source.mode in {"auto", "device"} else []
+    try:
+        resolved = resolve_robot_source(robot, source, devices)
+    except SourceSelectionRequired as exc:
+        raise HTTPException(status_code=409, detail={
+            "message": str(exc), "suggest_simulated": exc.suggest_simulated,
+            "devices": exc.devices,
+        }) from exc
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    robot_ip, can_port, simulation, replay = resolved.robot_ip, resolved.can_port, resolved.simulation, resolved.replay
+    if replay:
+        if not manager.status.dimos_python:
+            raise HTTPException(status_code=409, detail="Select a DimOS environment first")
         try:
-            resolved = resolve_robot_source(robot, source, devices, simulation=body.simulation)
-        except SourceSelectionRequired as exc:
-            raise HTTPException(status_code=409, detail={
-                "message": str(exc), "suggest_simulated": exc.suggest_simulated,
-                "devices": exc.devices,
-            }) from exc
-        except ValueError as exc:
+            info = await validate_replay(manager.status.dimos_python, replay, robot, source.streams)
+            if info["needs_selection"]:
+                raise ValueError("Select recording streams before starting")
+            source.streams = info["streams"]
+        except (ValueError, OSError, TimeoutError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        robot_ip, can_port, simulation, replay = resolved.robot_ip, resolved.can_port, resolved.simulation, resolved.replay
-        if replay:
-            if not manager.status.dimos_python:
-                raise HTTPException(status_code=409, detail="Select a DimOS environment first")
-            try:
-                info = await validate_replay(manager.status.dimos_python, replay, robot, source.streams)
-                if info["needs_selection"]:
-                    raise ValueError("Select recording streams before starting")
-                source.streams = info["streams"]
-            except (ValueError, OSError, TimeoutError) as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         await manager.start_armodule(
             blueprint=body.blueprint,
             client=body.client,
             **({"takeover_pids": body.takeover_pids} if body.takeover_pids else {}),
             robot_ip=robot_ip,
-            **(
-                {
-                    "armodule_config": robot_profiles.snapshot(
-                        body.profile_id, body.blueprint
-                    )
-                }
-                if body.profile_id
-                else {}
-            ),
+            armodule_config=robot_profiles.snapshot(body.profile_id, body.blueprint),
             **({"simulation": True} if simulation else {}),
             **({"can_port": can_port} if can_port else {}),
-            **({"replay": replay, "replay_streams": body.source.streams if body.source else {}} if replay else {}),
+            **({"replay": replay, "replay_streams": body.source.streams} if replay else {}),
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return manager.snapshot()
 
@@ -671,18 +645,7 @@ async def api_inspect_replay(body: ReplayBody) -> dict[str, Any]:
 
 @app.post("/api/browse-replay")
 async def api_browse_replay() -> dict[str, str | None]:
-    if not await asyncio.to_thread(_has_display):
-        raise HTTPException(status_code=409, detail="Enter the local recording path; no desktop chooser is available")
-    if sys.platform == "darwin":
-        command = ["osascript", "-e", 'POSIX path of (choose file with prompt "Select replay database")']
-    else:
-        chooser = shutil.which("zenity")
-        if not chooser:
-            raise HTTPException(status_code=501, detail="Enter a local path or install zenity")
-        command = [chooser, "--file-selection", "--title=Select replay database", "--file-filter=Replay databases | *.db"]
-    proc = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    out, _ = await proc.communicate()
-    return {"path": out.decode(errors="replace").strip() if proc.returncode == 0 else None}
+    return {"path": await _choose_path("Select replay database", file_filter="Replay databases | *.db")}
 
 
 class PreferencesBody(BaseModel):

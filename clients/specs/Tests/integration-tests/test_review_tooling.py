@@ -297,7 +297,13 @@ class IntegrationHandoffTests(unittest.IsolatedAsyncioTestCase):
         source = Path(__file__).with_name("IntegrationScenario.ts").read_text()
         handlers = re.findall(r'case "([a-z_]+)":', source)
         self.assertEqual(len(handlers), len(set(handlers)), "Duplicate integration handlers")
-        self.assertEqual(set(handlers), {row["id"] for row in applicable_cases()})
+        arm_source = Path(__file__).with_name("IntegrationArmGolden.ts").read_text()
+        arm_handlers = re.findall(r'id === "([a-z_]+)"', arm_source)
+        self.assertEqual(len(arm_handlers), len(set(arm_handlers)), "Duplicate arm handlers")
+        self.assertIn('this.armGolden.chapter(id', source)
+        # Some UI handlers are reused as prerequisites inside compact chapters.
+        required = {row["id"] for row in applicable_cases()}
+        self.assertFalse(required - set(handlers) - set(arm_handlers), "Missing catalog handler")
 
     async def test_catalog_fixture_is_generated_from_the_shared_source(self) -> None:
         from integration_catalog import load_catalog, write_lens_catalog
@@ -306,7 +312,7 @@ class IntegrationHandoffTests(unittest.IsolatedAsyncioTestCase):
             text = (Path(directory) / "IntegrationCatalog.ts").read_text()
             value = json.loads(text.split(" = ", 1)[1].removesuffix(";\n"))
             self.assertEqual(value, load_catalog())
-            self.assertEqual(len(value["golden"]["chapters"]), 25)
+            self.assertEqual(len(value["golden"]["chapters"]), 15)
 
 
 class LegacyGraphTests(unittest.TestCase):

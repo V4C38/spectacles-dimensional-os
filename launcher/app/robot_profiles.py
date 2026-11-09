@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from dimos_config import dimos_config_path, read_armodule_config
+from dimos_config import dimos_config_path
 from tag_config import merge_armodule_settings
 
 _LOCK = threading.RLock()
@@ -34,30 +34,19 @@ class RobotProfiles:
     def all(self) -> list[dict[str, Any]]:
         with _LOCK:
             if not self.path.exists():
-                legacy = read_armodule_config()
                 self._save(
                     [
                         {
                             "id": uuid4().hex,
                             "robot": "unitree_go2",
                             "name": "UnitreeGo2_1",
-                            "naming_version": 1,
-                            "armodule": legacy,
+                            "armodule": {},
                         }
                     ]
                 )
             data = json.loads(self.path.read_text())
             if not isinstance(data, list):
                 raise TypeError("robot profiles must contain a list")
-            changed = False
-            for profile in data:
-                if not profile.get("naming_version"):
-                    if profile["name"] in {"UnitreeGo2", "OpenYAM"}:
-                        profile["name"] = self._next_name(profile["name"], data)
-                    profile["naming_version"] = 1
-                    changed = True
-            if changed:
-                self._save(data)
             return copy.deepcopy(data)
 
     def get(self, profile_id: str) -> dict[str, Any]:
@@ -77,17 +66,19 @@ class RobotProfiles:
             raise ValueError("unknown robot type")
         with _LOCK:
             profiles = self.all()
-            config = self.get(source_id)["armodule"] if source_id else {}
-            if source_id and self.get(source_id)["robot"] != robot:
+            source = next((profile for profile in profiles if profile["id"] == source_id), None)
+            if source_id and source is None:
+                self._missing()
+            if source is not None and source["robot"] != robot:
                 raise ValueError("cannot duplicate a different robot type")
+            config = source["armodule"] if source else {}
             if robot == "openyam" and not source_id:
                 preset = Path(__file__).with_name("profiles") / "openyam.json"
                 config = json.loads(preset.read_text(encoding="utf-8"))["armodule"]
             if name is None:
-                stem = self.get(source_id)["name"] if source_id else ("UnitreeGo2" if robot == "unitree_go2" else "OpenYAM")
+                stem = source["name"] if source else ("UnitreeGo2" if robot == "unitree_go2" else "OpenYAM")
                 name = self._next_name(stem, profiles)
             profile = {
-                "naming_version": 1,
                 "id": uuid4().hex,
                 "robot": robot,
                 "name": self._name(name),

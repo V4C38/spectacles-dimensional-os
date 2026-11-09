@@ -8,17 +8,11 @@ The [CI baseline](../.dimos-revision) is pinned independently of the supported p
 
 AR owns client sessions, editing authority, wire conversion, coordinate/reference metadata, and presentation assets. DimOS owns hardware, planning scenes, kinematics, task execution, and physical feedback. The local manipulation adapter is the compatibility boundary to installed APIs. Required behavior includes nonmoving evaluation, exact-plan-ID execution, cancellation confirmation, fresh measured feedback, and watchdog-independent stop admission.
 
-Some robot/control policies remain local because equivalent upstream extension APIs are not yet available. Retain these safeguards until tested replacements exist. Keep their implementation out of client protocol and host presentation:
-
-| Concern | Upstream extension needed |
-| --- | --- |
-| Motor protection | Hardware-owned thermal/stall state and bounded commands |
-| Streaming IK | Explicit speed/command envelopes and feedback status |
-| Trajectory completion | Measured endpoint settlement and confirmed cancellation |
-| Planning isolation | Supported worker construction, versioned scene snapshots, and timeout retirement |
-| Shutdown | Confirmed quiescence before independent module services close |
-
-Propose these as separate upstream changes. Once an installed revision supplies an equivalent API, migrate the adapter, run the full mock/CI contracts, and remove the corresponding local implementation. Do not remove safety behavior merely to reduce repository size.
+Some robot/control policies remain local because the selected upstream APIs do not
+provide equivalent behavior. Keep these safeguards until tested replacements exist.
+Small, actionable upstream opportunities are recorded beside the implementation in
+[`manipulation/UPSTREAM.md`](../dimos-ar/dimos/ar/manipulation/UPSTREAM.md).
+This repository does not patch upstream DimOS.
 
 Scene snapshots supplied to planning workers must reflect the authoritative environment. A changed scene invalidates reviewed plans. Preserve all collision geometry; any self-contact exception must name specific link pairs and retain environment collision checks.
 

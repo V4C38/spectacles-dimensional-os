@@ -14,6 +14,7 @@ import { FLOOR_MARKER_STYLE, WORLD_DASH_STYLE } from "../Scripts/DimOSARClient/p
 import { composeLidarPoint } from "../Scripts/DimOSSpecsClient/sensors/PointCloudRenderer";
 import { IntegrationInput } from "./IntegrationInput";
 import { IntegrationV2Fixture } from "./IntegrationV2Fixture";
+import { IntegrationArmGolden } from "./IntegrationArmGolden";
 import { INTEGRATION_CATALOG as CATALOG } from "./IntegrationCatalog";
 const CAMERA_FIXTURE = requireAsset("./CameraFixture.png") as Texture;
 type Step = {
@@ -32,6 +33,7 @@ export class ReviewScenario extends BaseScriptComponent {
   private steps: Step[] = [];
   private index = -1;
   private elapsed = 0;
+  private armGolden: IntegrationArmGolden | null = null;
   private activeCase = "";
   private failed = false;
   private deferred: {
@@ -128,7 +130,10 @@ export class ReviewScenario extends BaseScriptComponent {
     this.input = new IntegrationInput();
     this.input.active = false;
     const available = { available: true, reason: null };
-    this.caps = { lidar: available, localization: available, estop: available, agent: available,
+    this.caps = {
+      manipulation: { available: false, reason: "No arm" },
+      object_detection: { available: false, reason: "No detector" },
+      lidar: available, localization: available, estop: available, agent: available,
       navigation: { ...available, nav_goal: { ...available, preview: true }, nav_joystick: { available: false, reason: "Hand input only" } } };
     root.transport.connect = () => { };
     root.transport.close = () => { };
@@ -176,6 +181,7 @@ export class ReviewScenario extends BaseScriptComponent {
     this.elapsed = 999;
   }
   private command(message: any): void {
+    if (this.armGolden?.command(message)) return;
     if (this.peer.command(message)) return;
     if (message.type === "lidar_settings_request") {
       this.lidarState = { enabled: message.enabled, min_height_m: message.min_height_m, max_height_m: message.max_height_m, max_range_m: message.max_range_m };
@@ -211,7 +217,7 @@ export class ReviewScenario extends BaseScriptComponent {
     if (!session.wantConnected) session.start();
     session.onTransportOpen();
     const request = [...this.sent].reverse().find(row => row.type === "hello_request");
-    this.wire({ type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "native-integration", odom_reference_id: "native-fixture-odom", time_sync: { ts_client: request.ts_client, ts_server: getTime() },
+    this.wire({ resume_token: "fixture-resume", type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "native-integration", odom_reference_id: "native-fixture-odom", time_sync: { ts_client: request.ts_client, ts_server: getTime() },
       robot: CATALOG.fixtures.robot, capabilities, localization: { providers } });
     this.peer.reset();
     this.state("idle", null);
@@ -219,7 +225,7 @@ export class ReviewScenario extends BaseScriptComponent {
   }
   private pose(position: readonly number[]): void { this.wire({ type: "pose", position, orientation: [0, 0, 0, 1], ts: getTime() }); }
   private captureRequest(policy = "any_angle"): void {
-    this.wire({ type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: policy, observation_count: 3,
+    this.wire({ result_timeout_s: 15, type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: policy, observation_count: 3,
       ...(policy === "robot_los_preferred" ? { wait_timeout_s: 0.2 } : {}) });
   }
   private acceptLocalization(ts = this.captureTs): void {
@@ -291,6 +297,7 @@ export class ReviewScenario extends BaseScriptComponent {
       this.cameraAspect = aspect;
       this.emit({ type: "host", action: "update_framing", aspect, bounds: this.captureBounds(this.activeCase) });
     }
+    this.armGolden?.tick();
     const pending = this.deferred.filter(row => row.at <= this.clock);
     this.deferred = this.deferred.filter(row => row.at > this.clock);
     for (const row of pending)
@@ -343,6 +350,21 @@ export class ReviewScenario extends BaseScriptComponent {
   }
   private golden(id: string): void {
     const root = this.root, ui = root.uiPresenter, menu = ui.mainMenuView, controller = ui.setupWizardController;
+    if (id.startsWith("manipulation_")) {
+      if (!this.armGolden) {
+        root.session.stop();
+        const yes = { available: true, reason: null }, no = { available: false, reason: "Stationary arm" };
+        this.caps = { ...this.caps, manipulation: yes, agent: no, lidar: no,
+          navigation: { ...no, nav_goal: { ...no, preview: false }, nav_joystick: no } };
+        this.ready(this.caps); this.runtime(); this.worldOnly();
+        this.worldCamera = false; // Arm framing is owned by the golden helper until completion.
+        this.armGolden = new IntegrationArmGolden(root, this.peer, this.input!,
+          (delay, action) => this.after(delay, action), passed => this.check(this.activeCase, passed));
+        this.armGolden.tick();
+      }
+      this.armGolden.chapter(id, action => { this.move = action; });
+      return;
+    }
     switch (id) {
       case "setup_entry":
         this.headerMetrics();
@@ -376,7 +398,8 @@ export class ReviewScenario extends BaseScriptComponent {
         });
         break;
       case "localization_capture":
-        this.press(controller.view.next.button);
+        this.ready();
+        this.after(.3, () => this.press(controller.view.next.button));
         this.later(1.5, () => controller.flow.step === "localization" && controller.view.previewRoot.enabled &&
           this.batches.length > 0 && root.episode.view().phase === "awaiting_result");
         break;
@@ -461,6 +484,7 @@ export class ReviewScenario extends BaseScriptComponent {
         break;
       }
       case "robot_selected":
+        this.worldOnly();
         this.press(root.robotPresenter.worldVisuals);
         this.check(id, root.selection.isSelected());
         this.input!.unhover();
@@ -493,8 +517,9 @@ export class ReviewScenario extends BaseScriptComponent {
       }
       case "navigation_route": {
         const before = this.count("interaction_request", row => row.action === "confirm");
-        this.input!.start(root.robotPresenter.worldVisuals.interactable);
-        this.after(0.3, () => this.input!.end());
+        this.input!.end();
+        this.after(.25, () => this.input!.start(root.robotPresenter.worldVisuals.interactable));
+        this.after(0.55, () => this.input!.end());
         this.after(1, () => {
           this.input!.active = false;
           this.check(id, this.count("interaction_request", row => row.action === "confirm") === before + 1 &&
@@ -548,9 +573,11 @@ export class ReviewScenario extends BaseScriptComponent {
       }
       case "agent_response": {
         const before = this.count("user_message_request");
-        this.press(menu.send);
-        this.after(0.2, () => this.wire({ type: "agent_message", text: CATALOG.fixtures.response }));
-        this.later(0.6, () => this.count("user_message_request") === before + 1 && root.speechController.snapshot().response === CATALOG.fixtures.response && menu.reply.text.text === CATALOG.fixtures.response);
+        this.golden("agent_recording");
+        this.after(1.5, () => { this.input!.end(); this.input!.unhover(); });
+        this.after(1.9, () => this.press(menu.send));
+        this.after(2.1, () => this.wire({ type: "agent_message", text: CATALOG.fixtures.response }));
+        this.later(2.6, () => this.count("user_message_request") === before + 1 && root.speechController.snapshot().response === CATALOG.fixtures.response && menu.reply.text.text === CATALOG.fixtures.response);
         break;
       }
       case "sensors_full":
@@ -638,6 +665,7 @@ export class ReviewScenario extends BaseScriptComponent {
     width: number;
     height: number;
   } {
+    if (id.startsWith("manipulation_")) return { x: 0, y: 0, width: 1, height: 1 };
     const root = this.root, camera = root.cameraObject.getComponent("Component.Camera") as Camera;
     const worldCases = new Set(["robot_hover", "robot_selected", "navigation_preview", "navigation_drag", "navigation_route", "robot_movement", "navigation_success", "navigation_cancelled", "world_marker"]);
     let points: vec3[] = [];
@@ -743,7 +771,7 @@ export class ReviewScenario extends BaseScriptComponent {
       case "capabilities_unavailable": {
         root.session.stop();
         this.ready(Object.fromEntries(Object.entries(this.caps).map(([key, value]) => [key,
-          key === "navigation" ? { available: false, reason: "Fixture unavailable", nav_goal: { available: false, reason: "Fixture unavailable" }, nav_joystick: { available: false, reason: "Hand only" } } : { available: false, reason: "Fixture unavailable" }])));
+          key === "navigation" ? { available: false, reason: "Fixture unavailable", nav_goal: { preview: false, available: false, reason: "Fixture unavailable" }, nav_joystick: { available: false, reason: "Hand only" } } : { available: false, reason: "Fixture unavailable" }])));
         this.runtime();
         const before = this.sent.length;
         this.after(0.5, () => { this.press(menu.modeButtons[1]); this.press(menu.stop); this.press(menu.lidarButtons[2]); });

@@ -22,16 +22,12 @@ it("prefers configured provider inventory over a task-specific capture policy", 
     [["fiducial_marker", "vps"], "mixed"], [[], "unavailable"],
   ] as const) {
     hello.localization = { providers: [...providers] };
-    expect(localizationKind(view, "any_angle")).toBe(kind);
+    expect(localizationKind(view)).toBe(kind);
   }
-  hello.localization = undefined;
-  expect(localizationKind(view, "robot_los_required")).toBe("marker");
-  expect(localizationKind(view, "robot_los_preferred")).toBe("mixed");
-  expect(localizationKind(view, null)).toBe("unknown");
-  expect(localizationKind({ hello: null, capabilities: null }, "any_angle")).toBe("unknown");
+  expect(localizationKind({ hello: null, capabilities: null })).toBe("unknown");
   hello.capabilities.localization = { available: false, reason: "off" };
   hello.localization = { providers: ["vps"] };
-  expect(localizationKind(view, "any_angle")).toBe("unavailable");
+  expect(localizationKind(view)).toBe("unavailable");
 });
 it("uses a plain single-line Capabilities prefix for available features", () => {
   expect(availableFeatures(helloAt(0).capabilities)).toBe("Capabilities: Navigation, LiDAR, Localization, Emergency Stop");

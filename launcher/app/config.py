@@ -7,14 +7,6 @@ import re
 from pathlib import Path
 
 _KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_LEGACY_ENV_KEYS = (
-    "OPENAI_API_KEY",
-    "ROBOT_IP",
-    "MULTISET_CLIENT_ID",
-    "MULTISET_CLIENT_SECRET",
-    "DIMOS_LOG_LEVEL",
-)
-
 LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR"})
 DEFAULT_LOG_LEVEL = "INFO"
 
@@ -38,20 +30,6 @@ def env_path(root: Path | None = None) -> Path:
 
 def scripts_dir(root: Path | None = None) -> Path:
     return launcher_dir(root) / "scripts"
-
-
-def migrate_legacy_env(root: Path | None = None) -> None:
-    """One-time copy of launcher keys from repo-root .env into launcher/.env."""
-    target = env_path(root)
-    if target.is_file():
-        return
-    legacy = (root or repo_root()) / ".env"
-    if not legacy.is_file():
-        return
-    values = read_env(legacy)
-    updates = {k: values[k] for k in _LEGACY_ENV_KEYS if values.get(k)}
-    if updates:
-        merge_env(updates, target)
 
 
 def read_env(path: Path | None = None) -> dict[str, str]:

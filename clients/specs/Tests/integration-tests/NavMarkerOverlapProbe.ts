@@ -85,9 +85,15 @@ export class ReviewScenario extends BaseScriptComponent {
     root.session.stop(); root.session.start(); root.session.onTransportOpen();
     const request = this.sent.find(row => row.type === "hello_request");
     const available = { available: true, reason: null };
-    this.wire({ type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "native-overlap", odom_reference_id: "native-overlap-odom",
+    this.wire({
+      resume_token: "fixture-resume",
+      localization: { providers: ["fiducial_marker"] },
+      type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "native-overlap", odom_reference_id: "native-overlap-odom",
       time_sync: { ts_client: request.ts_client, ts_server: getTime() }, robot: CATALOG.fixtures.robot,
-      capabilities: { lidar: available, localization: available, estop: available, agent: available,
+      capabilities: {
+        manipulation: { available: false, reason: "No arm" },
+        object_detection: { available: false, reason: "No detector" },
+        lidar: available, localization: available, estop: available, agent: available,
         navigation: { ...available, nav_goal: { ...available, preview: true }, nav_joystick: { available: false, reason: "Hands" } } } });
     this.peer.reset();
     this.wire({ type: "state", server: { connected_clients: 1 },

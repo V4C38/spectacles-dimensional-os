@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import * as THREE from "three";
 import { ViewerNotificationPresenter } from "../src/presentation/ViewerNotificationPresenter";
 
@@ -41,4 +41,21 @@ it.each(["stop", undefined] as const)("tilts %s popups upward without shifting t
   expect(view.object.position.toArray()).toEqual([0, 1.3975, -0.9]);
   expect(new THREE.Vector3(1, 0, 0).applyQuaternion(view.object.quaternion).y).toBeCloseTo(0);
   view.dispose();
+});
+
+it("releases the single pill visual owner", () => {
+  const view = new ViewerNotificationPresenter();
+  expect(view.object.children).toHaveLength(7);
+  const resources = new Set<{ dispose(): void }>();
+  view.object.traverse(child => {
+    if ("text" in child) { resources.add(child as unknown as { dispose(): void }); return; }
+    const mesh = child as THREE.Mesh;
+    if (mesh.geometry) resources.add(mesh.geometry);
+    if (mesh.material) for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) resources.add(material);
+  });
+  const disposals = [...resources].map(resource => vi.spyOn(resource, "dispose"));
+  view.show({ text: "Notice", glyph: "check" });
+  view.tick([0, 1.6, 0], [0, 0, 0, 1], 2, 0.01);
+  view.dispose();
+  for (const dispose of disposals) expect(dispose).toHaveBeenCalled();
 });

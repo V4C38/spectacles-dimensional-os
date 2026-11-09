@@ -20,14 +20,14 @@ describe("paired v2 bulk records", () => {
     const f = fixture();
     const message = { type: "manipulation_state", available: true, model_ref: f.ref };
     expect(f.bulk.hydrate(message)).toMatchObject({ pending: true, value: { available: false } });
-    f.peer.receive({ type: "bulk_record", ...f.ref, kind: "model", part: 0, parts: 3, data: { metadata: { revision: "robot", root: "base", asset_url: null } } });
+    f.peer.receive({ type: "bulk_record", ...f.ref, kind: "model", part: 0, parts: 3, data: { metadata: { gripper_joints: {}, revision: "robot", root: "base", asset_url: null } } });
     f.peer.receive({ type: "bulk_record", ...f.ref, kind: "model", part: 1, parts: 3, data: { links: [{ name: "base", bounds: null }] } });
     f.bulk.tick(); expect(f.bulk.hydrate(message).pending).toBe(true);
     f.peer.receive({ type: "bulk_record", ...f.ref, kind: "model", part: 2, parts: 3, data: { joints: [] } });
     f.bulk.tick();
     const first = f.bulk.hydrate(message), second = f.bulk.hydrate(message);
     expect(first.pending).toBe(false); expect(first.value.model).toBe(second.value.model);
-    expect(first.value.model).toMatchObject({ root: "base", links: [{ name: "base" }], joints: [] });
+    expect(first.value.model).toMatchObject({ gripper_joints: {}, root: "base", links: [{ name: "base" }], joints: [] });
   });
   it("caps record processing per display tick while leaving a bounded queue", () => {
     const f = fixture();
@@ -38,7 +38,11 @@ describe("paired v2 bulk records", () => {
   });
   it("keeps authority facts available while a referenced advisory route is missing", () => {
     const f = fixture();
-    const value = { type: "interaction_state", authority: { client_id: "other" }, preview: { type: "nav_goal", preview: true, route_ref: f.ref }, active_goal: null };
+    const value = {
+      targets: [],
+      motion_busy: false,
+      following_tail: null,
+      type: "interaction_state", authority: { client_id: "other" }, preview: { type: "nav_goal", preview: true, route_ref: f.ref }, active_goal: null };
     const hydrated = f.bulk.hydrate(value);
     expect(hydrated.pending).toBe(true); expect(hydrated.value.authority).toEqual(value.authority); expect(hydrated.value.preview).toBeNull();
   });
@@ -61,7 +65,7 @@ describe("paired v2 bulk records", () => {
   it("treats a precise cache miss as a bounded advisory failure and keeps other assets", () => {
     const f = fixture(), missing = { ...f.ref, id: "missing-route" };
     f.peer.receive({ type: "bulk_record", ...f.ref, kind: "model", part: 0, parts: 1,
-      data: { metadata: { revision: "robot", root: "base", asset_url: null }, links: [{ name: "base", bounds: null }], joints: [] } });
+      data: { metadata: { gripper_joints: {}, revision: "robot", root: "base", asset_url: null }, links: [{ name: "base", bounds: null }], joints: [] } });
     f.bulk.tick();
     const message = { type: "nav_goal", route_ref: missing };
     const miss = () => f.peer.receive({ type: "bulk_error", ...missing, kind: "route", code: "asset_unavailable" });
@@ -262,6 +266,7 @@ describe("paired v2 bulk records", () => {
 
 function articulatedModel() {
   return {
+    gripper_joints: {},
     revision: "arm-v1", root: "base", asset_url: null,
     links: [{ name: "base" }, { name: "tip" }],
     joints: [{ name: "hinge", parent: "base", child: "tip", kind: "revolute",

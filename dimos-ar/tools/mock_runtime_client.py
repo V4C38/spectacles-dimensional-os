@@ -37,7 +37,6 @@ class MockRuntimeClient:
         self.frames = deque(maxlen=10000)
         self.state = None
         self.simulated = False
-        self.follow_stream = False
 
     async def read_control(self):
         async for message in self.socket:
@@ -107,15 +106,12 @@ class MockRuntimeClient:
                 "action": "update", "epoch": self.shared["epoch"], "lease_id": self.lease,
                 "sequence": sequence, **pose, "speed_scale": speed_scale}
         await self.socket.send(json.dumps(body))
-        if not self.follow_stream:
-            result = await self.receive(lambda frame: frame.get("request_id") == body["request_id"])
-            if result["status"] != "accepted":
-                raise RuntimeError(result)
         return sequence
 
     async def release(self):
         self.require_simulated()
-        target = self.shared["target"]
+        target = next(target for target in self.shared["targets"]
+                      if target["domain"] == "manipulation" and target["group_id"] == self.group)
         result = await self.request("interaction_request", "release", epoch=self.shared["epoch"],
                                     lease_id=self.lease, sequence=self.sequence + 1,
                                     position=target["position"], orientation=target["orientation"])
@@ -166,17 +162,15 @@ class MockRuntimeClient:
 
 
 @asynccontextmanager
-async def mock_runtime(url, *, server_follow_stream=False):
+async def mock_runtime(url):
     require_local_url(url)
     async with websockets.connect(url) as socket:
         client = MockRuntimeClient(socket)
         await socket.send(json.dumps({"type": "hello_request", "protocol_version": 2,
-                                     "ts_client": time.time(),
-                                     "server_follow_stream": server_follow_stream}))
+                                     "ts_client": time.time()}))
         hello = json.loads(await socket.recv())
         if hello.get("protocol_version") != 2 or not hello.get("capabilities", {}).get("manipulation", {}).get("available"):
             raise RuntimeError("Runtime does not support protocol-v2 manipulation")
-        client.follow_stream = server_follow_stream
         bulk_url = urljoin(url, hello["bulk_url"])
         require_local_url(bulk_url)
         async with websockets.connect(bulk_url) as bulk:

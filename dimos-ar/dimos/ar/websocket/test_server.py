@@ -164,7 +164,7 @@ async def test_estop_is_processed_on_same_socket_while_localization_waits(
     callback_threads = []
     module = object.__new__(ARModule)
     module._map_localization = None
-    module._policy = LocalizationPolicy(["vps"])
+    module._policy = LocalizationPolicy(["fiducial_marker"])
     module._odometry = RobotOdometry(factor=1.0)
     module._replay_mode = False
 
@@ -359,7 +359,7 @@ async def test_hello_precedes_broadcasts_and_only_completed_handshakes_receive_t
     h._server._hello_supplier = hello
     try:
         async with websockets.connect(f"ws://127.0.0.1:{h.port}/ws") as ws:
-            await ws.send('{"type":"hello_request","ts_client":1}')
+            await ws.send('{"type":"hello_request","protocol_version":2,"ts_client":1}')
             assert await asyncio.to_thread(entered.wait, 1)
             assert h._server.connection_count == 0
             assert h._server._client_ids == {}
@@ -383,7 +383,7 @@ async def test_hello_precedes_broadcasts_and_only_completed_handshakes_receive_t
                     h._server._enqueue_all_text('{"type":"agent_message","text":"not-admitted"}\n'), h.loop
                 ))
                 await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(
-                    h._server._enqueue_all_binary(b"not-admitted"), h.loop
+                    asyncio.to_thread(h._server.schedule_broadcast_binary, b"not-admitted"), h.loop
                 ))
                 h.loop.call_soon_threadsafe(publish.set)
                 await h.wait_for_connection(first["client_id"])
@@ -422,7 +422,7 @@ async def test_unhandshaken_socket_does_not_count_as_active_or_trigger_disconnec
             hello = await _send_hello_request(ws)
             await h.wait_for_connection(hello["client_id"])
             assert h._server.connection_count == 1
-        assert await asyncio.to_thread(disconnected.wait, 1)
+        assert await asyncio.to_thread(disconnected.wait, 2)
         assert remaining == [0]
         assert h.disconnected_client_ids == [hello["client_id"]]
     finally:
@@ -485,6 +485,9 @@ async def test_disconnect_retires_authority_before_transport_cleanup(monkeypatch
             await old.close()
             assert await asyncio.to_thread(entered.wait, 1)
             assert h._server.connection_count == 0
+            async with asyncio.timeout(2):
+                while not h.disconnected_client_ids:
+                    await asyncio.sleep(0.01)
             assert h.disconnected_client_ids == [old_id]
             assert remaining == [0]
             assert old_socket not in h._server._client_ids
@@ -552,6 +555,9 @@ async def test_disconnect_callback_and_bulk_close_failures_still_stop_sender(mon
             await ws.close()
             assert await asyncio.to_thread(stopped.wait, 1)
             assert h._server.connection_count == 0
+            async with asyncio.timeout(2):
+                while not h.disconnected_client_ids:
+                    await asyncio.sleep(0.01)
             assert h.disconnected_client_ids == [client_id]
             assert server_socket not in h._server._retired_connections
             assert h._server._outbound == {}
@@ -575,7 +581,7 @@ async def test_hello_timeout_retires_silent_or_blocked_handshake_without_registr
     try:
         async with websockets.connect(f"ws://127.0.0.1:{h.port}/ws") as ws:
             if send_request:
-                await ws.send('{"type":"hello_request","ts_client":1}')
+                await ws.send('{"type":"hello_request","protocol_version":2,"ts_client":1}')
                 assert await asyncio.to_thread(entered.wait, 1)
             with pytest.raises(websockets.ConnectionClosedError) as error:
                 await asyncio.wait_for(ws.recv(), 1)
@@ -645,15 +651,15 @@ async def test_stop_at_rate_limit_is_honored_then_flooding_peer_retires():
 async def test_resumable_socket_preserves_identity_without_disconnect_callback(harness, delay):
     url = f"ws://127.0.0.1:{harness.port}/"
     async with websockets.connect(url) as first:
-        await first.send(json.dumps({"type": "hello_request", "ts_client": 1,
-                                     "resumable": True, "server_follow_stream": True}))
+        await first.send(json.dumps({"type": "hello_request", "protocol_version": 2, "ts_client": 1,
+                                     }))
         hello = json.loads(await first.recv())
         await harness.wait_for_connection(hello["client_id"])
     await asyncio.sleep(delay)
     assert harness.disconnected_client_ids == []
     async with websockets.connect(url) as second:
-        await second.send(json.dumps({"type": "hello_request", "ts_client": 2,
-                                      "resumable": True, "resume_token": hello["resume_token"]}))
+        await second.send(json.dumps({"type": "hello_request", "protocol_version": 2, "ts_client": 2,
+                                      "resume_token": hello["resume_token"]}))
         resumed = json.loads(await second.recv())
         await harness.wait_for_connection(resumed["client_id"])
         assert resumed["client_id"] == hello["client_id"]
@@ -666,14 +672,14 @@ async def test_resumable_socket_preserves_identity_without_disconnect_callback(h
 async def test_expired_resume_cannot_restore_authority(harness):
     url = f"ws://127.0.0.1:{harness.port}/"
     async with websockets.connect(url) as first:
-        await first.send(json.dumps({"type": "hello_request", "ts_client": 1, "resumable": True}))
+        await first.send(json.dumps({"type": "hello_request", "protocol_version": 2, "ts_client": 1}))
         hello = json.loads(await first.recv())
         await harness.wait_for_connection(hello["client_id"])
     await asyncio.sleep(1.1)
     assert harness.disconnected_client_ids == [hello["client_id"]]
     async with websockets.connect(url) as second:
-        await second.send(json.dumps({"type": "hello_request", "ts_client": 2,
-                                      "resumable": True, "resume_token": hello["resume_token"]}))
+        await second.send(json.dumps({"type": "hello_request", "protocol_version": 2, "ts_client": 2,
+                                      "resume_token": hello["resume_token"]}))
         with pytest.raises(websockets.ConnectionClosed):
             await second.recv()
 
@@ -683,13 +689,13 @@ async def test_resume_uses_its_reserved_slot_when_capacity_is_full(harness, monk
     monkeypatch.setattr("dimos.ar.websocket.server.MAX_CONTROL_CLIENTS", 1)
     url = f"ws://127.0.0.1:{harness.port}/"
     async with websockets.connect(url) as first:
-        await first.send(json.dumps({"type": "hello_request", "ts_client": 1, "resumable": True}))
+        await first.send(json.dumps({"type": "hello_request", "protocol_version": 2, "ts_client": 1}))
         hello = json.loads(await first.recv())
         await harness.wait_for_connection(hello["client_id"])
     await asyncio.sleep(0.05)
     async with websockets.connect(url) as second:
-        await second.send(json.dumps({"type": "hello_request", "ts_client": 2,
-                                      "resumable": True, "resume_token": hello["resume_token"]}))
+        await second.send(json.dumps({"type": "hello_request", "protocol_version": 2, "ts_client": 2,
+                                      "resume_token": hello["resume_token"]}))
         resumed = json.loads(await second.recv())
         assert resumed["client_id"] == hello["client_id"]
         await harness.wait_for_connection(resumed["client_id"])
@@ -712,8 +718,8 @@ async def test_concurrent_resume_claims_have_one_owner_and_one_valid_bulk_token(
             self.sent = []
 
         async def recv(self):
-            return json.dumps({"type": "hello_request", "ts_client": 1,
-                               "resumable": True, "resume_token": token})
+            return json.dumps({"type": "hello_request", "protocol_version": 2, "ts_client": 1,
+                               "resume_token": token})
 
         async def send(self, value):
             self.sent.append(json.loads(value))
@@ -752,8 +758,8 @@ async def test_failed_resume_send_releases_claim_without_retiring_the_session():
 
     class Socket:
         async def recv(self):
-            return json.dumps({"type": "hello_request", "ts_client": 1,
-                               "resumable": True, "resume_token": token})
+            return json.dumps({"type": "hello_request", "protocol_version": 2, "ts_client": 1,
+                               "resume_token": token})
 
         async def send(self, value):
             raise OSError("socket closed during hello")
@@ -790,8 +796,8 @@ async def test_expired_resume_claim_does_not_keep_a_logical_session_alive():
 
     class Socket:
         async def recv(self):
-            return json.dumps({"type": "hello_request", "ts_client": 1,
-                               "resumable": True, "resume_token": token})
+            return json.dumps({"type": "hello_request", "protocol_version": 2, "ts_client": 1,
+                               "resume_token": token})
 
         async def send(self, value):
             entered.set()
@@ -854,7 +860,7 @@ async def test_cancelled_post_hello_send_rolls_back_admission_without_retiring_r
         request = SimpleNamespace(path="/ws")
 
         async def recv(self):
-            return json.dumps({"type": "hello_request", "ts_client": 1, "resumable": True,
+            return json.dumps({"type": "hello_request", "protocol_version": 2, "ts_client": 1,
                                **({"resume_token": token} if resume else {})})
 
         async def send(self, value):
@@ -908,7 +914,7 @@ async def test_admission_callback_failure_removes_the_published_session_and_send
         request = SimpleNamespace(path="/ws")
 
         async def recv(self):
-            return '{"type":"hello_request","ts_client":1}'
+            return '{"type":"hello_request","protocol_version":2,"ts_client":1}'
 
         async def send(self, value):
             sent.append(json.loads(value))

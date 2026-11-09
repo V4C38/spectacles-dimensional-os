@@ -134,7 +134,7 @@ export class NavigationInteraction {
       this.directHeading = this.heading.update(placed.position, now);
       this.directPose = { position: [...placed.position], orientation: this.directHeading };
       this.collaboration.update(clientTrackingToOdomPose(this.directPose, this.origin));
-      this.goals.send(now, this.directPose, false);
+      this.goals.send(now, this.directPose);
     }
     return this.dragging;
   }
@@ -164,8 +164,6 @@ export class NavigationInteraction {
       this.collaboration.cancel(["live", "navigation_planning"]);
     this.directPose = null; this.directStart = null; this.directSource = null; this.dragging = false;
   }
-  /** Adapter for hosts whose native drag system already computes a complete pose. */
-  sendDirect(now: number, pose: NavigationPose, force: boolean): boolean { return this.goals.send(now, pose, force); }
   cancel(_now: number): boolean { this.cancelDrag(); return this.goals.cancel(); }
   cancelDrag(): void { this.collaboration.cancel(["live", "navigation_planning"]); this.placement.clear(); this.previews.clear(); this.directPose = null; this.directStart = null; this.directSource = null; this.dragging = false; }
   reset(): void { this.cancelDrag(); this.goals.reset(); this.origin = null; this.floor = null; this.armed = this.selected = false; }

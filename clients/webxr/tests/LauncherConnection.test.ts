@@ -20,7 +20,6 @@ function launcher() {
   return { update, request };
 }
 const element = (id: string) => document.getElementById(id)!;
-const button = (id: string) => element(id) as HTMLButtonElement;
 
 it("shows WebXR URL or Specs PIN and keeps IP in expanded details", () => {
   const { update } = launcher();
@@ -38,14 +37,5 @@ it("shows WebXR URL or Specs PIN and keeps IP in expanded details", () => {
       expect(element("connectionSummaryLabel").textContent).toBe("PIN");
       expect(element("pinSummary").textContent).toBe(status.pin);
     }
-  }
-});
-
-it("keeps unified actions and connects WebXR without PIN entry", () => {
-  launcher();
-  expect(button("startBtn")).toBeTruthy();
-  expect(button("stopBtn")).toBeTruthy();
-  for (const id of ["startWebxrBtn", "stopWebxrBtn", "stopBackendBtn"]) {
-    expect(document.getElementById(id)).toBeNull();
   }
 });

@@ -29,7 +29,6 @@ def test_native_gate_checks_navigation_and_background_following() -> None:
 def test_follow_status_remembers_worker_even_when_native_clears_thread_reference(monkeypatch) -> None:
     following = object.__new__(native.ARPersonFollowSkillContainer)
     following._ar_worker_lock = threading.Lock()
-    following._ar_workers = 0
     following._ar_threads = set()
     entered, finish = threading.Event(), threading.Event()
 
@@ -54,7 +53,6 @@ def test_follow_status_remembers_worker_even_when_native_clears_thread_reference
 def test_stop_movement_stops_worker_and_suppresses_late_tracker_velocity() -> None:
     following = object.__new__(native.ARPersonFollowSkillContainer)
     following._ar_worker_lock = threading.Lock()
-    following._ar_workers = 0
     following._ar_threads = set()
     following._lock = threading.RLock()
     following._should_stop = threading.Event()
@@ -120,7 +118,6 @@ class SimpleNamespaceDetections:
 def test_stop_retires_initial_detection_and_only_new_follow_invocation_resumes(monkeypatch) -> None:
     following = object.__new__(native.ARPersonFollowSkillContainer)
     following._ar_worker_lock = threading.Lock()
-    following._ar_workers = 0
     following._ar_threads = set()
     following._thread = None
     following._should_stop = threading.Event()

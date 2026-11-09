@@ -69,3 +69,27 @@ describe("immersive session lifecycle", () => {
     expect(f.effects.end).toHaveBeenCalledOnce();
   });
 });
+
+it("keeps alignment completed under a system overlay and resumes without a standby review", () => {
+  const f = fixture();
+  f.setLocalized(false);
+  try {
+    f.controller.start(f.session as unknown as XRSession);
+    f.controller.sample(0, f.frame);
+    f.session.visibilityState = "visible-blurred";
+    f.session.dispatchEvent(new Event("visibilitychange"));
+    expect(f.controller.tracking).toBe(false);
+    expect(f.controller.sample(100, f.frame)).toBeNull();
+
+    // Localization can finish while a browser/system overlay still covers XR.
+    f.setLocalized(true);
+    expect(f.controller.sample(5000, f.frame)).toBeNull();
+    f.session.visibilityState = "visible";
+    f.session.dispatchEvent(new Event("visibilitychange"));
+    expect(f.controller.sample(5010, f.frame)).toMatchObject({ reference: f.original, deltaS: 0 });
+    expect(f.controller.tracking).toBe(true);
+    expect(f.effects.reviewAlignment).not.toHaveBeenCalled();
+    expect(f.effects.recoverUnknownReset).not.toHaveBeenCalled();
+    expect(f.effects.reset).toHaveBeenCalledOnce();
+  } finally { f.controller.end(); }
+});

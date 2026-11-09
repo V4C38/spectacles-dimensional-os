@@ -35,7 +35,6 @@ export type LocalizationCapturePhase =
   | "failed";
 
 export interface LocalizationCaptureConfig {
-  resultTimeoutS: number;
   retryBackoffS: number;
 }
 
@@ -49,7 +48,7 @@ export interface LocalizationCaptureState {
 
 export type LocalizationTrace = { stage: string; atS: number; phase: LocalizationCapturePhase; captured: number; detail?: string };
 
-export type LocalizationSessionPort = Pick<ARModuleSession, "view" | "sendText" | "submitLocalizationObservations" | "cancelLocalizationSubmission" | "subscribeLocalizationObservationsRequest" | "subscribeOutbound" | "subscribeView"> & Partial<Pick<ARModuleSession, "localizationResultDeadline">>;
+export type LocalizationSessionPort = Pick<ARModuleSession, "view" | "sendText" | "submitLocalizationObservations" | "cancelLocalizationSubmission" | "subscribeOutbound" | "subscribeView"> & Partial<Pick<ARModuleSession, "localizationResultDeadline">>;
 
 export interface LocalizationCaptureDependencies {
   session: LocalizationSessionPort;
@@ -71,7 +70,6 @@ export class LocalizationCaptureEpisode {
   private readonly tracking: CameraTrackingSource;
   private readonly capture: CameraCaptureSource;
   private readonly geometry: CaptureGeometry;
-  private readonly resultTimeoutS: number;
   private readonly retryBackoffS: number;
 
   private readonly runtimeCapture?: LocalizationCaptureDependencies["runtimeCapture"];
@@ -120,10 +118,8 @@ export class LocalizationCaptureEpisode {
     this.captureEnabled = !deps.initiallyPaused;
     this.geometry = requireGeometry(deps.geometry ?? AR_MODULE_CLIENT_CONFIG.capture.geometry);
     const config = deps.config ?? AR_MODULE_CLIENT_CONFIG.capture.episode;
-    this.resultTimeoutS = requirePositive(config.resultTimeoutS, "resultTimeoutS");
     this.retryBackoffS = requireNonNegative(config.retryBackoffS, "retryBackoffS");
     this.unsubscribers.push(
-      this.session.subscribeLocalizationObservationsRequest((request) => this.onRequest(request)),
       this.session.subscribeOutbound((message) => this.onOutbound(message)),
       this.session.subscribeView((view) => {
         if (view.connection !== "ready") {
@@ -362,6 +358,7 @@ export class LocalizationCaptureEpisode {
   }
 
   private onOutbound(message: Outbound): void {
+    if (message.type === "localization_observations_request") { this.onRequest(message); return; }
     if (message.type === "localization_context") { this.publishTracking(true); return; }
     if (message.type === "localization_status") {
       if (message.episode_id && message.episode_id === this.request?.episode_id) this.resetIdle();
@@ -486,7 +483,7 @@ export class LocalizationCaptureEpisode {
 
   private sendBatch(now: number): void {
     this.recoveryUntil = null;
-    const timeoutS = this.request?.result_timeout_s ?? this.resultTimeoutS;
+    const timeoutS = this.request!.result_timeout_s;
     this.phase = "awaiting_result";
     this.resultDeadline = now + timeoutS;
     this.nextCaptureAt = null;

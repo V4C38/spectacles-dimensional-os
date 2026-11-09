@@ -132,8 +132,6 @@ def _finite_quat(data: dict[str, Any], key: str) -> tuple[float, float, float, f
 @dataclass(frozen=True)
 class HelloRequest:
     ts_client: float
-    resumable: bool = False
-    server_follow_stream: bool = False
     resume_token: str | None = None
 
 
@@ -221,13 +219,12 @@ def decode_hello_request(text: str) -> HelloRequest:
     msg_type = _require_type(data, "type", str)
     if msg_type != "hello_request":
         raise ValueError(f"Expected hello_request, got {msg_type!r}")
+    if data.get("protocol_version") != 2:
+        raise ValueError("Expected protocol_version 2; update ARModule and clients together")
     token = data.get("resume_token")
     if token is not None and (not isinstance(token, str) or len(token) != 64):
         raise ValueError("invalid resume token")
-    resumable = data.get("resumable", False)
-    if not isinstance(resumable, bool):
-        raise TypeError("resumable must be boolean")
-    return HelloRequest(_finite_float(data, "ts_client"), resumable, data.get("server_follow_stream") is True, token)
+    return HelloRequest(_finite_float(data, "ts_client"), token)
 
 
 def decode_inbound(text: str) -> Inbound:
@@ -268,6 +265,8 @@ def decode_inbound(text: str) -> Inbound:
         raise ValueError("hello_request is handled during handshake, not in the message loop")
 
     if msg_type == "manipulation_request":
+        if data.get("action") == "update":
+            raise ValueError("Following targets require the shared interaction stream")
         return decode_request(data)
 
     if msg_type == "interaction_request":
@@ -552,11 +551,11 @@ class HelloBody:
     robot: RobotDescription
     capabilities: dict[CapabilityName, Capability]
     navigation_inputs: dict[str, Capability]
+    odom_reference_id: str
+    localization: LocalizationMetadata
     nav_goal_preview: bool = False
     server_info: dict[str, str] | None = None
-    odom_reference_id: str | None = None
     source: dict[str, Any] | None = None
-    localization: LocalizationMetadata | None = None
 
 
 @dataclass(frozen=True)
@@ -566,17 +565,15 @@ class Hello:
     robot: RobotDescription
     capabilities: dict[CapabilityName, Capability]
     navigation_inputs: dict[str, Capability]
+    odom_reference_id: str
+    localization: LocalizationMetadata
+    bulk_url: str
+    bulk_token: str
+    bulk_epoch: str
+    resume_token: str
     nav_goal_preview: bool = False
     server_info: dict[str, str] | None = None
-    odom_reference_id: str | None = None
     source: dict[str, Any] | None = None
-    bulk_url: str | None = None
-    bulk_token: str | None = None
-    bulk_epoch: str | None = None
-    resume_token: str | None = None
-    server_follow_stream: bool = False
-    independent_ik: bool = False
-    localization: LocalizationMetadata | None = None
 
 
 def _capability_wire(cap: Capability) -> dict[str, Any]:
@@ -585,16 +582,16 @@ def _capability_wire(cap: Capability) -> dict[str, Any]:
 
 def encode_hello(hello: Hello) -> str:
     capabilities: dict[str, Any] = {}
-    for name, cap in hello.capabilities.items():
-        entry = _capability_wire(cap)
+    for name in CapabilityName:
+        entry = _capability_wire(hello.capabilities[name])
         if name is CapabilityName.NAVIGATION:
             for key in NAVIGATION_INPUT_NAMES:
                 nested = hello.navigation_inputs.get(key)
                 if nested is None:
                     raise ValueError(f"hello.navigation_inputs missing {key}")
                 entry[key] = _capability_wire(nested)
-                if key == "nav_goal" and hello.nav_goal_preview:
-                    entry[key]["preview"] = True
+                if key == "nav_goal":
+                    entry[key]["preview"] = hello.nav_goal_preview
         capabilities[str(name)] = entry
     return encode_text(
         {
@@ -604,12 +601,10 @@ def encode_hello(hello: Hello) -> str:
             "bulk_token": hello.bulk_token,
             "bulk_epoch": hello.bulk_epoch,
             "client_id": hello.client_id,
-            **({"server_follow_stream": True} if hello.server_follow_stream else {}),
-            **({"independent_ik": True} if hello.independent_ik else {}),
-            **({"resume_token": hello.resume_token} if hello.resume_token else {}),
+            "resume_token": hello.resume_token,
             **({"source": hello.source} if hello.source else {}),
-            **({"localization": hello.localization} if hello.localization is not None else {}),
-            **({"odom_reference_id": hello.odom_reference_id} if hello.odom_reference_id else {}),
+            "localization": hello.localization,
+            "odom_reference_id": hello.odom_reference_id,
             "time_sync": {
                 "ts_client": hello.time_sync.ts_client,
                 "ts_server": hello.time_sync.ts_server,
@@ -619,11 +614,7 @@ def encode_hello(hello: Hello) -> str:
                 "body_bounds_m": list(hello.robot.body_bounds_m),
                 "footprint_m": list(hello.robot.footprint_m),
                 "base_height_m": hello.robot.base_height_m,
-                **(
-                    {"odom_scale_correction_factor": hello.robot.odom_scale_correction_factor}
-                    if hello.robot.odom_scale_correction_factor != 1.0
-                    else {}
-                ),
+                "odom_scale_correction_factor": hello.robot.odom_scale_correction_factor,
             },
             "capabilities": capabilities,
             **({"server_info": hello.server_info} if hello.server_info is not None else {}),
@@ -637,8 +628,8 @@ class LocalizationObservationsRequest:
 
     capture_policy: CapturePolicy
     observation_count: int
+    result_timeout_s: float
     wait_timeout_s: float | None = None
-    result_timeout_s: float | None = None
     capture_id: str | None = None
 
     def __post_init__(self) -> None:
@@ -648,7 +639,7 @@ class LocalizationObservationsRequest:
             or len(self.capture_id) > 128
         ):
             raise ValueError("capture_id must contain 1 to 128 characters")
-        if self.result_timeout_s is not None and (
+        if (
             not math.isfinite(self.result_timeout_s) or self.result_timeout_s <= 0
         ):
             raise ValueError("result_timeout_s must be finite and positive")
@@ -677,8 +668,7 @@ def encode_localization_observations_request(request: LocalizationObservationsRe
         body["capture_id"] = request.capture_id
     if request.wait_timeout_s is not None:
         body["wait_timeout_s"] = request.wait_timeout_s
-    if request.result_timeout_s is not None:
-        body["result_timeout_s"] = request.result_timeout_s
+    body["result_timeout_s"] = request.result_timeout_s
     return encode_text(body)
 
 
@@ -787,15 +777,11 @@ def encode_client_pose(
     )
 
 
-def _wire_waypoint(x: float, y: float, z: float, yaw: float) -> list[float]:
-    """Compact waypoint for JSON — mm position, ~0.006° yaw."""
-    return [round(x, 3), round(y, 3), round(z, 3), round(yaw, 4)]
-
-
-def encode_nav_goal(nav_goal: NavGoalFrame) -> str:
+def navigation_payload(nav_goal: NavGoalFrame) -> dict[str, Any]:
+    """Nested route facts carried by the revisioned interaction snapshot."""
     body: dict[str, Any] = {
         "type": "nav_goal",
-        "path_poses": [_wire_waypoint(*point) for point in nav_goal.path_poses],
+        "path_poses": [list(point) for point in nav_goal.path_poses],
         "ts": nav_goal.ts,
     }
     if nav_goal.preview:
@@ -803,8 +789,8 @@ def encode_nav_goal(nav_goal: NavGoalFrame) -> str:
         if nav_goal.preview_id is not None:
             body["preview_id"] = nav_goal.preview_id
     if nav_goal.pose is not None:
-        body["pose"] = _wire_waypoint(*nav_goal.pose)
-    return encode_text(body)
+        body["pose"] = list(nav_goal.pose)
+    return body
 
 
 def encode_lidar_binary(

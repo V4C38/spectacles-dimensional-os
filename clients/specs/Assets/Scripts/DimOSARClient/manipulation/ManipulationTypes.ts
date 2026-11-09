@@ -29,7 +29,7 @@ export interface ManipulationJoint {
 export interface ManipulationModel {
   visual_signature?: string;
   visual_profile?: string;
-  gripper_joints?: Record<string, { closed: number; open: number }>;
+  gripper_joints: Record<string, { closed: number; open: number }>;
   revision: string;
   root: string;
   asset_url: string | null;

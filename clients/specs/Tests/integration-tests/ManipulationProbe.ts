@@ -108,10 +108,17 @@ export class ReviewScenario extends BaseScriptComponent {
     root.session.stop(); root.session.start(); root.session.onTransportOpen();
     const hello = this.sent.find(row => row.type === "hello_request");
     const yes = { available: true, reason: null }, no = { available: false, reason: "Arm" };
-    this.wire({ type: "hello", client_id: "native-manipulation", odom_reference_id: "native-arm",
+    this.wire({
+      resume_token: "fixture-resume",
+      localization: { providers: ["fiducial_marker"] },
+      type: "hello", client_id: "native-manipulation", odom_reference_id: "native-arm",
       time_sync: { ts_client: hello.ts_client, ts_server: getTime() },
       robot: { ...CATALOG.fixtures.robot, display_name: "OpenYAM" },
-      capabilities: { manipulation: yes, localization: yes, lidar: no, agent: no, estop: yes,
+      capabilities: {
+        object_detection: { available: false, reason: "No detector" },
+        manipulation: yes,
+        localization: yes,
+        lidar: no, agent: no, estop: yes,
         navigation: { ...no, nav_goal: no, nav_joystick: no } } });
     this.peer.reset();
     this.wire({ type: "state", server: { connected_clients: 1 }, lidar: { enabled: false, min_height_m: -10, max_height_m: 10, max_range_m: 5 },

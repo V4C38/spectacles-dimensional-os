@@ -12,9 +12,22 @@ function fixture() {
   const assets = new Map<string, number>();
   let now = 100;
   let listener: (message: Outbound) => void = () => {};
+  let followingToken: string | null = null;
+  let followSequence = 0;
+  let lastFollowAt = -Infinity;
+  // Native requests observed at the fixture server, including its shared-target stream.
+  function streamFollowing() {
+    if (!followingToken || view.connection !== "ready" || view.manipulation.stopped || !interaction.dragging || interaction.snapshot().blocked || !interaction.feedbackFresh || now - lastFollowAt < 1 / 30) return;
+    const target = authority.collaboration.snapshot("manipulation", interaction.groupId ?? undefined).rawTarget;
+    if (!target) return;
+    sent.push({ type: "manipulation_request", request_id: `shared-follow-${followingToken}-${++followSequence}`,
+      action: "update", group_id: interaction.groupId, token: followingToken, sequence: followSequence,
+      position: target.position, orientation: target.orientation, speed_scale: interaction.speedScale });
+    lastFollowAt = now;
+  }
   const view: any = {
     connection: "ready",
-    hello: { protocol_version: 2, server_follow_stream: false },
+    hello: { protocol_version: 2, resume_token: "fixture-resume" },
     capabilities: { manipulation: { available: true } },
     manipulation: {
       groups: [{ id: "arm", following: true, joint_names: ["joint"] }],
@@ -34,7 +47,7 @@ function fixture() {
       view: () => view,
       collaboration: authority.collaboration,
       assetTransferDeadline: (id: string) => assets.get(id) ?? null,
-      sendText: (text) => sent.push(JSON.parse(text)),
+      sendText: (text) => { const request = JSON.parse(text); if (request.action === "release") followingToken = null; sent.push(request); },
       subscribeOutbound: (callback) => {
         listener = callback;
         return () => {};
@@ -45,8 +58,11 @@ function fixture() {
   interaction.tick();
   function pump() {
     for (let frame = 0; frame < 3; frame++) { authority.tick(); interaction.tick(); }
+    streamFollowing();
   }
   function reply(command: any, payload: object) {
+    if (command.action === "acquire" && "token" in payload) { followingToken = String(payload.token); followSequence = 0; lastFollowAt = -Infinity; }
+    if (command.action === "release" || command.action === "resume") followingToken = null;
     if (command.action === "execute") view.manipulation.plan = null;
     if (payload && "plan_id" in payload) view.manipulation.plan = {
       ...payload, target_revision: command.target_revision, group_id: command.group_id,
@@ -58,6 +74,8 @@ function fixture() {
       group_id: command.group_id,
       status: "completed",
       target_revision: command.target_revision,
+      ...(command.action === "update" ? { sample_pose: { position: command.position, orientation: command.orientation },
+        ...("status" in payload && payload.status === "feasible" ? { pose: { position: command.position, orientation: command.orientation } } : {}) } : {}),
       ...payload,
     } as Outbound);
     pump();
@@ -249,19 +267,6 @@ it("Reset is a distinct joint-zero request using the selected speed", () => {
     speed_scale: 0.1,
   });
   expect(f.interaction.busy).toBe(true);
-});
-
-it("selected gripper intent is attached to the plan without moving the gripper", () => {
-  const f = fixture();
-  f.interaction.setSelected(true);
-  f.interaction.begin();
-  f.interaction.aim(pose);
-  f.interaction.end();
-  f.interaction.setGripper(1);
-  expect(f.sent.some((c) => c.action === "gripper")).toBe(false);
-  f.interaction.execute(); f.advance(0);
-  f.advance(0.1);
-  expect(f.sent.at(-1)).toMatchObject({ action: "plan", final_gripper: 1 });
 });
 
 it("plans on releasing a selected target without executing hardware", () => {
@@ -533,6 +538,7 @@ it("Open/Close drafts deferred gripper intent until Execute", () => {
   f.interaction.aim(pose);
   f.interaction.end();
   f.interaction.setGripper(1);
+  expect(f.sent.some(c => c.action === "gripper")).toBe(false);
   f.advance(0.01);
   const plan = f.sent.at(-1);
   expect(plan).toMatchObject({ action: "plan", final_gripper: 1 });
@@ -735,7 +741,7 @@ it("does not apply late follow errors to newer input and validates a pending rel
   expect(f.interaction.rejection).toBeNull();
   f.interaction.end();
   f.reply(current, { status: "infeasible", sequence: current.sequence, code: "ik_failed" });
-  expect(f.interaction.target).toEqual(next);
+  expect(f.interaction.target).toEqual(f.view.manipulation.observations.arm.pose);
   expect(f.authority.state.authority).toBeNull();
   expect(f.interaction.snapshot().finishing).toBe(false);
 });
@@ -1011,7 +1017,7 @@ it("does not leave stale execution or gripper drafts across 100 selected operati
 
 it("validates optional accepted gripper targets, velocities, and execution phases",()=> {
   const message:any={type:"manipulation_state",available:true,ts:1,
-    model:{revision:"v",root:"base",asset_url:null,links:[{name:"base",bounds:null}],joints:[]},
+    model:{ gripper_joints: {}, revision:"v",root:"base",asset_url:null,links:[{name:"base",bounds:null}],joints:[]},
     groups:[],observations:{arm:{joints:{},measured_at:1,gripper:.35,gripper_target:0,joint_velocities:{j:.2}}},
     execution_phase:"gripper"};
   expect(decodeManipulation(message)).toMatchObject({execution_phase:"gripper"});
@@ -1117,19 +1123,13 @@ it("retains the latest release demand while an obsolete plan retires", () => {
 });
 
 
-it.each([false, true])("requires shared authority with v2 server_follow_stream=%s", serverStream => {
-  const f = fixture(); f.view.hello.server_follow_stream = serverStream;
-  expect(f.interaction.begin()).toBe(true);
-  const acquire = f.sent.at(-1);
-  expect(acquire).toMatchObject({ action: "acquire", epoch: "test-epoch", lease_id: "test-lease-1" });
-  f.reply(acquire, { status: "acquired", token: "following" });
+it("requires shared authority and never sends a client-native follow stream", () => {
+  const f = fixture();
+  f.interaction.begin();
+  expect(f.authority.commands.some(command => command.action === "acquire")).toBe(true);
+  f.reply(f.sent.at(-1), { status: "acquired", token: "following" });
   f.interaction.aim(pose); f.advance(.1);
-  expect(f.sent.some(command => command.action === "update")).toBe(!serverStream);
-  expect(f.authority.state.target).toMatchObject(pose);
-  f.interaction.end(); f.advance(1);
-  expect(f.authority.state.authority).toBeNull();
-  const count = f.sent.length; f.advance(1);
-  expect(f.sent).toHaveLength(count);
+  expect(f.sent.filter(command => command.action === "update").every(command => command.request_id.startsWith("shared-follow-"))).toBe(true);
 });
 
 it("fails before subscribing when the required authority port is absent", () => {

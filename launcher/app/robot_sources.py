@@ -17,6 +17,8 @@ BLUEPRINT_CLI = {
 
 
 class SourceBody(BaseModel):
+    model_config = {"extra": "forbid"}
+
     mode: Literal["auto", "device", "manual", "simulated"]
     device_id: str | None = None
     address: str | None = None
@@ -62,12 +64,8 @@ def resolve_robot_source(
     robot: Literal["unitree_go2", "openyam"],
     source: SourceBody,
     devices: list[dict[str, Any]] | None = None,
-    *,
-    simulation: bool = False,
 ) -> ResolvedRobotSource:
     devices = devices or []
-    if simulation and source.mode != "simulated":
-        raise ValueError("Conflicting simulation and hardware selections")
     if source.mode in {"auto", "device"}:
         choices = devices if source.mode == "auto" else [d for d in devices if d["id"] == source.device_id]
         if len(choices) != 1:

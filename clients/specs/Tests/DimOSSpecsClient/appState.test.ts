@@ -1,3 +1,4 @@
+import { helloAt } from "../fixtures/SessionFixture";
 import { describe, expect, it } from "vitest";
 import {
   agentSpeechShouldRun,
@@ -11,6 +12,7 @@ import type { ClientTrackingOrigin } from "../../Assets/Scripts/DimOSARClient/lo
 import type { Hello, Pose, RobotDescription } from "../../Assets/Scripts/DimOSARClient/websocket/protocolTypes";
 
 const GO2: RobotDescription = {
+  odom_scale_correction_factor: 1,
   display_name: "Unitree Go2",
   body_bounds_m: [0.7, 0.5, 0.55],
   footprint_m: [0.7, 0.5],
@@ -47,24 +49,8 @@ function baseView(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessio
 }
 
 function helloView(): Hello {
-  return {
-    type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
-    client_id: "test-client",
-    time_sync: { ts_client: 0, ts_server: 0 },
-    robot: GO2,
-    capabilities: {
-      lidar: { available: true, reason: null },
-      navigation: {
-        available: true,
-        reason: null,
-        nav_goal: { available: true, reason: null },
-        nav_joystick: { available: true, reason: null },
-      },
-      localization: { available: true, reason: null },
-      estop: { available: true, reason: null },
-      agent: { available: false, reason: "current blueprint has no DimOS agent" },
-    },
-  };
+  return { ...helloAt(0), client_id: "test-client", robot: GO2,
+    time_sync: { ts_client: 0, ts_server: 0 } };
 }
 
 describe("deriveRobotMarkerApplyInput", () => {

@@ -9,6 +9,11 @@ export function applicableCases(client, group) {
     (row) => row.platforms.includes(client) && (!group || row.group === group),
   );
 }
+/** Both clients share the compact golden order; host-specific holds preserve complete gestures. */
+export function goldenChapters(client, value = catalog) {
+  if (!["webxr", "specs"].includes(client)) throw new Error(`Unknown integration client: ${client}`);
+  return client === "webxr" ? value.golden.webxrChapters : value.golden.chapters;
+}
 export function validateCatalog(value = catalog) {
   if (value.schemaVersion !== 1)
     throw new Error("Unsupported integration catalog version");
@@ -25,12 +30,14 @@ export function validateCatalog(value = catalog) {
       throw new Error(`Missing assertions: ${row.id}`);
     ids.add(row.id);
   }
-  const expected = value.cases.filter((row) => row.video).map((row) => row.id);
-  if (
-    JSON.stringify(expected) !==
-    JSON.stringify(value.golden.chapters.map((row) => row.id))
-  )
-    throw new Error("Golden chapters differ from catalog order");
+  for (const client of ["webxr", "specs"]) {
+    const expected = value.cases.filter(row => row.video && row.platforms.includes(client)).map(row => row.id);
+    const chapters = goldenChapters(client, value);
+    if (JSON.stringify(expected) !== JSON.stringify(chapters.map(row => row.id)))
+      throw new Error(`Golden chapters differ from ${client} catalog order`);
+    if (chapters.some(row => !Number.isFinite(row.durationS) || row.durationS <= 0))
+      throw new Error(`Invalid ${client} golden chapter duration`);
+  }
   return true;
 }
 validateCatalog();

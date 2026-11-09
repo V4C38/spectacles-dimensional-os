@@ -2,7 +2,7 @@ import { resolve, join, basename } from "node:path";
 import { writeFile, mkdir, readFile, rm } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { makeVisualReviews } from "../visual-review.mjs";
-import { catalog } from "./catalog.mjs";
+import { goldenChapters } from "./catalog.mjs";
 import { documents, finishRun, sourceIdentity, publishGoldenVideo } from "./artifacts.mjs";
 
 export function alignRecording(directory, manifest) {
@@ -95,7 +95,7 @@ export async function finalize(root, client, scope = "all") {
   for (const row of manifests)
     if (row.value.profile === "golden") {
       const actual = row.value.scenes.map((scene) => scene.id ?? scene.name);
-      const expected = catalog.golden.chapters.map((chapter) => chapter.id);
+      const expected = goldenChapters(client).map((chapter) => chapter.id);
       validation.push({
         caseId: "artifact_validation",
         name: "golden_order",

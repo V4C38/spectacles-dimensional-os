@@ -41,7 +41,11 @@ it.each(["cancelled", "succeeded", "failed"] as const)("resolves a shared pendin
   const accepted = { type: "nav_goal" as const, pose: [2,0,0,0] as [number,number,number,number], path_poses: [], ts: 1 };
   f.view.nav = { state: "idle", outcome: null };
   f.view.nav_goal = accepted;
-  f.view.interaction = { type: "interaction_state", epoch: "robot", revision: 1, mode: "manual", authority: null, target: null, preview: null, active_goal: accepted };
+  f.view.interaction = {
+    targets: [],
+    motion_busy: false,
+    following_tail: null,
+    type: "interaction_state", epoch: "robot", revision: 1, mode: "manual", authority: null, target: null, preview: null, active_goal: accepted };
   f.core.applyView(f.view, f.origin, { position: [0,0,0], orientation: [0,0,0,1] }, 1);
   expect(f.core.snapshot().goalActive).toBe(true);
   f.view.interaction = { ...f.view.interaction, revision: 2, active_goal: null };
@@ -60,7 +64,11 @@ it.each(["cancelled", "succeeded", "failed"] as const)("handles idle-before-clea
   const f = fixture();
   const accepted = { type: "nav_goal" as const, pose: [2,0,0,0] as [number,number,number,number], path_poses: [], ts: 1 };
   f.view.nav = { state: "idle", outcome: null }; f.view.nav_goal = accepted;
-  f.view.interaction = { type: "interaction_state", epoch: "robot", revision: 1, mode: "manual", authority: null, target: null, preview: null, active_goal: accepted };
+  f.view.interaction = {
+    targets: [],
+    motion_busy: false,
+    following_tail: null,
+    type: "interaction_state", epoch: "robot", revision: 1, mode: "manual", authority: null, target: null, preview: null, active_goal: accepted };
   f.core.applyView(f.view, f.origin, null, 1);
   f.view.nav = { state: "idle", outcome: null };
   f.core.applyView(f.view, f.origin, null, 1.1);
@@ -82,7 +90,11 @@ it("does not carry a previous goal's idle evidence into a new accepted goal", ()
   const f = fixture();
   const accepted = { type: "nav_goal" as const, pose: [2,0,0,0] as [number,number,number,number], path_poses: [], ts: 1 };
   f.view.nav = { state: "idle", outcome: null }; f.view.nav_goal = accepted;
-  f.view.interaction = { type: "interaction_state", epoch: "robot", revision: 1, mode: "manual", authority: null, target: null, preview: null, active_goal: accepted };
+  f.view.interaction = {
+    targets: [],
+    motion_busy: false,
+    following_tail: null,
+    type: "interaction_state", epoch: "robot", revision: 1, mode: "manual", authority: null, target: null, preview: null, active_goal: accepted };
   f.core.applyView(f.view, f.origin, null, 1);
   f.view.nav = { state: "idle", outcome: null }; f.core.applyView(f.view, f.origin, null, 1.1);
   const next = { ...accepted, ts: 2, pose: [3,0,0,0] as [number,number,number,number] };

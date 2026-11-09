@@ -415,3 +415,19 @@ async def test_start_does_not_inspect_or_signal_unrelated_dimos(runtime, monkeyp
     await mgr._clear_before_start(client="webxr")
     inspect.assert_not_awaited()
     kill.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_setup_reaps_its_child_without_stopping_gateway(runtime):
+    mgr, children, _ = runtime
+    await mgr.start_webxr()
+    gateway = mgr._webxr_proc
+    task = asyncio.create_task(mgr._run_tracked(["setup"], env={}))
+    while len(children) < 2:
+        await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert children[1].returncode == 0
+    assert mgr._proc is None
+    assert mgr._webxr_proc is gateway and gateway.returncode is None

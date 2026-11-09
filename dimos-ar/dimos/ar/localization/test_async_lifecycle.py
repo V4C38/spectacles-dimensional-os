@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
 import math
 import threading
 from types import SimpleNamespace
@@ -10,19 +9,15 @@ import numpy as np
 import pytest
 
 from dimos.ar.localization.coordinator import LocalizationOutcome
-from dimos.ar.localization.odom_map_transform import OdomMapTransform
 from dimos.ar.localization.policy import LocalizationPolicy
 from dimos.ar.localization.pose_buffer import PoseBuffer
 from dimos.ar.localization.runner import LocalizationRunner
-from dimos.ar.localization.types import LocalizedPose
 from dimos.ar.localization.vps.robot_observation_buffer import (
     RobotObservationBuffer,
-    RobotObservationSample,
 )
 from dimos.ar.localization.worker import LocalizationWorker
-from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from test_support.localization import _advance, _camera_info, _coordinator, _image, _observation
+from test_support.localization import _advance, _camera_info, _image, _observation
 
 
 def _pose(ts: float, *, x: float = 0, yaw: float = 0) -> PoseStamped:
@@ -121,7 +116,7 @@ async def test_cancelled_cpu_work_keeps_actual_worker_admission_bounded() -> Non
 
 @pytest.mark.parametrize("failure", ["timeout", "exception", "disconnect", "replacement"])
 async def test_runner_bounds_episode_and_discards_retired_results(failure: str) -> None:
-    policy = LocalizationPolicy(["vps"])
+    policy = LocalizationPolicy(["fiducial_marker"])
     policy.on_hello("client")
     work = policy.on_observations("client", [_observation()])
     release = asyncio.Event()
@@ -133,7 +128,7 @@ async def test_runner_bounds_episode_and_discards_retired_results(failure: str) 
         await release.wait()
         if failure == "exception":
             raise ValueError("provider failed")
-        return LocalizationOutcome(used_vps=True)
+        return LocalizationOutcome()
 
     async def close():
         pass
@@ -166,106 +161,12 @@ async def test_runner_bounds_episode_and_discards_retired_results(failure: str) 
         await runner.close()
 
 
-async def test_cooldown_poll_requests_fresh_pixels_without_odometry() -> None:
-    now = [0.0]
-    policy = LocalizationPolicy(["vps"], clock=lambda: now[0])
-    policy.begin_client_vps()
-    assert policy.on_hello("client") is None
-    prompts = []
-
-    async def close():
-        pass
-
-    runner = LocalizationRunner(
-        coordinator=SimpleNamespace(close=close),
-        policy=policy,
-        on_outcome=lambda *_args: None,
-        on_prompt=prompts.append,
-    )
-    try:
-        runner.start()
-        now[0] = 30
-        await asyncio.sleep(0.3)
-        assert prompts == ["client"]
-    finally:
-        await runner.close()
 
 
-@pytest.mark.parametrize("change", ["travel", "age", "generation"])
-async def test_robot_anchor_expiring_during_query_cannot_produce_alignment(change: str) -> None:
-    now = [3.0]
-    generation = [0]
-    calls = []
-    coordinator = None
-
-    async def localize(observations):
-        calls.append(observations)
-        if change == "travel":
-            _advance(coordinator._policy, 0, 0)
-            _advance(coordinator._policy, 3, 0)
-        elif change == "age":
-            now[0] = 65
-        else:
-            generation[0] += 1
-        return LocalizedPose(Pose(0, 0, 0), "map", 0.9)
-
-    coordinator = _coordinator(
-        providers=["vps"],
-        vps=SimpleNamespace(localize=localize),
-        robot_sample=RobotObservationSample(_observation(2), 0),
-    )
-    coordinator._clock = lambda: now[0]
-    coordinator._source_generation = lambda: generation[0]
-    try:
-        outcome = await coordinator.run([_observation(3)])
-        assert outcome.result is None
-        assert coordinator._odom_map_transform.vps_sample() is None
-        assert len(calls) == 1  # Do not spend a headset query on an expired robot fix.
-    finally:
-        coordinator._worker.close()
 
 
-async def test_anchor_snapshot_and_confidence_include_robot_quality() -> None:
-    coordinator = _coordinator(providers=["vps"])
-    transforms = coordinator._odom_map_transform
-    robot = LocalizedPose(Pose(10, 0, 0), "map", 0.51)
-    transforms.update_from_vps(robot, ts_server=2, travel_m=0, map_code="office")
-
-    async def localize(_observations, **_kwargs):
-        # A replacement must not alter the already captured composition snapshot.
-        transforms.update_from_vps(
-            replace(robot, pose=Pose(20, 0, 0)), ts_server=3, travel_m=0, map_code="office"
-        )
-        return LocalizedPose(Pose(11, 0, 0), "map", 0.99)
-
-    coordinator._vps = SimpleNamespace(localize=localize)
-    try:
-        outcome = await coordinator.run([_observation(3)])
-        assert outcome.result.position[0] == pytest.approx(1)
-        assert outcome.result.confidence == 0.51
-    finally:
-        coordinator._worker.close()
 
 
-def test_anchor_age_map_generation_and_finite_confidence_are_required() -> None:
-    transforms = OdomMapTransform()
-    localization = LocalizedPose(Pose(0, 0, 0), "map", 0.9)
-    assert not transforms.update_from_vps(
-        replace(localization, confidence=float("nan")), ts_server=10, travel_m=0
-    )
-    assert transforms.update_from_vps(
-        localization, ts_server=10, travel_m=0, map_code="office", source_generation=1
-    )
-    sample = transforms.vps_sample()
-    with pytest.raises(ValueError):
-        sample.T_odom_map[0, 3] = 999
-    args = {"now_server": 11, "current_travel_m": 0, "map_code": "office", "source_generation": 1}
-    assert transforms.is_vps_reusable(**args)
-    assert not transforms.is_vps_reusable(**{**args, "now_server": 71})
-    assert not transforms.is_vps_reusable(**{**args, "map_code": "elsewhere"})
-    assert not transforms.is_vps_reusable(**{**args, "source_generation": 2})
-    transforms.clear()
-    assert not transforms.is_vps_reusable(**args)
 
 
 def test_success_uses_capture_travel_not_http_completion_travel() -> None:
@@ -285,131 +186,8 @@ def test_exact_pose_remains_usable_beside_a_history_gap() -> None:
     assert history.at_server_ts(10.01).position[0] == pytest.approx(0.01)
 
 
-async def test_vendor_response_to_robot_and_headset_alignment_randomized() -> None:
-    import cv2
-    from scipy.spatial.transform import Rotation
-
-    from dimos.ar.localization.coordinator import LocalizationCoordinator
-    from dimos.ar.localization.types import Intrinsics, Observation
-    from dimos.ar.localization.vps.localizer import VpsLocalizer
-    from dimos.ar.localization.vps.multiset_client import _result_from_payload
-    from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
-    from dimos.utils.transform_utils import matrix_to_pose, pose_to_matrix
-
-    rng = np.random.default_rng(617)
-    responses = []
-
-    class Vendor:
-        async def query(self, **_kwargs):
-            return _result_from_payload(responses.pop(0))
-
-        async def close(self):
-            pass
-
-    # Independent axis matrices used to construct vendor JSON fixtures.
-    vendor_to_zup = np.array([[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 0], [0, 0, 0, 1]])
-    optical_to_vendor = np.diag([1, -1, -1, 1])
-
-    def transform(*, tilted=False):
-        matrix = np.eye(4)
-        matrix[:3, :3] = (
-            Rotation.random(random_state=rng).as_matrix()
-            if tilted
-            else Rotation.from_euler("z", rng.uniform(-math.pi, math.pi)).as_matrix()
-        )
-        matrix[:3, 3] = rng.uniform(-10, 10, 3)
-        return matrix
-
-    def response(optical_in_map):
-        vendor = np.linalg.inv(vendor_to_zup) @ optical_in_map @ optical_to_vendor
-        xyz = vendor[:3, 3]
-        quat = Rotation.from_matrix(vendor[:3, :3]).as_quat()
-        return {
-            "poseFound": True,
-            "position": dict(zip("xyz", xyz, strict=True)),
-            "rotation": dict(zip(("x", "y", "z", "w"), quat, strict=True)),
-            "confidence": 0.9,
-        }
-
-    ok, encoded = cv2.imencode(".jpg", np.zeros((16, 16, 3), dtype=np.uint8))
-    assert ok
-    intrinsics = Intrinsics(10, 10, 8, 8, 16, 16, "none", ())
-    worker = LocalizationWorker()
-    policy = LocalizationPolicy(["vps"], client_vps_cooldown_s=0, robot_vps_cooldown_s=0)
-    robot_frames = RobotObservationBuffer(pose_buffer=PoseBuffer(), T_base_camera_optical=np.eye(4))
-    coordinator = LocalizationCoordinator(
-        policy=policy,
-        odom_map_transform=OdomMapTransform(),
-        robot_observations=robot_frames,
-        marker=None,
-        vps=VpsLocalizer(client=Vendor(), worker=worker),
-        worker=worker,
-        clock=lambda: 100.0,
-        map_code="office",
-    )
-    try:
-        for _ in range(300):
-            expected_origin = transform()
-            odom_in_map = transform()
-            body_in_odom = transform(tilted=True)
-            optical_in_client = transform(tilted=True)
-            optical_in_odom = body_in_odom @ UNITREE_GO2_PROFILE.T_base_camera_optical
-            responses.extend(
-                [
-                    response(odom_in_map @ optical_in_odom),
-                    response(odom_in_map @ expected_origin @ optical_in_client),
-                ]
-            )
-            coordinator.invalidate_source()
-            robot_frames.add_sample(
-                RobotObservationSample(
-                    Observation(
-                        encoded.tobytes(), intrinsics, matrix_to_pose(optical_in_odom), 100
-                    ),
-                    0,
-                )
-            )
-            outcome = await coordinator.run(
-                [Observation(encoded.tobytes(), intrinsics, matrix_to_pose(optical_in_client), 100)]
-            )
-            assert outcome.result is not None
-            actual = pose_to_matrix(Pose(*outcome.result.position, *outcome.result.orientation))
-            assert np.allclose(actual, expected_origin, atol=1e-9)
-    finally:
-        await coordinator.close()
 
 
-@pytest.mark.parametrize("change", ["travel", "age", "generation"])
-async def test_anchor_expiring_during_headset_query_discards_final_result(change: str) -> None:
-    now = [3.0]
-    generation = [0]
-    calls = []
-    coordinator = None
-
-    async def localize(observations):
-        calls.append(observations)
-        if len(calls) == 2:
-            if change == "travel":
-                _advance(coordinator._policy, 0, 0)
-                _advance(coordinator._policy, 3, 0)
-            elif change == "age":
-                now[0] = 65
-            else:
-                generation[0] += 1
-        return LocalizedPose(Pose(0, 0, 0), "map", 0.9)
-
-    coordinator = _coordinator(
-        providers=["vps"],
-        vps=SimpleNamespace(localize=localize),
-        robot_sample=RobotObservationSample(_observation(2), 0),
-    )
-    coordinator._clock = lambda: now[0]
-    coordinator._source_generation = lambda: generation[0]
-    try:
-        assert (await coordinator.run([_observation(3)])).result is None
-        assert len(calls) == 2
-    finally:
-        coordinator._worker.close()
 
 
 @pytest.mark.asyncio
@@ -436,3 +214,21 @@ async def test_camera_stream_drops_replaceable_work_while_native_worker_is_busy(
     finally:
         release.set()
         worker.close()
+
+
+async def test_map_workflow_closes_shared_resources_after_jobs():
+    from unittest.mock import AsyncMock
+
+    order = []
+    coordinator = SimpleNamespace(close=AsyncMock(side_effect=lambda: order.append("worker")))
+    vps = SimpleNamespace(close=AsyncMock(side_effect=lambda: order.append("vps")))
+    mapping = SimpleNamespace(close=AsyncMock(side_effect=lambda: order.append("map")))
+    runner = LocalizationRunner(
+        coordinator=coordinator, policy=LocalizationPolicy(["vps"]),
+        map_localization=mapping, vps=vps,
+        on_outcome=lambda *_args: None, on_prompt=lambda _client: None,
+    )
+    await runner.close()
+    assert order == ["map", "vps", "worker"]
+    coordinator.close.assert_awaited_once()
+    vps.close.assert_awaited_once()

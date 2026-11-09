@@ -6,7 +6,7 @@ it("preserves native checked-plan identity across unchanged release and authorit
   const peer = new IntegrationV2Fixture(value => states.push(JSON.parse(JSON.stringify(value))), "native-test", () => 1);
   const pose = { position: [1, 2, 3], orientation: [0, 0, 0, 1] };
   const acquire = (requestId: string) => peer.command({ type: "interaction_request", action: "acquire",
-    request_id: requestId, source_id: "mouse", kind: "manipulation_planning", group_id: "arm",
+    request_id: requestId, acquisition_id: requestId, source_id: "mouse", kind: "manipulation_planning", group_id: "arm",
     speed_scale: .5, gripper: 1, ...pose });
   acquire("first");
   const revision = peer.canonical()!.revision;
@@ -14,7 +14,7 @@ it("preserves native checked-plan identity across unchanged release and authorit
   peer.command({ type: "interaction_request", action: "release", request_id: "release", sequence: 1, ...pose, ...lease });
   expect(peer.canonical()!.revision).toBe(revision);
   expect(states.findLast(state => state.type === "interaction_state")).toMatchObject({
-    authority: null, target: { revision, phase: "committed" },
+    authority: null, targets: [{ revision, phase: "committed" }],
   });
   acquire("second");
   expect(peer.canonical()!.revision).toBe(revision);

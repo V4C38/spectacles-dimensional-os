@@ -96,8 +96,9 @@ class CapabilitySet:
         items[CapabilityName.OBJECT_DETECTION] = _capability(
             object_detection_available, "current blueprint has no object detector"
         )
-        if manipulation_available:
-            items[CapabilityName.MANIPULATION] = Capability(True, None)
+        items[CapabilityName.MANIPULATION] = _capability(
+            manipulation_available, "current blueprint has no manipulation module"
+        )
         return cls(_items=items, _navigation=navigation)
 
     def supports(self, name: CapabilityName) -> bool:

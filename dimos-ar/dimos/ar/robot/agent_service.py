@@ -63,7 +63,7 @@ class ARAgentService:
         with self._lock:
             return frozenset(self._markers)
 
-    def set_pose(self, pose: ClientPose, *, client_id: str = "legacy") -> None:
+    def set_pose(self, pose: ClientPose, *, client_id: str) -> None:
         with self._lock:
             self._poses[client_id] = (pose, self._clock())
 

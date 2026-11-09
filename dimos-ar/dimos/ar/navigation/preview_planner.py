@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import threading
 from typing import TYPE_CHECKING
 
@@ -8,20 +7,9 @@ from dimos.mapping.occupancy.path_resampling import smooth_resample_path
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.nav_msgs.OccupancyGrid import CostValues, OccupancyGrid
-
-# DimOS moved these primitives into go2; retain compatibility with installed releases.
-try:
-    from dimos.navigation.go2.replanning_a_star.goal_validator import find_safe_goal
-    from dimos.navigation.go2.replanning_a_star.min_cost_astar import min_cost_astar
-    from dimos.navigation.go2.replanning_a_star.navigation_map import NavigationMap
-
-except ModuleNotFoundError:
-    from dimos.navigation.replanning_a_star.goal_validator import find_safe_goal
-    from dimos.navigation.replanning_a_star.min_cost_astar import min_cost_astar
-    from dimos.navigation.replanning_a_star.navigation_map import NavigationMap
-
-
-_NUMERIC_ROBOT_WIDTH = "robot_width" in inspect.signature(NavigationMap).parameters
+from dimos.navigation.go2.replanning_a_star.goal_validator import find_safe_goal
+from dimos.navigation.go2.replanning_a_star.min_cost_astar import min_cost_astar
+from dimos.navigation.go2.replanning_a_star.navigation_map import NavigationMap
 
 if TYPE_CHECKING:
     from dimos.core.global_config import GlobalConfig
@@ -33,7 +21,7 @@ class PreviewPlanner:
     def __init__(self, global_config: GlobalConfig) -> None:
         self._global_config = global_config
         self._navigation_map = NavigationMap(
-            global_config.robot_width if _NUMERIC_ROBOT_WIDTH else global_config, "gradient"
+            global_config, "gradient"
         )
         self._lock = threading.Lock()
         self._binary_costmap: OccupancyGrid | None = None

@@ -8,7 +8,6 @@ identity of the goal that produced them.
 from __future__ import annotations
 
 from collections.abc import Callable
-import inspect
 import json
 import math
 import threading
@@ -73,21 +72,12 @@ class ARReplanningAStarPlanner(ReplanningAStarPlanner):  # type: ignore[misc]
         # The upstream constructor only initializes Module and its planner. Use
         # the same configuration with our subclass, without editing upstream.
         Module.__init__(self, **kwargs)
-        if "global_config" in inspect.signature(GlobalPlanner.__init__).parameters:
-            overrides = {name: value for name, value in (
-                ("robot_width", self.config.robot_width),
-                ("robot_rotation_diameter", self.config.robot_rotation_diameter),
-            ) if value is not None}
-            config = self.config.g.model_copy(update=overrides) if overrides else self.config.g
-            self._planner = ARGlobalPlanner(self._emit_navigation_status, config)
-        else:
-            self._planner = ARGlobalPlanner(
-                self._emit_navigation_status,
-                robot_width=self.config.robot_width,
-                robot_rotation_diameter=self.config.robot_rotation_diameter,
-                nerf_speed=self.config.nerf_speed,
-                simulation=bool(self.config.g.simulation),
-            )
+        overrides = {name: value for name, value in (
+            ("robot_width", self.config.robot_width),
+            ("robot_rotation_diameter", self.config.robot_rotation_diameter),
+        ) if value is not None}
+        config = self.config.g.model_copy(update=overrides) if overrides else self.config.g
+        self._planner = ARGlobalPlanner(self._emit_navigation_status, config)
         self._ar_fence = NavigationControlFence()
         self.nav_cmd_vel = _NavigationVelocityOutput(self, self._ar_fence)
         self._ar_watchdog_stop = threading.Event()

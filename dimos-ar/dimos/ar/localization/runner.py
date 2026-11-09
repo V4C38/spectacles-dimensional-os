@@ -5,7 +5,11 @@ from collections.abc import Callable
 import time
 from typing import TYPE_CHECKING
 
-from dimos.ar.localization.coordinator import LocalizationCoordinator, LocalizationOutcome
+from dimos.ar.localization.coordinator import (
+    AsyncLocalizer,
+    LocalizationCoordinator,
+    LocalizationOutcome,
+)
 from dimos.ar.localization.policy import EpisodeWork, LocalizationPolicy
 from dimos.utils.logging_config import setup_logger
 
@@ -29,8 +33,10 @@ class LocalizationRunner:
         on_prompt: Callable[[str], None],
         timeout_s: float = EPISODE_TIMEOUT_S,
         map_localization: MapLocalization | None = None,
+        vps: AsyncLocalizer | None = None,
     ) -> None:
         self._map_localization = map_localization
+        self._vps = vps
         self._coordinator = coordinator
         self._policy = policy
         self._on_outcome = on_outcome
@@ -84,7 +90,11 @@ class LocalizationRunner:
         await asyncio.gather(*tasks, return_exceptions=True)
         if self._map_localization is not None:
             await self._map_localization.close()
-        await self._coordinator.close()
+        try:
+            if self._vps is not None:
+                await self._vps.close()
+        finally:
+            await self._coordinator.close()
 
     async def _poll(self) -> None:
         while True:
@@ -117,7 +127,6 @@ class LocalizationRunner:
                 processing_ms=round((time.perf_counter() - started) * 1000, 1),
                 newest_capture_ts=max((item.ts_server for item in work.observations), default=None),
                 result=outcome.result is not None,
-                deferred=outcome.defer_vps,
             )
             if self._tasks.get(work.client_id) is task and self._policy.is_current(work):
                 self._on_outcome(work, outcome)

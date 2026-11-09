@@ -8,7 +8,8 @@ import math
 import time
 from typing import TYPE_CHECKING, Protocol
 
-from dimos.ar.robot.odometry_correction import correct_odom_points, correct_odom_pose
+from dimos.ar.localization.pose_buffer import PoseSample
+from dimos.ar.robot.odometry_correction import correct_odom_points
 from dimos.ar.sensors.lidar_filter import (
     DEFAULT_TARGET_POINTS,
     LidarFilterSettings,
@@ -17,7 +18,6 @@ from dimos.ar.sensors.lidar_filter import (
 from dimos.ar.sensors.lidar_settings import LidarSettings
 from dimos.ar.timing_diagnostics import TimingSummary
 from dimos.ar.websocket.protocol import encode_lidar_binary, encode_pose
-from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.utils.logging_config import setup_logger
 
@@ -123,26 +123,14 @@ class RobotStatePublisher:
             await asyncio.gather(self._lidar_task, return_exceptions=True)
         self._lidar_executor.shutdown(wait=False, cancel_futures=True)
 
-    def publish_odom(self, msg: PoseStamped) -> None:
+    def publish_odom(self, sample: PoseSample) -> None:
         if not self._allow_emit(self._pose_last_emit_mono, self._pose_max_hz):
             return
-        corrected = correct_odom_pose(msg, factor=self._odom_scale_correction_factor)
-        position = (corrected.x, corrected.y, corrected.z)
-        orientation = (
-            corrected.orientation.x,
-            corrected.orientation.y,
-            corrected.orientation.z,
-            corrected.orientation.w,
-        )
-        if not _is_finite_pose(position, orientation):
+        if not _is_finite_pose(sample.position, sample.orientation):
             return
         self._pose_last_emit_mono = time.monotonic()
         self._ws.schedule_broadcast_text(
-            encode_pose(
-                position=position,
-                orientation=orientation,
-                ts=corrected.ts,
-            )
+            encode_pose(position=sample.position, orientation=sample.orientation, ts=sample.ts_server)
         )
 
     def publish_lidar(

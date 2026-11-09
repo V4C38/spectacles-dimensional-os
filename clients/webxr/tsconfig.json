@@ -34,6 +34,7 @@
     "tests"
   ],
   "exclude": [
-    "tests/integration-tests"
+    "tests/integration-tests",
+    "src/dimos"
   ]
 }

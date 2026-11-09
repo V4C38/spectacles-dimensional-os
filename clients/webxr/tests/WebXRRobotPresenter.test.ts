@@ -1,3 +1,4 @@
+import { helloAt } from "../../specs/Tests/fixtures/SessionFixture";
 import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/clientTrackingOrigin";
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
@@ -8,6 +9,8 @@ import { WebXRRobotPresenter } from "../src/presentation/WebXRRobotPresenter";
 import { ROBOT_LINE_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
 
 const capabilities: Capabilities = {
+  manipulation: { available: false, reason: "No arm" },
+  object_detection: { available: false, reason: "No detector" },
   lidar: { available: true, reason: null },
   localization: { available: true, reason: null },
   estop: { available: true, reason: null },
@@ -15,7 +18,7 @@ const capabilities: Capabilities = {
   navigation: {
     available: true,
     reason: null,
-    nav_goal: { available: true, reason: null },
+    nav_goal: { preview: false, available: true, reason: null },
     nav_joystick: { available: true, reason: null },
   },
 };
@@ -24,18 +27,8 @@ function view(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionSta
   return {
     connection: "ready",
     hasTrackingOrigin: false,
-    hello: {
-      type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
-      client_id: "c",
-      time_sync: { ts_client: 0, ts_server: 0 },
-      robot: {
-        display_name: "Go2",
-        body_bounds_m: [0.7, 0.5, 0.55],
-        footprint_m: [0.7, 0.3],
-        base_height_m: 0.33,
-      },
-      capabilities,
-    },
+    hello: { ...helloAt(0, capabilities), client_id: "c", time_sync: { ts_client: 0, ts_server: 0 },
+      robot: { ...helloAt(0).robot, display_name: "Go2", footprint_m: [0.7, 0.3] } },
     state: null,
     pose: null,
     nav_goal: null,

@@ -103,9 +103,9 @@ run_dimos_ar_job() {
   python -m pip install --upgrade pip
   # Match fresh GitHub dependencies while keeping the reviewed DimOS baseline.
   # CI_DIMOS_REVISION permits explicit compatibility probes against another commit.
-  GIT_LFS_SKIP_SMUDGE=1 pip install --upgrade -r "${DIMOS_AR}/requirements-ci.txt" -e "${CI_DIMOS_REQUIREMENT}" -e ".[dev]"
+  GIT_LFS_SKIP_SMUDGE=1 pip install --src "${CI_VENV}/src" --upgrade -r "${DIMOS_AR}/requirements-ci.txt" -e "${CI_DIMOS_REQUIREMENT}" -e ".[dev]"
 
-  ruff check .
+  ruff check dimos/ar tools
   mypy dimos/ar
   pytest --junitxml="${REVIEW_DATA}/unit/backend/junit.xml"
   pytest "${WEBXR_CLIENT}/tools/test_calibrate.py" --junitxml="${REVIEW_DATA}/unit/calibration/junit.xml"
@@ -119,7 +119,7 @@ run_manipulation_contract_job() {
     "${py}" -m venv "${CI_PLANNING_VENV}"
   fi
   "${CI_PLANNING_VENV}/bin/python" -m pip install --upgrade pip
-  GIT_LFS_SKIP_SMUDGE=1 "${CI_PLANNING_VENV}/bin/python" -m pip install -e "${CI_DIMOS_PLANNING_REQUIREMENT}" -e "${DIMOS_AR}[manipulation,dev]"
+  GIT_LFS_SKIP_SMUDGE=1 "${CI_PLANNING_VENV}/bin/python" -m pip install --src "${CI_PLANNING_VENV}/src" -e "${CI_DIMOS_PLANNING_REQUIREMENT}" -e "${DIMOS_AR}[manipulation,dev]"
   "${CI_PLANNING_VENV}/bin/python" "${DIMOS_AR}/tools/run_mock_manipulation_contract.py"
 }
 
@@ -172,17 +172,21 @@ run_client_webxr_job() {
   node --test --test-reporter=spec --test-reporter-destination=stdout \
     --test-reporter=junit --test-reporter-destination="${REVIEW_DATA}/unit/integration-tooling/junit.xml" \
     "${ROOT}/tools/integration-tests/integration.test.mjs" "${ROOT}/tools/visual-review.test.mjs"
-  # The active environment belongs to the launcher job; use the backend environment
-  # for the real ARModule server spawned by the multi-client browser test.
-  DIMOS_PYTHON="${CI_VENV}/bin/python" npm run test:integration
+  npm run test:integration
+}
+
+run_timed() {
+  local started=$SECONDS
+  "$@"
+  echo "Timing: $1 completed in $((SECONDS - started))s"
 }
 
 check_runtime_tools
-run_dimos_ar_job
-run_manipulation_contract_job
-run_launcher_job
-run_client_specs_job
-run_client_webxr_job
+run_timed run_dimos_ar_job
+run_timed run_manipulation_contract_job
+run_timed run_launcher_job
+run_timed run_client_specs_job
+run_timed run_client_webxr_job
 
 echo ""
 echo "All CI jobs passed."

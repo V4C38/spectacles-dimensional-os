@@ -14,8 +14,11 @@ export class InteractionPeer {
   constructor(readonly epoch: string, private readonly clientId: string) {}
 
   snapshot(extra: object = {}) {
-    return { type: "interaction_state", epoch: this.epoch, revision: ++this.revision,
-      mode: this.mode, authority: this.authority, target: this.target,
+    return {
+      motion_busy: false,
+      following_tail: null,
+      type: "interaction_state", epoch: this.epoch, revision: ++this.revision,
+      mode: this.mode, authority: this.authority,
       targets: this.target ? [this.target] : [], preview: this.preview,
       active_goal: this.activeGoal, ...extra };
   }

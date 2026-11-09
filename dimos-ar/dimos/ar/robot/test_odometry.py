@@ -65,9 +65,7 @@ def test_replay_retains_one_epoch_and_snapshots_do_not_share_mutable_messages() 
     assert first.corrected.ts_server == 100
     incoming.position.x = 999
     assert first.position[0] == 2
-    native = first.native_pose()
-    native.position.x = 777
-    assert first.native_pose().x == 2
+    assert first.corrected.position[0] == 2.5
     second = odometry.accept(_pose(6, 3), received_at=101.5)
     assert second.corrected.ts_server == 101
     assert second.corrected.position[0] == 3.75

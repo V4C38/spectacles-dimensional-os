@@ -1,4 +1,4 @@
-import { FakeClock, FakeTransport, helloAt, stateFrame } from "../fixtures/SessionFixture";
+import { FakeClock, FakeTransport, helloAt, stateFrame, navigationSnapshot } from "../fixtures/SessionFixture";
 import { ARM_FIXTURE } from "../integration-tests/IntegrationArmFixture";
 import { describe, expect, it } from "vitest";
 import { ClientTrackingOriginStore } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingOrigin";
@@ -15,7 +15,7 @@ import type {
 
 const STATE = stateFrame();
 
-function makeSession(): {
+function makeSession(pumpSnapshots = true): {
   session: ARModuleSession;
   transport: FakeTransport;
   clock: FakeClock;
@@ -30,17 +30,29 @@ function makeSession(): {
     clientTrackingOriginStore: originStore,
     config: { helloTimeoutS: 1, reconnectDelayS: 0.5 },
   });
+  const receive = session.onTransportText.bind(session);
+  let publication: import("../../Assets/Scripts/DimOSARClient/replication/CollaborationTypes").InteractionState | null = null;
+  session.onTransportText = text => {
+    for (const line of text.split("\n").filter(value => value.trim())) {
+      let value: any;
+      try { value = JSON.parse(line); } catch { receive(line + "\n"); continue; }
+      if (value.type === "nav_goal") value = navigationSnapshot(publication, value);
+      if (value.type === "interaction_state") publication = value;
+      receive(JSON.stringify(value) + "\n");
+    }
+    if (pumpSnapshots) session.tick();
+  };
   return { session, transport, clock, originStore };
 }
 
 function submitForResult(session: ARModuleSession, resultTs: number): void {
-  session.onTransportText(JSON.stringify({ type: "localization_observations_request", capture_id: `capture-${resultTs}`, capture_policy: "any_angle", observation_count: 1 }) + "\n");
+  session.onTransportText(JSON.stringify({ result_timeout_s: 15, type: "localization_observations_request", capture_id: `capture-${resultTs}`, capture_policy: "any_angle", observation_count: 1 }) + "\n");
   const sync = session.view().hello!.time_sync;
   session.submitLocalizationObservations([{
     ts_capture: resultTs - (sync.ts_server - sync.ts_client), jpeg: new Uint8Array([1]),
     intrinsics: { fx: 1, fy: 1, cx: 0, cy: 0, width: 1, height: 1, distortion_model: "none", distortion: [] },
     camera_position: [0, 0, 0], camera_orientation: [0, 0, 0, 1],
-  }]);
+  }], 15);
 }
 
 function handshake(
@@ -55,7 +67,7 @@ function handshake(
   session.onTransportText(`${JSON.stringify(hello)}\n${JSON.stringify(STATE)}\n`);
   expect(session.view().connection).toBe("ready");
   expect(transport.texts).toHaveLength(1);
-  expect(JSON.parse(transport.texts[0])).toEqual({ type: "hello_request", resumable: true, server_follow_stream: true, protocol_version: 2, ts_client: clock.nowS });
+  expect(JSON.parse(transport.texts[0])).toEqual({ type: "hello_request", protocol_version: 2, ts_client: clock.nowS });
   return hello;
 }
 
@@ -141,7 +153,11 @@ describe("session handshake", () => {
 describe("session facts and tracking origin", () => {
   it("clears an accepted goal and preview when their authoritative snapshot clears them", () => {
     const { session, transport, clock } = makeSession(); handshake(session, transport, clock);
-    const interaction = { type: "interaction_state", epoch: "robot", revision: 1, mode: "manual", authority: null, target: null,
+    const interaction = {
+      targets: [],
+      motion_busy: false,
+      following_tail: null,
+      type: "interaction_state", epoch: "robot", revision: 1, mode: "manual", authority: null, target: null,
       active_goal: { type: "nav_goal", pose: [2,0,0,0], path_poses: [], ts: 1 },
       preview: { type: "nav_goal", preview: true, pose: [2,0,0,0], path_poses: [[0,0,0,0],[2,0,0,0]], ts: 1 } };
     session.onTransportText(JSON.stringify(interaction) + "\n");
@@ -190,7 +206,7 @@ describe("session facts and tracking origin", () => {
     expect(session.view().lidar?.ts).toBe(4);
     expect(session.view().hasTrackingOrigin).toBe(true);
     expect(originStore.T_odom_client?.confidence).toBe(0.9);
-    expect(outbound).toEqual(["pose", "nav_goal", "localization_observations_request", "lidar", "localization_result"]);
+    expect(outbound).toEqual(["pose", "interaction_state", "localization_observations_request", "lidar", "localization_result"]);
     expect(views[views.length - 1]).toBe("ready");
     session.sendText('{"type":"state_request"}\n');
     expect(transport.texts[transport.texts.length - 1]).toBe('{"type":"state_request"}\n');
@@ -289,8 +305,10 @@ describe("session facts and tracking origin", () => {
     const { session, transport, clock } = makeSession();
     handshake(session, transport, clock);
     const requests: LocalizationObservationsRequest[] = [];
-    session.subscribeLocalizationObservationsRequest((request) => requests.push(request));
+    session.subscribeOutbound(message => { if (message.type === "localization_observations_request") requests.push(message); });
     const request = {
+      capture_id: "fixture-capture",
+      result_timeout_s: 15,
       type: "localization_observations_request",
       capture_policy: "any_angle",
       observation_count: 2,
@@ -302,7 +320,7 @@ describe("session facts and tracking origin", () => {
 });
 
 describe("disconnect and reconnect", () => {
-  it("clears facts and ClientTrackingOrigin on disconnect, then reconnects", () => {
+  it("clears live facts and restores same-reference localization on reconnect", () => {
     const { session, transport, clock, originStore } = makeSession();
     handshake(session, transport, clock);
     submitForResult(session, 1);
@@ -319,7 +337,7 @@ describe("disconnect and reconnect", () => {
 
     session.onTransportClose();
     expect(session.view().connection).toBe("failed");
-    expect(session.view().hello).toBeNull();
+    expect(session.view().hello).not.toBeNull();
     expect(session.view().hasTrackingOrigin).toBe(false);
     expect(originStore.T_odom_client).toBeNull();
 
@@ -331,7 +349,7 @@ describe("disconnect and reconnect", () => {
     session.onTransportOpen();
     session.onTransportText(`${JSON.stringify(helloAt(clock.nowS))}\n`);
     expect(session.view().connection).toBe("ready");
-    expect(session.view().hasTrackingOrigin).toBe(false);
+    expect(session.view().hasTrackingOrigin).toBe(true);
   });
 
   it("stop does not schedule reconnect", () => {
@@ -549,11 +567,15 @@ describe("bulk isolation and capture replacement", () => {
     const { session, transport, clock } = makeSession(); handshake(session, transport, clock);
     const ref = { epoch: "fixture-epoch", id: "permanently-missing-active-route", revision: "1" };
     const goal = { type: "nav_goal", pose: [3, 0, 0, 0], ts: 100, route_ref: ref };
-    session.onTransportText(JSON.stringify({ type: "interaction_state", epoch: "robot", revision: 1, mode: "manual",
+    session.onTransportText(JSON.stringify({
+      targets: [],
+      motion_busy: false,
+      following_tail: null,
+      type: "interaction_state", epoch: "robot", revision: 1, mode: "manual",
       authority: null, target: null, preview: null, active_goal: { ...goal, path_poses: [] } }) + "\n");
     session.onTransportText(JSON.stringify(goal) + "\n");
     expect(session.view().nav_goal).toMatchObject({ pose: [3, 0, 0, 0], path_poses: [] });
-    expect(session.assetTransferDeadline("nav_goal")).not.toBeNull();
+    expect(session.assetTransferDeadline("interaction_state")).not.toBeNull();
     for (const time of [0, 2, 6]) {
       clock.nowS = time; session.tick();
       transport.bulk.receive({ type: "bulk_error", code: "asset_unavailable", kind: "route", ...ref });
@@ -572,7 +594,7 @@ describe("bulk isolation and capture replacement", () => {
     const messages: Record<string, unknown>[] = [];
     const original = transport.bulk.sendText.bind(transport.bulk);
     transport.bulk.sendText = text => { messages.push(JSON.parse(text)); original(text); };
-    const request = (capture_id: string) => session.onTransportText(JSON.stringify({ type: "localization_observations_request", capture_id, capture_policy: "any_angle", observation_count: 1 }) + "\n");
+    const request = (capture_id: string) => session.onTransportText(JSON.stringify({ result_timeout_s: 15, type: "localization_observations_request", capture_id, capture_policy: "any_angle", observation_count: 1 }) + "\n");
     request("old-capture");
     session.sendBinary(new Uint8Array(1000000));
     expect(messages.find(m => m.type === "bulk_upload_begin")?.capture_id).toBe("old-capture");
@@ -590,7 +612,10 @@ describe("bulk isolation and capture replacement", () => {
 describe("deferred asset state ordering", () => {
   const routeRef = { epoch: "fixture-epoch", id: "old-route", revision: "1" };
   const planRef = { epoch: "fixture-epoch", id: "old-plan", revision: "1" };
-  const interaction = (revision: number, epoch = "robot") => ({ type: "interaction_state", epoch, revision,
+  const interaction = (revision: number, epoch = "robot") => ({
+    motion_busy: false,
+    following_tail: null,
+    type: "interaction_state", epoch, revision,
     mode: "manual", authority: null, target: null, targets: [], preview: null, active_goal: null });
   const wire = (session: ARModuleSession, value: object) => session.onTransportText(JSON.stringify(value) + "\n");
   const finishRoute = (transport: FakeTransport) => {
@@ -722,9 +747,9 @@ describe("deferred asset state ordering", () => {
 });
 
 it("coalesces snapshot bursts before bounded frame processing", () => {
-  const { session } = makeSession();
+  const { session } = makeSession(false);
   session.start(); session.onTransportOpen();
-  session.onTransportText(JSON.stringify({ ...helloAt(0), server_follow_stream: true }) + "\n");
+  session.onTransportText(JSON.stringify(helloAt(0)) + "\n");
   for (let clients = 1; clients <= 100; clients++) {
     session.onTransportText(JSON.stringify({ ...STATE, server: { connected_clients: clients } }) + "\n");
   }
@@ -746,10 +771,14 @@ it("retains the latest congested update while sending a lease renewal", () => {
   expect(JSON.parse(transport.texts.at(-1)!)).toMatchObject({ action: "update", sequence: 69 });
 });
 
-it("exposes one canonical navigation snapshot for standalone and replicated facts", () => {
+it("exposes navigation facts through the canonical interaction snapshot", () => {
   const { session, transport } = makeSession();
   handshake(session, transport);
-  const interaction = { type: "interaction_state", epoch: "robot", revision: 1, mode: "manual",
+  const interaction = {
+    targets: [],
+    motion_busy: false,
+    following_tail: null,
+    type: "interaction_state", epoch: "robot", revision: 1, mode: "manual",
     authority: null, target: null, active_goal: null, preview: null };
   session.onTransportText(JSON.stringify(interaction) + "\n");
   const active = { type: "nav_goal", pose: [2, 0, 0, 0], path_poses: [[0, 0, 0, 0], [2, 0, 0, 0]], ts: 1 };
@@ -762,7 +791,7 @@ it("exposes one canonical navigation snapshot for standalone and replicated fact
   view = session.view();
   expect(view.nav_preview).toBe(view.interaction!.preview);
   expect(session.collaboration.snapshot().preview).toBe(view.nav_preview);
-  session.onTransportText(JSON.stringify({ ...interaction, revision: 2 }) + "\n");
+  session.onTransportText(JSON.stringify({ ...interaction, revision: 4 }) + "\n");
   view = session.view();
   expect(view.nav_goal).toBeNull(); expect(view.nav_preview).toBeNull();
   expect(view.interaction!.active_goal).toBeNull(); expect(view.interaction!.preview).toBeNull();

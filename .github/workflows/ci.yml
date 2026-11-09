@@ -21,10 +21,10 @@ jobs:
       - name: Install dev tools and package
         run: |
           python -m pip install --upgrade pip
-          GIT_LFS_SKIP_SMUDGE=1 pip install -r requirements-ci.txt -e "dimos @ git+https://github.com/dimensionalOS/dimos.git@$(cat ../.dimos-revision)" -e ".[dev]"
+          GIT_LFS_SKIP_SMUDGE=1 pip install --src "${RUNNER_TEMP}/dimos-source" -r requirements-ci.txt -e "dimos @ git+https://github.com/dimensionalOS/dimos.git@$(cat ../.dimos-revision)" -e ".[dev]"
 
       - name: Ruff
-        run: ruff check .
+        run: ruff check dimos/ar tools
 
       - name: Mypy
         run: mypy dimos/ar
@@ -35,6 +35,22 @@ jobs:
       - name: WebXR offline camera calibration regression
         run: python -m pytest ../clients/webxr/tools/test_calibrate.py --junitxml="../Review Data/unit/calibration/junit.xml"
 
+      - name: Install isolated manipulation runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1
+          python -m venv "${RUNNER_TEMP}/planning-venv"
+          "${RUNNER_TEMP}/planning-venv/bin/python" -m pip install --upgrade pip
+          GIT_LFS_SKIP_SMUDGE=1 "${RUNNER_TEMP}/planning-venv/bin/python" -m pip install --src "${RUNNER_TEMP}/planning-source" -e "dimos[planning] @ git+https://github.com/dimensionalOS/dimos.git@$(cat ../.dimos-revision)" -e ".[manipulation,dev]"
+      - name: Verify official mock manipulation contract
+        run: '"${RUNNER_TEMP}/planning-venv/bin/python" tools/run_mock_manipulation_contract.py'
+      - name: Upload mock diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mock-manipulation-reports
+          path: Review Data/mock-manipulation/
+          retention-days: 14
       - name: Upload Python test reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -125,14 +141,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - name: Install and verify ARModule integration server
-        run: |
-          python -m pip install --upgrade pip
-          GIT_LFS_SKIP_SMUDGE=1 python -m pip install -r ../../dimos-ar/requirements-ci.txt -e "dimos @ git+https://github.com/dimensionalOS/dimos.git@$(cat ../../.dimos-revision)" -e "../../dimos-ar[dev]"
-          python -c "from dimos.ar.module import ARModule"
       - run: npm ci
       - run: npm test
       - run: npm run build
@@ -157,26 +165,5 @@ jobs:
             Review Data/unit/webxr/
             Review Data/unit/integration-tooling/
             Review Data/coverage/webxr/
-          retention-days: 14
-          if-no-files-found: warn
-
-  manipulation-contract:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - name: Install official planning runtime
-        run: GIT_LFS_SKIP_SMUDGE=1 python -m pip install -e "dimos[planning] @ git+https://github.com/dimensionalOS/dimos.git@$(cat .dimos-revision)" -e "./dimos-ar[manipulation,dev]"
-      - name: Verify official mock manipulation contract
-        run: python dimos-ar/tools/run_mock_manipulation_contract.py
-
-      - name: Upload official mock diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: mock-manipulation-reports
-          path: Review Data/mock-manipulation/
           retention-days: 14
           if-no-files-found: warn

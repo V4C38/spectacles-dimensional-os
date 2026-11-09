@@ -133,7 +133,6 @@ class WebSocketServer:
         ]
         | None = None,
     ) -> None:
-        self._shared_stream_clients: set[str] = set()
         self._resume_tokens: dict[str, str] = {}
         self._resume_claims: set[str] = set()
         self._disconnect_handles: dict[str, asyncio.TimerHandle] = {}
@@ -193,9 +192,6 @@ class WebSocketServer:
     @property
     def port(self) -> int:
         return self._port
-
-    def streams_following(self, client_id: str) -> bool:
-        return client_id in self._shared_stream_clients
 
     @property
     def connection_count(self) -> int:
@@ -282,7 +278,6 @@ class WebSocketServer:
                 handle.cancel()
             self._disconnect_handles.clear()
             self._resume_tokens.clear()
-            self._shared_stream_clients.clear()
             ws_logger.removeFilter(_handshake_noise_filter)
             monitor.cancel()
             tasks = tuple(self._bulk_preparations)
@@ -426,7 +421,6 @@ class WebSocketServer:
                             def expire() -> None:
                                 self._disconnect_handles.pop(client_id, None)
                                 self._resume_tokens.pop(client_id, None)
-                                self._shared_stream_clients.discard(client_id)
                                 if self._on_disconnect is not None:
                                     self._on_disconnect(websocket, client_id)
                             self._disconnect_handles[client_id] = self._loop.call_later(1.0, expire)
@@ -462,7 +456,6 @@ class WebSocketServer:
         if websocket in self._retired_connections:
             return
         self._resume_tokens.pop(client_id, None)
-        self._shared_stream_clients.discard(client_id)
         self._retired_connections.add(websocket)
         self._bulk_tokens.pop(client_id, None)
         self._capture_ids.pop(client_id, None)
@@ -536,10 +529,7 @@ class WebSocketServer:
                 bulk_url="/ws/bulk" if req is not None and req.path == "/ws" else "/bulk",
                 bulk_token=token,
                 bulk_epoch=self.bulk.epoch,
-                server_follow_stream=hello_request.server_follow_stream,
-                independent_ik=True,
-                resume_token=(hello_request.resume_token or secrets.token_hex(32))
-                if hello_request.resumable else None,
+                resume_token=hello_request.resume_token or secrets.token_hex(32),
             )
             if resume_handle is not None and self._disconnect_handles.get(client_id) is not resume_handle:
                 raise ValueError("resume deadline expired during handshake")
@@ -551,10 +541,7 @@ class WebSocketServer:
             if resume_handle is not None:
                 resume_handle.cancel()
                 self._disconnect_handles.pop(client_id, None)
-            if hello.server_follow_stream:
-                self._shared_stream_clients.add(client_id)
-            if hello.resume_token is not None:
-                self._resume_tokens[client_id] = hello.resume_token
+            self._resume_tokens[client_id] = hello.resume_token
             completed = True
             return client_id
         finally:
@@ -784,16 +771,18 @@ class WebSocketServer:
             raise TypeError("native control payload must be an object")
         return self.prepare_outbound(payload)
 
-    async def prepare_outbound_async(self, payload: dict[str, Any]) -> dict[str, Any]:
-        # Immutable assets hit the revision cache; first-time serialization runs
-        # on a dedicated bounded worker, never the control event loop.
+    async def _encode_bulk(self, operation: Callable[..., dict[str, Any]], value: Any) -> dict[str, Any]:
+        # A cancelled waiter never releases a native encoder's admission slot.
         await self._encoder_permit.acquire()
-        future = self._loop.run_in_executor(self._encoder, self.prepare_outbound, payload)
+        future = self._loop.run_in_executor(self._encoder, operation, value)
         future.add_done_callback(lambda _future: self._encoder_permit.release())
         future.add_done_callback(lambda done: None if done.cancelled() else done.exception())
         result: dict[str, Any] = await asyncio.shield(future)
         self._publish_refs(result)
         return result
+
+    async def prepare_outbound_async(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._encode_bulk(self.prepare_outbound, payload)
 
     def _publish_refs(self, payload: dict[str, Any]) -> None:
         for field, kind in (("model_ref", "model"), ("plan_ref", "trajectory"), ("route_ref", "route")):
@@ -829,10 +818,7 @@ class WebSocketServer:
             payload["capture_id"] = capture_id
             self._capture_ids[client_id] = capture_id
             text = json.dumps(payload, separators=(",", ":")) + "\n"
-        # Correlated preview replies and decisions remain reliable FIFO.
-        coalesced = frame_type in COALESCE_FRAME_TYPES and not (
-            frame_type == "nav_goal" and '"preview":true' in text.replace(" ", "")
-        )
+        coalesced = frame_type in COALESCE_FRAME_TYPES
         with self._bridge_lock:
             if coalesced:
                 self._bridge_latest[(websocket, frame_type)] = text
@@ -899,16 +885,7 @@ class WebSocketServer:
 
     async def _prepare_bulk_text(self, websocket: ws_server.ServerConnection | None, text: str) -> None:
         try:
-                # Decoding also stays off-loop for legacy-shaped native route
-                # broadcasts during the migration to compact domain snapshots.
-            await self._encoder_permit.acquire()
-            future = self._loop.run_in_executor(
-                self._encoder, self._prepare_text, text
-            )
-            future.add_done_callback(lambda _future: self._encoder_permit.release())
-            future.add_done_callback(lambda done: None if done.cancelled() else done.exception())
-            payload = await asyncio.shield(future)
-            self._publish_refs(payload)
+            payload = await self._encode_bulk(self._prepare_text, text)
             prepared = json.dumps(payload, separators=(",", ":"), allow_nan=False) + "\n"
             if websocket is None:
                 await self._enqueue_all_text(prepared)
@@ -954,11 +931,6 @@ class WebSocketServer:
         elif client_id in self._bulk_peers:
             self._bulk_peers[client_id].lidar(data)
 
-    async def _enqueue_one_binary(self, websocket: ws_server.ServerConnection, data: bytes) -> None:
-        outbound = self._outbound.get(websocket)
-        if outbound is not None:
-            outbound.enqueue_binary(data)
-
     def schedule_send_to(self, websocket: ws_server.ServerConnection, text: str) -> None:
         self._post_text(websocket, text)
 
@@ -971,9 +943,6 @@ class WebSocketServer:
     async def _enqueue_all_text(self, text: str) -> None:
         for websocket in tuple(self._outbound):
             await self._enqueue_one_text(websocket, text)
-
-    async def _enqueue_all_binary(self, data: bytes) -> None:
-        self._queue_bulk_binary(None, data)
 
     async def _enqueue_one_text(self, websocket: ws_server.ServerConnection, text: str) -> None:
         outbound = self._outbound.get(websocket)

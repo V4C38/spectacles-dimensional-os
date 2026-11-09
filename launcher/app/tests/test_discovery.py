@@ -37,7 +37,7 @@ async def test_auto_no_devices_never_starts_and_suggests_explicit_simulation(mon
     start = AsyncMock()
     monkeypatch.setattr(app.manager, "start_armodule", start)
     with pytest.raises(HTTPException) as error:
-        await app.api_armodule_start(app.StartBody(blueprint="unitree_go2_ar", client="webxr", source=app.SourceBody(mode="auto")))
+        await app.api_armodule_start(app.StartBody(blueprint="unitree_go2_ar", client="webxr", profile_id="go2", source=app.SourceBody(mode="auto")))
     assert error.value.status_code == 409
     assert error.value.detail["suggest_simulated"]
     start.assert_not_awaited()
@@ -67,7 +67,7 @@ async def test_missing_explicit_device_does_not_switch_to_simulation(monkeypatch
     start = AsyncMock()
     monkeypatch.setattr(app.manager, "start_armodule", start)
     with pytest.raises(HTTPException) as error:
-        await app.api_armodule_start(app.StartBody(blueprint="unitree_go2_ar", client="webxr", source=app.SourceBody(mode="device", device_id="missing")))
+        await app.api_armodule_start(app.StartBody(blueprint="unitree_go2_ar", client="webxr", profile_id="go2", source=app.SourceBody(mode="device", device_id="missing")))
     assert error.value.detail["suggest_simulated"] is False
     start.assert_not_awaited()
 
@@ -90,10 +90,11 @@ async def test_manual_ip_pins_connection_without_discovery(monkeypatch):
 
     discover = AsyncMock()
     start = AsyncMock()
+    monkeypatch.setattr(app.robot_profiles, "snapshot", lambda *args: {})
     monkeypatch.setattr(app, "api_discovery", discover)
     monkeypatch.setattr(app.manager, "start_armodule", start)
     monkeypatch.setattr(app.manager, "snapshot", dict)
-    await app.api_armodule_start(app.StartBody(blueprint="unitree_go2_ar", client="webxr",
+    await app.api_armodule_start(app.StartBody(blueprint="unitree_go2_ar", client="webxr", profile_id="go2",
         source=app.SourceBody(mode="manual", address="192.168.1.42")))
     discover.assert_not_awaited()
     assert start.call_args.kwargs["robot_ip"] == "192.168.1.42"
@@ -133,3 +134,29 @@ async def test_arm_recording_passes_validated_stream_binding_to_process(monkeypa
     assert start.call_args.kwargs["replay"] == str(path)
     assert start.call_args.kwargs["replay_streams"] == streams
     assert "can_port" not in start.call_args.kwargs
+
+
+def test_missing_preferences_ignore_old_robot_ip(tmp_path, monkeypatch):
+    import preferences
+
+    monkeypatch.setattr(preferences, "path", lambda: tmp_path / "missing.json")
+    monkeypatch.setenv("ROBOT_IP", "fake")
+    assert preferences.read() == {}
+
+
+@pytest.mark.asyncio
+async def test_probe_timeout_kills_and_reaps_its_own_process(monkeypatch):
+    import asyncio
+    from unittest.mock import Mock
+
+    proc = AsyncMock(returncode=None)
+    proc.kill = Mock()
+    # Use an actual blocked communicate so cancellation exercises the shared finally.
+    async def blocked():
+        await asyncio.Event().wait()
+    proc.communicate.side_effect = blocked
+    monkeypatch.setattr(discovery.asyncio, "create_subprocess_exec", AsyncMock(return_value=proc))
+    with pytest.raises(TimeoutError):
+        await discovery.run_json_probe("/selected/python", "probe.py", timeout=0.001)
+    proc.kill.assert_called_once_with()
+    proc.wait.assert_awaited_once_with()

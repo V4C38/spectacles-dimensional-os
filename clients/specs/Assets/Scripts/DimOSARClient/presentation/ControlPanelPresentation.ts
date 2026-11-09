@@ -1,6 +1,5 @@
 import { CAPABILITY_LABELS } from "./CapabilityPresentation";
 import type { ARModuleSessionState } from "../websocket/arModuleSession";
-import type { CapturePolicy } from "../websocket/protocolTypes";
 
 /** Copy and proportions shared by host-native control panels. */
 export const CONTROL_PANEL_LAYOUT = { width: 0.9, height: 0.76, margin: 0.05, cornerRadius: 0.05, titleY: 0.306 } as const;
@@ -29,9 +28,8 @@ export const CONTROL_PANEL_COPY = {
   localizationComplete: "Localization complete",
 } as const;
 export type LocalizationKind = "marker" | "vps" | "mixed" | "unknown" | "unavailable";
-/** Configured providers describe the UI; capture policy only fills older v2 metadata. */
-export function localizationKind(view: Pick<ARModuleSessionState, "hello" | "capabilities">,
-  capturePolicy: CapturePolicy | null | undefined): LocalizationKind {
+/** Configured providers describe the UI. */
+export function localizationKind(view: Pick<ARModuleSessionState, "hello" | "capabilities">): LocalizationKind {
   if (!view.capabilities) return "unknown";
   if (!view.capabilities.localization.available) return "unavailable";
   const providers = view.hello?.localization?.providers;
@@ -39,8 +37,7 @@ export function localizationKind(view: Pick<ARModuleSessionState, "hello" | "cap
     const marker = providers.includes("fiducial_marker"), vps = providers.includes("vps");
     return marker && vps ? "mixed" : marker ? "marker" : vps ? "vps" : "unavailable";
   }
-  return capturePolicy === "robot_los_required" ? "marker" : capturePolicy === "any_angle" ? "vps" :
-    capturePolicy === "robot_los_preferred" ? "mixed" : "unknown";
+  return "unknown";
 }
 export function localizationGuidance(kind: LocalizationKind): string {
   return kind === "vps" ? "Look around the mapped space." :

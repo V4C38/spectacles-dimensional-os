@@ -36,7 +36,7 @@ function harness(storage = new Map<string, string>(), options: {
   const dismissed = vi.fn();
   const episode = { reset: vi.fn(), pause: vi.fn(), requestStart: vi.fn(), view: () => ({ phase: "capturing" }) };
   const resolve = vi.fn(options.resolve ?? (() => new Promise<import("../../Assets/Scripts/DimOSSpecsClient/IpRelayClient").ResolvedPin | null>(() => {})));
-  const session = { view: () => view, start: vi.fn(), stop: vi.fn() };
+  const session = { view: () => view, start: vi.fn(), stop: vi.fn(), subscribeView: () => vi.fn() };
   const transport = { setUrl: vi.fn() };
   const events: { bind: ReturnType<typeof vi.fn>; reset: ReturnType<typeof vi.fn>; cancel: ReturnType<typeof vi.fn>; fire: () => void }[] = [];
   const controller = new SetupWizardController({
@@ -79,6 +79,7 @@ it("starts directly with the connection controls and separates available capabil
   expect(mocks.content).toHaveBeenLastCalledWith("Connect", "");
   view.hello = { robot: { display_name: "Test robot" } };
   view.capabilities = {
+    object_detection: { available: false, reason: "No detector" },
     navigation: { available: true }, manipulation: { available: false },
     localization: { available: true }, lidar: { available: true },
     agent: { available: false }, estop: { available: true },
@@ -340,8 +341,8 @@ it("retries an unresolved saved PIN after one second", async () => {
   const f = harness(new Map([["dimos_ar_module_pin", "012345"]]), { connection: "disconnected", advance: false, resolve: async () => null });
   await Promise.resolve();
   expect(mocks.connection).toHaveBeenLastCalledWith(expect.objectContaining({ text: "PIN did not resolve" }));
-  expect(f.events[2].reset).toHaveBeenCalledWith(1);
-  f.events[2].fire(); expect(f.resolve).toHaveBeenCalledTimes(2);
+  expect(f.events[1].reset).toHaveBeenCalledWith(1);
+  f.events[1].fire(); expect(f.resolve).toHaveBeenCalledTimes(2);
 });
 
 it("cancels saved-PIN resolution and retries when the user edits the PIN", async () => {

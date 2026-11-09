@@ -163,7 +163,7 @@ export class NotificationPill {
     this.object.removeFromParent();
     this.triangle.geometry.dispose();
     this.triangle.material.dispose();
-    this.bang.dispose();
+    disposeTextResources(this.bang);
     this.plate.dispose();
     disposeTextResources(this.text);
     for (const mesh of [this.ring, ...this.strokes]) {

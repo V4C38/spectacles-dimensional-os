@@ -119,47 +119,6 @@ def test_late_cancel_completion_cannot_clear_a_newer_emergency_stop():
         command(module, "acquire")
 
 
-def test_reset_zero_waits_for_feedback_and_preserves_gripper(monkeypatch):
-    import dimos.ar.manipulation.zero as implementation
-
-    module = runtime()
-    observed = module.adapter.get_state().groups["arm"]
-    observed.joints.name, observed.joints.position = ["joint"], [0.0]
-    module.adapter.list_planning_groups = Mock(
-        return_value=[SimpleNamespace(id="arm", joint_names=["joint"])]
-    )
-    module.adapter.plan_to_joints = Mock(
-        return_value=SimpleNamespace(
-            succeeded=True,
-            plan=SimpleNamespace(plan_id="zero", trajectory=SimpleNamespace(duration=0.2)),
-        )
-    )
-    clock = [1.0]
-    monkeypatch.setattr(implementation.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(
-        implementation.time,
-        "sleep",
-        lambda dt: (
-            clock.__setitem__(0, clock[0] + dt),
-            setattr(observed.joints, "ts", observed.joints.ts + dt),
-        ),
-    )
-    wall_start = observed.joints.ts
-    monkeypatch.setattr(implementation.time, "time", lambda: wall_start + clock[0] - 1)
-    result = command(module, "reset_joints", speed_scale=0.1)
-    assert result["status"] == "completed"
-    module.adapter.plan_to_joints.assert_not_called()
-    module.adapter.execute.assert_not_called()
-    assert module.session.owner is None
-    assert module.adapter.reset.call_count == 2
-    module.wait_for_execution.assert_not_called()
-    # Reset releases the motion lease; following works without E-stop/resume.
-    token = command(module, "acquire")["token"]
-    assert token
-    command(module, "release", token=token)
-    module.adapter.set_estop.assert_not_called()
-
-
 def test_shutdown_never_clears_estop_or_moves():
     module = runtime()
     module.session.stopped = True
@@ -402,6 +361,12 @@ def test_already_zero_requires_settling_without_another_trajectory(monkeypatch):
     assert module.session.owner is None
     assert not module.session.stopped
 
+    # The fake native reset acknowledges completion without updating its status.
+    module.adapter.get_state().execution_status.name = "IDLE"
+    # Confirm reset releases ownership without requiring emergency stop/resume.
+    token = command(module, "acquire")["token"]
+    command(module, "release", token=token)
+    module.adapter.set_estop.assert_not_called()
 
 def test_reset_requires_new_measurements_and_recovers_from_stale_feedback(monkeypatch):
     module, _, _ = zero_fixture(monkeypatch, refresh=False)
@@ -544,7 +509,6 @@ def test_follow_ik_failure_keeps_lease_and_recovers(monkeypatch):
     assert module.session.rejected_key is not None
     outcome.success = True
     outcome.target_joints = SimpleNamespace(name=["joint"], position=[0.2])
-    module.session.evaluated_at = float("-inf")
     corrected = {**body, "sequence": 2, "position": [0.01, 0, 0.3]}
     command(module, "update", **corrected)
     recovered = module.evaluate_following("a", {"group_id": "arm", **corrected})
@@ -823,7 +787,6 @@ def test_follow_commands_continue_between_feasibility_checks():
     module = runtime()
     module.adapter.ready = True
     token = command(module, "acquire")["token"]
-    module.session.evaluated_at = time.monotonic()
     module.adapter.evaluate = Mock(side_effect=AssertionError("Evaluation should be throttled"))
     module.adapter.task_invoke.return_value = None
     result = command(

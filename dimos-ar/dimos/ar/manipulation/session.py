@@ -11,7 +11,6 @@ class ManipulationSession:
     updated_at: float = 0.0
     target_key: tuple[float, ...] | None = None
     rejected_key: tuple[float, ...] | None = None
-    evaluated_at: float = float("-inf")
     generation: int = 0
     retired: OrderedDict[str, None] = field(default_factory=OrderedDict)
     cancelling: bool = False

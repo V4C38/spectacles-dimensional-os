@@ -16,13 +16,13 @@ def test_generated_names_and_duplicate_suffixes_preserve_custom_renames(tmp_path
     assert profiles.create("openyam", source_id=arm["id"])["name"] == "Desk_1"
 
 
-def test_legacy_default_migration_preserves_identity_and_calibration(tmp_path):
+def test_saved_profile_names_and_calibration_are_preserved(tmp_path):
     path = tmp_path / "profiles.json"
     original = [{"id": "arm", "robot": "openyam", "name": "OpenYAM", "armodule": {"calibration": 42}},
                 {"id": "custom", "robot": "openyam", "name": "My arm", "armodule": {}}]
     path.write_text(json.dumps(original))
     profiles = RobotProfiles(path)
-    assert profiles.get("arm")["name"] == "OpenYAM_1"
+    assert profiles.get("arm")["name"] == "OpenYAM"
     assert profiles.get("arm")["armodule"] == {"calibration": 42}
     assert profiles.get("custom")["name"] == "My arm"
     profiles.update("arm", name="OpenYAM")

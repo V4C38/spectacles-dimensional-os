@@ -30,9 +30,9 @@ def test_selected_device_resolves_to_its_native_transport():
     assert not source.simulation
 
 
-def test_conflicting_simulation_and_manual_source_fails():
-    with pytest.raises(ValueError, match="Conflicting"):
-        resolve_robot_source("unitree_go2", SourceBody(mode="manual", address="192.168.1.4"), simulation=True)
+def test_source_rejects_unknown_fields():
+    with pytest.raises(ValueError, match="Extra inputs"):
+        SourceBody(mode="manual", address="192.168.1.4", simulation=True)
 
 
 def test_arm_simulator_ignores_old_recording_selection():

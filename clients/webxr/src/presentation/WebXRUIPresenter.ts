@@ -176,7 +176,7 @@ export class WebXRUIPresenter {
     const link = sessionLinkStatus(view, view.hello?.robot.display_name);
     const episode = this.episode.view();
     const capture = localizationCaptureStatus(view, episode, this.nowS);
-    const kind = localizationKind(view, episode.capturePolicy);
+    const kind = localizationKind(view);
     const descriptions = {
       connect: "",
       localization: localizationProviderLabel(kind),

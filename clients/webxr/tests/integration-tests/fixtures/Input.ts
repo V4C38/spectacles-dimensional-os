@@ -1,16 +1,4 @@
 import { expect, type Page } from "@playwright/test";
-export async function visiblePointerCount(page: Page): Promise<number> {
-  return page.evaluate(() => {
-    const w = window as any;
-    const app = w.xb.core.scene.children.find(
-      (object: any) => object.client?.manipulation,
-    );
-    return [...app.interaction.beams.entries()].filter(
-      ([controller, beam]: any) => controller.visible && beam.mesh.visible,
-    ).length;
-  });
-}
-
 export async function setSelection(page: Page, value: number): Promise<void> {
   await page.evaluate(async (amount) => {
     const w = window as any;
@@ -248,72 +236,6 @@ export async function frameMenu(
   }, tight);
   await page.waitForTimeout(220);
   return saved;
-}
-
-export async function restoreView(
-  page: Page,
-  saved: { position: number[]; rotation: number[] },
-): Promise<void> {
-  await page.evaluate((saved) => {
-    const head = (window as any).questDevice;
-    head.position.set(...saved.position);
-    head.quaternion.set(...saved.rotation);
-  }, saved);
-  await page.waitForTimeout(220);
-}
-
-export async function placeDirect(page: Page, field: string): Promise<void> {
-  await page.evaluate(async () => {
-    const w = window as any;
-    const input =
-      w.questDevice.primaryInputMode === "controller"
-        ? w.questDevice.controllers.right
-        : w.questDevice.hands.right;
-    input.quaternion.set(0, -Math.SQRT1_2, 0, Math.SQRT1_2);
-    // Sample the rotated joints before calculating the placement offset. A wall
-    // clock delay can expire before an XR frame under CI software rendering.
-    const session = w.xb.core.renderer.xr.getSession();
-    await new Promise<void>((resolve) =>
-      session.requestAnimationFrame(() =>
-        session.requestAnimationFrame(() => resolve()),
-      ),
-    );
-  });
-  await page.evaluate((field) => {
-    const w = window as any,
-      app = w.xb.core.scene.children.find(
-        (o: any) => o.client?.manipulation,
-      );
-    const controller = w.xb.core.input.rightController;
-    const input =
-      w.questDevice.primaryInputMode === "controller"
-        ? w.questDevice.controllers.right
-        : w.questDevice.hands.right;
-    const point = app.interaction.direct.indexTip(controller)
-      ?? app.interaction.direct.point(controller);
-    const target = app.mainMenu[field].getWorldPosition(
-      app.mainMenu.panel.position.clone(),
-    );
-    if (!point) throw new Error("No tracked direct point");
-    input.position.x += target.x - point.x;
-    input.position.y += target.y - point.y;
-    input.position.z += target.z + 0.008 - point.z;
-  }, field);
-  await expect
-    .poll(() =>
-      page.evaluate((field) => {
-        const w = window as any,
-          app = w.xb.core.scene.children.find(
-            (o: any) => o.client?.manipulation,
-          );
-        return (
-          app.interaction.direct.isDirect(w.xb.core.input.rightController) &&
-          app.interaction.hit(w.xb.core.input.rightController)?.object ===
-            app.mainMenu[field].mesh
-        );
-      }, field),
-    )
-    .toBe(true);
 }
 
 export async function summonMenu(page: Page): Promise<void> {

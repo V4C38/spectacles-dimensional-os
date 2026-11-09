@@ -660,7 +660,7 @@ async def test_shared_following_renewals_refresh_native_input_with_new_sequences
 async def test_retired_shared_follow_token_is_reported_instead_of_silently_stalling():
     class Runtime:
         def ar_manipulation_command(self, client, body):
-            return {"status": "following", "message": "Following retired"}
+            return {"status": "rejected", "code": "retired", "message": "Following retired"}
 
         def ar_manipulation_stop(self):
             pass

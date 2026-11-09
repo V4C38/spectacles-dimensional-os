@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import app as launcher_app
-from config import env_path, merge_env, migrate_legacy_env, read_env
+from config import env_path, merge_env, read_env
 
 
 def test_settings_read_uses_launcher_env_file(tmp_path: Path, monkeypatch) -> None:
@@ -19,15 +19,12 @@ def test_settings_read_uses_launcher_env_file(tmp_path: Path, monkeypatch) -> No
     assert launcher_app.settings_payload()["openai_api_key"] == "sk-test"
 
 
-def test_migrate_legacy_repo_env(tmp_path: Path) -> None:
-    (tmp_path / "launcher").mkdir()
-    (tmp_path / ".env").write_text("OPENAI_API_KEY=sk-legacy\nROBOT_IP=1.2.3.4\n", encoding="utf-8")
+def test_root_env_is_not_imported(tmp_path: Path) -> None:
+    from armodule import ProcessManager
 
-    migrate_legacy_env(tmp_path)
-
-    values = read_env(env_path(tmp_path))
-    assert values["OPENAI_API_KEY"] == "sk-legacy"
-    assert values["ROBOT_IP"] == "1.2.3.4"
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=ignored\nROBOT_IP=1.2.3.4\n")
+    ProcessManager(root=tmp_path)
+    assert not env_path(tmp_path).exists()
 
 
 @pytest.mark.asyncio
@@ -67,18 +64,19 @@ async def test_settings_put_writes_dimos_log_level(
 
 
 @pytest.mark.asyncio
-async def test_settings_put_writes_dimos_armodule_section(
+async def test_settings_put_writes_selected_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from dimos_config import load_dimos_config
 
     (tmp_path / "launcher").mkdir()
     target = env_path(tmp_path)
     monkeypatch.setattr(launcher_app, "env_path", lambda: target)
     monkeypatch.setattr(launcher_app.manager, "root", tmp_path)
 
+    profile = launcher_app.robot_profiles.all()[0]
     snap = await launcher_app.api_settings_put(
         launcher_app.SettingsBody(
+            profile_id=profile["id"],
             fiducial_marker=True,
             vps=True,
             map_code="map-9",
@@ -87,7 +85,7 @@ async def test_settings_put_writes_dimos_armodule_section(
         )
     )
 
-    data = load_dimos_config()
+    data = launcher_app.robot_profiles.get(profile["id"])
     assert data["armodule"]["localization"]["providers"] == [
         {"type": "fiducial_marker"},
         {"type": "vps", "map_code": "map-9"},
@@ -103,14 +101,15 @@ async def test_settings_put_writes_dimos_armodule_section(
 async def test_settings_put_writes_multiple_fiducial_mounts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from dimos_config import load_dimos_config
 
     (tmp_path / "launcher").mkdir()
     monkeypatch.setattr(launcher_app, "env_path", lambda: env_path(tmp_path))
     monkeypatch.setattr(launcher_app.manager, "root", tmp_path)
 
+    profile = launcher_app.robot_profiles.all()[0]
     snap = await launcher_app.api_settings_put(
         launcher_app.SettingsBody(
+            profile_id=profile["id"],
             fiducial_marker=True,
             mounts=[
                 launcher_app.MountBody(marker_id=0),
@@ -119,7 +118,7 @@ async def test_settings_put_writes_multiple_fiducial_mounts(
         )
     )
 
-    data = load_dimos_config()
+    data = launcher_app.robot_profiles.get(profile["id"])
     assert [item["marker_id"] for item in data["armodule"]["fiducial_marker_mounts"]] == [0, 2]
     assert [item["marker_id"] for item in snap["mounts"]] == [0, 2]
 
@@ -134,9 +133,11 @@ async def test_settings_put_rejects_duplicate_marker_ids(
     monkeypatch.setattr(launcher_app, "env_path", lambda: env_path(tmp_path))
     monkeypatch.setattr(launcher_app.manager, "root", tmp_path)
 
+    profile = launcher_app.robot_profiles.all()[0]
     with pytest.raises(HTTPException) as exc_info:
         await launcher_app.api_settings_put(
             launcher_app.SettingsBody(
+                profile_id=profile["id"],
                 fiducial_marker=True,
                 mounts=[
                     launcher_app.MountBody(marker_id=0),
@@ -160,6 +161,23 @@ async def test_profile_settings_response_uses_saved_profile(tmp_path, monkeypatc
     )
     assert response["fiducial_marker"] is True
     assert launcher_app.settings_payload()["fiducial_marker"] is False
+
+
+@pytest.mark.asyncio
+async def test_calibration_without_profile_is_rejected_without_persisting(tmp_path, monkeypatch):
+    from fastapi import HTTPException
+
+    from dimos_config import dimos_config_path
+
+    target = dimos_config_path()
+    target.parent.mkdir(parents=True)
+    target.write_text('{"armodule":{"localization":{"providers":[]}}}')
+    original = target.read_text()
+    monkeypatch.setattr(launcher_app, "env_path", lambda: tmp_path / "launcher.env")
+    with pytest.raises(HTTPException, match="Calibration settings require"):
+        await launcher_app.api_settings_put(launcher_app.SettingsBody(fiducial_marker=True))
+    assert target.read_text() == original
+    assert not (tmp_path / "launcher.env").exists()
 
 
 @pytest.mark.parametrize("origin,fetch_site,allowed", [

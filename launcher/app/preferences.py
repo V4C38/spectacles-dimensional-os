@@ -7,7 +7,6 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from config import env_path, read_env
 from dimos_config import dimos_config_path
 
 
@@ -22,10 +21,7 @@ def read() -> dict[str, Any]:
             raise TypeError("launcher preferences must be a JSON object")
         return data
     except FileNotFoundError:
-        address = read_env(env_path()).get("ROBOT_IP", "").strip()
-        if address in {"simulated", "fake", "mock", "replay"}:
-            return {"go2_source": "simulated"}
-        return {"go2_source": "manual", "manual_ip": address} if address else {}
+        return {}
 
 
 def save(values: dict[str, Any]) -> None:

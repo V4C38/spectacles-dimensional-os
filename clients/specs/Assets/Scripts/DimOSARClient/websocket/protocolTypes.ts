@@ -33,13 +33,13 @@ export type Capability =
   | { available: false; reason: string };
 
 export type NavigationCapability = Capability & {
-  nav_goal: Capability & { preview?: boolean };
+  nav_goal: Capability & { preview: boolean };
   nav_joystick: Capability;
 };
 
 export type Capabilities = {
   [K in Exclude<CapabilityName, "navigation" | "manipulation" | "object_detection">]: Capability;
-} & { navigation: NavigationCapability; manipulation?: Capability; object_detection?: Capability };
+} & { navigation: NavigationCapability; manipulation: Capability; object_detection: Capability };
 
 export interface TimeSync {
   ts_client: number;
@@ -51,8 +51,8 @@ export interface RobotDescription {
   body_bounds_m: Vec3;
   footprint_m: [number, number];
   base_height_m: number;
-  /** Fixed native-odom to AR XY heuristic; absent on older servers means 1. */
-  odom_scale_correction_factor?: number;
+  /** Fixed native-odom to AR XY heuristic. */
+  odom_scale_correction_factor: number;
 }
 
 export interface ServerInfo {
@@ -62,18 +62,16 @@ export interface ServerInfo {
 }
 
 export interface Hello {
-  resume_token?: string;
-  server_follow_stream?: boolean;
-  independent_ik?: boolean;
-  /** Configured provider inventory; absent only on older protocol-v2 servers. */
-  localization?: { providers: ("fiducial_marker" | "vps")[] };
+  resume_token: string;
+  /** Configured provider inventory. */
+  localization: { providers: ("fiducial_marker" | "vps")[] };
   source?: { kind: "recording"; read_only: boolean; name: string };
   protocol_version: 2;
   bulk_url: string;
   bulk_token: string;
   bulk_epoch: string;
   /** Stable for the server odometry reference, including across socket reconnects. */
-  odom_reference_id?: string;
+  odom_reference_id: string;
   server_info?: ServerInfo;
   type: "hello";
   client_id: string;
@@ -153,7 +151,7 @@ export interface LocalizationStatus extends MapContext {
   ts?: number;
 }
 export interface CaptureEpisodeIdentity {
-  capture_id?: string;
+  capture_id: string;
   episode_id?: string;
   purpose?: "robot" | "headset";
 }
@@ -162,13 +160,13 @@ export type LocalizationObservationsRequest = CaptureEpisodeIdentity & (
       type: "localization_observations_request";
       capture_policy: "robot_los_required" | "any_angle";
       observation_count: number;
-      result_timeout_s?: number;
+      result_timeout_s: number;
     }
   | {
       type: "localization_observations_request";
       capture_policy: "robot_los_preferred";
       observation_count: number;
-      result_timeout_s?: number;
+      result_timeout_s: number;
       wait_timeout_s: number;
     });
 
@@ -216,7 +214,6 @@ export type Outbound =
   | LocalizationMapTransform
   | LocalizationStatus
   | Pose
-  | NavGoal
   | Lidar
   | AgentMessage
   | AgentSkill;
@@ -234,9 +231,7 @@ export interface ClientError {
 
 export interface HelloRequest {
   type: "hello_request";
-  resumable?: boolean;
   resume_token?: string;
-  server_follow_stream?: boolean;
   ts_client: number;
 }
 

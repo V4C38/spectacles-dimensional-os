@@ -65,8 +65,6 @@
   let robotProfileId = null;
   let robotProfiles = [];
   let profileLoadGeneration = 0;
-  let phase = "idle";
-  let checkOk = null;
   let lastStatus = {};
   let canStatus = { ready: false, state: "checking", message: "Checking can0…" };
   let plannerStatus = { ready: false, state: "checking", message: "Checking manipulation dependencies…" };
@@ -99,7 +97,6 @@
   let mounts = [{ ...DEFAULT_MOUNT }];
   let settingsReady = false;
   let persistTimer = null;
-  let configLocked = false;
 
   const FIELD_META = [
     { field: "print_size_mm", label: "Print size (mm)", step: 1, min: 20, max: 200 },
@@ -143,24 +140,10 @@
 
 
 
-    const robotKey = manipulation ? "openyam" : "go2";
-    const sourceSelect = $("robotSource");
-    sourceSelect.querySelectorAll('[value^="device:"], [value="manual"]').forEach(option => option.remove());
-    for (const device of discoveredRobots[robotKey]) {
-      const option = document.createElement("option"); option.value = `device:${device.id}`; option.textContent = device.label;
-      sourceSelect.insertBefore(option, sourceSelect.querySelector('[value="simulated"]'));
-    }
-    if (!manipulation && robotIp.value.trim()) {
-      const option = document.createElement("option"); option.value = "manual"; option.textContent = `${robotIp.value.trim()} (manual)`;
-      sourceSelect.insertBefore(option, sourceSelect.querySelector('[value="simulated"]'));
-    }
-    $("editConnection").disabled = configLocked || manipulation;
-    $("connectionEditor").classList.add("hidden");
     const rememberedSource = launcherPreferences[`${manipulation ? "openyam" : "go2"}_source`] || "auto";
-    if ((rememberedSource.startsWith("device:") || rememberedSource === "manual") && ![...$("robotSource").options].some(option => option.value === rememberedSource)) {
-      const option = document.createElement("option"); option.value = rememberedSource; option.textContent = option.value === "manual" ? `${robotIp.value.trim()} (manual)` : `${option.value.slice(7)} (saved)`; $("robotSource").insertBefore(option, $("robotSource").querySelector('[value="simulated"]'));
-    }
-    $("robotSource").value = rememberedSource;
+    renderSourceOptions(rememberedSource);
+    $("editConnection").disabled = configIsLocked() || manipulation;
+    $("connectionEditor").classList.add("hidden");
     syncSource();
 
 
@@ -173,6 +156,19 @@
     syncConfigCards();
     syncHardwareSetup();
     if (manipulation) { void refreshCan(); void refreshPlanner(); }
+  }
+
+  function renderSourceOptions(selected = $("robotSource").value, missing = "saved") {
+    const select = $("robotSource");
+    select.querySelectorAll('[value^="device:"], [value="manual"]').forEach(option => option.remove());
+    const add = (value, label) => {
+      const option = document.createElement("option"); option.value = value; option.textContent = label;
+      select.insertBefore(option, select.querySelector('[value="simulated"]'));
+    };
+    for (const device of discoveredRobots[manipulationSelected() ? "openyam" : "go2"]) add(`device:${device.id}`, device.label || device.id);
+    if (!manipulationSelected() && (robotIp.value.trim() || selected === "manual")) add("manual", `${robotIp.value.trim()} (manual)`);
+    if (selected.startsWith("device:") && ![...select.options].some(option => option.value === selected)) add(selected, `${selected.slice(7)} (${missing})`);
+    select.value = selected;
   }
 
   function manipulationSelected() { return blueprint === "openyam_ar_planner"; }
@@ -191,7 +187,7 @@
     const simulated = $("robotSource").value === "simulated";
     $("webrtcSummary").textContent = simulated ? "Not required" : go2DiscoveryState.text;
     $("webrtcSummary").dataset.phase = simulated ? "" : go2DiscoveryState.phase;
-    $("discoverWebrtc").disabled = configLocked || simulated || discoveryPending || checkOk !== true;
+    $("discoverWebrtc").disabled = configIsLocked() || simulated || discoveryPending || lastStatus.check_ok !== true;
     $("discoverWebrtc").textContent = discoveryPending ? "Scanning…" : "Discover";
     const missing = canRequired() && !canStatus.ready;
     card.classList.toggle("needs-setup", missing);
@@ -204,7 +200,7 @@
     $("canStatus").textContent = mock ? "Not required for simulated connection." : canStatus.message;
     const settingUp = canSetupPending || lastStatus.can_setup_running || canStatus.setting_up;
     $("canSetupBtn").textContent = settingUp ? "Setting up…" : "Set up CAN";
-    $("canSetupBtn").disabled = !selected || mock || configLocked || settingUp || canNotRequired || checkOk !== true || ["checking", "installing"].includes(phase);
+    $("canSetupBtn").disabled = !selected || mock || configIsLocked() || settingUp || canNotRequired || lastStatus.check_ok !== true || ["checking", "installing"].includes(lastStatus.phase);
     $("plannerStatus").classList.toggle("hidden", !selected);
     $("plannerStatus").textContent = plannerStatus.message || "Checking manipulation dependencies…";
     $("plannerStatus").dataset.phase = plannerStatus.state === "error" ? "error" : plannerStatus.ready ? "ready" : "checking";
@@ -213,7 +209,7 @@
     depsSummary.dataset.phase = deps.phase;
     syncInstallBanner();
     applyHeader(lastStatus);
-    startBtn.disabled = configLocked || ["checking", "installing"].includes(phase) || checkOk !== true || settingUp || hardwareNotSetup();
+    startBtn.disabled = configIsLocked() || ["checking", "installing"].includes(lastStatus.phase) || lastStatus.check_ok !== true || settingUp || hardwareNotSetup();
   }
   async function refreshCan() {
     if (!manipulationSelected() || canCheckPending || canSetupPending || document.hidden) return;
@@ -238,7 +234,7 @@
   document.addEventListener("visibilitychange", () => { if (!document.hidden) { void refreshCan(); void refreshPlanner(); } });
   setInterval(() => { void refreshCan(); void refreshPlanner(); }, 5000);
   $("canSetupBtn").addEventListener("click", async () => {
-    if (canSetupPending || configLocked) return;
+    if (canSetupPending || configIsLocked()) return;
     const result = $("canSetupResult");
     result.classList.remove("hidden");
     result.textContent = "Checking CAN configuration…";
@@ -315,7 +311,7 @@
   }
 
   function schedulePersist() {
-    if (configLocked) return;
+    if (configIsLocked()) return;
     clearTimeout(persistTimer);
     persistTimer = setTimeout(() => {
       void saveSettings();
@@ -405,8 +401,9 @@
     applyBlueprintInfo();
   }
 
+  function configIsLocked() { return ["starting", "running", "stopping"].includes(lastStatus.phase); }
+
   function setConfigLocked(locked) {
-    configLocked = locked;
     Object.values(policyInputs).forEach(input => { input.disabled = locked; });
     controlsCard.classList.toggle("locked", locked);
     document.querySelectorAll("[data-client]").forEach((btn) => {
@@ -453,7 +450,7 @@
     input.value = String(Number(Number(value).toFixed(6)));
     input.dataset.field = meta.field;
     input.setAttribute("aria-label", meta.label);
-    input.disabled = configLocked;
+    input.disabled = configIsLocked();
 
     const inc = document.createElement("button");
     inc.type = "button";
@@ -472,17 +469,17 @@
     };
 
     dec.addEventListener("click", () => {
-      if (configLocked) return;
+      if (configIsLocked()) return;
       commit(Number(input.value) - meta.step);
     });
     inc.addEventListener("click", () => {
-      if (configLocked) return;
+      if (configIsLocked()) return;
       commit(Number(input.value) + meta.step);
     });
     input.addEventListener("change", () => commit(input.value));
 
-    dec.disabled = configLocked;
-    inc.disabled = configLocked;
+    dec.disabled = configIsLocked();
+    inc.disabled = configIsLocked();
     wrap.append(dec, input, inc);
     return wrap;
   }
@@ -531,11 +528,11 @@
     input.type = "file";
     input.accept = "image/png";
     input.hidden = true;
-    input.disabled = configLocked;
+    input.disabled = configIsLocked();
     input.addEventListener("change", async () => {
       const file = input.files && input.files[0];
       input.value = "";
-      if (!file || configLocked) return;
+      if (!file || configIsLocked()) return;
       try {
         await onFile(file);
       } catch (err) {
@@ -593,7 +590,7 @@
       const typeField = document.createElement("label"); typeField.className = "field tag-type-field";
       const typeLabel = document.createElement("span"); typeLabel.textContent = "Marker type";
       const typeSelect = document.createElement("select"); typeSelect.setAttribute("aria-label", "Marker type");
-      typeSelect.disabled = configLocked;
+      typeSelect.disabled = configIsLocked();
       const used = usedMarkerIds(index);
       const ids = [...presetMarkerIds];
       if (!ids.includes(mount.marker_id)) ids.unshift(mount.marker_id);
@@ -611,7 +608,7 @@
         renderMountEditor(); schedulePersist();
       });
       typeSelect.addEventListener("change", () => {
-        if (configLocked) return;
+        if (configIsLocked()) return;
         if (typeSelect.value === "upload") {
           typeSelect.value = String(mounts[index].marker_id); uploadInput.click(); return;
         }
@@ -639,7 +636,7 @@
         const label = document.createElement("span");
         label.textContent = meta.label;
         const control = makeNumInput(meta, mount[meta.field], (next) => {
-          if (configLocked) return;
+          if (configIsLocked()) return;
           mounts[index] = { ...mounts[index], [meta.field]: next };
           syncMarker();
           schedulePersist();
@@ -660,11 +657,11 @@
       removeBtn.type = "button";
       removeBtn.className = "btn ghost tag-remove";
       removeBtn.textContent = "Remove";
-      removeBtn.disabled = configLocked || mounts.length === 1;
+      removeBtn.disabled = configIsLocked() || mounts.length === 1;
       removeBtn.title =
         mounts.length === 1 ? "Keep at least one fiducial marker" : "Remove this marker";
       removeBtn.addEventListener("click", () => {
-        if (configLocked || mounts.length === 1) return;
+        if (configIsLocked() || mounts.length === 1) return;
         mounts = mounts.filter((_, i) => i !== index);
         renderMountEditor();
         schedulePersist();
@@ -746,12 +743,12 @@
   }
 
   function syncInstallBanner() {
-    const ready = checkOk === true && (!manipulationSelected() || plannerStatus.ready);
+    const ready = lastStatus.check_ok === true && (!manipulationSelected() || plannerStatus.ready);
     const busy =
-      phase === "checking" ||
-      phase === "installing" ||
-      phase === "starting" ||
-      phase === "stopping";
+      lastStatus.phase === "checking" ||
+      lastStatus.phase === "installing" ||
+      lastStatus.phase === "starting" ||
+      lastStatus.phase === "stopping";
     const needsInstall = !ready;
     const cloning = setupMode() === "clone";
     const showInstall = needsInstall || cloning;
@@ -763,7 +760,7 @@
     dimosRefField.classList.toggle("hidden", !cloning);
     installBtn.textContent = cloning ? "Download & install" : "Install";
     installBtn.classList.toggle("hidden", !showInstall);
-    installBtn.disabled = busy || configLocked || canSetupPending || lastStatus.can_setup_running;
+    installBtn.disabled = busy || configIsLocked() || canSetupPending || lastStatus.can_setup_running;
     installBanner.classList.toggle("needs-setup", needsInstall || hardwareNotSetup());
 
     const versionBits = [];
@@ -966,7 +963,7 @@
   function displayRobotIp(value) {
     if (!value || !String(value).trim()) return "";
     const raw = String(value).trim();
-    if (raw === "fake" || raw === "simulated" || raw === "mock" || raw === "replay") {
+    if (raw === "simulated") {
       return "simulated";
     }
     return raw;
@@ -996,14 +993,12 @@
     const nextPython = status.dimos_python || null;
     const environmentChanged = nextPython !== plannerPython;
     plannerPython = nextPython;
-    phase = status.phase || "idle";
-    if ("check_ok" in status) checkOk = status.check_ok;
 
     applyHeader(status);
     const deps = describeDeps(status);
     depsSummary.textContent = deps.text;
     depsSummary.dataset.phase = deps.phase;
-    if (["starting", "running", "stopping"].includes(phase) && status.client) {
+    if (["starting", "running", "stopping"].includes(lastStatus.phase) && status.client) {
       client = status.client;
       document.querySelectorAll("[data-client]").forEach(btn => btn.classList.toggle("active", btn.dataset.client === client));
     }
@@ -1016,7 +1011,7 @@
       warningText.classList.add("hidden");
     }
 
-    if (status.error && phase !== "error") {
+    if (status.error && lastStatus.phase !== "error") {
       errorText.textContent = status.error;
       errorText.classList.remove("hidden");
     } else {
@@ -1038,12 +1033,12 @@
     syncConfigCards();
 
     const busy =
-      phase === "checking" ||
-      phase === "installing" ||
-      phase === "starting" ||
-      phase === "stopping";
-    const running = phase === "running" || phase === "starting";
-    const locked = phase === "starting" || phase === "running" || phase === "stopping";
+      lastStatus.phase === "checking" ||
+      lastStatus.phase === "installing" ||
+      lastStatus.phase === "starting" ||
+      lastStatus.phase === "stopping";
+    const running = lastStatus.phase === "running" || lastStatus.phase === "starting";
+    const locked = lastStatus.phase === "starting" || lastStatus.phase === "running" || lastStatus.phase === "stopping";
 
     controlsCard.classList.remove("hidden");
     actionsBar.classList.remove("hidden");
@@ -1056,16 +1051,16 @@
       dimosPython.value = status.dimos_install_dir || status.dimos_python;
     }
 
-    startBtn.disabled = busy || running || checkOk !== true;
+    startBtn.disabled = busy || running || lastStatus.check_ok !== true;
     stopBtn.disabled = false;
-    stopBtn.textContent = phase === "stopping" ? "Force stop" : "Stop";
+    stopBtn.textContent = lastStatus.phase === "stopping" ? "Force stop" : "Stop";
     stopBtn.classList.toggle(
       "danger",
-      phase === "running" || phase === "starting" || phase === "stopping"
+      lastStatus.phase === "running" || lastStatus.phase === "starting" || lastStatus.phase === "stopping"
     );
     setConfigLocked(locked);
     syncHardwareSetup();
-    if (environmentChanged || phase === "ready") { void refreshPlanner(); }
+    if (environmentChanged || lastStatus.phase === "ready") { void refreshPlanner(); }
 
   }
 
@@ -1135,7 +1130,7 @@
 
   document.querySelectorAll("[data-client]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      if (configLocked) return;
+      if (configIsLocked()) return;
       document.querySelectorAll("[data-client]").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       client = btn.dataset.client;
@@ -1144,7 +1139,7 @@
   });
 
   blueprintSelect.addEventListener("change", async () => {
-    if (configLocked) return;
+    if (configIsLocked()) return;
     if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; await saveSettings(); }
     blueprint = blueprintSelect.value;
     localStorage.setItem("dimos.blueprint", blueprint);
@@ -1172,7 +1167,7 @@
   apiKey.addEventListener("input", syncConfigCards);
 
   restoreTagsBtn.addEventListener("click", () => {
-    if (configLocked) return;
+    if (configIsLocked()) return;
     mounts = [cloneMount(DEFAULT_MOUNT)];
     renderMountEditor();
     schedulePersist();
@@ -1193,7 +1188,7 @@
   document.body.append(addUploadInput);
 
   addTagBtn.addEventListener("click", () => {
-    if (configLocked) return;
+    if (configIsLocked()) return;
     const nextId = nextUnusedPresetId();
     if (nextId == null) {
       appendLog("All pre-built markers are in use. Upload a PNG to add another.");
@@ -1318,12 +1313,8 @@
       if (!res.ok) {
         const detail = data.detail;
         if (Array.isArray(detail?.devices)) {
-          for (const device of detail.devices) {
-            const value = `device:${device.id}`;
-            if (![...$("robotSource").options].some(option => option.value === value)) {
-              const option = document.createElement("option"); option.value = value; option.textContent = device.label || device.id; $("robotSource").insertBefore(option, $("robotSource").querySelector('[value="simulated"]'));
-            }
-          }
+          discoveredRobots[manipulationSelected() ? "openyam" : "go2"] = detail.devices;
+          renderSourceOptions();
         }
         if (detail?.suggest_simulated) { $("robotSource").value = "simulated"; syncSource(); }
         $("discoveryStatus").textContent = detail?.message || String(detail || res.statusText);
@@ -1350,7 +1341,7 @@
   async function loadConfig() {
     try {
       const res = await fetch("/api/settings");
-      if (res.ok) applySettingsPayload(await res.json());
+      if (res.ok) { applySettingsPayload(await res.json()); applyRobotProfile(); }
     } catch (_) {
       /* ignore */
     }
@@ -1442,7 +1433,7 @@
     syncLocalizationPanels(); renderMountEditor(); syncConfigCards();
   }
   $("robotProfileSelect").addEventListener("change", async () => {
-    if (configLocked) return;
+    if (configIsLocked()) return;
     if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; if (!(await saveSettings())) { $("robotProfileSelect").value = robotProfileId; return; } }
     robotProfileId = $("robotProfileSelect").value;
     localStorage.setItem(`dimos.profile.${blueprint === "openyam_ar_planner" ? "openyam" : "unitree_go2"}`, robotProfileId);
@@ -1462,7 +1453,7 @@
     }
     $("playbackSource").querySelector('[value="simulator"]').hidden = !manipulationSelected();
     $("replayName").textContent = $("replayPath").value || (manipulationSelected() ? "Choose a recording" : "Default recording");
-    $("editReplay").disabled = configLocked || $("playbackSource").value !== "recording";
+    $("editReplay").disabled = configIsLocked() || $("playbackSource").value !== "recording";
 
 
     syncHardwareSetup();
@@ -1475,7 +1466,7 @@
     void saveLauncherPreferences();
   });
   async function refreshRobotDiscovery() {
-    if (configLocked || discoveryPending) return;
+    if (configIsLocked() || discoveryPending) return;
     discoveryPending = true;
     if (!manipulationSelected()) go2DiscoveryState = {text: "Scanning…", phase: "checking"};
     syncHardwareSetup();
@@ -1495,11 +1486,7 @@
       }
       discoveredRobots[manipulationSelected() ? "openyam" : "go2"] = data.devices;
       if (!manipulationSelected()) go2DiscoveryState = {text: data.devices.length ? `${data.devices.length} found` : "None found", phase: data.devices.length ? "ready" : "needs_setup"};
-      const select = $("robotSource");
-      select.querySelectorAll('[value^="device:"]').forEach(option => option.remove());
-      for (const device of data.devices) { const option = document.createElement("option"); option.value = `device:${device.id}`; option.textContent = device.label; select.insertBefore(option, select.querySelector('[value="simulated"]')); }
-      if ([...select.options].some(option => option.value === selected)) select.value = selected;
-      else if (selected.startsWith("device:")) { const option = document.createElement("option"); option.value = selected; option.textContent = "Selected device unavailable"; select.insertBefore(option, select.querySelector('[value="simulated"]')); select.value = selected; }
+      renderSourceOptions(selected, "unavailable");
       $("discoveryStatus").textContent = data.devices.length ? `${data.devices.length} connection(s) found` : "No devices found. Check the connection and try Discover again.";
     } catch (error) {
       $("discoveryStatus").textContent = String(error);
@@ -1516,9 +1503,7 @@
   $("cancelRobotIp").addEventListener("click", () => $("connectionEditor").classList.add("hidden"));
   $("saveRobotIp").addEventListener("click", () => {
     if (!robotIp.value.trim() || manipulationSelected()) { $("discoveryStatus").textContent = "Enter a Go2 IP address."; return; }
-    let option = $("robotSource").querySelector('[value="manual"]');
-    if (!option) { option = document.createElement("option"); option.value = "manual"; $("robotSource").insertBefore(option, $("robotSource").querySelector('[value="simulated"]')); }
-    option.textContent = `${robotIp.value.trim()} (manual)`; $("robotSource").value = "manual";
+    renderSourceOptions("manual");
     $("connectionEditor").classList.add("hidden"); $("robotSource").dispatchEvent(new Event("change"));
   });
   $("editReplay").addEventListener("click", () => $("replayEditor").classList.toggle("hidden"));
@@ -1562,7 +1547,7 @@
     syncSource(); void saveLauncherPreferences(); void inspectReplay();
   });
   $("browseReplay").addEventListener("click", async () => {
-    if (configLocked) return;
+    if (configIsLocked()) return;
     try {
       const response = await fetch("/api/browse-replay", { method: "POST" });
       const data = await response.json();
@@ -1580,7 +1565,7 @@
     if (!response.ok) throw new Error((await response.json()).detail || "Could not load saved preferences");
     return response.json();
   }).then(preferences => {
-    if (configLocked || preferencesEdited) return;
+    if (configIsLocked() || preferencesEdited) return;
     for (const key of Object.keys(launcherPreferences)) {
       if (typeof preferences[key] === "string") launcherPreferences[key] = preferences[key];
     }
@@ -1588,10 +1573,7 @@
     playbackRobot = null;
     if (typeof preferences.manual_ip === "string") robotIp.value = preferences.manual_ip;
     const value = launcherPreferences[`${manipulationSelected() ? "openyam" : "go2"}_source`] || "auto";
-    if (![...$("robotSource").options].some(option => option.value === value) && (value.startsWith("device:") || value === "manual")) {
-      const option = document.createElement("option"); option.value = value; option.textContent = option.value === "manual" ? `${robotIp.value.trim()} (manual)` : `${option.value.slice(7)} (saved)`; $("robotSource").insertBefore(option, $("robotSource").querySelector('[value="simulated"]'));
-    }
-    $("robotSource").value = value; syncSource();
+    renderSourceOptions(value); syncSource();
     if (value.startsWith("device:")) void refreshRobotDiscovery();
   }).catch(error => appendLog(`Could not load launcher preferences: ${error}`));
   async function saveLauncherPreferences() {
@@ -1605,7 +1587,7 @@
     return preferencesSave;
   }
   $("profileEdit").addEventListener("click", () => {
-    if (configLocked) return;
+    if (configIsLocked()) return;
     const editor = $("profileEditor");
     editor.classList.toggle("hidden");
     $("profileEdit").setAttribute("aria-expanded", String(!editor.classList.contains("hidden")));
@@ -1620,14 +1602,14 @@
   $("cancelProfileName").addEventListener("click", () => { applyRobotProfile(); closeProfileEditor(); });
   $("robotProfileName").addEventListener("keydown", event => { if (event.key === "Enter") $("saveProfileName").click(); });
   $("saveProfileName").addEventListener("click", async () => {
-    if (configLocked || !robotProfileId) return;
+    if (configIsLocked() || !robotProfileId) return;
     const response = await fetch(`/api/robot-profiles/${robotProfileId}`, { method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name: $("robotProfileName").value}) });
     if (!response.ok) { $("profileError").textContent = "Could not save profile name. Use 1–80 characters."; $("profileError").classList.remove("hidden"); return; }
     $("profileError").classList.add("hidden");
     await refreshRobotProfiles(); closeProfileEditor();
   });
   async function createRobotProfile() {
-    if (configLocked) return;
+    if (configIsLocked()) return;
     if (!(await saveSettings())) return;
     const response = await fetch("/api/robot-profiles", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({robot: blueprint === "openyam_ar_planner" ? "openyam" : "unitree_go2",  source_id: null}) });
     const created = await response.json();
@@ -1637,7 +1619,7 @@
   $("newRobotProfile").addEventListener("click", () => createRobotProfile());
   $("deleteRobotProfile").addEventListener("click", () => $("deleteProfileConfirm").classList.remove("hidden"));
   $("confirmDeleteProfile").addEventListener("click", async () => {
-    if (configLocked || !robotProfileId) return;
+    if (configIsLocked() || !robotProfileId) return;
     const response = await fetch(`/api/robot-profiles/${robotProfileId}`, {method: "DELETE"});
     if (response.ok) { $("deleteProfileConfirm").classList.add("hidden"); await refreshRobotProfiles(null); } else appendLog("Profile deletion failed");
   });

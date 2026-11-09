@@ -10,7 +10,7 @@ import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from dimos_lcm.std_msgs import Bool
+from dimos_lcm.std_msgs import String
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 import numpy as np
 import pytest
@@ -102,7 +102,7 @@ def test_ar_module_declares_stable_port_superset() -> None:
         "tf",
         "lidar",
         "path",
-        "goal_reached",
+        "ar_navigation_status",
         "color_image",
         "camera_info",
         "goal_request",
@@ -312,7 +312,14 @@ def test_marker_capture_travel_uses_replay_pose_policy(
         camera_orientation=(0, 0, 0, 1),
     )
 
+    if provider == "vps":
+        module._map_localization = SimpleNamespace(observations=Mock())
     module._on_localization_observations((observation,), "c1", TimeSync(0, 0))
+    if provider == "vps":
+        module._map_localization.observations.assert_called_once()
+        on_observations.assert_not_called()
+        assert not submitted
+        return
 
     assert len(submitted) == 1
     assert on_observations.call_args.kwargs["capture_travel_m"] == expected_travel
@@ -507,7 +514,7 @@ def test_lidar_settings_request_noops_without_lidar() -> None:
 
 
 @pytest.mark.asyncio
-async def test_handle_goal_reached_skips_policy_without_navigation() -> None:
+async def test_handle_native_status_skips_policy_without_navigation() -> None:
     profile = replace(
         UNITREE_GO2_PROFILE,
         supported_capabilities=frozenset({CapabilityName.ESTOP}),
@@ -517,13 +524,13 @@ async def test_handle_goal_reached_skips_policy_without_navigation() -> None:
     prompts: list[bool] = []
     module._nav_goal_coordinator = SimpleNamespace(
         nav_state=lambda: NavState("idle", None),
-        on_goal_reached=lambda _msg: prompts.append(True),
+        on_native_status=lambda *_args: prompts.append(True),
     )
     module._policy = SimpleNamespace(  # type: ignore[assignment]
         on_goal_reached=lambda **_kwargs: prompts.append(True),
         providers=["fiducial_marker"],
     )
-    await module.handle_goal_reached(Bool(True))
+    await module.handle_ar_navigation_status(String('{"goal_ts":1,"phase":"succeeded"}'))
     assert prompts == []
     assert module._ws_server.broadcasts == []  # type: ignore[union-attr]
 
@@ -612,8 +619,8 @@ async def test_handle_odom_uses_corrected_robot_position_for_localization(
         )
     )
     assert len(published) == 1
-    assert (published[0].x, published[0].y, published[0].z) == (pose.x, pose.y, pose.z)
-    assert published[0].ts == pose.ts
+    assert published[0] is buffered
+    assert published[0].ts_server == pose.ts
 
 
 def test_hello_agent_capability_follows_config() -> None:
@@ -832,7 +839,7 @@ def test_preview_returns_empty_without_changing_motion_or_state(failure: str) ->
     assert module._ws_server.broadcasts == []
 
 
-async def test_preview_is_requester_only_off_loop_and_does_not_submit_motion() -> None:
+async def test_preview_is_shared_off_loop_and_does_not_submit_motion() -> None:
     module = _module_with_policy(
         [], profile=replace(UNITREE_GO2_PROFILE, odom_scale_correction_factor=2.0)
     )
@@ -841,9 +848,11 @@ async def test_preview_is_requester_only_off_loop_and_does_not_submit_motion() -
     module.goal_request = SimpleNamespace(transport=object(), publish=Mock())
     loop_thread = threading.get_ident()
     worker_threads = []
+    release = threading.Event()
 
     def plan(start, goal):
         worker_threads.append(threading.get_ident())
+        assert release.wait(2)
         assert start == (1, 2)
         assert goal == (2, 3)
         return [(1, 2, 0), (2, 3, 0)]
@@ -859,15 +868,15 @@ async def test_preview_is_requester_only_off_loop_and_does_not_submit_motion() -
         _authorized_request(module, request, "requester"), None, "requester"
     )
     assert module._previews._tasks["requester"] is task
+    await module._previews._busy_replies["requester"]
+    busy = json.loads(module._ws_server.interaction_broadcasts[-1])["preview"]
+    assert busy["path_poses"] == [] and busy["preview_id"] == "aim"
+    release.set()
     await task
     assert worker_threads and worker_threads[0] != loop_thread
     assert list(module._previews._tasks) == []
-    assert len(module._ws_server.sent) == 2
-    busy = json.loads(module._ws_server.sent[0][1])
-    assert busy["path_poses"] == [] and busy["preview_id"] == "aim"
-    client_id, text = module._ws_server.sent[1]
-    assert client_id == "requester"
-    response = json.loads(text)
+    assert module._ws_server.sent == []
+    response = json.loads(module._ws_server.interaction_broadcasts[-1])["preview"]
     assert response["preview"] is True
     assert response["preview_id"] == "aim"
     assert response["path_poses"] == [[2, 4, 0.5, 0], [4, 6, 0.5, 0]]
@@ -942,7 +951,8 @@ async def test_changed_robot_frame_retires_origins_and_requires_mapping_restart(
     module._odometry.generation = 0
     module._odometry._source_frame = "world"
     module._localization_runner = SimpleNamespace(cancel_all=Mock())
-    module._coordinator = SimpleNamespace(invalidate_source=Mock())
+    module._odom_map_transform = SimpleNamespace(clear=Mock())
+    module._robot_observations = SimpleNamespace(clear=Mock())
     module._ws_server.schedule_disconnect_all = Mock()
     module._tele_cmd_vel_publisher = SimpleNamespace(cancel=Mock())
     stopped = []
@@ -954,7 +964,8 @@ async def test_changed_robot_frame_retires_origins_and_requires_mapping_restart(
     assert module._odometry.history.latest() is None
     assert stopped
     module._localization_runner.cancel_all.assert_called_once()
-    module._coordinator.invalidate_source.assert_called_once()
+    module._odom_map_transform.clear.assert_called_once()
+    module._robot_observations.clear.assert_called_once()
     module._ws_server.schedule_disconnect_all.assert_called_once()
     hello = module._hello_body("client")
     assert not hello.capabilities[CapabilityName.NAVIGATION].available
@@ -985,7 +996,6 @@ async def test_robot_image_pairing_preserves_producer_time_and_encodes_off_loop(
     module._robot_observations = RobotObservationBuffer(
         pose_buffer=module._odometry.history,
         T_base_camera_optical=np.eye(4),
-        timing_uncertainty_s=0.1,
     )
     module._robot_observations.set_camera_info(_camera_info())
     module._localization_worker = LocalizationWorker()
@@ -1050,7 +1060,7 @@ async def test_duplicate_odometry_has_no_telemetry_or_localization_effects() -> 
 
 def test_unwired_goal_does_not_mutate_navigation() -> None:
     module = _module_with_policy([])
-    module.goal_request = SimpleNamespace(transport=None, publish=Mock())
+    module._navigation_service = None
     module._nav_goal_coordinator.submit_goal = Mock()
     module._on_nav_goal_request(
         _authorized_request(module, NavGoalRequest((1, 0, 0), (0, 0, 0, 1)), "client"),

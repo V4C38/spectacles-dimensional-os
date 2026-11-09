@@ -163,7 +163,7 @@ def test_publish_odom_applies_odom_correction() -> None:
         odom_scale_correction_factor=1.25,
     )
 
-    publisher.publish_odom(_pose())
+    _publish_odom(publisher, _pose())
 
     assert len(sink.text_payloads) == 1
     payload = json.loads(sink.text_payloads[0])
@@ -176,8 +176,8 @@ def test_publish_odom_rate_limits() -> None:
     sink = _RecordingBroadcast()
     publisher = _publisher(sink, pose_max_hz=10.0)
 
-    publisher.publish_odom(_pose())
-    publisher.publish_odom(_pose(x=1.0, y=2.0))
+    _publish_odom(publisher, _pose())
+    _publish_odom(publisher, _pose(x=1.0, y=2.0))
 
     assert len(sink.text_payloads) == 1
 
@@ -188,7 +188,7 @@ def test_publish_lidar_disabled_skips_binary() -> None:
     lidar = LidarSettings(enabled=False, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0)
     points = np.array([[0.5, 0.0, 0.5]], dtype=np.float32)
 
-    publisher.publish_odom(_pose())
+    _publish_odom(publisher, _pose())
     publisher.publish_lidar(_FakePointCloud2(points), lidar=lidar)  # type: ignore[arg-type]
 
     assert sink.binary_payloads == []
@@ -206,7 +206,7 @@ def test_publish_lidar_filters_native_range_then_corrects_wire_coordinates() -> 
     lidar = LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=15.0)
     points = np.array([[8.2, 0.0, 0.5], [10.2, 0.0, 0.5]], dtype=np.float32)
 
-    publisher.publish_odom(_pose(x=8.0, y=0.0))
+    _publish_odom(publisher, _pose(x=8.0, y=0.0))
     publisher.publish_lidar(_FakePointCloud2(points, ts=2.0), lidar=lidar)  # type: ignore[arg-type]
 
     assert len(sink.binary_payloads) == 1
@@ -241,7 +241,7 @@ def test_publish_lidar_range_is_around_robot_not_origin() -> None:
     lidar = LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0)
     points = np.array([[0.5, 0.0, 0.5], [10.5, 0.0, 0.5]], dtype=np.float32)
 
-    publisher.publish_odom(_pose(x=10.0, y=0.0))
+    _publish_odom(publisher, _pose(x=10.0, y=0.0))
     publisher.publish_lidar(_FakePointCloud2(points, ts=2.0), lidar=lidar)  # type: ignore[arg-type]
 
     assert len(sink.binary_payloads) == 1
@@ -259,7 +259,7 @@ def test_publish_lidar_uses_passed_settings_per_call() -> None:
     enabled = LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0)
     points = np.array([[0.5, 0.0, 0.5]], dtype=np.float32)
 
-    publisher.publish_odom(_pose())
+    _publish_odom(publisher, _pose())
     publisher.publish_lidar(_FakePointCloud2(points, ts=2.0), lidar=disabled)  # type: ignore[arg-type]
     assert sink.binary_payloads == []
 
@@ -282,7 +282,7 @@ def test_repeated_voxel_geometry_is_independent_of_robot_movement() -> None:
     publisher._robot_position = lambda: tuple(position)
     for robot_x in [4.0, 4.918]:
         position[0] = robot_x
-        publisher.publish_odom(_pose(x=robot_x, y=0))
+        _publish_odom(publisher, _pose(x=robot_x, y=0))
         publisher.publish_lidar(_FakePointCloud2(points, ts=2), lidar=lidar)
     assert sink.binary_payloads[0] == sink.binary_payloads[1]
     assert struct.unpack_from("<3f", sink.binary_payloads[0], 16) == (6.25, 0, 0.5)
@@ -299,7 +299,7 @@ def test_range_filter_stays_in_native_metres_when_display_is_scaled() -> None:
         robot_position=lambda: (4.0, 0.0, 0.33),
     )
     lidar = LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=0.5)
-    publisher.publish_odom(_pose(x=4, y=0))
+    _publish_odom(publisher, _pose(x=4, y=0))
     publisher.publish_lidar(
         _FakePointCloud2(np.array([[4.4, 0, 0.5], [4.6, 0, 0.5]], dtype=np.float32)), lidar=lidar
     )
@@ -327,7 +327,7 @@ def test_native_navigation_and_lidar_share_one_corrected_wire_frame() -> None:
     native_goal = navigation.submit_goal(wire_goal)
     assert (native_goal.x, native_goal.y) == pytest.approx((4.2, -2.1))
     native_body = _pose(x=4, y=-2)
-    publisher.publish_odom(native_body)
+    _publish_odom(publisher, native_body)
     cloud = np.array([[4.2, -2.1, 0.5]], dtype=np.float32)
     publisher.publish_lidar(_FakePointCloud2(cloud), lidar=LidarSettings(True, 0.1, 1.5, 5))
     route, _ = navigation.on_path(Path(ts=time.time() + 1, poses=[native_body, native_goal]))
@@ -360,3 +360,14 @@ def test_lidar_subscriptions_are_isolated_and_downsample_once(monkeypatch):
     targeted.clear()
     publisher.publish_lidar(cloud, lidar=LidarSettings(True, 0.1, 1.5, 5.0))
     assert [client for client, _ in targeted] == ["far"]
+
+
+def _publish_odom(publisher, pose):
+    from dimos.ar.localization.pose_buffer import PoseSample
+    from dimos.ar.robot.odometry_correction import correct_odom_pose
+    corrected = correct_odom_pose(pose, factor=publisher._odom_scale_correction_factor)
+    publisher.publish_odom(PoseSample(
+        position=(corrected.x, corrected.y, corrected.z),
+        orientation=tuple(getattr(corrected.orientation, a) for a in "xyzw"),
+        ts_odom=pose.ts, ts_server=pose.ts, frame_id=pose.frame_id,
+    ))

@@ -9,6 +9,8 @@ import {
 } from "../src/navigation/WebXRNavigationController";
 
 const capabilities: Capabilities = {
+  manipulation: { available: false, reason: "No arm" },
+  object_detection: { available: false, reason: "No detector" },
   lidar: { available: true, reason: null },
   localization: { available: true, reason: null },
   estop: { available: true, reason: null },
@@ -16,16 +18,20 @@ const capabilities: Capabilities = {
   navigation: {
     available: true,
     reason: null,
-    nav_goal: { available: true, reason: null },
+    nav_goal: { preview: false, available: true, reason: null },
     nav_joystick: { available: false, reason: "off" },
   },
 };
 
 const hello: Hello = {
+  resume_token: "fixture-resume",
+  odom_reference_id: "fixture-odom",
+  localization: { providers: ["fiducial_marker"] },
   type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
   client_id: "c",
   time_sync: { ts_client: 0, ts_server: 0 },
   robot: {
+    odom_scale_correction_factor: 1,
     display_name: "Go2",
     body_bounds_m: [0.7, 0.5, 0.55],
     footprint_m: [0.7, 0.3],
@@ -95,7 +101,7 @@ describe("WebXRNavigationController", () => {
             navigation: {
               available: true,
               reason: null,
-              nav_goal: { available: false, reason: "off" },
+              nav_goal: { preview: false, available: false, reason: "off" },
               nav_joystick: { available: false, reason: "off" },
             },
           },

@@ -22,6 +22,7 @@ export class IntegrationV2Fixture implements BindableWebSocketTransport {
     private readonly clientId: string, private readonly now: () => number) {}
 
   bind(handlers: WebSocketTransportHandlers): void { this.handlers = handlers; }
+  createSibling(): IntegrationV2Fixture { throw new Error("Bulk connections do not open siblings"); }
   connect(): void { this.handlers.onTransportOpen(); }
   close(): void { this.attached = false; this.upload = null; }
   bufferedAmount(): number { return 0; }
@@ -61,6 +62,10 @@ export class IntegrationV2Fixture implements BindableWebSocketTransport {
     }
   }
   send(value: Value): void {
+    if (value.type === "nav_goal") {
+      this.interaction[value.preview ? "preview" : "active_goal"] = value;
+      this.bump(); return;
+    }
     const message = this.prepare(value);
     if (message.type === "hello") Object.assign(message, {
       protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
@@ -75,6 +80,7 @@ export class IntegrationV2Fixture implements BindableWebSocketTransport {
   publish(): void { this.send(this.interaction); }
   clearGoal(): void { this.interaction.active_goal = null; this.interaction.preview = null; this.bump(); }
   setGoal(goal: Value): void { this.interaction.active_goal = goal; this.interaction.preview = null; this.bump(); }
+  setFollowingTail(tail: Value | null): void { this.interaction.following_tail = tail; this.bump(); }
   setBusy(busy: boolean): void { this.interaction.motion_busy = busy; this.bump(); }
   authorizes(request: Value): boolean {
     const authority = this.interaction.authority;
@@ -104,7 +110,7 @@ export class IntegrationV2Fixture implements BindableWebSocketTransport {
       if (state.authority || state.motion_busy || state.mode !== "manual") { result("busy", "owned"); return true; }
       this.onTakeover(); state.following_tail = null; state.preview = null; this.previewAim = null;
       state.authority = { client_id: this.clientId, source_id: request.source_id,
-        acquisition_id: request.acquisition_id ?? request.request_id, lease_id: `native-lease-${++this.generation}`,
+        acquisition_id: request.acquisition_id, lease_id: `native-lease-${++this.generation}`,
         kind: request.kind, group_id: request.group_id ?? null, held: true, sequence: 0, expires_at: this.now() + .5 };
       if (request.position) this.target(request);
       this.bump(); result(); return true;
@@ -178,7 +184,7 @@ export class IntegrationV2Fixture implements BindableWebSocketTransport {
       2 * Math.acos(Math.min(1, Math.abs(a.orientation.reduce((sum: number, v: number, i: number) => sum + v * b.orientation[i], 0)))) < Math.PI / 12;
   }
   private prepare(value: Value): Value {
-    const message = { ...value };
+    const { target: _currentTarget, ...message } = value;
     if (message.model) { message.model_ref = this.asset("model", message.model); delete message.model; }
     if (message.plan) { message.plan_ref = this.asset("trajectory", message.plan); delete message.plan; }
     if (message.type === "manipulation_result" && message.trajectory) { message.plan_ref = this.asset("trajectory", message); delete message.trajectory; }

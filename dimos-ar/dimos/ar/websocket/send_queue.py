@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-import json
 import math
 import re
 import time
@@ -25,7 +24,7 @@ CONTROL_RECORD_MAX_BYTES = 16_384
 CONTROL_BATCH_MAX_BYTES = 65_536
 OUTBOUND_SEND_TIMEOUT_S = 2.0
 COALESCE_FRAME_TYPES = frozenset(
-    {"pose", "nav_goal", "state", "localization_result", "interaction_state", "manipulation_state"}
+    {"pose", "state", "localization_result", "interaction_state", "manipulation_state"}
 )
 _FRAME_TYPE_RE = re.compile(r'"type"\s*:\s*"([^"]+)"')
 
@@ -56,7 +55,6 @@ class ClientSendQueue:
             maxsize=OUTBOUND_FIFO_MAXSIZE,
         )
         self._coalesce_latest: dict[str, str] = {}
-        self._coalesce_latest_binary: bytes | None = None
         self._snapshot_budget = TokenBucket(57344, 16384)
         self._sequence = 0
         self._queued_bytes = 0
@@ -94,10 +92,7 @@ class ClientSendQueue:
             self._fail("outbound control record exceeds byte budget")
             return
         frame_type = peek_frame_type(text)
-        # Previews are request/reply traffic. Coalescing them with authoritative
-        # nav_goal frames loses either the active route or a correlated reply.
-        preview = frame_type == "nav_goal" and json.loads(text).get("preview") is True
-        if frame_type in COALESCE_FRAME_TYPES and not preview:
+        if frame_type in COALESCE_FRAME_TYPES:
             self._replacements += int(frame_type in self._coalesce_latest)
             self._coalesce_latest[frame_type] = text
         else:
@@ -133,19 +128,12 @@ class ClientSendQueue:
             except Exception:
                 logger.exception("WebSocket outbound failure handler failed")
 
-    def enqueue_binary(self, data: bytes) -> None:
-        if self._closed:
-            return
-        self._coalesce_latest_binary = data
-        self._work_available.set()
-
     async def _sender_loop(self) -> None:
         try:
             while not self._closed:
                 if (
                     self._queue.empty()
                     and not self._coalesce_latest
-                    and self._coalesce_latest_binary is None
                 ):
                     self._work_available.clear()
                     await self._work_available.wait()
@@ -189,11 +177,6 @@ class ClientSendQueue:
                 # Yield while capacity replenishes; essential FIFO traffic preempts
                 # optional snapshots on the next pass. Latest snapshots replace old ones.
                 await asyncio.sleep(0.005)
-        if not self._closed and self._coalesce_latest_binary is not None:
-            data = self._coalesce_latest_binary
-            self._coalesce_latest_binary = None
-            await self._send_binary(data)
-
     async def _send_text(self, text: str) -> None:
         if self._closed:
             return
@@ -201,7 +184,7 @@ class ClientSendQueue:
         try:
             async with asyncio.timeout(self._send_timeout_s):
                 await self._websocket.send(text)
-            self._record_send(started, binary=False, size=len(text.encode()))
+            self._record_send(started, size=len(text.encode()))
         except (TimeoutError, OSError, websockets.WebSocketException) as exc:
             logger.warning(
                 "WebSocket outbound text send failed",
@@ -210,27 +193,14 @@ class ClientSendQueue:
             )
             self._fail("outbound send timeout" if isinstance(exc, TimeoutError) else "outbound send failed")
 
-    async def _send_binary(self, data: bytes) -> None:
-        if self._closed:
-            return
-        started = time.monotonic()
-        try:
-            async with asyncio.timeout(self._send_timeout_s):
-                await self._websocket.send(data)
-            self._record_send(started, binary=True, size=len(data))
-        except (TimeoutError, OSError, websockets.WebSocketException) as exc:
-            logger.warning("WebSocket outbound binary send failed", error=str(exc))
-            self._fail("outbound send timeout" if isinstance(exc, TimeoutError) else "outbound send failed")
-
-    def _record_send(self, started: float, *, binary: bool, size: int = 0) -> None:
+    def _record_send(self, started: float, *, size: int = 0) -> None:
         # send() duration includes transport backpressure and event-loop stalls;
         # it does not measure delivery to, or consumption by, the headset.
         duration_ms = (time.monotonic() - started) * 1000
         self._send_latency.add(duration_ms)
         self._timing.record(
             counts={
-                "text_sends": int(not binary),
-                "binary_sends": int(binary),
+                "text_sends": 1,
                 "slow_sends": int(duration_ms >= 100),
                 "dropped_fifo": 0,
                 "bytes": size,
@@ -241,7 +211,6 @@ class ClientSendQueue:
                 "fifo_depth_max": float(self._queue.qsize()),
                 "fifo_bytes_max": float(self._queued_bytes),
                 "coalesce_pending_max": float(len(self._coalesce_latest)),
-                "binary_pending_max": float(self._coalesce_latest_binary is not None),
                 "send_p95_upper_ms": self._send_latency.percentile(0.95),
                 "queue_p99_upper_ms": self._queue_latency.percentile(0.99),
             },

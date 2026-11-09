@@ -46,7 +46,7 @@ def sample_hello(_client):
 
 
 async def _send_hello_request(socket):
-    await socket.send(json.dumps({"type": "hello_request", "ts_client": time.time()}))
+    await socket.send(json.dumps({"type": "hello_request", "protocol_version": 2, "ts_client": time.time()}))
     return json.loads(await socket.recv())
 
 

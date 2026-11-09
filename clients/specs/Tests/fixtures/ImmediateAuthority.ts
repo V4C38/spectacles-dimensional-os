@@ -10,7 +10,10 @@ export function immediateAuthority(options: {
 } = {}) {
   const now = options.now ?? (() => 0);
   const commands: Record<string, any>[] = [];
-  const state: InteractionState = { type: "interaction_state", epoch: "test-epoch", revision: 0,
+  const state: InteractionState & { target: InteractionTarget | null } = {
+    motion_busy: false,
+    following_tail: null,
+    type: "interaction_state", epoch: "test-epoch", revision: 0,
     mode: "manual", authority: null, target: null, targets: [], preview: null, active_goal: null };
   let serial = 0;
   const collaboration = new CollaborationController({ ready: options.ready ?? (() => true),
@@ -88,8 +91,9 @@ export function immediateAuthority(options: {
     replaceTarget(target);
   }
   function publish() {
-    collaboration.apply({ ...state, authority: state.authority ? { ...state.authority } : null });
-    options.onState?.(state);
+    const { target: _activeTarget, ...snapshot } = state;
+    collaboration.apply({ ...snapshot, authority: state.authority ? { ...state.authority } : null });
+    options.onState?.(snapshot);
   }
   publish();
   return { collaboration, commands, state,

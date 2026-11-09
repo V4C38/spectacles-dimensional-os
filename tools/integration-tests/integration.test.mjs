@@ -3,39 +3,43 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { catalog, applicableCases, validateCatalog } from "./catalog.mjs";
+import { catalog, applicableCases, goldenChapters, validateCatalog } from "./catalog.mjs";
 import { coverage, numberImages, finishRun, reviewDataRoot, publishGoldenVideo } from "./artifacts.mjs";
 
-test("catalog contains one unambiguous shared golden order and explicit platform exceptions", () => {
+test("each client has an explicit golden order including manipulation", () => {
   assert.equal(validateCatalog(), true);
-  assert.equal(
-    applicableCases("webxr", "golden").length,
-    applicableCases("specs", "golden").length,
-  );
-  assert.throws(
-    () =>
-      validateCatalog({
-        ...catalog,
-        cases: [...catalog.cases, catalog.cases[0]],
-      }),
-    /duplicate/,
-  );
+  assert.equal(goldenChapters("specs").length, 15);
+  assert.equal(goldenChapters("webxr").length, 15);
+  for (const client of ["webxr", "specs"])
+    assert.deepEqual(applicableCases(client, "golden").map(row => row.id), goldenChapters(client).map(row => row.id));
+  const armIds = ["manipulation_select", "manipulation_preview", "manipulation_execute", "manipulation_following", "manipulation_controls"];
+  assert.deepEqual(goldenChapters("webxr").slice(-5).map(row => row.id), armIds);
+  assert.deepEqual(goldenChapters("specs").slice(-5).map(row => row.id), armIds);
+  assert.throws(() => validateCatalog({ ...catalog, cases: [...catalog.cases, catalog.cases[0]] }), /duplicate/);
+  assert.throws(() => validateCatalog({ ...catalog, golden: { ...catalog.golden, webxrChapters: catalog.golden.chapters.slice(0, -1) } }), /webxr catalog order/);
   assert.throws(() => applicableCases("controller"), /Unknown/);
+});
+test("arm chapters require their own assertions for both clients", () => {
+  const missing = coverage("webxr", []);
+  assert.equal(missing.find(row => row.id === "manipulation_execute").status, "missing");
+  assert.equal(coverage("specs", []).find(row => row.id === "manipulation_execute").status, "missing");
+  assert.equal(coverage("webxr", [{ caseId: "manipulation_execute", name: "manipulation_execute", passed: true }])
+    .find(row => row.id === "manipulation_execute").status, "passed");
 });
 test("missing or mislabeled assertions never become coverage", () => {
   const checks = [
-    { caseId: "robot_hover", name: "robot_selected", passed: true },
+    { caseId: "robot_selected", name: "navigation_preview", passed: true },
   ];
   const rows = coverage("specs", checks);
-  assert.equal(rows.find((row) => row.id === "robot_hover").status, "missing");
+  assert.equal(rows.find((row) => row.id === "robot_selected").status, "missing");
   assert.equal(
     rows.find((row) => row.id === "controller_input").status,
     "not-applicable",
   );
   assert.equal(
     coverage("specs", [
-      { caseId: "robot_hover", name: "robot_hover", passed: false },
-    ]).find((row) => row.id === "robot_hover").status,
+      { caseId: "robot_selected", name: "robot_selected", passed: false },
+    ]).find((row) => row.id === "robot_selected").status,
     "failed",
   );
 });
@@ -46,11 +50,11 @@ test("numbered images are consecutive and leave their native evidence intact", a
     await writeFile(source, "native bytes");
     const images = await numberImages(root, [
       { id: "setup_entry", source },
-      { id: "robot_hover", source },
+      { id: "robot_selected", source },
     ]);
     assert.deepEqual(
       images.map((row) => row.file),
-      ["01_setup_entry.png", "02_robot_hover.png"],
+      ["01_setup_entry.png", "02_robot_selected.png"],
     );
     assert.equal(await readFile(source, "utf8"), "native bytes");
   } finally {
@@ -60,26 +64,26 @@ test("numbered images are consecutive and leave their native evidence intact", a
 test("golden-only results cannot imply regression completion", async () => {
   const root = await mkdtemp(join(tmpdir(), "integration-coverage-"));
   try {
-    const checks = applicableCases("webxr", "golden").map((row) => ({
+    const checks = applicableCases("specs", "golden").map((row) => ({
       caseId: row.id,
       name: row.id,
       passed: true,
     }));
-    const partial = await finishRun(root, "webxr", {
+    const partial = await finishRun(root, "specs", {
       checks,
       scope: "golden",
       source: {},
     });
     assert.equal(partial.passed, false);
     assert.equal(
-      partial.cases.find((row) => row.id === "robot_hover").status,
+      partial.cases.find((row) => row.id === "robot_selected").status,
       "missing-image",
     );
     assert.equal(
       partial.cases.find((row) => row.id === "connection_recovery").status,
       "not-run",
     );
-    const all = await finishRun(root, "webxr", { checks, source: {} });
+    const all = await finishRun(root, "specs", { checks, source: {} });
     assert.equal(all.passed, false);
   } finally {
     await rm(root, { recursive: true, force: true });

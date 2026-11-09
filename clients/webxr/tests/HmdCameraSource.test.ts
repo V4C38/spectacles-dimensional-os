@@ -237,3 +237,26 @@ it("bounds stale-frame retries in the WebXR host without changing Specs capture 
   const fresh = await readyCapture(f); f.emit();
   await expect(fresh.pending).resolves.toHaveProperty("ts_capture", now);
 });
+
+it("recovers from denied permission without retaining a stream or poisoning the next capture", async () => {
+  const f = cameraFixture();
+  try {
+    f.media.getUserMedia.mockRejectedValueOnce(new DOMException("Denied", "NotAllowedError"));
+    await expect(f.source.requestPermission()).rejects.toThrow("Camera access was denied");
+    expect(f.source.previewFrame()).toBeNull();
+    expect(f.media.enumerateDevices).not.toHaveBeenCalled();
+    expect(f.frames.start).not.toHaveBeenCalled();
+
+    await f.source.requestPermission();
+    expect(f.source.previewFrame()).toBeNull();
+    expect(f.video.srcObject).toBeNull();
+    expect(f.jpeg.encode).not.toHaveBeenCalled();
+
+    const { pending } = await readyCapture(f);
+    f.emit();
+    await expect(pending).resolves.toHaveProperty("ts_capture", 10);
+    expect(f.jpeg.encode).toHaveBeenCalledOnce();
+  } finally {
+    f.source.dispose();
+  }
+});

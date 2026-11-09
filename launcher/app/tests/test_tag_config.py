@@ -27,10 +27,11 @@ def test_default_mount_matches_go2_profile() -> None:
     assert "tag_id" not in wire
 
 
-def test_accepts_leftover_tag_id_on_read() -> None:
-    mount = normalize_ui_mount({"tag_id": 0, "print_size_mm": 70, "forward_m": 0.18})
-    assert mount["marker_id"] == 0
-    assert "tag_id" not in mount
+def test_mounts_reject_noncanonical_identifiers_and_persisted_shapes() -> None:
+    with pytest.raises(ValueError, match="marker_id"):
+        normalize_ui_mount({"tag_id": 0, "print_size_mm": 70})
+    with pytest.raises(ValueError, match="stored mounts"):
+        wire_to_ui_mount(dict(DEFAULT_MOUNT))
 
 
 def test_print_size_scales_black_square() -> None:

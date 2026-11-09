@@ -17,6 +17,8 @@ function makeSession(): { session: ARModuleSession; transport: FakeTransport; cl
     clientTrackingOriginStore: new ClientTrackingOriginStore(),
     config: { helloTimeoutS: 1, reconnectDelayS: 0.5 },
   });
+  const receive = session.onTransportText.bind(session);
+  session.onTransportText = text => { receive(text); session.tick(); };
   return { session, transport, clock };
 }
 
@@ -33,10 +35,18 @@ function handshake(
 }
 
 function grant(session: ARModuleSession, transport: FakeTransport): void {
-  session.onTransportText(JSON.stringify({ type: "interaction_state", epoch: "epoch", revision: 0, mode: "manual", authority: null, target: null, preview: null, active_goal: null }) + "\n");
+  session.onTransportText(JSON.stringify({
+    targets: [],
+    motion_busy: false,
+    following_tail: null,
+    type: "interaction_state", epoch: "epoch", revision: 0, mode: "manual", authority: null, target: null, preview: null, active_goal: null }) + "\n");
   session.collaboration.begin("live", "test");
   const request = JSON.parse(transport.texts[transport.texts.length - 1]);
-  session.onTransportText(JSON.stringify({ type: "interaction_state", epoch: "epoch", revision: 1, mode: "manual", target: null, preview: null, active_goal: null,
+  session.onTransportText(JSON.stringify({
+    targets: [],
+    motion_busy: false,
+    following_tail: null,
+    type: "interaction_state", epoch: "epoch", revision: 1, mode: "manual", target: null, preview: null, active_goal: null,
     authority: { client_id: "c3f1a9", source_id: "test", acquisition_id: request.acquisition_id, lease_id: "lease", kind: "live", held: true, expires_at: 1, sequence: -1 } }) + "\n");
   session.onTransportText(JSON.stringify({ type: "interaction_result", request_id: request.request_id, epoch: "epoch", revision: 1, status: "accepted", code: "acquired", lease_id: "lease" }) + "\n");
 }
@@ -68,7 +78,7 @@ describe("requestNavGoal", () => {
       navigation: {
         available: false,
         reason: "navigation not supported",
-        nav_goal: { available: false, reason: "nav_goal not available on this robot" },
+        nav_goal: { preview: false, available: false, reason: "nav_goal not available on this robot" },
         nav_joystick: { available: false, reason: "nav_joystick not available on this robot" },
       },
     });
@@ -84,7 +94,7 @@ describe("requestNavGoal", () => {
       navigation: {
         available: true,
         reason: null,
-        nav_goal: { available: false, reason: "nav_goal not available on this robot" },
+        nav_goal: { preview: false, available: false, reason: "nav_goal not available on this robot" },
         nav_joystick: { available: true, reason: null },
       },
     });
@@ -134,7 +144,7 @@ describe("requestNavJoystick", () => {
       navigation: {
         available: true,
         reason: null,
-        nav_goal: { available: true, reason: null },
+        nav_goal: { preview: false, available: true, reason: null },
         nav_joystick: { available: false, reason: "nav_joystick not available on this robot" },
       },
     });

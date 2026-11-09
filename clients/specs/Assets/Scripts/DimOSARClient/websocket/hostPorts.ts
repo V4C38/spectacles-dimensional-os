@@ -15,7 +15,6 @@ export const AR_MODULE_CLIENT_CONFIG = {
       frameSpacingS: 0.5,
     },
     episode: {
-      resultTimeoutS: 15,
       retryBackoffS: 2,
     },
   },
@@ -27,7 +26,7 @@ export interface WebSocketTransport {
   sendText(text: string): void;
   sendBinary(data: Uint8Array): void;
   bufferedAmount?(): number;
-  createSibling?(path: string): BindableWebSocketTransport;
+  createSibling(path: string): BindableWebSocketTransport;
 }
 
 export interface WebSocketTransportHandlers {

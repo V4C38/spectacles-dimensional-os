@@ -72,9 +72,9 @@ def quat_to_yaw_pitch(
 
 def normalize_ui_mount(raw: dict[str, Any] | None) -> dict[str, Any]:
     source = raw or DEFAULT_MOUNT
-    marker_id = source.get(
-        "marker_id", source.get("tag_id", DEFAULT_MOUNT["marker_id"])
-    )
+    if "marker_id" not in source or "tag_id" in source:
+        raise ValueError("mounts require marker_id")
+    marker_id = source["marker_id"]
     print_size_mm = float(source.get("print_size_mm", DEFAULT_PRINT_SIZE_MM))
     if not math.isfinite(print_size_mm) or print_size_mm <= 0:
         raise ValueError("print_size_mm must be positive")
@@ -117,52 +117,27 @@ def ui_mount_to_wire(raw: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def wire_to_ui_mount(raw: dict[str, Any] | None) -> dict[str, Any]:
-    if not raw:
-        return dict(DEFAULT_MOUNT)
-    marker_id = raw.get("marker_id", raw.get("tag_id", DEFAULT_MOUNT["marker_id"]))
-    position = raw.get("position") or [
-        DEFAULT_MOUNT["forward_m"],
-        DEFAULT_MOUNT["lateral_m"],
-        DEFAULT_MOUNT["up_m"],
-    ]
-    orientation = raw.get("orientation")
-    if orientation:
-        yaw_deg, pitch_deg = quat_to_yaw_pitch(orientation)
-    else:
-        yaw_deg = float(raw.get("yaw_deg", DEFAULT_MOUNT["yaw_deg"]))
-        pitch_deg = float(raw.get("pitch_deg", DEFAULT_MOUNT["pitch_deg"]))
-    size_m = raw.get("size_m")
-    if size_m is not None:
-        print_size_mm = print_mm_from_black_size_m(float(size_m))
-    else:
-        print_size_mm = float(raw.get("print_size_mm", DEFAULT_PRINT_SIZE_MM))
+def wire_to_ui_mount(raw: dict[str, Any]) -> dict[str, Any]:
+    required = {"marker_id", "size_m", "position", "orientation"}
+    if not required <= raw.keys() or "tag_id" in raw:
+        raise ValueError("stored mounts require marker_id, size_m, position and orientation")
+    position = raw["position"]
+    orientation = raw["orientation"]
+    if len(position) != 3 or len(orientation) != 4:
+        raise ValueError("stored mounts require a 3D position and XYZW orientation")
+    yaw_deg, pitch_deg = quat_to_yaw_pitch(orientation)
     return normalize_ui_mount(
         {
-            "marker_id": marker_id,
-            "print_size_mm": print_size_mm,
+            "marker_id": raw["marker_id"],
+            "print_size_mm": print_mm_from_black_size_m(float(raw["size_m"])),
             "forward_m": float(position[0]),
             "lateral_m": float(position[1]),
             "up_m": float(position[2]),
             "yaw_deg": yaw_deg,
             "pitch_deg": pitch_deg,
-            "roll_deg": math.degrees(
-                math.asin(
-                    max(
-                        -1.0,
-                        min(
-                            1.0,
-                            2
-                            * (
-                                float(orientation[3]) * float(orientation[0])
-                                - float(orientation[1]) * float(orientation[2])
-                            ),
-                        ),
-                    )
-                )
-            )
-            if orientation
-            else float(raw.get("roll_deg", 0)),
+            "roll_deg": math.degrees(math.asin(max(-1.0, min(1.0,
+                2 * (float(orientation[3]) * float(orientation[0])
+                     - float(orientation[1]) * float(orientation[2])))))),
         }
     )
 

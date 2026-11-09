@@ -1,5 +1,5 @@
 import type { InteractionCredentials, InteractionKind, InteractionPose, InteractionResult, InteractionState, InteractionSettings, InteractionTarget } from "./CollaborationTypes";
-import type { NavGoal, Quat } from "../websocket/protocolTypes";
+import type { Quat } from "../websocket/protocolTypes";
 
 export const TARGET_SEND_INTERVAL_S = 0.05;
 export const AUTHORITY_RENEW_INTERVAL_S = 0.1;
@@ -10,8 +10,7 @@ export interface CollaborationPort {
 }
 /** Exact shared facts and presentation-only prediction/interpolation have separate owners. */
 export class CollaborationController {
-  private state: Omit<InteractionState, "preview" | "active_goal"> | null = null;
-  private navigationFacts: Pick<InteractionState, "preview" | "active_goal"> = { preview: null, active_goal: null };
+  private state: InteractionState | null = null;
   private serial = 0;
   private sequence = 0;
   private acquisition: string | null = null;
@@ -33,15 +32,14 @@ export class CollaborationController {
   private settling: { acceptedRevision?: number; settings: InteractionSettings; pose: InteractionPose; sequence: number; key: string; requestId: string; epoch: string } | null = null;
   constructor(private readonly port: CollaborationPort) {}
 
-  raw(): InteractionState | null { return this.state ? { ...this.state, ...this.navigationFacts } : null; }
-  navigation(): Readonly<Pick<InteractionState, "preview" | "active_goal">> { return this.navigationFacts; }
-  applyNavigation(goal: NavGoal): void {
-    this.navigationFacts = { ...this.navigationFacts, [goal.preview ? "preview" : "active_goal"]: goal };
+  raw(): InteractionState | null { return this.state ? { ...this.state } : null; }
+  navigation(): Readonly<Pick<InteractionState, "preview" | "active_goal">> {
+    return { preview: this.state?.preview ?? null, active_goal: this.state?.active_goal ?? null };
   }
-  clearNavigation(): void { this.navigationFacts = { preview: null, active_goal: null }; }
+  clearNavigation(): void { if (this.state) this.state = { ...this.state, preview: null, active_goal: null }; }
   completeAssets(state: InteractionState): boolean {
     if (!this.state || this.state.epoch !== state.epoch || this.state.revision !== state.revision) return false;
-    this.navigationFacts = { preview: state.preview, active_goal: state.active_goal };
+    this.state = { ...this.state, preview: state.preview, active_goal: state.active_goal };
     return true;
   }
   get denialRevision(): number { return this.denial; }
@@ -67,7 +65,7 @@ export class CollaborationController {
       settling: this.settling?.key === key,
       target, rawTarget, phase: rawTarget?.phase ?? null,
       stale: !!authority?.held && now - this.lastStateAt > ACTIVE_TARGET_STALE_S,
-      preview: this.navigationFacts.preview, activeGoal: this.navigationFacts.active_goal };
+      preview: this.state?.preview ?? null, activeGoal: this.state?.active_goal ?? null };
   }
   apply(state: InteractionState): boolean {
     const previous = this.state;
@@ -82,13 +80,11 @@ export class CollaborationController {
       }
       this.clearLocal();
     }
-    const { preview, active_goal, ...authorityState } = state;
-    this.state = authorityState;
-    this.navigationFacts = { preview, active_goal };
+    this.state = state;
     this.lastStateAt = this.port.now();
-    const targets = state.targets ?? (state.target ? [state.target] : []);
+    const targets = state.targets;
     for (const target of targets) {
-      const key = this.targetKey(target.domain ?? "navigation", target.group_id);
+      const key = this.targetKey(target.domain, target.group_id);
       let history = this.histories.get(key);
       if (!history) { history = { samples: [], revision: -1, newestTs: -Infinity }; this.histories.set(key, history); }
       if (history.revision === target.revision) continue;
@@ -110,7 +106,7 @@ export class CollaborationController {
       }
     }
     if (this.settling && !state.authority) {
-      const final = targets.find(target => this.targetKey(target.domain ?? "navigation", target.group_id) === this.settling!.key);
+      const final = targets.find(target => this.targetKey(target.domain, target.group_id) === this.settling!.key);
       if (!final && (!this.settling.key.startsWith("manipulation:") ||
           this.settling.acceptedRevision !== undefined && state.revision >= this.settling.acceptedRevision)) this.settling = null;
       else if (final && final.sequence >= this.settling.sequence &&
@@ -123,7 +119,7 @@ export class CollaborationController {
       }
     }
     for (const key of this.histories.keys()) {
-      if (!targets.some(t => this.targetKey(t.domain ?? "navigation", t.group_id) === key)) this.histories.delete(key);
+      if (!targets.some(t => this.targetKey(t.domain, t.group_id) === key)) this.histories.delete(key);
     }
     if (this.settling && state.authority && state.authority.client_id !== this.port.clientId()) this.settling = null;
     if (state.authority?.client_id === this.port.clientId() && state.authority.acquisition_id === this.acquisition) {
@@ -218,7 +214,7 @@ export class CollaborationController {
     }
     this.flush();
   }
-  reset(): void { this.settling = null; this.clearLocal(); this.state = null; this.clearNavigation(); this.histories.clear(); this.sampleOffset = null; this.lastStateAt = -Infinity; this.cancelled.clear(); }
+  reset(): void { this.settling = null; this.clearLocal(); this.state = null; this.histories.clear(); this.sampleOffset = null; this.lastStateAt = -Infinity; this.cancelled.clear(); }
   private owns(): boolean {
     return !!this.state?.authority && this.state.authority.client_id === this.port.clientId() &&
       (this.lease === this.state.authority.lease_id || this.acquisition === this.state.authority.acquisition_id);
@@ -281,8 +277,8 @@ export class CollaborationController {
   private domain(): "navigation" | "manipulation" { return this.kind?.startsWith("manipulation") ? "manipulation" : "navigation"; }
   private targetKey(domain: string, group?: string): string { return `${domain}:${group ?? ""}`; }
   private targetFor(domain: string, group?: string): InteractionTarget | null {
-    return (this.state?.targets ?? (this.state?.target ? [this.state.target] : []))
-      .find(t => (t.domain ?? "navigation") === domain && (domain === "navigation" || t.group_id === group)) ?? null;
+    return (this.state?.targets ?? [])
+      .find(t => (t.domain) === domain && (domain === "navigation" || t.group_id === group)) ?? null;
   }
   private interpolate(key: string, now: number, target: InteractionTarget | null): InteractionPose | null {
     const samples = this.histories.get(key)?.samples ?? [];

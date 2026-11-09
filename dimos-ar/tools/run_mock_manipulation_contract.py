@@ -154,6 +154,8 @@ async def run_contract(args: argparse.Namespace) -> int:
     except (OSError, ValueError, RuntimeError, TimeoutError) as exc:
         result["error"] = str(exc)
         print(f"Mock contract failed: {exc}", file=sys.stderr)
+        if log_path.exists():
+            print("\n".join(log_path.read_text(errors="replace").splitlines()[-60:]), file=sys.stderr)
         return 1
     finally:
         if test is not None:

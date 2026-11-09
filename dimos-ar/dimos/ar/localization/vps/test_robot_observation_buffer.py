@@ -35,7 +35,6 @@ def _buffer() -> tuple[RobotObservationBuffer, PoseBuffer]:
     robot_buffer = RobotObservationBuffer(
         pose_buffer=pose_buffer,
         T_base_camera_optical=np.eye(4),
-        timing_uncertainty_s=0.0,
     )
     robot_buffer.set_camera_info(_camera_info())
     return robot_buffer, pose_buffer

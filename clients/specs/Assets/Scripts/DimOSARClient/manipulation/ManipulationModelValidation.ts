@@ -36,15 +36,12 @@ export function validateManipulationModel(model: Record<string, unknown>): void 
   text(model.revision);
   text(model.root);
   if (model.visual_profile !== undefined) text(model.visual_profile);
-  if (model.gripper_joints !== undefined) {
-    for (const [name, raw] of Object.entries(
-      object(model.gripper_joints),
-    )) {
-      text(name);
-      const mapping = object(raw);
-      finite(mapping.closed);
-      finite(mapping.open);
-    }
+  const gripperJoints = object(model.gripper_joints);
+  for (const [name, raw] of Object.entries(gripperJoints)) {
+    text(name);
+    const mapping = object(raw);
+    finite(mapping.closed);
+    finite(mapping.open);
   }
   if (model.asset_url !== null && typeof model.asset_url !== "string")
     throw new Error("Invalid asset URL");
@@ -118,10 +115,8 @@ export function validateManipulationModel(model: Record<string, unknown>): void 
       current = mimics.get(current);
     }
   }
-  if (model.gripper_joints !== undefined) {
-    for (const name of Object.keys(object(model.gripper_joints))) {
-      if (!jointNames.has(name)) throw new Error("Unknown gripper joint");
-    }
+  for (const name of Object.keys(gripperJoints)) {
+    if (!jointNames.has(name)) throw new Error("Unknown gripper joint");
   }
   linkPoses(
     model as unknown as ManipulationModel,

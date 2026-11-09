@@ -22,13 +22,6 @@ class AcceptedOdometry:
     frame_id: str
     corrected: PoseSample
 
-    def native_pose(self) -> PoseStamped:
-        return PoseStamped(
-            ts=self.corrected.ts_server,
-            frame_id=self.frame_id,
-            position=list(self.position),
-            orientation=list(self.orientation),
-        )
 
 
 class RobotOdometry:

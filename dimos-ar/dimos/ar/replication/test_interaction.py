@@ -183,7 +183,7 @@ def test_draft_does_not_replace_execution_and_snapshots_are_detached(fixture):
     request(owner, "update")
     request(owner, "release", sequence=1)
     snapshot = owner.snapshot()
-    snapshot["target"]["position"][0] = 999
+    snapshot["targets"][0]["position"][0] = 999
     snapshot["active_goal"]["pose"][0] = 999
     assert owner.snapshot()["active_goal"]["pose"] == [5, 5, 0, 0]
     assert owner.target.position == (1.0, 2.0, 0.0)
@@ -375,9 +375,9 @@ def test_finishing_tail_parks_validated_endpoint_without_reverting_after_complet
     from dimos.ar.replication.interaction import SharedTarget
 
     owner, _ = fixture
-    owner.target = SharedTarget((9, 0, 0), (0, 0, 0, 1), 4, "draft", 100, 3,
-                                "manipulation", "arm")
-    owner._targets[("manipulation", "arm")] = owner.target
+    owner._active_target_key = ("manipulation", "arm")
+    owner._targets[owner._active_target_key] = SharedTarget(
+        (9, 0, 0), (0, 0, 0, 1), 4, "draft", 100, 3, "manipulation", "arm")
     tail = {"generation": 1, "group_id": "arm", "target_revision": 3,
             "position": [1, 0, 0], "orientation": [0, 0, 0, 1]}
     owner.set_following_tail(tail)
@@ -387,7 +387,7 @@ def test_finishing_tail_parks_validated_endpoint_without_reverting_after_complet
     owner.set_following_tail(tail)
     assert owner.revision == revision
     owner.set_following_tail(None)
-    assert owner.snapshot()["target"]["position"] == [1, 0, 0]
+    assert owner.snapshot()["targets"][0]["position"] == [1, 0, 0]
     assert acquire(owner, client="b", kind="manipulation_following", group_id="arm").status == "accepted"
     owner.set_following_tail({**tail, "position": [5, 0, 0]})
     assert owner.target.position == (1, 0, 0)

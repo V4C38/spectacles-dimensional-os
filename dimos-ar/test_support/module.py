@@ -63,7 +63,11 @@ def _module_with_policy(
     module._interaction = InteractionCoordinator()
     module._lidar_subscriptions = {}
     module._native_sequences = {}
-    module._allow_unfenced_navigation = True
+    module._navigation_service = SimpleNamespace(
+        submit=lambda goal, _epoch, _revision: (module.goal_request.publish(goal) or True)
+        if module.goal_request.transport is not None else False,
+        cancel=lambda: None,
+    )
     module._interaction_sent_revision = -1
     module._map_localization = None
     module._pairing_log_at = 0.0
@@ -103,7 +107,7 @@ def _module_with_policy(
         SimpleNamespace(plan=lambda *_args: None),
         factor=profile.odom_scale_correction_factor,
         odometry=module._odometry.latest,
-        send=module._ws_server.schedule_send_to_client,
+        on_preview=module._on_navigation_preview,
     )
     return module
 

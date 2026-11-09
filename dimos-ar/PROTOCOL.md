@@ -541,7 +541,7 @@ the result timeout is only a fallback for a missing response.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `capture_id` | string | V3 server-generated capture generation, 1–128 characters. Echo in the matching `bulk_upload_begin`; it is scoped to this control connection. |
+| `capture_id` | string | V2 server-generated capture generation, 1–128 characters. Echo in the matching `bulk_upload_begin`; it is scoped to this control connection. |
 | `capture_policy` | string | `robot_los_required` \| `robot_los_preferred` \| `any_angle`. Geometric gate only — not a provider name. |
 | `observation_count` | uint | Exact batch size. The client always sends this many frames. |
 | `wait_timeout_s` | float | Required when `capture_policy` is `robot_los_preferred`. Omitted otherwise. |
@@ -748,10 +748,10 @@ Robot pose in `odom`, at high rate.
 X and Y carry the odometry scale correction; Z and orientation do not. Optional
 fields may be added later (`speed_mps`, `yaw_rate_rad_s`); clients ignore unknown keys.
 
-### `nav_goal`
+### Navigation routes in `interaction_state`
 
-Optional boolean `preview: true` identifies an advisory path returned only to the
-requesting client. Omitted/false denotes active navigation. Store previews separately;
+Nested boolean `preview: true` identifies an advisory path in the shared
+interaction snapshot. Omitted/false denotes active navigation. Store previews separately;
 they never replace active goal facts or change `state.nav`. Empty previews omit `pose`
 and use `path_poses: []` when the map/odometry is unavailable or planning fails.
 Preview coordinates use the same odometry correction as active paths.
@@ -909,16 +909,18 @@ Response: `localization_result` after a successful episode, or another
 
 Goal in `odom`. **`position` and `orientation` are both required** — same fields
 as `pose`. Send them in the same coordinates you receive `pose` in; ARModule
-inverts the scale correction on ingress and publishes to DimOS `goal_request`.
+inverts the scale correction on ingress and submits through the native navigation
+RPC admission service, retaining the current authority epoch and revision.
 
 Gated on `hello.capabilities.navigation.nav_goal`.
 
 Optional boolean `preview: true` requests planning only. Clients MUST send it only
-when `hello.capabilities.navigation.nav_goal.preview === true`; older servers may
-otherwise interpret the request as a motion goal. Omitted/false keeps normal behavior.
+when `hello.capabilities.navigation.nav_goal.preview === true`. Omitted/false
+keeps normal behavior.
 Preview computation runs off the WebSocket loop using raw odometry and the global
 costmap, and never publishes motion, cancels navigation, or mutates `state.nav`.
-Only the requester receives a `nav_goal` response with `preview: true`.
+Accepted previews are published in the revisioned `interaction_state.preview`.
+Active routes use `interaction_state.active_goal`; neither emits a standalone message.
 
 Clients keep at most one preview request outstanding, retain only the latest desired
 aim, and discard replies whose captured aim or interaction generation is obsolete.
@@ -1157,7 +1159,7 @@ stale returns `No client pose`.
 | `manipulation_request` (optional) | `manipulation_state`, `manipulation_result` |
 | `localization_start_request` | `localization_observations_request` |
 | `localization_observations` (binary) | `localization_result` |
-| `nav_goal_request` | `nav_goal` |
+| `nav_goal_request` | `interaction_state` |
 | `nav_joystick_request` | `pose` |
 | `estop_request` | `lidar` (binary) |
 | `lidar_settings_request` | `agent_message` |
@@ -1179,8 +1181,8 @@ the inbound string is published as `human_input: Out[str]`.
 
 Paired requests: `hello_request` → `hello`, `state_request` → `state`,
 `localization_observations_request` → `localization_observations` →
-`localization_result` (on success), `nav_goal_request` → `nav_goal` (via
-DimOS planner). `nav_joystick_request` takes effect through DimOS
+`localization_result` (on success), `nav_goal_request` → revisioned
+`interaction_state` navigation facts (via DimOS planner). `nav_joystick_request` takes effect through DimOS
 `MovementManager` (`tele_cmd_vel`).
 `estop_request` and `lidar_settings_request` take effect through
 a broadcast `state` update. `user_message_request` takes effect through outbound `agent_message`
@@ -1194,7 +1196,7 @@ A preview request may include `preview_id`, a non-empty string of at most 128
 characters, only alongside `preview: true`. The server echoes it on every preview
 response, including empty paths and responses while that client’s planner is busy.
 New clients supply an identifier and accept only the current matching reply.
-Preview replies use the bounded FIFO, independently of active `nav_goal` coalescing.
+Navigation previews and routes use revisioned interaction snapshots and bulk references.
 A client retires a request after five seconds, discards late replies, and queues its
 latest aim under the normal throttle. A preview reply without an identifier disables
 preview for that connection. Neither condition prevents normal goal confirmation.

@@ -14,7 +14,7 @@ type RecordObject = Record<string, unknown>;
 export interface BulkRef { epoch: string; id: string; revision: string | number; }
 type Kind = "model" | "trajectory" | "route";
 type Entry = { kind: Kind; parts: number; next: number; bytes: number; metadata: RecordObject; first: unknown[]; second: unknown[];
-  links: Set<string>; joints: Set<string>; parents: Map<string, string>; mimics: Map<string, string>; needed: Set<string>; lastTime: number;
+  lastTime: number;
   started: number; updated: number; value?: RecordObject };
 type Wanted = { ref: BulkRef; kind: Kind; started: number; retryAt: number; attempts: number };
 export type BulkUploadResult = { id: number; status: "accepted" | "cancelled" | "rejected"; code?: string };
@@ -41,50 +41,26 @@ function key(ref: BulkRef): string { return JSON.stringify([ref.epoch, ref.id, r
 function finite(value: unknown): number { if (typeof value !== "number" || !Number.isFinite(value)) throw new Error("Invalid bulk number"); return value; }
 function name(value: unknown): string { if (typeof value !== "string" || !value.length || value.length > 256) throw new Error("Invalid bulk name"); return value; }
 function vector(value: unknown, count: number): number[] { if (!Array.isArray(value) || value.length !== count) throw new Error("Invalid bulk vector"); value.forEach(finite); return value; }
-function pose(value: unknown): void { const raw = object(value); vector(raw.position, 3); if (Math.abs(Math.hypot(...vector(raw.orientation, 4)) - 1) > 1e-4) throw new Error("Invalid bulk rotation"); }
+
 function freeze(value: unknown): void { if (value && typeof value === "object" && !Object.isFrozen(value)) { for (const item of Object.values(value)) freeze(item); Object.freeze(value); } }
 function metadata(entry: Entry): void {
   const raw = entry.metadata;
-  if (entry.kind === "model") {
-    name(raw.revision); name(raw.root);
-    if (raw.asset_url !== null && typeof raw.asset_url !== "string") throw new Error("Invalid bulk asset URL");
-    if (raw.gripper_joints !== undefined) for (const [joint, pair] of Object.entries(object(raw.gripper_joints))) {
-      name(joint); const mapping = object(pair); finite(mapping.open); finite(mapping.closed); entry.needed.add(joint);
-    }
-  } else if (entry.kind === "trajectory") {
+  if (entry.kind === "trajectory") {
     name(raw.plan_id); finite(raw.duration);
     if (!Array.isArray(raw.joint_names) || !raw.joint_names.length || raw.joint_names.length > 256 || new Set(raw.joint_names).size !== raw.joint_names.length || Number(raw.duration) < 0) throw new Error("Invalid bulk trajectory metadata");
     raw.joint_names.forEach(name);
-  } else { finite(raw.ts); if (raw.pose !== undefined && raw.pose !== null) vector(raw.pose, 4); }
+  } else if (entry.kind === "route") { finite(raw.ts); if (raw.pose !== undefined && raw.pose !== null) vector(raw.pose, 4); }
   freeze(raw);
 }
-function item(entry: Entry, value: unknown, second: boolean): void {
+function item(entry: Entry, value: unknown): void {
   if (entry.kind === "route") vector(value, 4);
   else if (entry.kind === "trajectory") {
     const raw = object(value), time = finite(raw.time);
     if (time < 0 || time < entry.lastTime || time > Number(entry.metadata.duration)) throw new Error("Invalid bulk trajectory time");
     vector(raw.positions, (entry.metadata.joint_names as unknown[]).length); entry.lastTime = time;
     if (entry.first.length >= 8192) throw new Error("Bulk trajectory point budget exceeded");
-  } else if (!second) {
-    const raw = object(value), id = name(raw.name);
-    if (entry.links.has(id) || entry.links.size >= 256) throw new Error("Invalid bulk model link");
-    if (raw.bounds != null) { const bounds = object(raw.bounds); vector(bounds.center, 3); if (vector(bounds.size, 3).some(v => v <= 0)) throw new Error("Invalid bulk bounds"); }
-    entry.links.add(id);
-  } else {
-    const raw = object(value), id = name(raw.name), parent = name(raw.parent), child = name(raw.child);
-    if (entry.joints.has(id) || entry.joints.size >= 256 || entry.parents.has(child) || !entry.links.has(parent) || !entry.links.has(child) || !["fixed", "revolute", "continuous", "prismatic"].includes(String(raw.kind))) throw new Error("Invalid bulk model joint");
-    vector(raw.axis, 3); pose(raw.origin);
-    if (raw.limits != null) { const limit = object(raw.limits); if (finite(limit.lower) > finite(limit.upper)) throw new Error("Invalid bulk joint limit"); }
-    let ancestor: string | undefined = parent;
-    while (ancestor !== undefined) { if (ancestor === child) throw new Error("Cyclic bulk model"); ancestor = entry.parents.get(ancestor); }
-    entry.parents.set(child, parent); entry.joints.add(id); entry.needed.delete(id);
-    if (raw.mimic != null) {
-      const mimic = object(raw.mimic), target = name(mimic.joint); finite(mimic.multiplier); finite(mimic.offset);
-      if (!entry.joints.has(target)) entry.needed.add(target);
-      ancestor = target; while (ancestor !== undefined) { if (ancestor === id) throw new Error("Cyclic bulk mimic"); ancestor = entry.mimics.get(ancestor); }
-      entry.mimics.set(id, target);
-    }
   }
+
   freeze(value);
 }
 
@@ -215,7 +191,12 @@ export class BulkTransfer {
         } else Object.assign(result, asset.value, value, { path_poses: asset.value.path_poses });
       }
       if (result.preview && typeof result.preview === "object") {
-        const preview = visit(object(result.preview), "preview"); result.preview = preview.path_poses === undefined ? null : preview;
+        const preview = visit(object(result.preview), "preview");
+        const failed = preview.route_ref && this.unavailable.has(key(reference(preview.route_ref)));
+        if (failed) {
+          delete preview.pose; preview.path_poses = [];
+        }
+        result.preview = preview.path_poses === undefined ? null : preview;
       }
       if (result.active_goal && typeof result.active_goal === "object") {
         const goal = visit(object(result.active_goal), "active_goal"); result.active_goal = { ...goal, path_poses: goal.path_poses ?? [] };
@@ -283,7 +264,7 @@ export class BulkTransfer {
       if (Number(raw.part) !== 0) throw new Error("Missing first bulk record");
       if (!this.reserve(bytes, id, true)) { this.markUnavailable(id, "cache_capacity"); return; }
       entry = { kind: raw.kind as Kind, parts: Number(raw.parts), next: 0, bytes: 0, metadata: {}, first: [], second: [],
-        links: new Set(), joints: new Set(), parents: new Map(), mimics: new Map(), needed: new Set(), lastTime: -1,
+        lastTime: -1,
         started: this.clock.now(), updated: this.clock.now() }; this.entries.set(id, entry);
       this.ignored.delete(id);
     }
@@ -301,8 +282,8 @@ export class BulkTransfer {
     const second = entry.kind === "model" ? data.joints : undefined;
     for (const [items, destination] of [[first, entry.first], [second, entry.second]] as const) {
       if (items === undefined) continue;
-      if (!Array.isArray(items) || items.length > 2048 || destination.length + items.length > 16384) throw new Error("Bulk item budget exceeded");
-      for (const value of items) { item(entry, value, destination === entry.second); destination.push(value); }
+      if (!Array.isArray(items) || items.length > 2048 || destination.length + items.length > (entry.kind === "model" ? 256 : 16384)) throw new Error("Bulk item budget exceeded");
+      for (const value of items) { item(entry, value); destination.push(value); }
     }
     entry.next++; entry.bytes += bytes; this.cacheBytes += bytes; this.counters.records++;
     entry.updated = this.lastProgressAt = this.clock.now();
@@ -310,7 +291,7 @@ export class BulkTransfer {
     if (wanted) wanted.retryAt = this.clock.now() + 5;
     this.counters.maxCacheBytes = Math.max(this.counters.maxCacheBytes, this.cacheBytes);
     if (entry.next === entry.parts) {
-      if (entry.kind === "model" && (!entry.links.has(String(entry.metadata.root)) || entry.needed.size) || entry.kind === "trajectory" && !entry.first.length) throw new Error("Incomplete bulk asset");
+      if (entry.kind === "trajectory" && !entry.first.length) throw new Error("Incomplete bulk asset");
       Object.freeze(entry.first); Object.freeze(entry.second);
       entry.value = entry.kind === "model" ? { ...entry.metadata, links: entry.first, joints: entry.second }
         : { ...entry.metadata, [entry.kind === "trajectory" ? "trajectory" : "path_poses"]: entry.first };

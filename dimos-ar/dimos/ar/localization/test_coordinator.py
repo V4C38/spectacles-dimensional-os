@@ -5,13 +5,7 @@ import threading
 import pytest
 
 from dimos.ar.localization.types import LocalizedPose
-from dimos.ar.localization.vps.robot_observation_buffer import (
-    RobotObservationSample,
-)
 from dimos.msgs.geometry_msgs.Pose import Pose
-from dimos.msgs.geometry_msgs.Quaternion import Quaternion
-from dimos.msgs.geometry_msgs.Transform import Transform
-from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from test_support.localization import _coordinator, _FixedLocalizer, _observation
 
 
@@ -28,89 +22,16 @@ async def test_marker_success_preserves_metric_alignment() -> None:
     outcome = await coordinator.run([_observation(ts_server=100.0)])
 
     assert outcome.result is not None
-    assert outcome.used_vps is False
     assert outcome.result.position == (1.0, 2.0, 3.0)
     assert outcome.result.ts_server == 100.0
 
 
-async def test_mixed_falls_through_to_vps_on_newest_observation() -> None:
-    marker = _FixedLocalizer(None)
-    vps = _FixedLocalizer(
-        LocalizedPose(
-            pose=Pose(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0),
-            frame_id="map",
-            confidence=0.9,
-        )
-    )
-    first = _observation(ts_server=1.0)
-    newest = _observation(ts_server=3.0)
-    robot = RobotObservationSample(observation=_observation(ts_server=2.0), travel_m=0.0)
-    coordinator = _coordinator(
-        providers=["fiducial_marker", "vps"],
-        marker=marker,
-        vps=vps,
-        robot_sample=robot,
-    )
-
-    outcome = await coordinator.run([first, newest])
-
-    assert marker.calls and len(marker.calls[0]) == 2
-    assert vps.calls[0][0] is robot.observation
-    assert vps.calls[1][0] is newest
-    assert outcome.used_vps is True
-    assert outcome.result is not None
 
 
-async def test_vps_defers_during_client_cooldown() -> None:
-    vps = _FixedLocalizer(
-        LocalizedPose(
-            pose=Pose(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0),
-            frame_id="map",
-            confidence=0.9,
-        )
-    )
-    coordinator = _coordinator(providers=["vps"], vps=vps)
-    coordinator._policy.begin_client_vps()
-
-    outcome = await coordinator.run([_observation(ts_server=3.0)])
-
-    assert outcome.defer_vps is True
-    assert outcome.result is None
-    assert vps.calls == []
 
 
-async def test_vps_fails_without_robot_observation() -> None:
-    vps = _FixedLocalizer(
-        LocalizedPose(
-            pose=Pose(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0),
-            frame_id="map",
-            confidence=0.9,
-        )
-    )
-    coordinator = _coordinator(providers=["vps"], vps=vps)
-
-    outcome = await coordinator.run([_observation(ts_server=3.0)])
-
-    assert outcome.result is None
-    assert outcome.defer_vps is False
-    assert outcome.used_vps is True
 
 
-def test_on_relocalization_transform_stores_sample() -> None:
-    coordinator = _coordinator(providers=[])
-    transform = Transform(
-        translation=Vector3(5.0, 0.0, 0.0),
-        rotation=Quaternion(0.0, 0.0, 0.0, 1.0),
-        frame_id="odom",
-        child_frame_id="map",
-        ts=42.0,
-    )
-
-    assert coordinator.on_relocalization_transform(transform, ts_server=100.0) is True
-    sample = coordinator._odom_map_transform.relocalization_sample()
-    assert sample is not None
-    assert sample.confidence is None
-    assert sample.ts_server == pytest.approx(100.0)
 
 
 def test_result_in_odom_rejects_non_odom_frame() -> None:

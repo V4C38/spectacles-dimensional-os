@@ -5,6 +5,7 @@
 #   ./launcher/scripts/start.sh
 #   ./launcher/scripts/start.sh --blueprint unitree_go2_ar|unitree_go2_ar_agentic
 #   ./launcher/scripts/start.sh --blueprint unitree_go2_ar --robot-ip <ip|simulated>
+#   ./launcher/scripts/start.sh --blueprint openyam_ar_planner --config /path/to/run.json
 #
 # The robot is auto-discovered on the LAN (Unitree multicast) unless --robot-ip
 # (or ROBOT_IP) pins an address. When several are found interactively you get a
@@ -29,43 +30,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 source "${SCRIPT_DIR}/dimos_lib.sh"
 
-_color_enabled() {
-  local fd="$1"
-  if [[ -t "${fd}" ]]; then
-    return 0
-  fi
-  case "${DIMOS_AR_FORCE_COLOR:-}" in
-    ""|0|false|FALSE|False) return 1 ;;
-    *) return 0 ;;
-  esac
-}
-
-print_green_stdout() {
-  if _color_enabled 1; then
-    printf '\033[32m%s\033[0m\n' "$1"
-  else
-    printf '%s\n' "$1"
-  fi
-}
-
-print_green_stderr() {
-  if _color_enabled 2; then
-    printf '\033[32m%s\033[0m\n' "$1" >&2
-  else
-    printf '%s\n' "$1" >&2
-  fi
-}
-
-print_red_stderr() {
-  if _color_enabled 2; then
-    printf '\033[31m%s\033[0m\n' "$1" >&2
-  else
-    printf '%s\n' "$1" >&2
-  fi
-}
-
 BLUEPRINT_FLAG=""
 ROBOT_IP_FLAG=""
+CONFIG_FLAG=""
 NON_INTERACTIVE=0
 
 while [[ $# -gt 0 ]]; do
@@ -77,6 +44,14 @@ while [[ $# -gt 0 ]]; do
       fi
       BLUEPRINT_FLAG="$2"
       NON_INTERACTIVE=1
+      shift 2
+      ;;
+    --config)
+      if [[ $# -lt 2 || ! -f "${2:-}" ]]; then
+        echo "--config requires an existing native DimOS config file" >&2
+        exit 1
+      fi
+      CONFIG_FLAG="$2"
       shift 2
       ;;
     --robot-ip)
@@ -109,7 +84,7 @@ if ! PYTHON="$(find_dimos_python "${ROOT}")"; then
 fi
 
 if ! python_has_dimos_ar "${PYTHON}"; then
-  print_red_stderr "dimos-ar blueprints are not registered in ${PYTHON}."
+  print_color 2 31 "dimos-ar blueprints are not registered in ${PYTHON}."
   echo "DimOS discovers them from the dimos.blueprints entry points, not from import dimos.ar." >&2
   echo "A stale editable install can import the package and still fail here." >&2
   echo "Fix: run Install in the launcher, or:" >&2
@@ -138,8 +113,8 @@ ensure_system_config() {
   if sudo "${helper}" --apply --state-dir "${state_dir}"; then
     export DIMOS_AR_SKIP_SYSCONFIG=1
   else
-    print_red_stderr "System configuration failed — ARModule may not start."
-    print_red_stderr "You can retry, or apply manually: sudo ${helper} --apply"
+    print_color 2 31 "System configuration failed — ARModule may not start."
+    print_color 2 31 "You can retry, or apply manually: sudo ${helper} --apply"
     exit 1
   fi
 }
@@ -252,7 +227,7 @@ resolve_robot_ip() {
     sn="${discovered[0]%%$'\t'*}"
     ip="${discovered[0]#*$'\t'}"
     ROBOT_IP="${ip}"
-    print_green_stderr "Found robot ${sn} at ${ip}"
+    print_color 2 32 "Found robot ${sn} at ${ip}"
     return 0
   fi
 
@@ -261,7 +236,7 @@ resolve_robot_ip() {
       sn="${discovered[0]%%$'\t'*}"
       ip="${discovered[0]#*$'\t'}"
       ROBOT_IP="${ip}"
-      print_green_stderr "Found ${count} robots — using first: ${sn} at ${ip}"
+      print_color 2 32 "Found ${count} robots — using first: ${sn} at ${ip}"
       return 0
     fi
     for line in "${discovered[@]}"; do
@@ -274,7 +249,7 @@ resolve_robot_ip() {
     return 0
   fi
 
-  print_red_stderr "No robots found on the network — using offline replay (ROBOT_IP=simulated)."
+  print_color 2 31 "No robots found on the network — using offline replay (ROBOT_IP=simulated)."
   echo "Set ROBOT_IP=<ip> and re-run to target a specific robot." >&2
   echo "Tip: --robot-ip simulated (or ROBOT_IP=simulated) skips discovery and starts faster." >&2
   ROBOT_IP="simulated"
@@ -309,9 +284,9 @@ elif [[ -z "${OPENAI_API_KEY:-}" ]]; then
   echo "Warning: OPENAI_API_KEY is unset — agent mode will not work until it is set." >&2
 elif [[ -z "${DIMOS_AR_SKIP_OPENAI_CHECK:-}" ]]; then
   if openai_api_reachable; then
-    print_green_stderr "OpenAI API: reachable"
+    print_color 2 32 "OpenAI API: reachable"
   else
-    print_red_stderr "OpenAI API: unreachable — voice commands will hang at \"Working: thinking...\""
+    print_color 2 31 "OpenAI API: unreachable — voice commands will hang at \"Working: thinking...\""
     echo "Check network/DNS (router parental controls, hotspot, VPN). ARModule will still start." >&2
   fi
 fi
@@ -323,12 +298,12 @@ if [[ "${SELECTED_BLUEPRINT}" != "openyam_ar_planner" && -z "${ROBOT_IP:-}" ]]; 
   resolve_robot_ip
 fi
 
-# Map launcher "simulated" (and alias "fake") to DimOS offline replay.
+# Map the explicit simulated source to DimOS offline replay.
 DISPLAY_ROBOT_IP="${ROBOT_IP:-local}"
 REPLAY=0
 PINNED_IP=""
 case "${ROBOT_IP:-}" in
-  simulated|fake)
+  simulated)
     DISPLAY_ROBOT_IP="simulated"
     REPLAY=1
     unset ROBOT_IP
@@ -355,6 +330,9 @@ done <<< "${RUNTIME_ARGS}"
 if [[ -n "${PINNED_IP}" ]]; then
   RUN_CMD+=(--robot-ip "${PINNED_IP}")
 fi
+if [[ -n "${CONFIG_FLAG}" ]]; then
+  RUN_CMD+=(--config "${CONFIG_FLAG}")
+fi
 
 echo "Using Python: ${PYTHON}"
 echo "Blueprint:    ${SELECTED_BLUEPRINT}"
@@ -364,7 +342,7 @@ echo "Robot IP:     ${DISPLAY_ROBOT_IP}"
 echo "WebSocket:    ws://${LISTEN_HOST}:8787 (not listening yet — booting DimOS stack…)"
 echo "Log level:    ${DIMOS_LOG_LEVEL} (verbose: DIMOS_LOG_LEVEL=DEBUG ./launcher/scripts/start.sh)"
 echo "Logs:         stdout + ~/.local/state/dimos/logs/.../main.jsonl (dimos log -f)"
-print_green_stdout "Host IP:      ${LAN_IP}"
+print_color 1 32 "Host IP:      ${LAN_IP}"
 echo "Spectacles:   enter the Host IP in the lens"
 echo ""
 echo "Ctrl+C to stop."
@@ -374,6 +352,8 @@ echo ""
 # A one-off Go2 :8081 /offer refusal usually means the robot-side runtime was
 # still coming up, not that the Lens-side ws://<host>:8787 session is misconfigured.
 
+# Native dotenv loading uses the current launcher credential file.
+cd "${ROOT}/launcher"
 if [[ "${SELECTED_BLUEPRINT}" == "openyam_ar_planner" && -z "${REPLAY_DB:-}" ]]; then
   exec "${PYTHON}" "${SCRIPT_DIR}/supervise-arm.py" -- "${RUN_CMD[@]}" < /dev/null
 fi

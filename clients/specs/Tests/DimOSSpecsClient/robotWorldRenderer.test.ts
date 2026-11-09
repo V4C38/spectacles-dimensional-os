@@ -9,7 +9,7 @@ it("retires robot picking and outlines when disconnect clears the description", 
   const renderer = Object.assign(Object.create(RobotWorldRenderer.prototype), {
     colliderRoot, markerRoot: { enabled: true }, collider: { shape: {} }, outline, circle, connector,
   }) as RobotWorldRenderer;
-  renderer.setRobot({ display_name: "Go2", body_bounds_m: [0.7, 0.5, 0.55], footprint_m: [0.7, 0.5], base_height_m: 0.33 });
+  renderer.setRobot({ odom_scale_correction_factor: 1, display_name: "Go2", body_bounds_m: [0.7, 0.5, 0.55], footprint_m: [0.7, 0.5], base_height_m: 0.33 });
   renderer.setSelected(true);
   expect(colliderRoot.enabled).toBe(true);
   expect(() => renderer.setRobot(null)).not.toThrow();

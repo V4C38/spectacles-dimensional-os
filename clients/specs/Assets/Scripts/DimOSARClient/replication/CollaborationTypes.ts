@@ -3,7 +3,7 @@ import type { NavGoal, Quat, Vec3 } from "../websocket/protocolTypes";
 export type InteractionKind = "live" | "navigation_planning" | "joystick" | "manipulation_planning" | "manipulation_following";
 export interface InteractionPose { position: Vec3; orientation: Quat; }
 export interface InteractionTarget extends InteractionPose {
-  domain?: "navigation" | "manipulation"; group_id?: string; speed_scale?: number; gripper?: number;
+  domain: "navigation" | "manipulation"; group_id?: string; speed_scale?: number; gripper?: number;
   revision: number; phase: "draft" | "live" | "committed"; sample_ts: number; sequence: number;
 }
 export interface InteractionAuthority {
@@ -13,10 +13,10 @@ export interface InteractionAuthority {
 }
 export interface InteractionState {
   type: "interaction_state"; epoch: string; revision: number; mode: "manual" | "agent";
-  authority: InteractionAuthority | null; target: InteractionTarget | null;
-  targets?: InteractionTarget[];
-  following_tail?: import("../manipulation/ManipulationTypes").FollowingTail | null;
-  motion_busy?: boolean;
+  authority: InteractionAuthority | null;
+  targets: InteractionTarget[];
+  following_tail: import("../manipulation/ManipulationTypes").FollowingTail | null;
+  motion_busy: boolean;
   preview: NavGoal | null; active_goal: NavGoal | null;
 }
 export interface InteractionResult {

@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 # Shared shell helpers for launcher/scripts/setup.sh and launcher/scripts/start.sh.
 # Source this file; do not execute directly.
+print_color() {
+  local fd="$1" color="$2" message="$3"
+  case "${DIMOS_AR_FORCE_COLOR:-}" in
+    ""|0|false|FALSE|False)
+      if [[ ! -t "${fd}" ]]; then printf '%s\n' "${message}" >&"${fd}"; return; fi
+      ;;
+  esac
+  printf '\033[%sm%s\033[0m\n' "${color}" "${message}" >&"${fd}"
+}
+
 python_has_dimos() {
   local py="${1:-}"
   [[ -n "${py}" && -x "${py}" ]] || return 1

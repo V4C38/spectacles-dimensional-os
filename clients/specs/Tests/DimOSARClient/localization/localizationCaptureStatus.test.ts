@@ -51,11 +51,13 @@ describe("localizationCaptureStatus", () => {
           connection: "ready",
           hasTrackingOrigin: true,
           capabilities: {
+            manipulation: { available: false, reason: "No arm" },
+            object_detection: { available: false, reason: "No detector" },
             lidar: { available: true, reason: null },
             navigation: {
               available: true,
               reason: null,
-              nav_goal: { available: true, reason: null },
+              nav_goal: { preview: false, available: true, reason: null },
               nav_joystick: { available: true, reason: null },
             },
             localization: { available: true, reason: null },

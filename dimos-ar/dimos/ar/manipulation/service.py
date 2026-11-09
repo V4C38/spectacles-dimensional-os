@@ -259,10 +259,6 @@ class ManipulationService:
                 "message": str(exc),
             }
         if request.action == "update":
-            if (request.request_id.startswith("shared-follow-")
-                    and result.get("status") == "following"
-                    and result.get("message") == "Following retired"):
-                result = {**result, "status": "rejected", "code": "retired"}
             result.setdefault("sequence", request.payload["sequence"])
         if request.action != "update" or result.get("status") in {
             "rejected",

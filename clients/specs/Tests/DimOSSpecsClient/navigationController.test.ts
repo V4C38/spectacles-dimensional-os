@@ -63,7 +63,7 @@ import { vi } from "vitest";
 it("removes invalid floor probes independently and cancels only their draft owner", () => {
   let hits = [{ position: new vec3(0, 0, -100), normal: new vec3(0, 1, 0) }];
   const view: any = { connection: "ready", hasTrackingOrigin: true, nav: null, nav_goal: null,
-    capabilities: { navigation: { available: true, nav_goal: { available: true } } }, state: null };
+    capabilities: { navigation: { available: true, nav_goal: { preview: false, available: true } } }, state: null };
   const origin: any = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
   const controller = new NavigationController({ session: { collaboration: immediateAuthority({ now: () => getTime() }).collaboration, view: () => view, sendText: vi.fn() } as any,
     deviceTracking: { worldOptions: {}, raycastWorldMesh: () => hits } as any,
@@ -102,7 +102,7 @@ it.each([false, true])("streams marker drags across frames with selection %s acr
   const cast = vi.fn(() => [{ position: point, normal: new vec3(0, 1, 0) }]);
   const options: any = {};
   const view: any = { connection: "ready", hasTrackingOrigin: true, nav: null, nav_goal: null,
-    capabilities: { navigation: { available: true, nav_goal: { available: true } } }, state: null };
+    capabilities: { navigation: { available: true, nav_goal: { preview: false, available: true } } }, state: null };
   const origin: any = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
   const sendText = vi.fn();
   const authority = immediateAuthority({ now: () => getTime() });
@@ -169,7 +169,7 @@ it.each([false, true])("streams marker drags across frames with selection %s acr
 it("keeps direct dragging continuous across scanned robot surfaces without allowing floor placement on them", () => {
   let hit = { position: new vec3(0, 0, -100), normal: new vec3(0, 1, 0) };
   const view: any = { connection: "ready", hasTrackingOrigin: true, nav: null, nav_goal: null,
-    capabilities: { estop: { available: true }, navigation: { available: true, nav_goal: { available: true } } }, state: null };
+    capabilities: { estop: { available: true }, navigation: { available: true, nav_goal: { preview: false, available: true } } }, state: null };
   const origin: any = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
   const controller = new NavigationController({ session: { collaboration: immediateAuthority({ now: () => getTime() }).collaboration, view: () => view, sendText: vi.fn() } as any,
     deviceTracking: { worldOptions: {}, raycastWorldMesh: () => [hit] } as any,
@@ -214,7 +214,7 @@ it("rejects direct drag intersections outside the queried 20 metre ray segment",
 
 it("keeps an edge grab anchored instead of dragging the circle center to the pinch ray", () => {
   const view: any = { connection: "ready", hasTrackingOrigin: true, nav: null, nav_goal: null,
-    capabilities: { estop: { available: true }, navigation: { available: true, nav_goal: { available: true } } } };
+    capabilities: { estop: { available: true }, navigation: { available: true, nav_goal: { preview: false, available: true } } } };
   const controller = new NavigationController({ session: { collaboration: immediateAuthority({ now: () => getTime() }).collaboration, view: () => view, sendText: vi.fn() } as any,
     deviceTracking: { worldOptions: {}, raycastWorldMesh: () => [] } as any,
     robotPresenter: { floorPose: () => ({ position: new vec3(0, 0, -100), rotation: quat.quatIdentity() }) } as any,
@@ -232,7 +232,7 @@ it("keeps an edge grab anchored instead of dragging the circle center to the pin
 it("does not place an attached marker at world zero while the robot floor is still unknown", () => {
   let floor: { position: vec3; rotation: quat } | null = null;
   const view: any = { connection: "ready", hasTrackingOrigin: true, nav: null, nav_goal: null,
-    capabilities: { navigation: { available: true, nav_goal: { available: true } } } };
+    capabilities: { navigation: { available: true, nav_goal: { preview: false, available: true } } } };
   const controller = new NavigationController({ session: { collaboration: immediateAuthority().collaboration, view: () => view } as any,
     deviceTracking: { worldOptions: {}, raycastWorldMesh: () => [] } as any,
     robotPresenter: { floorPose: () => floor, floorWorldY: () => floor?.position.y ?? null } as any,
@@ -253,7 +253,7 @@ it("reports transport failure from navigation cancellation", () => {
     robotPresenter: {} as any, cameraObject: {} as any, parent: {} as any, navGoalMarkerPrefab: {} as any,
   });
   view = { connection: "ready", hasTrackingOrigin: true,
-    capabilities: { navigation: { available: true, nav_goal: { available: true } }, estop: { available: true } },
+    capabilities: { navigation: { available: true, nav_goal: { preview: false, available: true } }, estop: { available: true } },
     nav: { state: "following_path" }, nav_goal: null };
   controller.interaction.applyView(view, { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 }, null, 0);
   // No authored scene is needed to verify command success propagation.

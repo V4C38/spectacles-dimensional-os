@@ -6,6 +6,7 @@ export class PairedBulk implements BindableWebSocketTransport {
   private upload: { id: number; bytes: Uint8Array; offset: number } | null = null;
   constructor(private readonly uploaded: (data: Uint8Array) => void = () => {}) {}
   bind(handlers: WebSocketTransportHandlers) { this.handlers = handlers; }
+  createSibling(): PairedBulk { throw new Error("Bulk connections do not open siblings"); }
   connect() { this.handlers.onTransportOpen(); }
   close() {}
   sendText(text: string) {

@@ -70,15 +70,40 @@ describe("BrowserWebSocketTransport", () => {
   });
 });
 
-it("re-resolves control and preserves gateway identity for bulk", async () => {
+it("ignores obsolete socket callbacks after reconnect", async () => {
+  const sockets: FakeSocket[] = [];
   const urls: string[] = [];
-  const transport = new BrowserWebSocketTransport({ url: "wss://gateway/ar", socketFactory: url => { urls.push(url); return new FakeSocket() as unknown as WebSocket; } });
-  const resolve = vi.fn().mockResolvedValueOnce({ controlUrl: "wss://gateway/api/connections/a/control", bulkUrl: "wss://gateway/api/connections/a/bulk" })
-    .mockResolvedValueOnce({ controlUrl: "wss://gateway/api/connections/b/control", bulkUrl: "wss://gateway/api/connections/b/bulk" });
-  transport.setConnectionResolver(resolve);
-  transport.connect(); await Promise.resolve();
-  const bulk = transport.createSibling("/bulk"); bulk.connect();
-  transport.close(); transport.connect(); await Promise.resolve();
-  expect(urls).toEqual(["wss://gateway/api/connections/a/control", "wss://gateway/api/connections/a/bulk", "wss://gateway/api/connections/b/control"]);
-  transport.close(); bulk.close();
+  const transport = new BrowserWebSocketTransport({
+    url: "wss://gateway/ar",
+    socketFactory: url => {
+      urls.push(url);
+      const socket = new FakeSocket();
+      sockets.push(socket);
+      return socket as unknown as WebSocket;
+    },
+  });
+  const handlers = { onTransportOpen: vi.fn(), onTransportClose: vi.fn(),
+    onTransportText: vi.fn(), onTransportBinary: vi.fn() };
+  transport.bind(handlers);
+  try {
+    transport.connect();
+    sockets[0].open();
+    const oldText = sockets[0].onmessage!;
+    const oldClose = sockets[0].onclose!;
+    transport.connect();
+    await Promise.resolve();
+    sockets[1].open();
+    oldText({ data: "stale authority" } as MessageEvent);
+    oldClose(new Event("close"));
+    sockets[1].onmessage!({ data: "current authority" } as MessageEvent);
+    expect(handlers.onTransportText.mock.calls).toEqual([["current authority"]]);
+    expect(handlers.onTransportClose).not.toHaveBeenCalled();
+    transport.sendText("still connected");
+    expect(sockets[1].sent).toEqual(["still connected"]);
+    const bulk = transport.createSibling("/bulk");
+    try {
+      bulk.connect();
+      expect(urls.at(-1)).toBe("wss://gateway/bulk");
+    } finally { bulk.close(); }
+  } finally { transport.close(); }
 });

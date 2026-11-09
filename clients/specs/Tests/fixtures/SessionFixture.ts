@@ -36,21 +36,27 @@ export class FakeTransport implements WebSocketTransport {
 
 export function helloAt(tsClient: number, capabilities?: Partial<Capabilities>): Hello {
   return {
+    resume_token: "fixture-resume",
+    odom_reference_id: "fixture-odom",
+    localization: { providers: ["fiducial_marker"] },
     type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
     client_id: "c3f1a9",
     time_sync: { ts_client: tsClient, ts_server: 100 },
     robot: {
+      odom_scale_correction_factor: 1,
       display_name: "Unitree Go2",
       body_bounds_m: [0.7, 0.5, 0.55],
       footprint_m: [0.7, 0.5],
       base_height_m: 0.33,
     },
     capabilities: {
+      manipulation: { available: false, reason: "No arm" },
+      object_detection: { available: false, reason: "No detector" },
       lidar: { available: true, reason: null },
       navigation: {
         available: true,
         reason: null,
-        nav_goal: { available: true, reason: null },
+        nav_goal: { preview: false, available: true, reason: null },
         nav_joystick: { available: true, reason: null },
       },
       localization: { available: true, reason: null },
@@ -68,3 +74,13 @@ export function stateFrame(): State { return {
   nav: { state: "idle", outcome: null },
   agent: { idle: true },
 }; }
+
+
+/** Fixture server publication: navigation domain facts ride one revisioned snapshot. */
+export function navigationSnapshot(current: import("../../Assets/Scripts/DimOSARClient/replication/CollaborationTypes").InteractionState | null,
+  goal: import("../../Assets/Scripts/DimOSARClient/websocket/protocolTypes").NavGoal) {
+  const state = current ?? { type: "interaction_state" as const, epoch: "fixture-navigation", revision: 0,
+    mode: "manual" as const, authority: null, targets: [], motion_busy: false, following_tail: null,
+    preview: null, active_goal: null };
+  return { ...state, revision: state.revision + 1, [goal.preview ? "preview" : "active_goal"]: goal };
+}

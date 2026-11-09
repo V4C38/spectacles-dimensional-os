@@ -15,7 +15,8 @@ import socket
 import sys
 import time
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -26,13 +27,13 @@ from can_setup import check_can, setup_command
 from config import (
     env_path,
     merge_env,
-    migrate_legacy_env,
     normalize_log_level,
     read_env,
     repo_root,
     scripts_dir,
 )
-from dimos_config import read_armodule_config
+from dimos_config import write_runtime_config
+from discovery import run_json_probe
 from robot_sources import BLUEPRINT_CLI
 from tag_config import ui_from_armodule_config
 
@@ -149,7 +150,6 @@ class ProcessManager:
                 "DIMOS_STOP_GRACE_SECONDS must be a finite positive number"
             )
         self.root = root or repo_root()
-        migrate_legacy_env(self.root)
         self.scripts = scripts_dir(self.root)
         self.status = LauncherStatus(host_ip=detect_lan_ip())
         self._log: deque[str] = deque(maxlen=LOG_BUFFER_SIZE)
@@ -158,6 +158,7 @@ class ProcessManager:
         self._last_log_at = 0.0
         self._subs: list[_Subscriber] = []
         self._proc: asyncio.subprocess.Process | None = None
+        self._run_config_path: Path | None = None
         self._webxr_proc: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._webxr_reader_task: asyncio.Task[None] | None = None
@@ -345,36 +346,19 @@ class ProcessManager:
                 "message": "Select an installed DimOS environment first.",
             }
             if python:
-                proc = None
                 try:
-                    proc = await asyncio.create_subprocess_exec(
-                        python,
-                        str(Path(__file__).with_name("planner_check.py")),
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
+                    decoded = await run_json_probe(
+                        python, str(Path(__file__).with_name("planner_check.py")), timeout=30
                     )
-                    out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-                    decoded = json.loads(out.decode().strip().splitlines()[-1])
                     if not isinstance(decoded.get("ready"), bool):
                         raise TypeError("Invalid planner check response")
                     result = decoded
-                except (
-                    OSError,
-                    ValueError,
-                    IndexError,
-                    TypeError,
-                    AttributeError,
-                    TimeoutError,
-                ) as exc:
+                except (OSError, ValueError, TypeError, AttributeError, TimeoutError) as exc:
                     result = {
                         "ready": False,
                         "state": "incomplete",
                         "message": f"Planner check failed: {exc}",
                     }
-                finally:
-                    if proc is not None and proc.returncode is None:
-                        proc.kill()
-                        await proc.wait()
             self._planner_status = result
             self._planner_python = python
             self._planner_checked_at = now
@@ -572,12 +556,15 @@ class ProcessManager:
         *,
         blueprint: str,
         robot_ip: str | None = None,
+        config_path: Path | None = None,
     ) -> list[str]:
         if blueprint not in BLUEPRINTS:
             raise ValueError(f"blueprint must be one of {', '.join(BLUEPRINTS)}")
         argv = [str(self.scripts / "start.sh"), "--blueprint", blueprint]
         if robot_ip:
             argv.extend(["--robot-ip", robot_ip])
+        if config_path is not None:
+            argv.extend(["--config", str(config_path)])
         return argv
 
     def build_setup_argv(
@@ -756,9 +743,7 @@ class ProcessManager:
     def _require_vps_credentials(
         self, armodule_config: dict[str, Any] | None = None
     ) -> None:
-        ui = ui_from_armodule_config(
-            armodule_config if armodule_config is not None else read_armodule_config()
-        )
+        ui = ui_from_armodule_config(armodule_config)
         if not ui["vps"]:
             return
         stored = read_env(env_path(self.root))
@@ -784,45 +769,23 @@ class ProcessManager:
         if (webxr_dir / "node_modules").is_dir():
             return
         self._append_log("Installing WebXR dependencies (npm ci)…")
-        proc = await asyncio.create_subprocess_exec(
-            "npm",
-            "ci",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=str(webxr_dir),
-            start_new_session=True,
+        await self._run_webxr_command(
+            ["npm", "ci"], "WebXR dependency installation", "npm ci failed in clients/webxr"
         )
-        try:
-            assert proc.stdout is not None
-            while raw := await proc.stdout.readline():
-                self._append_log(raw.decode("utf-8", errors="replace").rstrip("\n"))
-            if await proc.wait() != 0:
-                raise RuntimeError("npm ci failed in clients/webxr")
-        finally:
-            if proc.returncode is None:
-                await self._stop_one(proc, "WebXR dependency installation")
 
     async def _build_webxr(self, env: dict[str, str]) -> None:
         self._append_log("Building optimized WebXR client…")
-        proc = await asyncio.create_subprocess_exec(
-            "npm",
-            "run",
-            "build",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=str(self._webxr_dir()),
-            env=env,
-            start_new_session=True,
+        await self._run_webxr_command(
+            ["npm", "run", "build"], "WebXR build",
+            "WebXR production build failed; see launcher logs", env=env,
         )
-        try:
-            assert proc.stdout is not None
-            while raw := await proc.stdout.readline():
-                self._append_log(raw.decode("utf-8", errors="replace").rstrip("\n"))
-            if await proc.wait() != 0:
-                raise RuntimeError("WebXR production build failed; see launcher logs")
-        finally:
-            if proc.returncode is None:
-                await self._stop_one(proc, "WebXR build")
+
+    async def _run_webxr_command(
+        self, argv: list[str], label: str, failure: str, *, env: dict[str, str] | None = None
+    ) -> None:
+        async with self._logged_command(argv, cwd=self._webxr_dir(), env=env, label=label) as proc:
+            if await self._drain_output(proc) != 0:
+                raise RuntimeError(failure)
 
     async def _spawn_webxr(self, env: dict[str, str]) -> None:
         argv = [
@@ -888,10 +851,6 @@ class ProcessManager:
             await self._configure_system_if_needed()
 
             pinned_ip = robot_ip.strip() if robot_ip else None
-            if pinned_ip in ("simulated", "fake"):
-                pinned_ip = "simulated"
-            if blueprint != "openyam_ar_planner":
-                merge_env({"ROBOT_IP": pinned_ip}, env_path(self.root))
 
             env = os.environ.copy()
             env["DIMOS_AR_SKIP_SYSCONFIG"] = "1"
@@ -911,11 +870,9 @@ class ProcessManager:
             env["DIMOS_LOG_LEVEL"] = normalize_log_level(stored.get("DIMOS_LOG_LEVEL"))
 
             host_ip = detect_lan_ip()
-            if armodule_config is not None:
-                for key, value in armodule_config.items():
-                    env[f"ARMODULE__{key.upper()}"] = (
-                        value if isinstance(value, str) else json.dumps(value)
-                    )
+            for key in tuple(env):
+                if key.startswith("ARMODULE__"):
+                    env.pop(key)
             for key in ("CAN_PORT", "REPLAY_DB", "SIMULATION", "REPLAY", "DIMOS_AR_SIMULATION", "ROBOT_IPS", "DIMOS_AR_REPLAY_STREAMS"):
                 env.pop(key, None)
             if can_port:
@@ -925,7 +882,10 @@ class ProcessManager:
                 env["DIMOS_AR_REPLAY_STREAMS"] = json.dumps(replay_streams or {})
             if simulation:
                 env["DIMOS_AR_SIMULATION"] = "1"
-            argv = self.build_start_argv(blueprint=blueprint, robot_ip=pinned_ip)
+            self._run_config_path = write_runtime_config(armodule_config or {})
+            argv = self.build_start_argv(
+                blueprint=blueprint, robot_ip=pinned_ip, config_path=self._run_config_path
+            )
             self._set_status(
                 phase=Phase.STARTING,
                 blueprint=blueprint,
@@ -942,7 +902,11 @@ class ProcessManager:
             self._manipulation_ready = False
             self._startup_error = None
             self._append_log(f"$ {' '.join(argv)}")
-            await self._spawn(argv, env=env, parse_armodule=True)
+            try:
+                await self._spawn(argv, env=env, parse_armodule=True)
+            except BaseException:
+                self._clear_run_config()
+                raise
             if client == "webxr" and self._webxr_proc is None and self._webxr_start_task is None:
                 assert self._proc is not None
                 self._append_log("Waiting for ARModule before starting WebXR…")
@@ -1026,13 +990,19 @@ class ProcessManager:
             self._set_status(phase=Phase.READY if self.status.check_ok else Phase.IDLE,
                              websocket_url=None, pin=None, error=None)
 
+    def _clear_run_config(self) -> None:
+        if self._run_config_path is not None:
+            self._run_config_path.unlink(missing_ok=True)
+            self._run_config_path = None
+
     async def _stop_backend_unlocked(self) -> bool:
         proc, self._proc = self._proc, None
-        # Cancel a compatibility start waiting for this backend; retain a running gateway.
+        # Cancel a pending client start waiting for this backend.
         if self._webxr_start_task is not None and self.status.webxr_phase != "starting":
             task, self._webxr_start_task = self._webxr_start_task, None
             await self._cancel_task(task)
         stopped = await self._stop_one(proc, "ARModule")
+        self._clear_run_config()
         await self._cancel_task(self._reader_task)
         self._reader_task = None
         return stopped
@@ -1182,35 +1152,44 @@ class ProcessManager:
             )
         )
 
-    async def _run_tracked(
-        self,
-        argv: list[str],
-        *,
-        env: dict[str, str],
-        on_line: Any = None,
-    ) -> int:
+    @asynccontextmanager
+    async def _logged_command(
+        self, argv: list[str], *, cwd: Path, label: str, env: dict[str, str] | None = None
+    ) -> AsyncIterator[asyncio.subprocess.Process]:
         self._append_log(f"$ {' '.join(argv)}")
         proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=str(self.root),
-            env=env,
-            start_new_session=True,
+            *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            cwd=str(cwd), env=env, start_new_session=True,
         )
-        self._proc = proc
+        try:
+            yield proc
+        finally:
+            if proc.returncode is None:
+                await self._stop_one(proc, label)
+
+    async def _drain_output(
+        self, proc: asyncio.subprocess.Process,
+        on_line: Callable[[str], Awaitable[None]] | None = None,
+    ) -> int:
         assert proc.stdout is not None
-        while True:
-            raw = await proc.stdout.readline()
-            if not raw:
-                break
+        while raw := await proc.stdout.readline():
             line = raw.decode("utf-8", errors="replace").rstrip("\n")
             self._append_log(line)
             if on_line is not None:
                 await on_line(line)
-        code = await proc.wait()
-        self._proc = None
-        return code
+        return await proc.wait()
+
+    async def _run_tracked(
+        self, argv: list[str], *, env: dict[str, str],
+        on_line: Callable[[str], Awaitable[None]] | None = None,
+    ) -> int:
+        async with self._logged_command(argv, cwd=self.root, env=env, label="Setup") as proc:
+            self._proc = proc
+            try:
+                return await self._drain_output(proc, on_line)
+            finally:
+                if self._proc is proc:
+                    self._proc = None
 
     async def _read_stream(
         self,
@@ -1219,24 +1198,16 @@ class ProcessManager:
         parse_armodule: bool,
         ready: asyncio.Event | None = None,
     ) -> None:
-        assert proc.stdout is not None
+        async def on_line(line: str) -> None:
+            if parse_armodule and self._proc is proc and self.status.phase != Phase.STOPPING:
+                self._parse_armodule_line(line)
+                if ready is not None and self.status.phase == Phase.RUNNING:
+                    ready.set()
         try:
-            while True:
-                raw = await proc.stdout.readline()
-                if not raw:
-                    break
-                line = raw.decode("utf-8", errors="replace").rstrip("\n")
-                self._append_log(line)
-                if (
-                    parse_armodule
-                    and self._proc is proc
-                    and self.status.phase != Phase.STOPPING
-                ):
-                    self._parse_armodule_line(line)
-                    if ready is not None and self.status.phase == Phase.RUNNING:
-                        ready.set()
+            code = await self._drain_output(proc, on_line)
         finally:
-            code = await proc.wait()
+            if proc.returncode is None:
+                await proc.wait()
 
         if self._proc is not proc or self.status.phase == Phase.STOPPING:
             return
@@ -1246,18 +1217,14 @@ class ProcessManager:
         asyncio.create_task(self._finalize_exit(error, expected_proc=proc))
 
     async def _read_webxr_stream(self, proc: asyncio.subprocess.Process) -> None:
-        assert proc.stdout is not None
+        async def on_line(line: str) -> None:
+            if self._webxr_proc is proc and self.status.phase != Phase.STOPPING:
+                self._parse_webxr_line(line)
         try:
-            while True:
-                raw = await proc.stdout.readline()
-                if not raw:
-                    break
-                line = raw.decode("utf-8", errors="replace").rstrip("\n")
-                self._append_log(line)
-                if self._webxr_proc is proc and self.status.phase != Phase.STOPPING:
-                    self._parse_webxr_line(line)
+            await self._drain_output(proc, on_line)
         finally:
-            await proc.wait()
+            if proc.returncode is None:
+                await proc.wait()
 
         if self._webxr_proc is not proc or self.status.phase == Phase.STOPPING:
             return

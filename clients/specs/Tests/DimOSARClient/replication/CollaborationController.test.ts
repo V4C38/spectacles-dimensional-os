@@ -3,7 +3,11 @@ import { CollaborationController } from "../../../Assets/Scripts/DimOSARClient/r
 import type { InteractionState, InteractionPose } from "../../../Assets/Scripts/DimOSARClient/replication/CollaborationTypes";
 import { decodeOutbound } from "../../../Assets/Scripts/DimOSARClient/websocket/protocol";
 const pose = (x: number): InteractionPose => ({ position: [x, 0, 0], orientation: [0, 0, 0, 1] });
-function state(revision = 0): InteractionState { return { type: "interaction_state", epoch: "robot", revision, mode: "manual", authority: null, target: null, preview: null, active_goal: null }; }
+function state(revision = 0): InteractionState { return {
+  targets: [],
+  motion_busy: false,
+  following_tail: null,
+  type: "interaction_state", epoch: "robot", revision, mode: "manual", authority: null, preview: null, active_goal: null }; }
 function fixture() {
   const clock = { now: 0 }, messages: any[] = [];
   const core = new CollaborationController({ ready: () => true, clientId: () => "a", now: () => clock.now,
@@ -110,13 +114,13 @@ describe("robot replication", () => {
   it.each([false, true])("fences a pending arm correction against a changed canonical target (%s)", changed => {
     const { core, messages } = fixture();
     const target = { ...pose(4), domain: "manipulation" as const, group_id: "arm", revision: 7, phase: "draft" as const, sample_ts: 1, sequence: 1 };
-    core.apply({ ...state(1), target });
+    core.apply({ ...state(1), targets: [target] });
     core.begin("manipulation_planning", "correction", undefined, { group_id: "arm" });
     const request = messages.at(-1); core.release(pose(2));
     core.accept({ type: "interaction_result", request_id: request.request_id, epoch: "robot", revision: 3,
       status: "accepted", code: "acquired", lease_id: "correction" });
     expect(messages.some(packet => packet.action === "release")).toBe(false);
-    core.apply({ ...state(3), target: changed ? { ...target, ...pose(8), revision: 8 } : target,
+    core.apply({ ...state(3), targets: [changed ? { ...target, ...pose(8), revision: 8 } : target],
       authority: { client_id: "a", source_id: "correction", acquisition_id: request.acquisition_id,
         lease_id: "correction", kind: "manipulation_planning", group_id: "arm", held: true, sequence: -1, expires_at: 5 } });
     if (changed) {
@@ -126,9 +130,9 @@ describe("robot replication", () => {
   });
   it("interpolates canonical poses using server time deltas despite receiver jitter", () => {
     const { core, clock } = fixture();
-    const a = state(1); a.target = { ...pose(0), revision: 1, phase: "live", sample_ts: 100, sequence: 1 };
+    const a = state(1); a.targets = [{ domain: "navigation", ...pose(0), revision: 1, phase: "live", sample_ts: 100, sequence: 1 }];
     core.apply(a); clock.now = 0.07;
-    core.apply({ ...a, revision: 2, target: { ...a.target!, ...pose(1), revision: 2, sample_ts: 100.05 } });
+    core.apply({ ...a, revision: 2, targets: [{ ...a.targets[0]!, ...pose(1), revision: 2, sample_ts: 100.05 }] });
     clock.now = 0.125; expect(core.snapshot().target!.position[0]).toBeCloseTo(0.5);
     clock.now = 0.3; expect(core.snapshot().target!.position[0]).toBe(1);
     expect(core.snapshot().stale).toBe(false);
@@ -136,7 +140,7 @@ describe("robot replication", () => {
   it("does not mark stationary held targets stale while authority heartbeats arrive", () => {
     const { core, clock } = fixture();
     const a = state(1); a.authority = { client_id: "b", source_id: "hand", acquisition_id: "remote", lease_id: "other", kind: "live", held: true, sequence: 1, expires_at: 10 };
-    a.target = { ...pose(2), revision: 1, phase: "live", sample_ts: 1, sequence: 1 };
+    a.targets = [{ domain: "navigation", ...pose(2), revision: 1, phase: "live", sample_ts: 1, sequence: 1 }];
     core.apply(a); clock.now = 0.4; core.apply({ ...a, revision: 2 });
     expect(core.snapshot().stale).toBe(false); expect(core.snapshot().blocked).toBe(true);
     clock.now = 0.7; expect(core.snapshot().stale).toBe(true);
@@ -144,31 +148,31 @@ describe("robot replication", () => {
   it("settles promptly when a late join's parked target starts moving again", () => {
     const { core, clock } = fixture();
     const parked = state(1);
-    parked.target = { ...pose(0), revision: 1, phase: "committed", sample_ts: 1, sequence: 1 };
+    parked.targets = [{ domain: "navigation", ...pose(0), revision: 1, phase: "committed", sample_ts: 1, sequence: 1 }];
     core.apply(parked);
     clock.now = 0.05;
-    core.apply({ ...parked, revision: 2, target: { ...parked.target!, ...pose(4), revision: 2, sample_ts: 3601 } });
+    core.apply({ ...parked, revision: 2, targets: [{ ...parked.targets[0]!, ...pose(4), revision: 2, sample_ts: 3601 }] });
     clock.now = 0.16;
     expect(core.snapshot().target!.position[0]).toBe(4);
   });
   it("rejects older snapshots and resets interpolation on epoch changes", () => {
     const { core } = fixture(); const a = state(2);
-    a.target = { ...pose(4), revision: 1, phase: "committed", sample_ts: 100, sequence: 1 };
+    a.targets = [{ domain: "navigation", ...pose(4), revision: 1, phase: "committed", sample_ts: 100, sequence: 1 }];
     core.apply(a); expect(core.apply(state(1))).toBe(false);
     core.apply({ ...state(), epoch: "new" }); expect(core.snapshot().target).toBeNull();
   });
   it("decodes signed initial sequence sentinels and rejects malformed target facts", () => {
-    const a = state(); a.target = { ...pose(0), revision: 1, phase: "draft", sample_ts: 100, sequence: -1 };
+    const a = state(); a.targets = [{ domain: "navigation", ...pose(0), revision: 1, phase: "draft", sample_ts: 100, sequence: -1 }];
     expect(decodeOutbound(JSON.stringify(a))).toEqual(a);
-    expect(() => decodeOutbound(JSON.stringify({ ...a, target: { ...a.target, sequence: -2 } }))).toThrow();
-    expect(() => decodeOutbound(JSON.stringify({ ...a, target: { ...a.target, position: [null, 0, 0] } }))).toThrow();
+    expect(() => decodeOutbound(JSON.stringify({ ...a, targets: [{ ...a.targets[0], sequence: -2 }] }))).toThrow();
+    expect(() => decodeOutbound(JSON.stringify({ ...a, targets: [{ ...a.targets[0], position: [null, 0, 0] }] }))).toThrow();
   });
   it("decodes the exact accepted endpoint while its native route is pending", () => {
     const pending = { ...state(1), active_goal: { type: "nav_goal", pose: [4, 2, 0, 0], path_poses: [], ts: 1 } };
     expect(decodeOutbound(JSON.stringify(pending))).toEqual(pending);
     const routed = { ...pending, revision: 2, active_goal: { ...pending.active_goal, path_poses: [[0,0,0,0], [4,2,0,0]] } };
     expect(decodeOutbound(JSON.stringify(routed))).toEqual(routed);
-    expect(() => decodeOutbound(JSON.stringify(pending.active_goal))).toThrow("pose must be omitted");
+    expect(() => decodeOutbound(JSON.stringify(pending.active_goal))).toThrow("Unknown outbound frame type");
   });
   it("blocks new gestures while the robot owns an accepted native operation", () => {
     const { core } = fixture(); core.apply({ ...state(1), motion_busy: true });
@@ -183,11 +187,11 @@ describe("robot replication", () => {
   it("retires final prediction when an unchanged canonical target acknowledges release", () => {
     const { core, clock, grant } = fixture(); grant();
     const authority = core.raw()!.authority!;
-    const target = { ...pose(2), revision: 1, phase: "live" as const, sample_ts: 1, sequence: 1 };
-    core.apply({ ...state(2), authority, target });
+    const target = { domain: "navigation", ...pose(2), revision: 1, phase: "live" as const, sample_ts: 1, sequence: 1 };
+    core.apply({ ...state(2), authority, targets: [target] });
     core.release(pose(2));
-    core.apply({ ...state(3), target: { ...target, phase: "committed" } });
-    core.apply({ ...state(4), target: { ...target, ...pose(3), revision: 2, phase: "committed", sample_ts: 1.1 } });
+    core.apply({ ...state(3), targets: [{ ...target, phase: "committed" }] });
+    core.apply({ ...state(4), targets: [{ domain: "navigation", ...target, ...pose(3), revision: 2, phase: "committed", sample_ts: 1.1 }] });
     clock.now = 0.3;
     expect(core.snapshot().target?.position[0]).toBe(3);
   });
@@ -216,9 +220,9 @@ describe("robot replication", () => {
   });
   it("rolls a rejected final release back to canonical state after lease expiry", () => {
     const { core, clock, messages, grant } = fixture(); grant();
-    const target = { ...pose(1), revision: 1, phase: "committed" as const, sample_ts: 1, sequence: 0 };
+    const target = { domain: "navigation", ...pose(1), revision: 1, phase: "committed" as const, sample_ts: 1, sequence: 0 };
     core.release(pose(2)); const final = messages.at(-1);
-    core.apply({ ...state(2), target });
+    core.apply({ ...state(2), targets: [target] });
     expect(core.snapshot().target?.position[0]).toBe(2);
     core.accept({ type: "interaction_result", request_id: final.request_id, epoch: "robot", revision: 2, status: "stale", code: "lease_retired" });
     clock.now = 0.3;
@@ -227,7 +231,7 @@ describe("robot replication", () => {
   it("ignores an old final rejection after a newer final prediction", () => {
     const { core, messages, grant } = fixture(); grant();
     core.release(pose(2)); const old = messages.at(-1);
-    core.apply({ ...state(2), target: { ...pose(1), revision: 1, phase: "committed", sample_ts: 1, sequence: 0 } });
+    core.apply({ ...state(2), targets: [{ domain: "navigation", ...pose(1), revision: 1, phase: "committed", sample_ts: 1, sequence: 0 }] });
     core.begin("live", "hand", pose(3)); const acquire = messages.at(-1);
     core.apply({ ...core.raw()!, revision: 3, authority: { client_id: "a", source_id: "hand", acquisition_id: acquire.acquisition_id,
       lease_id: "new", kind: "live", held: true, expires_at: 5, sequence: -1 } });
@@ -252,9 +256,9 @@ it("retains a complete released draft through snapshots before the final cumulat
   expect(core.snapshot("manipulation", "arm")).toMatchObject({ settling: true, settings: { speed_scale: .8, gripper: 1 } });
   const target = { ...pose(0), domain: "manipulation" as const, group_id: "arm", speed_scale: .8, gripper: 0,
     revision: 1, phase: "draft" as const, sample_ts: 0, sequence: release.sequence };
-  core.apply({ ...state(3), target });
+  core.apply({ ...state(3), targets: [target] });
   expect(core.snapshot("manipulation", "arm")).toMatchObject({ settling: true, settings: { gripper: 1 } });
-  core.apply({ ...state(4), target: { ...target, gripper: 1 } });
+  core.apply({ ...state(4), targets: [{ ...target, gripper: 1 }] });
   expect(core.snapshot("manipulation", "arm").settling).toBe(false);
 });
 

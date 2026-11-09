@@ -38,7 +38,7 @@ export class NavigationGoalLifecycle {
   private elapsed = 0;
   private feedbackId = 0;
   private confirmationId = 0;
-  constructor(private readonly commands: NavigationCommands, private readonly forceNoopDistanceM = 0) {}
+  constructor(private readonly commands: NavigationCommands) {}
 
   apply(view: ARModuleSessionState, origin: ClientTrackingOrigin | null, floor: NavigationPose | null): void {
     this.view = view; this.floor = floor;
@@ -86,11 +86,10 @@ export class NavigationGoalLifecycle {
     this.lastFrame = frame; this.lastNav = view.nav;
   }
 
-  send(now: number, pose: NavigationPose, force = true): boolean {
-    if (!this.origin || force && this.lastSent && distance(this.lastSent, pose.position) < this.forceNoopDistanceM) return false;
-    if (!force && (now - this.lastSentAt < GOAL_SEND_INTERVAL_S || this.lastSent && distance(this.lastSent, pose.position) < GOAL_SEND_MIN_DISTANCE_M)) return false;
+  send(now: number, pose: NavigationPose): boolean {
+    if (!this.origin || now - this.lastSentAt < GOAL_SEND_INTERVAL_S || this.lastSent && distance(this.lastSent, pose.position) < GOAL_SEND_MIN_DISTANCE_M) return false;
     try { this.commands.sendGoal(clientTrackingToOdomPose(pose, this.origin)); } catch { return false; }
-    this.submitted(now, pose, force);
+    this.submitted(now, pose, false);
     return true;
   }
 

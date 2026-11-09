@@ -42,7 +42,12 @@ def test_rejects_invalid_motion_inputs(changes):
 
 
 def test_websocket_dispatch_uses_validated_request():
-    decoded = decode_inbound(json.dumps(request()))
-    assert decoded.action == "update"
+    decoded = decode_inbound(json.dumps(request(action="evaluate")))
+    assert decoded.action == "evaluate"
     assert decoded.payload["sequence"] == 1
     assert decoded.payload["orientation"] == [0, 0, 0, 1]
+
+
+def test_websocket_rejects_duplicate_native_following_stream():
+    with pytest.raises(ValueError, match="shared interaction stream"):
+        decode_inbound(json.dumps(request()))

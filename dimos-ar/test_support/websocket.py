@@ -37,6 +37,8 @@ def _sample_hello(_client_id: str) -> HelloBody:
             base_height_m=UNITREE_GO2_PROFILE.base_height_m,
         ),
         capabilities={
+            CapabilityName.OBJECT_DETECTION: Capability(available=False, reason="not configured"),
+            CapabilityName.MANIPULATION: Capability(available=False, reason="not configured"),
             CapabilityName.LIDAR: Capability(available=True, reason=None),
             CapabilityName.NAVIGATION: Capability(available=True, reason=None),
             CapabilityName.LOCALIZATION: Capability(available=True, reason=None),
@@ -45,6 +47,8 @@ def _sample_hello(_client_id: str) -> HelloBody:
                 available=False, reason="current blueprint has no DimOS agent"
             ),
         },
+        odom_reference_id="test-odom",
+        localization={"providers": []},
         navigation_inputs={
             NAV_GOAL: Capability(available=True, reason=None),
             NAV_JOYSTICK: Capability(available=True, reason=None),
@@ -53,7 +57,7 @@ def _sample_hello(_client_id: str) -> HelloBody:
 
 
 async def _send_hello_request(ws: websockets.ClientConnection, ts_client: float = 1000.0) -> dict:
-    await ws.send(json.dumps({"type": "hello_request", "ts_client": ts_client}))
+    await ws.send(json.dumps({"type": "hello_request", "protocol_version": 2, "ts_client": ts_client}))
     raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
     return json.loads(raw)
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 from itertools import count
 import time
 
-from dimos_lcm.std_msgs import Bool
 import pytest
 
 from dimos.ar.navigation.coordinator import NavGoalCoordinator
@@ -98,7 +97,8 @@ def test_goal_reached_resolves_any_navigation() -> None:
     coordinator = NavGoalCoordinator(odom_scale_correction_factor=1.0)
     coordinator.on_path(_path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
 
-    coordinator.on_goal_reached(Bool(True))
+    coordinator.on_native_status(1.0, "accepted")
+    coordinator.on_native_status(1.0, "succeeded")
 
     nav = coordinator.nav_state()
     assert nav.state == "resolved"
@@ -108,7 +108,8 @@ def test_goal_reached_resolves_any_navigation() -> None:
 def test_goal_reached_without_path_still_resolves() -> None:
     coordinator = NavGoalCoordinator(odom_scale_correction_factor=1.0)
 
-    coordinator.on_goal_reached(Bool(True))
+    coordinator.on_native_status(1.0, "accepted")
+    coordinator.on_native_status(1.0, "succeeded")
 
     nav = coordinator.nav_state()
     assert nav.state == "resolved"
@@ -119,7 +120,8 @@ def test_goal_reached_failure() -> None:
     coordinator = NavGoalCoordinator(odom_scale_correction_factor=1.0)
     coordinator.on_path(_path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
 
-    coordinator.on_goal_reached(Bool(False))
+    coordinator.on_native_status(1.0, "accepted")
+    coordinator.on_native_status(1.0, "failed")
 
     nav = coordinator.nav_state()
     assert nav.state == "resolved"
@@ -140,7 +142,8 @@ def test_estop_clears_following_path_without_resolved_outcome() -> None:
 def test_new_goal_clears_previous_outcome() -> None:
     coordinator = NavGoalCoordinator(odom_scale_correction_factor=1.0)
     coordinator.on_path(_path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
-    coordinator.on_goal_reached(Bool(True))
+    coordinator.on_native_status(1.0, "accepted")
+    coordinator.on_native_status(1.0, "succeeded")
 
     coordinator.submit_goal(_nav_goal_request(x=3.0, y=4.0))
     coordinator.on_path(_path(((3.0, 4.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
@@ -155,7 +158,8 @@ def test_late_path_cannot_resurrect_terminal_navigation(success: bool) -> None:
     coordinator = NavGoalCoordinator(odom_scale_correction_factor=1.0)
     path = _path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)))
     coordinator.on_path(path)
-    coordinator.on_goal_reached(Bool(success))
+    coordinator.on_native_status(1.0, "accepted")
+    coordinator.on_native_status(1.0, "succeeded" if success else "failed")
     frame, changed = coordinator.on_path(path)
     assert frame is None
     assert changed is False
@@ -183,7 +187,6 @@ def test_old_goal_terminal_cannot_retire_new_ar_goal(success):
     coordinator.on_native_status(old.ts, "accepted")
     current = coordinator.submit_goal(_nav_goal_request(x=2))
     assert not coordinator.on_native_status(old.ts, "succeeded" if success else "failed")
-    assert not coordinator.on_goal_reached(Bool(success))
     coordinator.on_native_status(current.ts, "accepted")
     coordinator.on_path(_path(((2, 0, 0), (0, 0, 0, 1))))
     assert not coordinator.on_native_status(old.ts, "accepted")

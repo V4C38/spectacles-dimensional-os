@@ -228,16 +228,7 @@ class RecordedARModule(ARModule):
                 for role, sample in (
                     tuple(self._last_samples.items()) if self._playback_state == "ended" else ()
                 ):
-                    msg = copy.copy(sample)
-                    if role == "gripper":
-                        continue
-                    msg.ts = (
-                        time.time()
-                    )  # consumers must never treat recorded time as stale feedback
-                    if role == "joints":
-                        self._publish_arm(msg)
-                    else:
-                        await getattr(self, f"handle_{role}")(msg)
+                    await self._sample(role, sample)
                 self._broadcast_state()
                 await asyncio.sleep(0.1)
         finally:

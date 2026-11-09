@@ -9,7 +9,10 @@ const origin = { position: [1, 0, 0] as [number, number, number], orientation: [
 function fixture() {
   const sent: any[] = [], commands: any[] = [];
   const collaboration = new CollaborationController({ ready: () => true, clientId: () => "local", now: () => 0, send: s => sent.push(JSON.parse(s)) });
-  const state: InteractionState = { type: "interaction_state", epoch: "robot", revision: 0, mode: "manual", authority: null, target: null, preview: null, active_goal: null };
+  const state: InteractionState = {
+    motion_busy: false,
+    following_tail: null,
+    type: "interaction_state", epoch: "robot", revision: 0, mode: "manual", authority: null, targets: [], preview: null, active_goal: null };
   collaboration.apply(state);
   const view = { connection: "ready", hasTrackingOrigin: true, nav_goal: null, nav: null,
     capabilities: { navigation: { available: true, nav_goal: { available: true, preview: false } } } } as unknown as ARModuleSessionState;
@@ -52,15 +55,15 @@ describe("navigation replication adapter", () => {
     nav.hold(0, { position: [2,0,0], blocked: false }, false, "hand");
     const request = sent[0];
     const authority = { client_id: "local", source_id: "hand", acquisition_id: request.acquisition_id, lease_id: "lease", kind: "navigation_planning" as const, held: true, expires_at: 1, sequence: -1 };
-    const target = { position: [3,0,0] as [number,number,number], orientation: [0,0,0,1] as [number,number,number,number], phase: "draft" as const, revision: 1, sequence: -1, sample_ts: 100 };
-    collaboration.apply({ ...state, revision: 1, authority, target });
+    const target = {domain: "navigation", position: [3,0,0] as [number,number,number], orientation: [0,0,0,1] as [number,number,number,number], phase: "draft" as const, revision: 1, sequence: -1, sample_ts: 100 };
+    collaboration.apply({ ...state, revision: 1, authority, targets: [target] });
     collaboration.accept({ type: "interaction_result", request_id: request.request_id, epoch: "robot", revision: 1, status: "accepted", code: "acquired", lease_id: "lease" });
     nav.aim(0.1, { position: [3,0,0], blocked: false }, "hand"); nav.tick(0.1);
     expect(nav.snapshot().draft!.position[0]).toBe(3);
     expect(sent.filter(packet => packet.type === "nav_goal_request")).toHaveLength(1);
     expect(sent.find(packet => packet.type === "nav_goal_request")).toMatchObject({ position: [3,0,0] });
     const update = sent.find(packet => packet.action === "update");
-    collaboration.apply({ ...state, revision: 2, authority: { ...authority, sequence: update.sequence }, target: { ...target, position: [4,0,0], revision: 2, sequence: update.sequence } });
+    collaboration.apply({ ...state, revision: 2, authority: { ...authority, sequence: update.sequence }, targets: [{ ...target, position: [4,0,0], revision: 2, sequence: update.sequence }] });
     nav.tick(0.2);
     expect(sent.filter(packet => packet.type === "nav_goal_request")).toHaveLength(1);
     nav.tick(0.5);
@@ -69,7 +72,7 @@ describe("navigation replication adapter", () => {
     expect(second).toMatchObject({ preview: true, position: [4,0,0], lease_id: "lease" });
     view.nav_preview = { type: "nav_goal", preview: true, preview_id: second.preview_id, pose: [4,0,0,0], path_poses: [[0,0,0,0],[4,0,0,0]], ts: 1 };
     nav.applyView(view, origin, null, 0.55);
-    collaboration.apply({ ...state, revision: 3, authority, target: { ...target, position: [4.01,0,0], revision: 3, sequence: update.sequence } });
+    collaboration.apply({ ...state, revision: 3, authority, targets: [{ ...target, position: [4.01,0,0], revision: 3, sequence: update.sequence }] });
     nav.tick(0.9);
     expect(sent.filter(packet => packet.type === "nav_goal_request")).toHaveLength(3);
     expect(sent.filter(packet => packet.type === "nav_goal_request").at(-1)).toMatchObject({ position: [4.01,0,0] });
@@ -106,7 +109,7 @@ describe("navigation replication adapter", () => {
     const { nav, collaboration, state } = fixture();
     collaboration.apply({ ...state, revision: 1,
       authority: { client_id: "remote", source_id: "hand", acquisition_id: "a", lease_id: "l", kind: "navigation_planning", held: false, sequence: 1, expires_at: 1 },
-      target: { position: [4, 0, 0], orientation: [0, 0, 0, 1], phase: "draft", revision: 1, sequence: 1, sample_ts: 100 },
+      targets: [{domain: "navigation", position: [4, 0, 0], orientation: [0, 0, 0, 1], phase: "draft", revision: 1, sequence: 1, sample_ts: 100 }],
       preview: { type: "nav_goal", preview: true, pose: [4,0,0,0], path_poses: [[2,0,0,0],[4,0,0,0]], ts: 1 } });
     expect(nav.snapshot().selected).toBe(false); expect(nav.snapshot().blocked).toBe(true);
     expect(nav.snapshot().draft?.position[0]).toBe(3); expect(nav.isAiming()).toBe(true);
@@ -129,7 +132,7 @@ describe("navigation replication adapter", () => {
   });
   it("does not render an arm target as a navigation marker", () => {
     const { nav, collaboration, state } = fixture();
-    collaboration.apply({ ...state, revision: 1, target: { domain: "manipulation", group_id: "arm", position: [8,0,1], orientation: [0,0,0,1], phase: "draft", revision: 1, sequence: 1, sample_ts: 1 } });
+    collaboration.apply({ ...state, revision: 1, targets: [{ domain: "manipulation", group_id: "arm", position: [8,0,1], orientation: [0,0,0,1], phase: "draft", revision: 1, sequence: 1, sample_ts: 1 }] });
     expect(nav.snapshot().draft).toBeNull(); expect(nav.snapshot().position[0]).toBe(0);
   });
 });

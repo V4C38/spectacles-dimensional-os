@@ -1,3 +1,4 @@
+import { helloAt } from "../../specs/Tests/fixtures/SessionFixture";
 import { describe, expect, it, vi } from "vitest";
 import { LIDAR_PRESETS } from "@dimos-ar-client/sensors/lidarSettings";
 import { WebXRUIPresenter } from "../src/presentation/WebXRUIPresenter";
@@ -6,6 +7,8 @@ import type { Capabilities } from "@dimos-ar-client/websocket/protocolTypes";
 import { RobotSelection } from "@dimos-ar-client/robot/RobotSelection";
 
 const capabilities: Capabilities = {
+  manipulation: { available: false, reason: "No arm" },
+  object_detection: { available: false, reason: "No detector" },
   lidar: { available: true, reason: null },
   localization: { available: true, reason: null },
   estop: { available: true, reason: null },
@@ -13,7 +16,7 @@ const capabilities: Capabilities = {
   navigation: {
     available: true,
     reason: null,
-    nav_goal: { available: true, reason: null },
+    nav_goal: { preview: false, available: true, reason: null },
     nav_joystick: { available: false, reason: "off" },
   },
 };
@@ -22,18 +25,8 @@ function view(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionSta
   return {
     connection: "ready",
     hasTrackingOrigin: true,
-    hello: {
-      type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
-      client_id: "c",
-      time_sync: { ts_client: 0, ts_server: 0 },
-      robot: {
-        display_name: "Go2",
-        body_bounds_m: [0.7, 0.5, 0.55],
-        footprint_m: [0.7, 0.3],
-        base_height_m: 0.33,
-      },
-      capabilities,
-    },
+    hello: { ...helloAt(0, capabilities), client_id: "c", time_sync: { ts_client: 0, ts_server: 0 },
+      robot: { ...helloAt(0).robot, display_name: "Go2", footprint_m: [0.7, 0.3] } },
     state: {
       type: "state",
       server: { connected_clients: 1 },
@@ -100,7 +93,10 @@ it.each([
   ["any_angle", "vps", "VPS", "mapped space"],
   ["robot_los_preferred", "mixed", "VPS", "mapped space"],
 ] as const)("uses provider-appropriate instructions for %s", (policy, kind, description, guidance) => {
-  const f = setupFixture(policy); f.ui.nextSetup();
+  const f = setupFixture(policy);
+  const current = view({ hasTrackingOrigin: false });
+  current.hello!.localization.providers = policy === "any_angle" ? ["vps"] : policy === "robot_los_preferred" ? ["fiducial_marker", "vps"] : ["fiducial_marker"];
+  f.setView(current); f.ui.nextSetup();
   expect(f.ui.snapshot().localizationKind).toBe(kind);
   expect(f.ui.snapshot().wizardDescription).toContain(description);
   expect(f.ui.snapshot().wizardCardBody).toContain(guidance);
@@ -108,6 +104,7 @@ it.each([
 
 it("uses neutral waiting copy before a capture policy arrives and explains unavailable localization", () => {
   const f = setupFixture(); f.ui.nextSetup();
+  f.setView(view({ connection: "awaiting_hello", hello: null, capabilities: null, hasTrackingOrigin: false }));
   expect(f.ui.snapshot().localizationKind).toBe("unknown");
   expect(f.ui.snapshot().wizardDescription).toBe("Waiting for localization…");
   f.setView(view({ hasTrackingOrigin: false, capabilities: { ...capabilities, localization: { available: false, reason: "off" } } }));

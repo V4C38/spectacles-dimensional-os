@@ -11,6 +11,7 @@ import { AppState } from "../../Assets/Scripts/DimOSSpecsClient/presentation/App
 import type { ARModuleSessionState } from "../../Assets/Scripts/DimOSARClient/websocket/arModuleSession";
 
 const GO2: RobotDescription = {
+  odom_scale_correction_factor: 1,
   display_name: "Unitree Go2",
   body_bounds_m: [0.7, 0.5, 0.55],
   footprint_m: [0.7, 0.5],

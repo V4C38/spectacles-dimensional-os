@@ -1,9 +1,10 @@
-"""Read/write the DimOS JSON config file (`~/.config/dimos/config`)."""
+"""Locate launcher-owned settings and freeze native configuration for each run."""
 
 from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -14,32 +15,18 @@ def dimos_config_path() -> Path:
     return base / "dimos" / "config"
 
 
-def load_dimos_config(path: Path | None = None) -> dict[str, Any]:
-    target = path or dimos_config_path()
-    if not target.is_file():
-        return {}
-    try:
-        data = json.loads(target.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"invalid DimOS config JSON ({target}): {exc}") from exc
+def write_runtime_config(armodule: dict[str, Any]) -> Path:
+    """Preserve native configuration while replacing AR settings for this run."""
+    source = dimos_config_path()
+    data = json.loads(source.read_text()) if source.is_file() else {}
     if not isinstance(data, dict):
-        raise TypeError(f"DimOS config {target} must contain a JSON object")
-    return data
-
-
-def read_armodule_config(path: Path | None = None) -> dict[str, Any]:
-    data = load_dimos_config(path)
-    section = data.get("armodule")
-    return dict(section) if isinstance(section, dict) else {}
-
-
-def merge_armodule_config(
-    armodule: dict[str, Any],
-    path: Path | None = None,
-) -> dict[str, Any]:
-    target = path or dimos_config_path()
-    data = load_dimos_config(target)
+        raise TypeError("DimOS configuration must contain a JSON object")
     data["armodule"] = armodule
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    return data
+    with tempfile.NamedTemporaryFile(mode="w", prefix="dimos-ar-run-", suffix=".json", delete=False) as stream:
+        target = Path(stream.name)
+        try:
+            json.dump(data, stream, allow_nan=False)
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+    return target

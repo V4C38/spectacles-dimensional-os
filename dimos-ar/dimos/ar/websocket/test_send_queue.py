@@ -53,7 +53,7 @@ async def test_send_timing_reports_backpressure_without_silent_drops(
     assert fields["slow_sends"] == 1
     assert fields["dropped_fifo"] == 0
     now[0] += 30
-    await outbound._send_binary(b"test")
+    await outbound._send_text("test")
     assert logger.info.call_args.kwargs["dropped_fifo"] == 0
 
 
@@ -79,7 +79,7 @@ def test_peek_frame_type(payload: str, expected: str | None) -> None:
 
 
 @pytest.mark.asyncio
-async def test_outbound_coalesces_pose_nav_goal_state() -> None:
+async def test_outbound_coalesces_pose_interaction_state() -> None:
     ws = _FakeWebSocket()
     outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
@@ -87,7 +87,7 @@ async def test_outbound_coalesces_pose_nav_goal_state() -> None:
     outbound.enqueue('{"type":"state","nav":{"state":"idle"}}\n')
     outbound.enqueue('{"type":"pose","position":[1,2,3]}\n')
     outbound.enqueue('{"type":"pose","position":[4,5,6]}\n')
-    outbound.enqueue('{"type":"nav_goal","pose":[0,0,0,0],"path_poses":[[0,0,0,0]]}\n')
+    outbound.enqueue('{"type":"interaction_state","active_goal":{"pose":[0,0,0,0],"path_poses":[[0,0,0,0]]}}\n')
 
     await asyncio.sleep(0.05)
     await outbound.stop()
@@ -95,7 +95,7 @@ async def test_outbound_coalesces_pose_nav_goal_state() -> None:
     assert len(ws.sent_text) == 1
     by_type = {msg["type"]: msg for msg in _messages_from_sent(ws.sent_text)}
     assert by_type["pose"]["position"] == [4, 5, 6]
-    assert by_type["nav_goal"]["path_poses"] == [[0, 0, 0, 0]]
+    assert by_type["interaction_state"]["active_goal"]["path_poses"] == [[0, 0, 0, 0]]
     assert by_type["state"]["nav"]["state"] == "idle"
 
 
@@ -108,7 +108,7 @@ async def test_outbound_interleaves_fifo_before_coalesced() -> None:
     outbound.enqueue('{"type":"hello","client_id":"a"}\n')
     outbound.enqueue('{"type":"pose","position":[1,1,1]}\n')
     outbound.enqueue('{"type":"hello","client_id":"b"}\n')
-    outbound.enqueue('{"type":"nav_goal","pose":[1,2,3,0],"path_poses":[[1,2,3,0]]}\n')
+    outbound.enqueue('{"type":"interaction_state","active_goal":{"pose":[1,2,3,0],"path_poses":[[1,2,3,0]]}}\n')
 
     await asyncio.sleep(0.05)
     await outbound.stop()
@@ -118,22 +118,7 @@ async def test_outbound_interleaves_fifo_before_coalesced() -> None:
     assert types[0] == "hello"
     assert types.count("hello") == 2
     assert "pose" in types
-    assert "nav_goal" in types
-
-
-@pytest.mark.asyncio
-async def test_outbound_coalesces_binary_lidar() -> None:
-    ws = _FakeWebSocket()
-    outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
-    outbound.start()
-
-    outbound.enqueue_binary(b"LDAR-old")
-    outbound.enqueue_binary(b"LDAR-new")
-
-    await asyncio.sleep(0.05)
-    await outbound.stop()
-
-    assert ws.sent_binary == [b"LDAR-new"]
+    assert "interaction_state" in types
 
 
 @pytest.mark.asyncio
@@ -149,14 +134,11 @@ async def test_outbound_overflow_retires_connection_without_dropping_an_old_repl
     assert outbound.failure_reason == failures[0]
     assert outbound._queue.qsize() == OUTBOUND_FIFO_MAXSIZE
     assert json.loads(outbound._queue.get_nowait()[1])["seq"] == 0
-    outbound.enqueue_binary(b"ignored")
-    assert outbound._coalesce_latest_binary is None
     assert ws.sent_text == []
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("binary", [False, True])
-async def test_blocked_send_is_bounded_and_retires_authority_once(binary: bool) -> None:
+async def test_blocked_send_is_bounded_and_retires_authority_once() -> None:
     class BlockedWebSocket(_FakeWebSocket):
         async def send(self, payload: str | bytes) -> None:
             await asyncio.Event().wait()
@@ -165,10 +147,7 @@ async def test_blocked_send_is_bounded_and_retires_authority_once(binary: bool) 
     outbound = ClientSendQueue(
         BlockedWebSocket(), on_failure=failures.append, send_timeout_s=0.01
     )
-    if binary:
-        outbound.enqueue_binary(b"lidar")
-    else:
-        outbound.enqueue('{"type":"interaction_result"}\n')
+    outbound.enqueue('{"type":"interaction_result"}\n')
     outbound.start()
     assert outbound._task is not None
     await asyncio.wait_for(outbound._task, 1)
@@ -225,22 +204,19 @@ def test_oversized_control_record_fails_closed() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("preview_first", [True, False])
-async def test_preview_reply_never_coalesces_with_active_goal(preview_first: bool) -> None:
+async def test_latest_navigation_snapshot_keeps_preview_and_active_goal_together() -> None:
     websocket = _FakeWebSocket()
     queue = ClientSendQueue(websocket)
     active = {"type": "nav_goal", "path_poses": [[1, 2, 0, 0]], "pose": [1, 2, 0, 0], "ts": 1}
     preview = {"type": "nav_goal", "preview": True, "preview_id": "aim", "path_poses": [], "ts": 2}
-    frames = [preview, active] if preview_first else [active, preview]
-    for frame in frames:
-        queue.enqueue(json.dumps(frame) + "\n")
+    queue.enqueue(json.dumps({"type": "interaction_state", "revision": 1,
+                              "active_goal": active, "preview": None}) + "\n")
+    latest = {"type": "interaction_state", "revision": 2, "active_goal": active, "preview": preview}
+    queue.enqueue(json.dumps(latest) + "\n")
     queue.start()
     await asyncio.sleep(0)
     await queue.stop()
-    assert sorted(_messages_from_sent(websocket.sent_text), key=lambda msg: msg["ts"]) == [
-        active,
-        preview,
-    ]
+    assert _messages_from_sent(websocket.sent_text) == [latest]
 
 
 @pytest.mark.asyncio

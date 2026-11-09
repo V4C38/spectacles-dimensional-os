@@ -12,6 +12,7 @@ import type { Hello, State } from "@dimos-ar-client/websocket/protocolTypes";
 import type { InteractionState } from "@dimos-ar-client/replication/CollaborationTypes";
 
 class Socket {
+  afterReceive: () => void = () => {};
   binaryType = "";
   readyState = 0;
   onopen: ((event: Event) => void) | null = null;
@@ -22,8 +23,12 @@ class Socket {
   uploaded: Uint8Array[] = [];
   bulk: ReturnType<typeof pairedBulkSocket> | null = null;
   nativeJoystick: { linear: number[]; angular: number[] }[] = [];
-  private interaction: InteractionState = { type: "interaction_state", epoch: "fixture-robot", revision: 0,
-    mode: "manual", authority: null, target: null, preview: null, active_goal: null };
+  private interaction: InteractionState = {
+    targets: [],
+    motion_busy: false,
+    following_tail: null,
+    type: "interaction_state", epoch: "fixture-robot", revision: 0,
+    mode: "manual", authority: null, preview: null, active_goal: null };
   send(value: string | Uint8Array) {
     this.sent.push(value);
     if (typeof value !== "string") return;
@@ -43,22 +48,23 @@ class Socket {
       status = "stale"; code = "lease_retired";
     }
     if (status === "accepted") {
-      if (command.position && command.orientation) shared.target = { position: command.position, orientation: command.orientation,
-        revision: (shared.target?.revision ?? 0) + 1, phase: command.kind === "live" || shared.authority?.kind === "live" ? "live" : "draft",
-        sequence: command.sequence ?? -1, sample_ts: 10 };
+      if (command.position && command.orientation) shared.targets = [{domain: "navigation", position: command.position, orientation: command.orientation,
+        revision: (shared.targets[0]?.revision ?? 0) + 1, phase: command.kind === "live" || shared.authority?.kind === "live" ? "live" : "draft",
+        sequence: command.sequence ?? -1, sample_ts: 10 }];
       if (shared.authority && command.sequence !== undefined) shared.authority.sequence = command.sequence;
       if (["cancel", "cancel_acquire", "confirm", "release"].includes(command.action)) {
         if (command.action === "release" && shared.authority?.kind === "navigation_planning") shared.authority.held = false;
         else {
           if (shared.authority?.kind === "joystick") this.nativeJoystick.push({ linear: [0,0,0], angular: [0,0,0] });
           shared.authority = null;
-          if (shared.target && ["confirm", "release"].includes(command.action)) shared.target.phase = "committed";
+          if (shared.targets[0] && ["confirm", "release"].includes(command.action)) shared.targets[0].phase = "committed";
         }
       }
       shared.revision++;
     }
     this.receive({ type: "interaction_result", request_id: command.request_id, epoch: shared.epoch,
       revision: shared.revision, status, code, ...(shared.authority ? { lease_id: shared.authority.lease_id } : {}) });
+    shared.targets = shared.targets[0] ? [shared.targets[0]] : [];
     this.receive(shared);
   }
   result(position = [0, 0, 0]) {
@@ -69,8 +75,15 @@ class Socket {
   close() { this.readyState = 3; }
   open() { this.readyState = 1; this.onopen?.(new Event("open")); }
   receive(message: object) {
+    const goal = message as { type?: string; preview?: boolean };
+    if (goal.type === "nav_goal") {
+      this.interaction = { ...this.interaction, revision: this.interaction.revision + 1,
+        [goal.preview ? "preview" : "active_goal"]: message };
+      message = this.interaction;
+    }
     this.onmessage?.({ data: JSON.stringify(message) + "\n" } as MessageEvent);
     if ((message as { type?: string }).type === "hello") this.receive(this.interaction);
+    this.afterReceive();
   }
   acknowledgeLidar() {
     const { type: _type, ...lidar } = this.commands("lidar_settings_request").at(-1);
@@ -79,12 +92,17 @@ class Socket {
   commands(type: string) { return this.sent.filter((value): value is string => typeof value === "string").map(value => JSON.parse(value)).filter(value => value.type === type); }
 }
 const hello: Hello = {
+  resume_token: "fixture-resume",
+  odom_reference_id: "fixture-odom",
+  localization: { providers: ["fiducial_marker"] },
   type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "webxr", time_sync: { ts_client: 10, ts_server: 10 },
-  robot: { display_name: "Go2", body_bounds_m: [0.7, 0.5, 0.55], footprint_m: [0.7, 0.3], base_height_m: 0.33 },
+  robot: { odom_scale_correction_factor: 1, display_name: "Go2", body_bounds_m: [0.7, 0.5, 0.55], footprint_m: [0.7, 0.3], base_height_m: 0.33 },
   capabilities: {
+    manipulation: { available: false, reason: "No arm" },
+    object_detection: { available: false, reason: "No detector" },
     lidar: { available: true, reason: null }, localization: { available: true, reason: null },
     estop: { available: true, reason: null }, agent: { available: true, reason: null },
-    navigation: { available: true, reason: null, nav_goal: { available: true, reason: null }, nav_joystick: { available: true, reason: null } },
+    navigation: { available: true, reason: null, nav_goal: { preview: false, available: true, reason: null }, nav_joystick: { available: true, reason: null } },
   },
 };
 const state: State = {
@@ -94,7 +112,7 @@ const state: State = {
 };
 const pose = { position: [0, 0.5, 0], orientation: [0, 0, 0, 1] } as const;
 const alignment = { type: "localization_result", position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 10 };
-const request = { type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: "any_angle", observation_count: 1 };
+const request = { result_timeout_s: 15, type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: "any_angle", observation_count: 1 };
 const cleanup: (() => void)[] = [];
 afterEach(() => { cleanup.splice(0).forEach(dispose => dispose()); });
 function fixture(recognition: RecognitionPort | null = null, odomScale = 1, synthesis: SynthesisPort | null = null) {
@@ -108,9 +126,15 @@ function fixture(recognition: RecognitionPort | null = null, odomScale = 1, synt
       if (url.endsWith("/bulk")) {
         const control = sockets.at(-1)!; control.bulk = pairedBulkSocket(data => control.uploaded.push(data)); return control.bulk;
       }
-      const socket = new Socket(); sockets.push(socket); return socket as unknown as WebSocket;
+      const socket = new Socket(); socket.afterReceive = pump; sockets.push(socket); return socket as unknown as WebSocket;
     } }),
   });
+  let pumping = false;
+  function pump() {
+    if (pumping) return;
+    pumping = true;
+    try { client.session.tick(); } finally { pumping = false; }
+  }
   cleanup.push(() => client.dispose());
   client.start();
   const tick = (axes: { x: number; y: number } | null = null) => client.tick({ position: [...pose.position], orientation: [...pose.orientation] }, axes);
@@ -131,7 +155,7 @@ function submitAlignment(client: DimOSWebXRClient, timestamp: number) {
     ts_capture: timestamp, jpeg: new Uint8Array([1]),
     intrinsics: { fx: 1, fy: 1, cx: 0, cy: 0, width: 1, height: 1, distortion_model: "none", distortion: [] },
     camera_position: [0, 0, 0], camera_orientation: [0, 0, 0, 1],
-  }]);
+  }], 15);
 }
 async function settle() { for (let i = 0; i < 30; i++) await Promise.resolve(); }
 
@@ -463,11 +487,14 @@ it("excludes the arm handle from ray picking while another client owns control",
   const f = fixture();
   const socket = f.connect({ ...hello.capabilities, manipulation: { available: true, reason: null } });
   const shared: InteractionState = {
+    targets: [],
+    motion_busy: false,
+    following_tail: null,
     type: "interaction_state", epoch: "fixture-robot", revision: 100, mode: "manual",
     authority: { client_id: "other", source_id: "hand", acquisition_id: "other-grab",
       lease_id: "other-lease", kind: "manipulation_following", group_id: "arm",
       held: true, expires_at: 1000, sequence: 0 },
-    target: null, preview: null, active_goal: null,
+     preview: null, active_goal: null,
   };
   const collider = f.client.manipulation.renderer.handle.collider;
   const intersections = () => {

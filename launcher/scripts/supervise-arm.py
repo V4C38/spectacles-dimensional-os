@@ -20,7 +20,7 @@ async def prepare_shutdown() -> None:
         async with asyncio.timeout(60):
             async with connect("ws://127.0.0.1:8787", max_size=64 * 1024) as ws:
                 await ws.send(
-                    json.dumps({"type": "hello_request", "ts_client": time.time()})
+                    json.dumps({"type": "hello_request", "protocol_version": 2, "ts_client": time.time()})
                 )
                 hello = False
                 state = None
@@ -35,28 +35,27 @@ async def prepare_shutdown() -> None:
                             if message.get("protocol_version") != 2:
                                 raise ValueError("shutdown requires protocol v2")
                             hello = True
-                            if message.get("bulk_url") and message.get("bulk_token"):
-                                from urllib.parse import urljoin
+                            from urllib.parse import urljoin
 
-                                async def hold_bulk(info=message):
-                                    url = urljoin(
-                                        "ws://127.0.0.1:8787/", info["bulk_url"]
-                                    )
-                                    async with connect(url, max_size=64 * 1024) as bulk:
-                                        await bulk.send(
-                                            json.dumps(
-                                                {
-                                                    "type": "bulk_hello_request",
-                                                    "protocol_version": 2,
-                                                    "client_id": info["client_id"],
-                                                    "token": info["bulk_token"],
-                                                }
-                                            )
+                            async def hold_bulk(info=message):
+                                url = urljoin(
+                                    "ws://127.0.0.1:8787/", info["bulk_url"]
+                                )
+                                async with connect(url, max_size=64 * 1024) as bulk:
+                                    await bulk.send(
+                                        json.dumps(
+                                            {
+                                                "type": "bulk_hello_request",
+                                                "protocol_version": 2,
+                                                "client_id": info["client_id"],
+                                                "token": info["bulk_token"],
+                                            }
                                         )
-                                        async for _record in bulk:
-                                            pass  # Visual assets are not needed for parking.
+                                    )
+                                    async for _record in bulk:
+                                        pass  # Visual assets are not needed for parking.
 
-                                bulk_task = asyncio.create_task(hold_bulk())
+                            bulk_task = asyncio.create_task(hold_bulk())
                         elif message.get("type") == "interaction_state":
                             state = message
                         elif message.get("type") == "manipulation_state":

@@ -69,7 +69,6 @@ export class WebXRRobotPresenter {
   private lastOrigin: ClientTrackingOrigin | null = null;
   private floorOffset: Vec3 = [0, 0, 0];
   private unlocalizedCommitted = false;
-  private labelKey = "";
 
   constructor() {
     this.object = new THREE.Group();
@@ -269,9 +268,6 @@ export class WebXRRobotPresenter {
     const title = String(this.object.userData.title || "Robot");
     const status = info.activity;
     const message = String(this.object.userData.coordinates ?? "");
-    const labelKey = [title, status, message, info.tone].join("\n");
-    if (labelKey === this.labelKey) return;
-    this.labelKey = labelKey;
     (this.labelGroup as RobotMarkerLabel).setFeedback(
       title,
       status,

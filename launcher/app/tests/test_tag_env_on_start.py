@@ -9,7 +9,6 @@ import pytest
 
 from armodule import ProcessManager
 from config import env_path, merge_env
-from dimos_config import merge_armodule_config
 from tag_config import DEFAULT_MOUNT, armodule_config_from_ui
 
 
@@ -125,14 +124,12 @@ async def test_start_armodule_defaults_log_level_to_info(tmp_path: Path) -> None
 @pytest.mark.asyncio
 async def test_start_armodule_rejects_incomplete_vps(tmp_path: Path) -> None:
     _scripts(tmp_path)
-    merge_armodule_config(
-        armodule_config_from_ui(
+    configuration = armodule_config_from_ui(
             fiducial_marker=False,
             vps=True,
             map_code="",
             mounts=[DEFAULT_MOUNT],
         )
-    )
     mgr = ProcessManager(root=tmp_path)
     with pytest.raises(ValueError, match="VPS is enabled"):
-        await mgr.start_armodule(blueprint="unitree_go2_ar", client="specs")
+        await mgr.start_armodule(blueprint="unitree_go2_ar", client="specs", armodule_config=configuration)

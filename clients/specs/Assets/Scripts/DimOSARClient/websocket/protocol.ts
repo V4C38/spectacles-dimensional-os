@@ -71,8 +71,6 @@ export class TextFramer {
 export function encodeHelloRequest(request: { ts_client: number; resume_token?: string }): string {
   return encodeText({
     type: "hello_request",
-    resumable: true,
-    server_follow_stream: true,
     ...(request.resume_token ? { resume_token: request.resume_token } : {}),
     protocol_version: 2,
     ts_client: finiteNumber(request.ts_client, "ts_client"),
@@ -96,7 +94,7 @@ export function encodeNavGoalRequest(request: {
   preview_id?: string;
   position: Vec3;
   orientation: Quat;
-  epoch?: string; lease_id?: string; sequence?: number;
+  epoch: string; lease_id: string; sequence: number;
 }): string {
   if (request.preview !== undefined && typeof request.preview !== "boolean") throw new Error("Field 'preview' must be boolean");
   if (request.preview_id !== undefined && request.preview !== true) throw new Error("preview_id requires preview: true");
@@ -113,7 +111,7 @@ export function encodeNavJoystickRequest(command: {
   linear: Vec3;
   angular: Vec3;
   duration?: number;
-  epoch?: string; lease_id?: string; sequence?: number;
+  epoch: string; lease_id: string; sequence: number;
 }): string {
   const linear = requireVec3Value(command.linear, "linear");
   const angular = requireVec3Value(command.angular, "angular");
@@ -252,8 +250,6 @@ export function decodeOutboundObject(data: Record<string, unknown>): Exclude<Out
       return decodeLocalizationStatus(data);
     case "pose":
       return decodePose(data);
-    case "nav_goal":
-      return decodeNavGoal(data, data.route_ref !== undefined);
     case "agent_message":
       return decodeAgentMessage(data);
     case "agent_skill":
@@ -500,8 +496,6 @@ function decodePlayback(data: Record<string, unknown>): NonNullable<State["playb
 }
 
 function decodeHello(data: Record<string, unknown>): Hello {
-  if (data.independent_ik !== undefined && typeof data.independent_ik !== "boolean")
-    throw new Error("independent_ik must be boolean");
   const timeSyncRaw = asObject(requireKey(data, "time_sync"), "time_sync");
   const time_sync: TimeSync = {
     ts_client: finiteField(timeSyncRaw, "ts_client"),
@@ -513,16 +507,14 @@ function decodeHello(data: Record<string, unknown>): Hello {
   return {
     type: "hello",
     ...(data.source === undefined ? {} : { source: decodeSource(asObject(data.source, "source")) }),
-    ...(data.localization === undefined ? {} : { localization: decodeLocalizationProviders(asObject(data.localization, "localization")) }),
+    localization: decodeLocalizationProviders(asObject(requireKey(data, "localization"), "localization")),
     protocol_version: 2,
     bulk_url: requireString(data, "bulk_url"),
     bulk_token: requireString(data, "bulk_token"),
     bulk_epoch: requireString(data, "bulk_epoch"),
     client_id: requireString(data, "client_id"),
-    ...(data.server_follow_stream === true ? { server_follow_stream: true } : {}),
-    ...(data.independent_ik === true ? { independent_ik: true } : {}),
-    ...(data.resume_token === undefined ? {} : { resume_token: requireString(data, "resume_token") }),
-    ...(data.odom_reference_id === undefined ? {} : { odom_reference_id: requireString(data, "odom_reference_id") }),
+    resume_token: requireString(data, "resume_token"),
+    odom_reference_id: requireString(data, "odom_reference_id"),
     ...(data.server_info === undefined ? {} : { server_info: decodeServerInfo(asObject(data.server_info, "server_info")) }),
     time_sync,
     robot: decodeRobot(asObject(requireKey(data, "robot"), "robot")),
@@ -553,9 +545,8 @@ function decodeServerInfo(data: Record<string, unknown>): { robot_ip?: string; d
 
 function decodeRobot(data: Record<string, unknown>): RobotDescription {
   const footprint = requireNumberArray(data, "footprint_m", 2);
-  const scale = data.odom_scale_correction_factor === undefined
-    ? undefined : finiteField(data, "odom_scale_correction_factor");
-  if (scale !== undefined && scale <= 0) {
+  const scale = finiteField(data, "odom_scale_correction_factor");
+  if (scale <= 0) {
     throw new Error("robot.odom_scale_correction_factor must be finite and positive");
   }
   return {
@@ -563,14 +554,13 @@ function decodeRobot(data: Record<string, unknown>): RobotDescription {
     body_bounds_m: requireVec3(data, "body_bounds_m"),
     footprint_m: [footprint[0], footprint[1]],
     base_height_m: finiteField(data, "base_height_m"),
-    ...(scale === undefined ? {} : { odom_scale_correction_factor: scale }),
+    odom_scale_correction_factor: scale,
   };
 }
 
 function decodeCapabilities(data: Record<string, unknown>): Capabilities {
   const capabilities = {} as Capabilities;
   for (const name of CAPABILITY_NAMES) {
-    if ((name === "manipulation" || name === "object_detection") && !(name in data)) continue;
     if (!(name in data)) {
       throw new Error(`Missing required field: capabilities.${name}`);
     }
@@ -588,7 +578,7 @@ function decodeNavigationCapability(raw: unknown): NavigationCapability {
   const base = decodeCapability(raw, "navigation");
   return {
     ...base,
-    nav_goal: { ...decodeCapability(data.nav_goal, "navigation.nav_goal"), preview: optionalBoolean(asObject(data.nav_goal, "navigation.nav_goal"), "preview") },
+    nav_goal: { ...decodeCapability(data.nav_goal, "navigation.nav_goal"), preview: requireBoolean(asObject(data.nav_goal, "navigation.nav_goal"), "preview") },
     nav_joystick: decodeCapability(data.nav_joystick, "navigation.nav_joystick"),
   };
 }
@@ -695,8 +685,8 @@ function decodeLocalizationObservationsRequest(
   if (observationCount < 1) {
     throw new Error(`observation_count must be at least 1, got ${observationCount}`);
   }
-  const resultTimeoutS = data.result_timeout_s === undefined ? undefined : finiteField(data, "result_timeout_s");
-  if (resultTimeoutS !== undefined && resultTimeoutS <= 0) {
+  const resultTimeoutS = finiteField(data, "result_timeout_s");
+  if (resultTimeoutS <= 0) {
     throw new Error("result_timeout_s must be finite and positive");
   }
   const episode = data.episode_id === undefined ? {} : {
@@ -704,10 +694,10 @@ function decodeLocalizationObservationsRequest(
     purpose: requireString(data, "purpose") as "robot" | "headset",
   };
   if ("purpose" in episode && episode.purpose !== "robot" && episode.purpose !== "headset") throw new Error("invalid capture purpose");
-  const captureId = data.capture_id === undefined ? undefined : boundedString(data, "capture_id");
-  if (captureId !== undefined && !captureId.trim()) throw new Error("invalid capture_id");
-  const capture = captureId === undefined ? {} : { capture_id: captureId };
-  const resultTimeout = { ...episode, ...capture, ...(resultTimeoutS === undefined ? {} : { result_timeout_s: resultTimeoutS }) };
+  const captureId = boundedString(data, "capture_id");
+  if (!captureId.trim()) throw new Error("invalid capture_id");
+  const capture = { capture_id: captureId };
+  const resultTimeout = { ...episode, ...capture, result_timeout_s: resultTimeoutS };
   const hasTimeout = Object.prototype.hasOwnProperty.call(data, "wait_timeout_s");
   if (capturePolicy === "robot_los_preferred") {
     if (!hasTimeout) {
@@ -1002,8 +992,7 @@ function asciiBytes(text: string): Uint8Array {
   return out;
 }
 
-function interactionCredentials(value: Partial<InteractionCredentials>): Partial<InteractionCredentials> {
-  if (value.epoch === undefined && value.lease_id === undefined && value.sequence === undefined) return {};
+function interactionCredentials(value: InteractionCredentials): InteractionCredentials {
   if (!value.epoch || !value.lease_id || !Number.isInteger(value.sequence) || value.sequence! < 0) throw new Error("Invalid interaction authority credentials");
   return { epoch: value.epoch, lease_id: value.lease_id, sequence: value.sequence };
 }
@@ -1023,15 +1012,14 @@ function decodeInteractionState(data: Record<string, unknown>): InteractionState
       expires_at: finiteField(a, "expires_at"), sequence: interactionSequence(a),
       ...(a.group_id == null ? {} : { group_id: requireString(a, "group_id") }) };
   }
-  const target = data.target === null ? null : decodeInteractionTarget(asObject(data.target, "target"));
-  const targets = data.targets === undefined ? undefined : (() => {
+  const targets = (() => {
     if (!Array.isArray(data.targets)) throw new Error("targets must be an array");
     return data.targets.map(t => decodeInteractionTarget(asObject(t, "target")));
   })();
   return { type: "interaction_state", epoch: requireString(data, "epoch"), revision: nonnegativeInteger(data, "revision"),
-    mode, authority, target, ...(targets ? { targets } : {}), preview: data.preview == null ? null : decodeNavGoal(asObject(data.preview, "preview")),
-    ...(data.motion_busy === undefined ? {} : { motion_busy: requireBoolean(data, "motion_busy") }),
-    ...(data.following_tail === undefined ? {} : { following_tail: decodeFollowingTail(data.following_tail) }),
+    mode, authority, targets, preview: data.preview == null ? null : decodeNavGoal(asObject(data.preview, "preview")),
+    motion_busy: requireBoolean(data, "motion_busy"),
+    following_tail: decodeFollowingTail(requireKey(data, "following_tail")),
     active_goal: data.active_goal == null ? null : decodeNavGoal(asObject(data.active_goal, "active_goal"), true) };
 }
 function decodeInteractionResult(data: Record<string, unknown>): InteractionResult {
@@ -1055,15 +1043,15 @@ function interactionSequence(data: Record<string, unknown>): number { const n = 
 function decodeInteractionTarget(a: Record<string, unknown>): InteractionTarget {
   const phase = requireString(a, "phase");
   if (!["draft", "live", "committed"].includes(phase)) throw new Error("Invalid target phase");
-  const domain = a.domain === undefined ? undefined : requireString(a, "domain");
-  if (domain !== undefined && domain !== "navigation" && domain !== "manipulation") throw new Error("Invalid target domain");
+  const domain = requireString(a, "domain");
+  if (domain !== "navigation" && domain !== "manipulation") throw new Error("Invalid target domain");
   const speed = a.speed_scale === undefined ? undefined : finiteField(a, "speed_scale");
   const gripper = a.gripper === undefined ? undefined : finiteField(a, "gripper");
   if (speed !== undefined && (speed <= 0 || speed > 1) || gripper !== undefined && (gripper < 0 || gripper > 1)) throw new Error("Invalid target settings");
   return { position: requireVec3(a, "position"), orientation: requireQuat(a, "orientation"),
     revision: nonnegativeInteger(a, "revision"), phase: phase as InteractionTarget["phase"],
     sample_ts: finiteField(a, "sample_ts"), sequence: interactionSequence(a),
-    ...(domain ? { domain: domain as InteractionTarget["domain"] } : {}),
+    domain: domain as InteractionTarget["domain"],
     ...(a.group_id === undefined ? {} : { group_id: requireString(a, "group_id") }),
     ...(speed === undefined ? {} : { speed_scale: speed }), ...(gripper === undefined ? {} : { gripper }) };
 }

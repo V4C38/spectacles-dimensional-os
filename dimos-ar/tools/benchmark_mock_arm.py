@@ -18,7 +18,7 @@ else:
 
 
 async def benchmark(url, repeats=3):
-    async with mock_runtime(url, server_follow_stream=True) as (client, state):
+    async with mock_runtime(url) as (client, state):
         home = state["observations"][client.group]["pose"]
         target = {**home, "position": [home["position"][0] + 0.04, *home["position"][1:]]}
 
@@ -63,8 +63,6 @@ async def benchmark(url, repeats=3):
                         await client.update_target(target, speed_scale=speed)
                         await asyncio.sleep(1 / 30)
                     arrival = time.monotonic() - started
-                    released = await client.command("release", token=acquired["token"])
-                    assert released["status"] == "released", released
                     await client.release()
                     await client.wait(lambda: not client.shared["motion_busy"])
                 results.append({"speed": speed, "mode": mode, "arrival": arrival})

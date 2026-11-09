@@ -133,33 +133,6 @@ find_python_for_venv() {
   return 1
 }
 
-_color_enabled() {
-  local fd="$1"
-  if [[ -t "${fd}" ]]; then
-    return 0
-  fi
-  case "${DIMOS_AR_FORCE_COLOR:-}" in
-    ""|0|false|FALSE|False) return 1 ;;
-    *) return 0 ;;
-  esac
-}
-
-print_green() {
-  if _color_enabled 1; then
-    printf '\033[32m%s\033[0m\n' "$1"
-  else
-    printf '%s\n' "$1"
-  fi
-}
-
-print_red() {
-  if _color_enabled 1; then
-    printf '\033[31m%s\033[0m\n' "$1"
-  else
-    printf '%s\n' "$1"
-  fi
-}
-
 run_check() {
   echo "Starting setup check…"
   local dimos_py=""
@@ -229,9 +202,9 @@ PY
   fi
   echo "dimos-ar: ${ar_status}"
   if openai_api_key_is_set "${ROOT}"; then
-    print_green "OPENAI_API_KEY = true"
+    print_color 1 32 "OPENAI_API_KEY = true"
   else
-    print_red "OPENAI_API_KEY = false"
+    print_color 1 31 "OPENAI_API_KEY = false"
   fi
   echo "CHECK_OK=${check_ok}"
   if [[ -n "${dimos_py}" ]]; then
@@ -245,10 +218,10 @@ PY
   fi
 
   if [[ "${check_ok}" -eq 1 ]]; then
-    print_green "Setup check successful"
+    print_color 1 32 "Setup check successful"
     exit 0
   fi
-  print_red "Setup check failed"
+  print_color 1 31 "Setup check failed"
   exit 1
 }
 
@@ -317,18 +290,6 @@ checkout_dimos_ref() {
   git -C "${dimos_dir}" checkout "${ref}" 1>&2
 }
 
-install_dimos_editable() {
-  local dimos_dir="$1"
-  local target_python="$2"
-  echo "Installing DimOS from source (editable) into: ${target_python}" >&2
-  (
-    cd "${dimos_dir}"
-    local dimos_extras="base,unitree"
-    if [[ "${FLAG_MANIPULATION}" -eq 1 ]]; then dimos_extras="planning"; fi
-    python_pip_install "${target_python}" -e ".[${dimos_extras}]" 1>&2
-  )
-}
-
 install_dimos_from_clone() {
   local dimos_dir="$1"
   local bootstrap_python="$2"
@@ -338,8 +299,8 @@ install_dimos_from_clone() {
   if [[ ! -x "${dimos_python}" ]]; then
     "${bootstrap_python}" -m venv "${dimos_dir}/.venv"
   fi
-  install_dimos_editable "${dimos_dir}" "${dimos_python}"
-  printf '%s\n' "${dimos_python}"
+  DIMOS_INSTALL_SOURCE="${dimos_dir}"
+  DIMOS_ENV_PYTHON="${dimos_python}"
 }
 
 resolve_dimos_python() {
@@ -367,7 +328,7 @@ resolve_dimos_python() {
         exit 1
       fi
     fi
-    printf '%s\n' "${FLAG_DIMOS_PYTHON}"
+    DIMOS_ENV_PYTHON="${FLAG_DIMOS_PYTHON}"
     return 0
   fi
 
@@ -383,7 +344,7 @@ resolve_dimos_python() {
 
   if [[ "${NON_INTERACTIVE}" -eq 1 ]]; then
     if found="$(find_dimos_python "${ROOT}")"; then
-      printf '%s\n' "${found}"
+      DIMOS_ENV_PYTHON="${found}"
       return 0
     fi
     print_dimos_python_help "${ROOT}"
@@ -394,14 +355,13 @@ resolve_dimos_python() {
     if found="$(find_dimos_python "${ROOT}")"; then
       echo "Detected DimOS Python: ${found}" >&2
       if ask_yes_no "Use this interpreter?" "y"; then
-        printf '%s\n' "${found}"
+        DIMOS_ENV_PYTHON="${found}"
         return 0
       fi
     else
       echo "Auto-detection did not find DimOS." >&2
     fi
-    found="$(prompt_for_existing_dimos_python)"
-    printf '%s\n' "${found}"
+    DIMOS_ENV_PYTHON="$(prompt_for_existing_dimos_python)"
     return 0
   fi
 
@@ -419,7 +379,9 @@ echo "Resolving DimOS environment..."
 if [[ -n "${FLAG_DIMOS_REF}" ]]; then
   echo "DimOS ref: ${FLAG_DIMOS_REF}"
 fi
-DIMOS_ENV_PYTHON="$(resolve_dimos_python)"
+DIMOS_INSTALL_SOURCE=""
+DIMOS_ENV_PYTHON=""
+resolve_dimos_python
 
 echo "Using DimOS Python: ${DIMOS_ENV_PYTHON}"
 
@@ -427,13 +389,20 @@ echo "Installing dimos-ar into that environment..."
 (
   cd "${DIMOS_AR_ROOT}"
   extras="dev"
-  if [[ "${FLAG_MANIPULATION}" -eq 1 ]]; then extras="dev,manipulation"; fi
-  if [[ "${FLAG_MANIPULATION}" -eq 1 ]] && selected_source="$("${DIMOS_ENV_PYTHON}" "${ROOT}/launcher/app/planner_install.py" --source)"; then
+  dimos_extras="base,unitree"
+  if [[ "${FLAG_MANIPULATION}" -eq 1 ]]; then
+    extras="dev,manipulation"
+    dimos_extras="planning"
+    if [[ -z "${DIMOS_INSTALL_SOURCE}" ]]; then
+      DIMOS_INSTALL_SOURCE="$("${DIMOS_ENV_PYTHON}" "${ROOT}/launcher/app/planner_install.py" --source || true)"
+    fi
     "${DIMOS_ENV_PYTHON}" "${ROOT}/launcher/app/planner_install.py" --clean-conflicts
-    python_pip_install "${DIMOS_ENV_PYTHON}" -e "${selected_source}[planning]" -e ".[${extras}]"
-  else
-    python_pip_install "${DIMOS_ENV_PYTHON}" -e ".[${extras}]"
   fi
+  requirements=(-e ".[${extras}]")
+  if [[ -n "${DIMOS_INSTALL_SOURCE}" ]]; then
+    requirements+=(-e "${DIMOS_INSTALL_SOURCE}[${dimos_extras}]")
+  fi
+  python_pip_install "${DIMOS_ENV_PYTHON}" "${requirements[@]}"
   if [[ "${FLAG_MANIPULATION}" -eq 1 ]]; then
     "${DIMOS_ENV_PYTHON}" "${ROOT}/launcher/app/planner_check.py"
   fi

@@ -23,12 +23,8 @@ export function gripperJointValues(
       group.joint_names.includes(joint.name)
     )
       continue;
-    const { lower, upper } = joint.limits;
     const mapping = model.gripper_joints?.[joint.name];
-    // Older descriptors use the standard lower-to-upper visual articulation.
-    values[joint.name] = mapping
-      ? mapping.closed + (mapping.open - mapping.closed) * t
-      : lower + (upper - lower) * t;
+    if (mapping) values[joint.name] = mapping.closed + (mapping.open - mapping.closed) * t;
   }
   return values;
 }

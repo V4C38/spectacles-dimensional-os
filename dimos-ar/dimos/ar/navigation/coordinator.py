@@ -3,8 +3,6 @@ from __future__ import annotations
 import threading
 import time
 
-from dimos_lcm.std_msgs import Bool
-
 from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavOutcome, NavState
 from dimos.ar.robot.odometry_correction import correct_odom_path, uncorrect_odom_pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
@@ -20,7 +18,6 @@ class NavGoalCoordinator:
         self._retired_at = 0.0
         self._requested_goal_ts: float | None = None
         self._native_goal_ts: float | None = None
-        self._correlated = False
 
     def nav_state(self) -> NavState:
         with self._lock:
@@ -42,7 +39,6 @@ class NavGoalCoordinator:
             self._outcome = None
             self._retired_at = time.time()
             self._requested_goal_ts = float(goal.ts)
-            self._correlated = True
         return goal
 
     def on_path(self, msg: Path) -> tuple[NavGoalFrame | None, bool]:
@@ -73,15 +69,6 @@ class NavGoalCoordinator:
         with self._lock:
             return bool(timestamp and timestamp > self._retired_at)
 
-    def on_goal_reached(self, msg: Bool) -> bool:
-        with self._lock:
-            if self._correlated:
-                return False
-            self._outcome = "succeeded" if msg.data else "failed"
-            self._following_path = False
-            self._retired_at = time.time()
-            return True
-
     def on_native_status(self, goal_ts: float, phase: str) -> bool:
         with self._lock:
             if self._requested_goal_ts is not None and goal_ts != self._requested_goal_ts:
@@ -91,7 +78,6 @@ class NavGoalCoordinator:
                     return False
                 if self._native_goal_ts is not None and goal_ts < self._native_goal_ts:
                     return False
-                self._correlated = True
                 self._native_goal_ts = goal_ts
                 self._outcome = None
                 return False
@@ -100,7 +86,6 @@ class NavGoalCoordinator:
                 self._native_goal_ts,
             }:
                 return False
-            self._correlated = True
             self._requested_goal_ts = self._native_goal_ts = None
             self._outcome = "succeeded" if phase == "succeeded" else "failed"
             self._following_path = False

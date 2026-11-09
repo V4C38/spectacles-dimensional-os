@@ -24,8 +24,7 @@ source patches are required.
 
 For the launcher, select **openyam_ar_planner**, **WebXR** or **Specs**, a named **OpenYAM**
 profile, and **Simulated** for software development. Profiles are stored in
-`~/.config/dimos/ar-profiles.json`; existing Go2 calibration is migrated into a
-named Go2 profile. Names are editable; stable profile IDs are retained on rename.
+`~/.config/dimos/ar-profiles.json`. Calibration belongs to named profiles. Names are editable; stable profile IDs are retained on rename.
 New OpenYAM profiles copy the bundled OpenYAM Bench preset, including its enabled
 fiducial provider and configured tag mount. Calibration belongs to the selected
 robot instance and can be edited independently for each saved profile. The tag
@@ -44,9 +43,9 @@ DIMOS_AR_SIMULATION=1 \
 This chooses official in-memory hardware, including the configured home pose.
 It does not contact arm hardware. For direct DimOS CLI use,
 `dimos --simulation=mock run dimos-ar.openyam-ar-planner`.
-The launcher exports an immutable per-run snapshot of the selected profile through
-module configuration environment variables; editing a saved profile does not
-modify an existing process. API keys remain in the existing credential settings.
+The launcher writes a mode-0600 temporary native `--config` file for each run,
+preserving non-AR configuration and replacing the AR section with the selected
+profile. Editing a saved profile does not modify an existing process. API keys remain in the existing credential settings.
 
 ## Ownership and interactions
 
@@ -344,7 +343,7 @@ metadata supplies gripper articulation and profile identity independently of URL
 | Behavior | Automated evidence |
 |---|---|
 | Ownership, exact plan IDs, stale replies, cancellation and uncertain stops | Python `test_runtime.py`, ClientCore `ManipulationInteraction.test.ts` |
-| Live coalesced planning, exact release target, retained valid previews | ClientCore interaction tests, browser `Manipulation.spec.ts` |
+| Live coalesced planning, exact release target, retained valid previews | ClientCore interaction tests |
 | Following, IK recovery, lease expiry without polling, input interruption | Python runtime tests, ClientCore interaction tests, browser manipulation scenarios |
 | Immediate/deferred gripper actions and fresh endpoint confirmation | Python runtime tests, ClientCore interaction tests, WebXR kinematics tests |
 | Reset/parking timing, already-zero settling, E-stop preservation and shutdown receipts | Python runtime/service tests and supervisor tests |
@@ -407,8 +406,8 @@ Selected and idle-hovered meshes share a 25% point-opacity floor. Selected hover
 retains the inner fill and adds 10% opacity; unselected hover shows only the
 outline with a 5% opacity boost. Hover leaves line thickness unchanged. Maximum displacement opacity occurs at 100 mm, with
 a 5 mm dead zone. Failure tint remains yellow until the current request validates.
-Both hosts use velocity-preserving critically damped joint presentation: 100 ms
-settling for measured motion and 150 ms for preview targets. Selection, plan
+Both hosts use velocity-preserving Hermite interpolation; interval limits and
+bounded prediction are specified in the protocol. Selection, plan
 updates, and rejection/recovery do not reset this motion. Debug frames
 use raw measured joint angles; preview interpolation is never control feedback.
 
@@ -424,13 +423,13 @@ speed badge. Its default scale is 0.7, with a 0.525 minimum and 1.4 maximum; Pin
 restores its anchored position, rotation and default scale. A dedicated header
 keeps Pin separate from the control rows.
 
-Short feedback loss retains capture and the displayed arm for two seconds while
+Short feedback loss retains capture and the displayed arm for one second while
 pausing Preview and all motion requests. The target still follows the hand. Recovery
 revalidates plans and reacquires following leases without automatically clearing Stop.
 The mini panel defaults to scale 0.875 (25% larger), bounded to 0.65625–1.75; its
 separately anchored robot badge does not scale with it. Presentation uses Hermite
-interpolation capped at 50 ms, finite measured velocities when available, and visual
-prediction bounded to 30 ms. Execution uses raw feedback, with 30 mm / 8° arrival
+interpolation, finite measured velocities when available, and visual prediction
+bounded to 30 ms. Execution uses raw feedback, with 30 mm / 8° arrival
 settled for 500 ms; the deferred gripper must acknowledge before terminal completion.
 
 ## Multi-client protocol v2

@@ -21,7 +21,6 @@ import type {
   CapabilityName,
   Hello,
   Lidar,
-  LocalizationObservationsRequest,
   LocalizationObservation,
   LocalizationResult,
   NavGoal,
@@ -74,7 +73,6 @@ export interface ARModuleSessionDependencies {
 
 type ViewListener = (view: ARModuleSessionState) => void;
 type OutboundListener = (message: Outbound) => void;
-type CaptureRequestListener = (request: LocalizationObservationsRequest) => void;
 type DeferredAsset = { value: Record<string, unknown>; deadline: number; stream: string | null; generation: number; connection: number };
 
 export class ARModuleSession {
@@ -86,7 +84,6 @@ export class ARModuleSession {
   private readonly reconnectDelayS: number;
   private readonly viewListeners: ViewListener[] = [];
   private readonly outboundListeners: OutboundListener[] = [];
-  private readonly captureRequestListeners: CaptureRequestListener[] = [];
 
   private phase: ConnectionPhase = "disconnected";
   private wantConnected = false;
@@ -248,7 +245,7 @@ export class ARModuleSession {
         return;
       }
       const type = /"type"\s*:\s*"([^"]+)"/.exec(line)?.[1];
-      if (this.hello?.server_follow_stream && this.phase === "ready" &&
+      if (this.phase === "ready" &&
           ["state", "pose", "manipulation_state", "interaction_state"].includes(type ?? "")) {
         if (this.pendingControl.has(type!)) this.coalescedControl++;
         this.pendingControl.set(type!, line);
@@ -324,7 +321,7 @@ export class ARModuleSession {
 
   submitLocalizationObservations(
     observations: LocalizationObservation[],
-    timeoutS = AR_MODULE_CLIENT_CONFIG.capture.episode.resultTimeoutS,
+    timeoutS: number,
   ): void {
     if (this.phase !== "ready" || this.hello === null) {
       throw new Error("localization submission requires a ready session");
@@ -345,7 +342,9 @@ export class ARModuleSession {
   localizationResultDeadline(): number | null { return this.resultDeadline; }
 
   assetTransferDeadline(requestId: string): number | null {
-    return this.deferredAssets.get(requestId)?.deadline ?? null;
+    return this.deferredAssets.get(requestId)?.deadline ??
+      [...this.deferredAssets.values()].find(pending =>
+        (pending.value.preview as Record<string, unknown> | null)?.preview_id === requestId)?.deadline ?? null;
   }
 
   cancelLocalizationSubmission(): void {
@@ -356,8 +355,6 @@ export class ARModuleSession {
 
   requestEstop(): void {
     requireCapability(this, "estop");
-    this.invalidateAssetStream("nav_goal:active");
-    this.invalidateAssetStream("nav_goal:preview");
     this.invalidateAssetStream("manipulation_state");
     this.invalidateAssetStream("interaction_state");
     this.collaboration.cancel();
@@ -399,20 +396,16 @@ export class ARModuleSession {
     return addListener(this.outboundListeners, listener);
   }
 
-  subscribeLocalizationObservationsRequest(listener: CaptureRequestListener): () => void {
-    return addListener(this.captureRequestListeners, listener);
-  }
-
   private dispatchText(line: string): void {
     let message: Exclude<Outbound, Lidar>;
     try {
       const value = JSON.parse(line) as Record<string, unknown>;
       this.observeAssetFacts(value);
       const hydrated = this.bulk.hydrate(value);
-      if (hydrated.unavailable && (value.type === "manipulation_result" || value.type === "nav_goal")) {
+      if (hydrated.unavailable && value.type === "manipulation_result") {
         this.retireAssetReply(String(value.request_id ?? value.preview_id ?? value.type), value); return;
       }
-      if (hydrated.pending && (value.type === "manipulation_result" || value.type === "nav_goal" && value.preview)) {
+      if (hydrated.pending && value.type === "manipulation_result") {
         this.deferAssetReply(value, hydrated.deadline); return;
       }
       message = decodeOutboundObject(hydrated.value);
@@ -450,8 +443,8 @@ export class ARModuleSession {
       this.pendingHelloTs = null;
       this.helloDeadline = null;
       this.phase = "ready";
-      const sibling = this.transport.createSibling?.(message.bulk_url);
-      if (sibling) { this.bulk.connect(sibling, message); this.bulk.tick(); }
+      const sibling = this.transport.createSibling(message.bulk_url);
+      this.bulk.connect(sibling, message); this.bulk.tick();
       this.emitOutbound(message);
       this.emitView();
       return;
@@ -486,7 +479,7 @@ export class ARModuleSession {
       if (!this.currentAssetReply(pending)) continue;
       try {
         const hydrated = this.bulk.hydrate(pending.value);
-        if (hydrated.unavailable) { this.retireAssetReply(key, pending.value); continue; }
+        if (hydrated.unavailable && pending.value.type !== "interaction_state") { this.retireAssetReply(key, pending.value); continue; }
         if (hydrated.pending) {
           pending.deadline = hydrated.deadline ?? pending.deadline;
           this.deferredAssets.set(key, pending); continue;
@@ -500,7 +493,6 @@ export class ARModuleSession {
   }
 
   private assetStream(value: Record<string, unknown>): string | null {
-    if (value.type === "nav_goal") return value.preview ? "nav_goal:preview" : "nav_goal:active";
     return value.type === "manipulation_state" || value.type === "interaction_state" ? value.type : null;
   }
 
@@ -528,24 +520,13 @@ export class ARModuleSession {
       const previous = this.collaboration.raw();
       if (previous && value.epoch === previous.epoch && Number(value.revision) <= previous.revision) return;
       if (previous && value.epoch !== previous.epoch) {
-        this.invalidateAssetStream("nav_goal:active");
-        this.invalidateAssetStream("nav_goal:preview");
         this.invalidateAssetStream("manipulation_state");
-      } else {
-        if (value.active_goal === null || !this.sameGoal(value.active_goal, this.collaboration.navigation().active_goal)) this.invalidateAssetStream("nav_goal:active");
-        if (value.preview === null || !this.sameGoal(value.preview, this.collaboration.navigation().preview)) this.invalidateAssetStream("nav_goal:preview");
       }
     }
     if (stream) this.invalidateAssetStream(stream);
     // Native action results remain request-correlated across newer state snapshots.
     // A later result for the same request still supersedes its pending asset reply.
     if (value.request_id !== undefined) this.deferredAssets.delete(String(value.request_id));
-  }
-
-  private sameGoal(value: unknown, current: NavGoal | null): boolean {
-    if (!value || typeof value !== "object" || !current) return value === null && current === null;
-    const goal = value as Record<string, unknown>;
-    return goal.ts === current.ts && goal.preview_id === current.preview_id && JSON.stringify(goal.pose) === JSON.stringify(current.pose);
   }
 
   private retireAssetReply(key: string, value: Record<string, unknown>): void {
@@ -556,10 +537,6 @@ export class ARModuleSession {
       const rejected = { ...value, status: "rejected", code: "asset_unavailable", message: detail };
       for (const field of ["plan_id", "plan_ref", "trajectory", "joint_names", "duration"]) delete (rejected as Record<string, unknown>)[field];
       this.applyReadyMessage(decodeOutboundObject(rejected) as Exclude<Outbound, Lidar | Hello>);
-    } else if (value.type === "nav_goal") {
-      const empty: Record<string, unknown> = { ...value, path_poses: [] };
-      if (value.preview) delete empty.pose;
-      this.applyReadyMessage(decodeOutboundObject(empty) as Exclude<Outbound, Lidar | Hello>);
     }
     this.emitView();
   }
@@ -582,9 +559,6 @@ export class ARModuleSession {
         break;
       case "pose":
         this.pose = message;
-        break;
-      case "nav_goal":
-        this.collaboration.applyNavigation(message);
         break;
       case "localization_context":
         if (message.odom_reference_id !== this.hello?.odom_reference_id) return;
@@ -618,7 +592,6 @@ export class ARModuleSession {
         this.cancelLocalizationSubmission();
         this.captureEpisodeId = message.episode_id ?? null;
         this.captureId = message.capture_id ?? null;
-        this.emitCaptureRequest(message);
         this.emitOutbound(message);
         this.emitView();
         return;
@@ -741,11 +714,7 @@ export class ARModuleSession {
     }
   }
 
-  private emitCaptureRequest(request: LocalizationObservationsRequest): void {
-    for (const listener of this.captureRequestListeners) {
-      listener(request);
-    }
-  }
+
 }
 
 export function requireCapability(session: Pick<ARModuleSession, "view">, name: CapabilityName): void {

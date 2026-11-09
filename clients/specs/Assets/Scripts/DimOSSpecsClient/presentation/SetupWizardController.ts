@@ -76,7 +76,7 @@ export interface SetupWizardControllerDeps {
   panel: SceneObject;
   cameraObject?: SceneObject;
   script: ScriptComponent;
-  session: Pick<ARModuleSession, "view" | "start" | "stop">;
+  session: Pick<ARModuleSession, "view" | "start" | "stop" | "subscribeView">;
   episode: LocalizationCaptureEpisode;
   transport: Pick<SpecsWebSocketTransport, "setUrl">;
   clientTrackingOriginStore: ClientTrackingOriginStore;
@@ -469,7 +469,7 @@ export class SetupWizardController {
     this.refreshRobotBadge();
     const sessionView = this.deps.session.view();
     const episodeView = this.deps.episode.view();
-    const kind = localizationKind(sessionView, episodeView.capturePolicy);
+    const kind = localizationKind(sessionView);
     this.view.setCaptureLayout?.(kind !== "unavailable" && !episodeView.lastError);
     this.view.setLocalizationProvider?.(localizationProviderLabel(kind));
     this.view.setMarkerGuide?.(kind === "marker" || kind === "mixed");

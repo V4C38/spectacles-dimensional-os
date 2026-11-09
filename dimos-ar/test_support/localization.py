@@ -4,17 +4,10 @@ from collections.abc import Sequence
 from types import SimpleNamespace
 from weakref import WeakKeyDictionary
 
-import numpy as np
-
 from dimos.ar.localization.coordinator import LocalizationCoordinator
-from dimos.ar.localization.odom_map_transform import OdomMapTransform
 from dimos.ar.localization.policy import LocalizationPolicy
 from dimos.ar.localization.pose_buffer import PoseBuffer
 from dimos.ar.localization.types import Intrinsics, LocalizedPose, Observation
-from dimos.ar.localization.vps.robot_observation_buffer import (
-    RobotObservationBuffer,
-    RobotObservationSample,
-)
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
@@ -52,18 +45,7 @@ def _coordinator(
     *,
     providers: list[str],
     marker: _FixedLocalizer | None = None,
-    vps: _FixedLocalizer | None = None,
-    robot_sample: RobotObservationSample | None = None,
 ) -> LocalizationCoordinator:
-    policy = LocalizationPolicy(providers)
-    odom_map_transform = OdomMapTransform()
-    robot_observations = RobotObservationBuffer(
-        pose_buffer=PoseBuffer(),
-        T_base_camera_optical=np.eye(4),
-    )
-    if robot_sample is not None:
-        robot_observations._samples.append(robot_sample)
-
     class Marker:
         def snapshot(self):
             return self
@@ -73,12 +55,7 @@ def _coordinator(
             return marker.result
 
     return LocalizationCoordinator(
-        policy=policy,
-        odom_map_transform=odom_map_transform,
-        robot_observations=robot_observations,
         marker=Marker() if marker is not None else None,
-        vps=vps,
-        map_code="office",
         clock=lambda: 3.0,
     )
 

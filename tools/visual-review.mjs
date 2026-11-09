@@ -3,6 +3,7 @@
 import { readdir, readFile, access } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
+import { catalog } from "./integration-tests/catalog.mjs";
 
 export async function makeVisualReviews(resultsRoot, runNames = null) {
   const root = resolve(resultsRoot);
@@ -137,13 +138,6 @@ export async function makeVisualReviews(resultsRoot, runNames = null) {
         ],
         { stdio: "inherit" },
       );
-    } else if (entry.name.startsWith("LidarReview-")) {
-      output = join(directory, "lidar-review.mp4");
-      execFileSync(
-        "ffmpeg",
-        ["-y", "-loglevel", "error", "-i", input, ...encode, output],
-        { stdio: "inherit" },
-      );
     }
     if (output && standard) {
       const probe = JSON.parse(
@@ -163,7 +157,11 @@ export async function makeVisualReviews(resultsRoot, runNames = null) {
       );
       const duration = Number(probe.format.duration);
       const [minimum, maximum] =
-        review.profile === "golden" ? [90, 120] : [20, 30];
+        review.profile === "golden"
+          ? review.client === "webxr"
+            ? [catalog.golden.webxrMinDurationS, catalog.golden.webxrMaxDurationS]
+            : [catalog.golden.minDurationS, catalog.golden.maxDurationS]
+          : [catalog.video.controllerMinDurationS, catalog.video.controllerMaxDurationS];
       if (duration < minimum - 0.1 || duration > maximum + 0.1)
         throw new Error(
           `${review.profile} video is ${duration.toFixed(2)}s; expected ${minimum}–${maximum}s`,

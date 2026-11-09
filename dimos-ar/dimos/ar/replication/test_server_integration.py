@@ -33,7 +33,7 @@ async def receive(ws, kind, request_id=None):
 
 async def connect(url):
     ws = await websockets.connect(url)
-    await ws.send(json.dumps({"type": "hello_request", "ts_client": 1.0}))
+    await ws.send(json.dumps({"type": "hello_request", "protocol_version": 2, "ts_client": 1.0}))
     hello = await receive(ws, "hello")
     state = await receive(ws, "interaction_state")
     return ws, hello["client_id"], state
@@ -119,7 +119,7 @@ async def test_selected_planner_excludes_second_socket_and_shared_target_survive
         )
         assert released["status"] == "accepted" and not goals
         shared = await receive(b, "interaction_state")
-        while shared["target"]["position"] != [3, 4, 0]:
+        while shared["targets"][0]["position"] != [3, 4, 0]:
             shared = await receive(b, "interaction_state")
         assert shared["authority"]["client_id"] == actor_a and not shared["authority"]["held"]
         assert (await send(b, "another-grab-b", "acquire", initial, kind="navigation_planning"))[
@@ -139,8 +139,8 @@ async def test_selected_planner_excludes_second_socket_and_shared_target_survive
         c, _, snapshot = await connect(url)
         try:
             assert snapshot["authority"] is None
-            assert snapshot["target"]["position"] == [3, 4, 0]
-            assert snapshot["target"]["phase"] == "committed"
+            assert snapshot["targets"][0]["position"] == [3, 4, 0]
+            assert snapshot["targets"][0]["phase"] == "committed"
             assert snapshot["active_goal"]["pose"][:3] == [3, 4, 0]
         finally:
             await c.close()

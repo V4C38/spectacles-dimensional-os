@@ -42,7 +42,7 @@ export class Flow {
     condition: () => Promise<unknown>,
     options: { screenshotOffsetS?: number; durationS?: number } = {},
   ): Promise<void> {
-    const chapter = shared.golden.chapters.find((row: any) => row.id === id);
+    const chapter = shared.golden.webxrChapters.find((row: any) => row.id === id);
     const at = (Date.now() - this.epoch) / 1000;
     let screenshotAt = at;
     try {

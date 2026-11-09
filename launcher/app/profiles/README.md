@@ -20,3 +20,11 @@ The reference measured tag yaw is about -0.4944 degrees;
 the reusable default uses zero yaw for a square-aligned tag. If reusing that exact
 measured placement without realigning the printed tag, set the profile's yaw to
 -0.4944 degrees. Measure and adjust a saved profile when your placement differs.
+
+
+Calibration is read only from named profiles in `~/.config/dimos/ar-profiles.json`.
+The launcher does not import the native global `armodule` section, rename existing
+profiles, or copy credentials from a repository-root `.env`. Credentials belong in
+`launcher/.env`; source choices belong in `ar-launcher.json`. Existing files are
+left in place. Each run uses an immutable native config snapshot that replaces its
+AR section with the selected profile and preserves other DimOS configuration.

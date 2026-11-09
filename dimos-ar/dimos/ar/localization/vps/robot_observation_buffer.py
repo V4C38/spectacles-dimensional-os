@@ -20,10 +20,8 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 DEFAULT_MAXLEN = 3
-DEFAULT_STATIC_SPEED_MPS = 0.05
 DEFAULT_MAX_TRAVEL_M = 1.0
 DEFAULT_MAX_AGE_S = 2.0
-DEFAULT_TIMING_UNCERTAINTY_S = 0.5
 DEFAULT_STATIC_ANGULAR_RPS = 0.05
 
 
@@ -41,29 +39,19 @@ class RobotObservationBuffer:
         pose_buffer: PoseBuffer,
         T_base_camera_optical: NDArray[np.float64] | None,
         maxlen: int = DEFAULT_MAXLEN,
-        static_speed_mps: float = DEFAULT_STATIC_SPEED_MPS,
         max_travel_m: float = DEFAULT_MAX_TRAVEL_M,
         max_age_s: float = DEFAULT_MAX_AGE_S,
-        timing_uncertainty_s: float = DEFAULT_TIMING_UNCERTAINTY_S,
     ) -> None:
         if maxlen < 1:
             raise ValueError(f"maxlen must be at least 1, got {maxlen}")
-        if not math.isfinite(static_speed_mps) or static_speed_mps < 0.0:
-            raise ValueError(
-                f"static_speed_mps must be finite and non-negative, got {static_speed_mps}"
-            )
         if not math.isfinite(max_travel_m) or max_travel_m <= 0.0:
             raise ValueError(f"max_travel_m must be finite and positive, got {max_travel_m}")
         self._pose_buffer = pose_buffer
         if not math.isfinite(max_age_s) or max_age_s <= 0:
             raise ValueError("max_age_s must be finite and positive")
-        if not math.isfinite(timing_uncertainty_s) or timing_uncertainty_s < 0:
-            raise ValueError("timing_uncertainty_s must be finite and nonnegative")
         self._max_age_s = max_age_s
-        self.timing_uncertainty_s = timing_uncertainty_s
         self._T_base_camera_optical = T_base_camera_optical
         self._maxlen = maxlen
-        self._static_speed_mps = static_speed_mps
         self._max_travel_m = max_travel_m
         self._lock = threading.Lock()
         self._camera_info: CameraInfo | None = None

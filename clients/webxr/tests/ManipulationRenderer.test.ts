@@ -27,6 +27,7 @@ const state: ManipulationState = {
   available: true,
   root_pose: pose,
   model: {
+    gripper_joints: {},
     revision: "one",
     root: "base",
     asset_url: null,
@@ -62,19 +63,7 @@ const state: ManipulationState = {
 it("keeps the gripper menu across hover transitions and shows the target guide", () => {
   const r = new ManipulationRenderer();
   const apply = (now: number) =>
-    applyRenderer(
-      r,
-      state,
-      origin,
-      "arm",
-      true,
-      { ...pose, position: [0.2, 0, 0.3] },
-      null,
-      null,
-      now,
-      "",
-      true,
-    );
+    applyRenderer(r, { target: { ...pose, position: [0.2, 0, 0.3] }, now });
   r.eeHovered = true;
   apply(1);
   expect(r.gripperMenu.visible).toBe(true);
@@ -95,19 +84,7 @@ it("keeps the gripper menu across hover transitions and shows the target guide",
 it("plays Preview once from zero while retaining separate measured and target handles", () => {
   const r = new ManipulationRenderer();
   const apply = (now: number, plan: any = null) =>
-    applyRenderer(
-      r,
-      state,
-      origin,
-      "arm",
-      true,
-      { ...pose, position: [0.1, 0, 0.2] },
-      null,
-      plan,
-      now,
-      "",
-      true,
-    );
+    applyRenderer(r, { target: { ...pose, position: [0.1, 0, 0.2] }, plan, now });
   apply(1);
   const plan = {
     plan_id: "one",
@@ -134,20 +111,7 @@ it("plays Preview once from zero while retaining separate measured and target ha
 it("keeps robot status on one line and includes the arm speed", () => {
   const r = new ManipulationRenderer();
   speedScale = 0.35;
-  applyRenderer(
-    r,
-    state,
-    origin,
-    "arm",
-    false,
-    null,
-    null,
-    null,
-    1,
-    "Returning to\nzero pose with a long status",
-    true,
-    "OpenYAM",
-  );
+  applyRenderer(r, { selected: false, now: 1, status: "Returning to\nzero pose with a long status", robotTitle: "OpenYAM" });
   const label = r.baseMarker.children.find(
     (c) => c.constructor.name === "RobotMarkerLabel",
   ) as any;
@@ -171,24 +135,10 @@ it("shows measured and dragged spheres and a full-opacity connector in unselecte
     ...pose,
     position: [0.2, 0, 0.3] as [number, number, number],
   };
-  applyRenderer(
-    r,
-    s,
-    origin,
-    "arm",
-    false,
-    target,
-    null,
-    null,
-    1,
-    "",
-    true,
-    "Arm",
-    {
+  applyRenderer(r, { state: s, selected: false, target, now: 1, snapshot: {
       ...readyIntent,
       dragging: true,
-    },
-  );
+    } });
   expect(r.measuredHandle.object.visible).toBe(true);
   expect(
     r.handle.object.position.distanceTo(r.measuredHandle.object.position),
@@ -209,25 +159,14 @@ it("shows measured and dragged spheres and a full-opacity connector in unselecte
 it("uses path provenance for opacity even when the actual planned path is straight", () => {
   const r = new ManipulationRenderer();
   const target = { ...pose, position: [0.2, 0, 0] as [number, number, number] };
-  applyRenderer(r, state, origin, "arm", true, target, null, null, 1, "");
+  applyRenderer(r, { target, now: 1 });
   expect(r.path.material.uniforms.uOpacity.value).toBe(0.5);
-  applyRenderer(
-    r,
-    state,
-    origin,
-    "arm",
-    true,
-    target,
-    null,
-    {
+  applyRenderer(r, { target, plan: {
       plan_id: "straight",
       joint_names: [],
       trajectory: [{ time: 0, positions: [] }],
       duration: 0,
-    },
-    1.1,
-    "",
-  );
+    }, now: 1.1 });
   expect(r.path.material.uniforms.uOpacity.value).toBe(0.7);
   r.dispose();
 });
@@ -236,21 +175,7 @@ it("keeps Preview above an offset target and hides both marker buttons immediate
   const r = new ManipulationRenderer();
   const target = { ...pose, position: [0.2, 0, 0] as [number, number, number] };
   const apply = (now: number, dragging = false, targetOffset = true) =>
-    applyRenderer(
-      r,
-      state,
-      origin,
-      "arm",
-      true,
-      target,
-      null,
-      null,
-      now,
-      "",
-      true,
-      "Arm",
-      { ...readyIntent, dragging, targetOffset },
-    );
+    applyRenderer(r, { target, now, snapshot: { ...readyIntent, dragging, targetOffset } });
   r.eeHovered = true;
   apply(1);
   expect(r.gripperMenu.visible).toBe(true);
@@ -271,7 +196,7 @@ it("keeps Preview above an offset target and hides both marker buttons immediate
 
 it("uses one contextual emergency control below a narrower Stop and includes the speed slider", () => {
   const r = new ManipulationRenderer();
-  applyRenderer(r, state, origin, "arm", true, null, null, null, 1, "");
+  applyRenderer(r, { now: 1 });
   const stop = r.panel.children.find(
     (c) => c.userData.manipulationAction === "stop",
   ) as any;
@@ -282,18 +207,7 @@ it("uses one contextual emergency control below a narrower Stop and includes the
   expect(stop.rangeX).toBeLessThan(emergency.rangeX);
   expect(r.owns(r.speedSlider.hit)).toBe(true);
   expect(r.speedSlider.position.y).toBeLessThan(stop.position.y);
-  applyRenderer(
-    r,
-    { ...state, stopped: true, stop_confirmed: true },
-    origin,
-    "arm",
-    true,
-    null,
-    null,
-    null,
-    1.1,
-    "",
-  );
+  applyRenderer(r, { state: { ...state, stopped: true, stop_confirmed: true }, now: 1.1 });
   expect(emergency.userData.manipulationAction).toBe("resume");
   expect(emergency.text).toBe("Resume operation");
   expect(
@@ -302,18 +216,7 @@ it("uses one contextual emergency control below a narrower Stop and includes the
     ),
   ).toHaveLength(1);
   expect(emergency.enabled).toBe(true);
-  applyRenderer(
-    r,
-    { ...state, stopped: true, stop_confirmed: false },
-    origin,
-    "arm",
-    true,
-    null,
-    null,
-    null,
-    1.2,
-    "",
-  );
+  applyRenderer(r, { state: { ...state, stopped: true, stop_confirmed: false }, now: 1.2 });
   expect(emergency.enabled).toBe(false);
   r.dispose();
 });
@@ -340,19 +243,7 @@ it("trims the executing path from raw measured joints without selection boxes", 
   };
   const target = { ...pose, position: [1, 0, 0] as [number, number, number] };
   const apply = (now: number, fresh = true) =>
-    applyRenderer(
-      r,
-      s,
-      origin,
-      "arm",
-      true,
-      target,
-      null,
-      null,
-      now,
-      "",
-      fresh,
-    );
+    applyRenderer(r, { state: s, target, now, fresh });
   const startDistance = () => (r.path.material as THREE.ShaderMaterial).uniforms.uStartDistance.value;
   apply(1);
   const geometry = r.path.geometry;
@@ -433,21 +324,7 @@ it("shows movement-weighted 3D links without arm boxes", () => {
       targetOffset: true,
       executing: false,
     } as any;
-    applyRenderer(
-      r,
-      arm,
-      origin,
-      "arm",
-      false,
-      target,
-      solution,
-      null,
-      1,
-      "",
-      true,
-      "OpenYAM",
-      intent,
-    );
+    applyRenderer(r, { state: arm, selected: false, target, solution, now: 1, robotTitle: "OpenYAM", snapshot: intent });
     const models = (r as any).modelRenderer;
     const moving = models.previewMeshes.get("gripper") as THREE.Mesh;
     const stationary = models.previewMeshes.get("link2") as THREE.Mesh;
@@ -456,39 +333,11 @@ it("shows movement-weighted 3D links without arm boxes", () => {
     expect(Array.from(stationary.geometry.getAttribute("armAlpha").array).every(value => value === 0)).toBe(true);
     expect(r.object.getObjectByName("LinkBounds_link3")).toBeUndefined();
     rejection = { revision: 1, pose: target, message: "IK failed" };
-    applyRenderer(
-      r,
-      arm,
-      origin,
-      "arm",
-      false,
-      target,
-      solution,
-      null,
-      1.1,
-      "IK failed",
-      true,
-      "OpenYAM",
-      intent,
-    );
+    applyRenderer(r, { state: arm, selected: false, target, solution, now: 1.1, status: "IK failed", robotTitle: "OpenYAM", snapshot: intent });
     expect(
       (moving.children.find(c => c.userData.armOutline) as THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>).material.uniforms.uColor.value.getHex(),
     ).toBe(0xffcc00);
-    applyRenderer(
-      r,
-      arm,
-      origin,
-      "arm",
-      false,
-      target,
-      solution,
-      null,
-      3,
-      "IK failed",
-      true,
-      "OpenYAM",
-      intent,
-    );
+    applyRenderer(r, { state: arm, selected: false, target, solution, now: 3, status: "IK failed", robotTitle: "OpenYAM", snapshot: intent });
     expect(r.warning.object.visible).toBe(true);
   } finally {
     r.dispose();
@@ -501,52 +350,40 @@ import {
   targetIsOffset,
   type ManipulationSnapshot,
 } from "@dimos-ar-client/manipulation/ManipulationInteraction";
-import type {
-  ManipulationPlan,
-  ManipulationPose,
-} from "@dimos-ar-client/manipulation/ManipulationTypes";
 import type { ManipulationPresentation } from "../src/manipulation/ManipulationRenderer";
 let speedScale = 0.2;
 let rejection: ManipulationPresentation["rejection"] = null;
-function applyRenderer(
-  renderer: ManipulationRenderer,
-  state: ManipulationState,
-  origin: ManipulationPresentation["origin"],
-  groupId: string | null,
-  selected: boolean,
-  target: ManipulationPose | null,
-  solution: Record<string, number> | null,
-  plan: ManipulationPlan | null,
-  now: number,
-  status: string,
-  fresh = true,
-  robotTitle = "Arm",
-  overrides: Partial<ManipulationSnapshot> = {},
-): void {
+type RendererFixture = Partial<Pick<ManipulationPresentation,
+  "origin" | "groupId" | "selected" | "target" | "solution" | "plan" | "now" | "robotTitle"
+>> & { state?: ManipulationState; status?: string; fresh?: boolean; snapshot?: Partial<ManipulationSnapshot> };
+function applyRenderer(renderer: ManipulationRenderer, input: RendererFixture = {}): void {
+  const { state: current = state, origin: trackingOrigin = origin, groupId = "arm",
+    selected = true, target = null, solution = null, plan = null, now = 0,
+    status = "", fresh = true, robotTitle = "Arm", snapshot = {} } = input;
   const intent = deriveManipulationSnapshot({
-    available: state.available,
+    available: current.available,
     fresh,
     selected,
     targetOffset: targetIsOffset(
       target,
-      state.observations?.[groupId ?? ""]?.pose,
+      current.observations?.[groupId ?? ""]?.pose,
     ),
     gripperDraft: false,
     dragging: false,
     planning: false,
-    executing: ["accepted", "executing"].includes(state.execution ?? ""),
-    resetting: !!state.operation,
-    stopped: state.stopped === true,
-    stopConfirmed: state.stop_confirmed === true,
+    executing: ["accepted", "executing"].includes(current.execution ?? ""),
+    resetting: !!current.operation,
+    stopped: current.stopped === true,
+    stopConfirmed: current.stop_confirmed === true,
     pendingControl: false,
-    following: state.following === true,
+    following: current.following === true,
     rejection: rejection !== null,
     status,
-    runtimeMessage: state.message,
+    runtimeMessage: current.message,
   });
   renderer.apply({
-    state,
-    origin,
+    state: current,
+    origin: trackingOrigin,
     groupId,
     selected,
     target,
@@ -554,7 +391,7 @@ function applyRenderer(
     plan,
     now,
     robotTitle,
-    intent: { ...intent, ...overrides },
+    intent: { ...intent, ...snapshot },
     speedScale,
     rejection,
     desiredGripper: null,
@@ -594,30 +431,8 @@ it("retires late model loads after replacement and disposal", () => {
     };
   };
   try {
-    applyRenderer(
-      renderer,
-      first,
-      origin,
-      "arm",
-      true,
-      null,
-      null,
-      null,
-      1,
-      "",
-    );
-    applyRenderer(
-      renderer,
-      second,
-      origin,
-      "arm",
-      true,
-      null,
-      null,
-      null,
-      2,
-      "",
-    );
+    applyRenderer(renderer, { state: first, now: 1 });
+    applyRenderer(renderer, { state: second, now: 2 });
     const replaced = late();
     callbacks[0]({ scene: replaced.scene });
     expect(replaced.geometry).toHaveBeenCalledTimes(1);
@@ -640,8 +455,7 @@ it("retries transient model failures with backoff and immediately after renderin
   });
   const renderer = new ManipulationRenderer();
   const modelState = structuredClone(state); modelState.model!.asset_url = "/retry.glb";
-  const apply = (now: number, active = true) => applyRenderer(renderer, modelState,
-    active ? origin : null, "arm", true, null, null, null, now, "");
+  const apply = (now: number, active = true) => applyRenderer(renderer, { state: modelState, origin: active ? origin : null, now });
   try {
     apply(1); errors[0]();
     apply(1.49); expect(loader).toHaveBeenCalledTimes(1);
@@ -678,9 +492,7 @@ it("keeps the selected mesh moving between sparse live IK updates throughout a h
   try {
     for (let frame = 0; frame < 270; frame++) {
       if (frame % 18 === 0) solution = { j: frame / 18 * 0.04 };
-      applyRenderer(renderer, moving, origin, "arm", true,
-        { ...pose, position: [0.2, 0, 0.3] }, solution, null, 1 + frame / 90, "", true,
-        "Arm", { dragging: true });
+      applyRenderer(renderer, { state: moving, target: { ...pose, position: [0.2, 0, 0.3] }, solution, now: 1 + frame / 90, snapshot: { dragging: true } });
       const mesh = (renderer as any).modelRenderer.previewMeshes.get("tool") as THREE.Object3D;
       if (frame > 45) {
         expect(mesh.visible).toBe(true);
@@ -717,18 +529,7 @@ it("disposes shared model geometry once across measured, preview and tool clones
       ...pose,
       position: [0.2, 0, 0] as [number, number, number],
     };
-    applyRenderer(
-      renderer,
-      modelState,
-      origin,
-      "arm",
-      true,
-      target,
-      null,
-      null,
-      1,
-      "",
-    );
+    applyRenderer(renderer, { state: modelState, target, now: 1 });
     const models = (renderer as any).modelRenderer;
     const mesh = models.ghosts.get("tool") as THREE.Mesh;
     expect(models.previewMeshes.get("tool").geometry).toBe(mesh.geometry);
@@ -751,7 +552,7 @@ it("shows only the outline on hover and fades the selected fill while preserving
   const r = new ManipulationRenderer();
   const s = structuredClone(state); s.model!.asset_url = "/arm.glb";
   let now = 1;
-  const apply = (selected: boolean) => { applyRenderer(r, s, origin, "arm", selected, null, null, null, now += 1 / 60, ""); r.object.updateMatrixWorld(true); };
+  const apply = (selected: boolean) => { applyRenderer(r, { state: s, selected, now: now += 1 / 60 }); r.object.updateMatrixWorld(true); };
   try {
     apply(false);
     const model = (r as any).modelRenderer;
@@ -784,7 +585,7 @@ it("shows only the outline on hover and fades the selected fill while preserving
 it("keeps the measured sphere visible even when selected target equals feedback", () => {
   const r = new ManipulationRenderer();
   try {
-    applyRenderer(r, state, origin, "arm", true, pose, null, null, 1, "");
+    applyRenderer(r, { target: pose, now: 1 });
     expect(r.measuredHandle.object.visible).toBe(true);
     expect(r.measuredHandle.collider.userData.interactionEnabled).toBe(false);
     expect(r.measuredHandle.visual.renderOrder).toBeGreaterThan(r.handle.visual.renderOrder);
@@ -796,7 +597,7 @@ it("keeps gripper below the EE in selected mode with matching Preview and Execut
   try {
     r.eeHovered = true;
     const target = { ...pose, position: [0.1, 0, 0] as [number, number, number] };
-    applyRenderer(r, state, origin, "arm", true, target, null, null, 1, "");
+    applyRenderer(r, { target, now: 1 });
     const button = r.controlsView.buttons.get("gripper")!;
     expect(button.text).toBe("Open");
     expect(button.userData.manipulationAction).toBe("gripper");
@@ -808,7 +609,7 @@ it("keeps gripper below the EE in selected mode with matching Preview and Execut
     expect(preview.scale.toArray()).toEqual(execute.scale.toArray());
     expect(r.previewMenu.position.y).toBeGreaterThan(r.gripperMenu.position.y);
     expect(r.gripperMenu.visible).toBe(true);
-    applyRenderer(r, state, origin, "arm", false, target, null, null, 1.1, "");
+    applyRenderer(r, { selected: false, target, now: 1.1 });
     expect(button.text).toBe("Open"); expect(button.userData.manipulationAction).toBe("gripper");
   } finally { r.dispose(); }
 });
@@ -818,10 +619,10 @@ it("uses full opacity for an executing path and planning opacity for its draft",
   const r = new ManipulationRenderer();
   const target = { ...pose, position: [0.1, 0, 0] as [number, number, number] };
   try {
-    applyRenderer(r, state, origin, "arm", true, target, null, null, 1, "");
+    applyRenderer(r, { target, now: 1 });
     expect(r.path.material.uniforms.uOpacity.value).toBe(0.5);
     const moving = { ...state, execution: "executing" };
-    applyRenderer(r, moving, origin, "arm", true, target, null, null, 1.1, "");
+    applyRenderer(r, { state: moving, target, now: 1.1 });
     expect(r.path.material.uniforms.uOpacity.value).toBe(1);
   } finally { r.dispose(); }
 });
@@ -839,7 +640,7 @@ it("keeps the EE grab radius three times the visual radius", () => {
 it("moves and scales the arm controls independently and Pin restores the anchor", () => {
   const r = new ManipulationRenderer();
   try {
-    applyRenderer(r, state, origin, "arm", true, null, null, null, 1, "");
+    applyRenderer(r, { now: 1 });
     const frame = r.controlsView.frame.object;
     const handles = frame.children.filter(child => child.userData.panelHandle);
     expect(handles.map(child => child.userData.panelHandle)).toEqual(["bar", "left", "right"]);
@@ -860,7 +661,7 @@ it("moves and scales the arm controls independently and Pin restores the anchor"
 
     r.detachPanel();
     r.panel.position.set(1, 2, 3); r.panel.rotation.set(.1, .2, .3); r.panel.scale.setScalar(1.2);
-    applyRenderer(r, state, origin, "arm", true, null, null, null, 2, "");
+    applyRenderer(r, { now: 2 });
     expect(r.panel.position.toArray()).toEqual([1, 2, 3]);
     r.object.updateMatrixWorld(true);
     expect(label.getWorldPosition(new THREE.Vector3()).toArray()).toEqual(labelPosition.toArray());
@@ -888,7 +689,7 @@ for (const selected of [false, true]) it(`keeps rendered model and picking conti
   s.model!.links[1].bounds = {center: [0,0,0], size: [.03,.03,.03]};
   s.observations!.arm.joints = {fixed: 0};
   const apply = (time: number, mode: boolean, solution: Record<string,number> | null) =>
-    applyRenderer(r, s, origin, "arm", mode, null, solution, null, time, "");
+    applyRenderer(r, { state: s, selected: mode, solution, now: time });
   try {
     apply(1, selected, selected ? {fixed: 0} : null);
     const model = (r as any).modelRenderer;
@@ -915,18 +716,18 @@ it("retains both EE handles, arm transforms, and Preview through a short feedbac
   const r=new ManipulationRenderer();
   const target={...pose,position:[.2,0,.3] as [number,number,number]};
   try {
-    applyRenderer(r,state,origin,"arm",true,target,{},null,1,"");
+    applyRenderer(r, { target, solution: {}, now: 1 });
     const model=(r as any).modelRenderer;
     const snapshot=()=>[...model.previewMeshes.values()].map((o:any)=>[o.visible,...o.position.toArray(),...o.quaternion.toArray()]);
     const before=snapshot(), measured=r.measuredHandle.object.position.toArray();
     const moved={...target,position:[.3,0,.3] as [number,number,number]};
-    for(const now of [1.1,1.5,2.9]) applyRenderer(r,{...state,available:false},origin,"arm",true,moved,null,null,now,"No feedback",false,"Arm",{retainingFeedback:true});
+    for(const now of [1.1,1.5,2.9]) applyRenderer(r, { state: {...state,available:false}, target: moved, now, status: "No feedback", fresh: false, snapshot: {retainingFeedback:true} });
     expect(snapshot()).toEqual(before);
     expect(r.measuredHandle.object.position.toArray()).toEqual(measured);
     expect(r.measuredHandle.object.visible).toBe(true); expect(r.handle.object.visible).toBe(true);
     expect(r.controlsView.buttons.get("execute")!.enabled).toBe(false);
     expect(r.handle.object.position.toArray()).not.toEqual(measured);
-    applyRenderer(r,{...state,available:false},origin,"arm",true,null,null,null,3.1,"No feedback",false);
+    applyRenderer(r, { state: {...state,available:false}, now: 3.1, status: "No feedback", fresh: false });
     expect(r.handle.object.visible).toBe(false); expect(r.measuredHandle.object.visible).toBe(false);
   } finally {r.dispose();}
 });
@@ -936,14 +737,14 @@ it("owns the visible handle's rejection, stale and blocked center colors", () =>
   const renderer = new ManipulationRenderer();
   const color = () => (renderer.handle.visual.material as THREE.ShaderMaterial).uniforms.uCenterColor.value.getHex();
   rejection = { revision: 1, pose, message: "IK failed" };
-  applyRenderer(renderer, state, origin, "arm", false, pose, null, null, 1, "", true);
+  applyRenderer(renderer, { selected: false, target: pose, now: 1 });
   expect(color()).toBe(0xffcc00);
-  applyRenderer(renderer, state, origin, "arm", false, pose, null, null, 2, "", true, "Arm", { blocked: true });
+  applyRenderer(renderer, { selected: false, target: pose, now: 2, snapshot: { blocked: true } });
   expect(color()).toBe(0x8e969e);
   rejection = null;
-  applyRenderer(renderer, state, origin, "arm", false, pose, null, null, 3, "", false);
+  applyRenderer(renderer, { selected: false, target: pose, now: 3, fresh: false });
   expect(color()).toBe(0xffcc00);
-  applyRenderer(renderer, state, origin, "arm", false, pose, null, null, 4, "", true);
+  applyRenderer(renderer, { selected: false, target: pose, now: 4 });
   expect(color()).toBe(0xb3b3b3);
   renderer.dispose();
 });

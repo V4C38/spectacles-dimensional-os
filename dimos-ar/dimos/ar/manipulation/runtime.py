@@ -482,7 +482,6 @@ class ManipulationRuntime:
                     self.session.owner, self.session.group_id = client_id, group
                     self._following_target = None
                     self.session.token = uuid4().hex
-                    self.session.evaluated_at = float("-inf")
                     self.session.sequence = -1
                     self.session.updated_at = time.monotonic()
                     return {"status": "acquired", "token": self.session.token}

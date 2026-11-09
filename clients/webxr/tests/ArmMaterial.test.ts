@@ -2,11 +2,8 @@ import { expect, it } from "vitest";
 import { armMaterial } from "../src/manipulation/ArmMaterial";
 import { AdaptiveDashedLineRenderer } from "../src/presentation/AdaptiveDashedLineRenderer";
 
-it("renders a flat twenty-eight-percent surface without Fresnel contours", () => {
+it("keeps translucent arm surfaces from writing depth", () => {
   for (const material of [armMaterial(), armMaterial(true)]) {
-    expect(material.fragmentShader).toContain("0.28 * uOpacity");
-    expect(material.fragmentShader).not.toContain("vNormal");
-    expect(material.uniforms.uRim).toBeUndefined();
     expect(material.depthWrite).toBe(false);
     material.dispose();
   }

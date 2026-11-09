@@ -124,8 +124,8 @@ class InteractionCoordinator:
         self._revision = 0
         self._mode: InteractionMode = "manual"
         self._authority: Authority | None = None
-        self.target: SharedTarget | None = None
         self._targets: dict[tuple[str, str | None], SharedTarget] = {}
+        self._active_target_key: tuple[str, str | None] | None = None
         self.preview: dict[str, Any] | None = None
         self._preview_aim: tuple[float, float, float, float] | None = None
         self.active_goal: dict[str, Any] | None = None
@@ -143,6 +143,13 @@ class InteractionCoordinator:
         self._cancelled: dict[str, OrderedDict[str, None]] = {}
         self._acquisitions: dict[str, OrderedDict[str, str]] = {}
         self._retired: list[tuple[Authority, str]] = []
+
+    @property
+    def target(self) -> SharedTarget | None:
+        return self._targets.get(self._active_target_key) if self._active_target_key else None
+
+    def target_for(self, domain: str, group_id: str | None = None) -> SharedTarget | None:
+        return self._targets.get((domain, group_id))
 
     @property
     def revision(self) -> int:
@@ -195,7 +202,6 @@ class InteractionCoordinator:
             "following_tail": copy.deepcopy(self.following_tail),
             "mode": self._mode,
             "authority": self._authority.wire() if self._authority is not None else None,
-            "target": self.target.wire() if self.target is not None else None,
             "targets": [target.wire() for target in self._targets.values()],
             "preview": copy.deepcopy(self.preview),
             "active_goal": copy.deepcopy(self.active_goal),
@@ -223,7 +229,7 @@ class InteractionCoordinator:
     def reset(self) -> None:
         self._retire("reference_reset")
         self.epoch = uuid4().hex
-        self.target = None
+        self._active_target_key = None
         self.following_tail = None
         self._targets.clear()
         self.preview = self.active_goal = None
@@ -345,18 +351,15 @@ class InteractionCoordinator:
                     q = (float(orientation[0]), float(orientation[1]),
                          float(orientation[2]), float(orientation[3]))
                     if p != target.position or q != target.orientation:
-                        self.target = replace(target, position=p, orientation=q,
-                                              revision=target.revision + 1,
-                                              sample_ts=self._clock(), phase="draft")
-                        self._targets[(target.domain, target.group_id)] = self.target
+                        self._targets[(target.domain, target.group_id)] = replace(
+                            target, position=p, orientation=q, revision=target.revision + 1,
+                            sample_ts=self._clock(), phase="draft")
             self.following_tail = copy.deepcopy(tail)
             self._revision += 1
 
     def clear_manipulation_target(self, group_id: str) -> None:
         previous = self._targets.pop(("manipulation", group_id), None)
         if previous is not None:
-            if self.target is previous:
-                self.target = None
             self._revision += 1
 
     def set_manipulation_gripper(self, group_id: str, value: float) -> None:
@@ -367,8 +370,6 @@ class InteractionCoordinator:
         target = replace(previous, gripper=value, revision=previous.revision + 1,
                          sample_ts=self._clock())
         self._targets[key] = target
-        if self.target is previous:
-            self.target = target
         self._revision += 1
 
     def observe_manipulation_snapshot(self, snapshot: dict[str, Any]) -> None:
@@ -572,7 +573,7 @@ class InteractionCoordinator:
             self._update_target(request, sequence=-1)
         elif request.kind != "joystick":
             domain = "manipulation" if request.kind.startswith("manipulation_") else "navigation"
-            self.target = self._targets.get((domain, request.group_id))
+            self._active_target_key = (domain, request.group_id)
         self._tail_floor = self._revision
         return self._result(request, "accepted", "acquired", lease)
 
@@ -590,7 +591,7 @@ class InteractionCoordinator:
         if request.action == "cancel":
             if authority.kind == "navigation_planning":
                 self._targets.pop(("navigation", None), None)
-                self.target = None
+                self._active_target_key = None
             self._retire("cancelled")
             return self._result(request, "accepted", "cancelled")
         if request.action not in ("update", "release", "confirm"):
@@ -620,8 +621,7 @@ class InteractionCoordinator:
         if authority.kind in {"live", "navigation_planning"} and target is not None:
             if commit is not None and not commit(target, authority.kind):
                 return self._result(request, "rejected", "native_unavailable", authority.lease_id)
-            self.target = replace(target, phase="committed")
-            self._targets[(target.domain, target.group_id)] = self.target
+            self._targets[(target.domain, target.group_id)] = replace(target, phase="committed")
         self._retire("released" if request.action == "release" else "confirmed")
         return self._result(request, "accepted", "released")
 
@@ -640,7 +640,8 @@ class InteractionCoordinator:
             "manipulation" if self._authority.kind.startswith("manipulation_") else "navigation"
         )
         group = self._authority.group_id
-        previous = self._targets.get((domain, group))
+        self._active_target_key = (domain, group)
+        previous = self._targets.get(self._active_target_key)
         phase: Literal["draft", "live", "committed"] = (
             "draft" if self._authority.kind.endswith("planning") else "live"
         )
@@ -665,12 +666,11 @@ class InteractionCoordinator:
             and previous.speed_scale == speed
             and previous.gripper == gripper
         ):
-            self.target = replace(previous, phase=phase, sequence=sequence)
-            self._targets[(domain, group)] = self.target
+            self._targets[self._active_target_key] = replace(previous, phase=phase, sequence=sequence)
             if previous.phase != phase:
                 self._revision += 1
             return
-        self.target = SharedTarget(
+        self._targets[self._active_target_key] = SharedTarget(
             position,
             orientation,
             1 if previous is None else previous.revision + 1,
@@ -682,7 +682,6 @@ class InteractionCoordinator:
             speed,
             gripper,
         )
-        self._targets[(domain, group)] = self.target
         if self.preview is not None and not self._preview_matches_target(
             self.preview, source_pose=self._preview_aim
         ):

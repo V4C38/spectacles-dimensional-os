@@ -57,7 +57,7 @@ async def test_commands_bind_current_epoch_lease_and_target_revision():
 async def test_stream_target_updates_use_shared_authority_and_increasing_sequence():
     socket = SimpleNamespace(send=AsyncMock())
     client = helper.MockRuntimeClient(socket)
-    client.simulated = client.follow_stream = True
+    client.simulated = True
     client.shared = {"epoch": "epoch"}
     client.lease = "lease"
     pose = {"position": [0, 0, 1], "orientation": [0, 0, 0, 1]}

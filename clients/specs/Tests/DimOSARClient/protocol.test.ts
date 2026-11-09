@@ -1,4 +1,4 @@
-import { helloAt, stateFrame } from "../fixtures/SessionFixture";
+import { helloAt, stateFrame, navigationSnapshot } from "../fixtures/SessionFixture";
 import { describe, it, expect } from "vitest";
 import {
   LIDAR_FOURCC,
@@ -6,7 +6,7 @@ import {
   TextFramer,
   decodeLidar,
   decodeLocalizationObservations,
-  decodeOutbound,
+  decodeOutbound as decodeWireOutbound,
   encodeEstopRequest,
   encodeNavGoalRequest,
   encodeClientPose,
@@ -21,12 +21,22 @@ import {
 } from "../../Assets/Scripts/DimOSARClient/websocket/protocol";
 import type { LocalizationObservation } from "../../Assets/Scripts/DimOSARClient/websocket/protocolTypes";
 
+// Route codec fixtures are embedded in their current revisioned publication.
+function decodeOutbound(text: string): ReturnType<typeof decodeWireOutbound> | import("../../Assets/Scripts/DimOSARClient/websocket/protocolTypes").NavGoal {
+  const value = JSON.parse(text);
+  if (value.type !== "nav_goal") return decodeWireOutbound(text);
+  const state = decodeWireOutbound(JSON.stringify(navigationSnapshot(null, value)));
+  if (state.type !== "interaction_state") throw new Error("Missing navigation snapshot");
+  return (value.preview ? state.preview : state.active_goal)!;
+}
+
 const HELLO_FIXTURE = { ...helloAt(1234.567), time_sync: { ts_client: 1234.567, ts_server: 5678.901 } };
 
 const STATE_FIXTURE = stateFrame();
 
 it("decodes optional selected localization providers without inventing absent metadata", () => {
-  expect(decodeOutbound(JSON.stringify(HELLO_FIXTURE))).not.toHaveProperty("localization");
+  expect(decodeOutbound(JSON.stringify(HELLO_FIXTURE))).toHaveProperty("localization");
+  expect(() => decodeOutbound(JSON.stringify({ ...HELLO_FIXTURE, localization: undefined }))).toThrow(/localization/);
   for (const providers of [[], ["fiducial_marker"], ["vps"], ["fiducial_marker", "vps"]]) {
     expect(decodeOutbound(JSON.stringify({ ...HELLO_FIXTURE, localization: { providers } })))
       .toHaveProperty("localization", { providers });
@@ -132,11 +142,7 @@ describe("encode inbound JSON", () => {
 });
 
 describe("decodeOutbound fixtures", () => {
-  it("negotiates independent advisory IK only when advertised by the server", () => {
-    expect(decodeOutbound(JSON.stringify({ ...HELLO_FIXTURE, independent_ik: true }))).toHaveProperty("independent_ik", true);
-    expect(decodeOutbound(JSON.stringify(HELLO_FIXTURE))).not.toHaveProperty("independent_ik");
-    expect(() => decodeOutbound(JSON.stringify({ ...HELLO_FIXTURE, independent_ik: "true" }))).toThrow(/independent_ik/);
-  });
+
   it("decodes hello from PROTOCOL.md", () => {
     const hello = decodeOutbound(JSON.stringify(HELLO_FIXTURE));
     expect(hello).toEqual({ ...HELLO_FIXTURE, capabilities: { ...HELLO_FIXTURE.capabilities, navigation: { ...HELLO_FIXTURE.capabilities.navigation, nav_goal: { ...HELLO_FIXTURE.capabilities.navigation.nav_goal, preview: false } } } });
@@ -179,9 +185,8 @@ describe("decodeOutbound fixtures", () => {
       ts: 6.0,
     });
 
-    expect(() =>
-      decodeOutbound(JSON.stringify({ type: "nav_goal", pose: [1, 0, 0, 0], path_poses: [], ts: 1 })),
-    ).toThrow(/nav_goal.pose must be omitted/);
+    expect(decodeOutbound(JSON.stringify({ type: "nav_goal", pose: [1, 0, 0, 0], path_poses: [], ts: 1 })))
+      .toMatchObject({ pose: [1, 0, 0, 0], path_poses: [] });
     expect(() =>
       decodeOutbound(JSON.stringify({ type: "nav_goal", path_poses: [[0, 0, 0, 0]], ts: 1 })),
     ).toThrow(/nav_goal.pose is required/);
@@ -191,12 +196,14 @@ describe("decodeOutbound fixtures", () => {
     expect(
       decodeOutbound(
         JSON.stringify({
+          result_timeout_s: 15,
           type: "localization_observations_request", capture_id: "fixture-capture",
           capture_policy: "any_angle",
           observation_count: 1,
         }),
       ),
     ).toEqual({
+      result_timeout_s: 15,
       type: "localization_observations_request", capture_id: "fixture-capture",
       capture_policy: "any_angle",
       observation_count: 1,
@@ -205,12 +212,14 @@ describe("decodeOutbound fixtures", () => {
     expect(
       decodeOutbound(
         JSON.stringify({
+          result_timeout_s: 15,
           type: "localization_observations_request", capture_id: "fixture-capture",
           capture_policy: "robot_los_required",
           observation_count: 3,
         }),
       ),
     ).toEqual({
+      result_timeout_s: 15,
       type: "localization_observations_request", capture_id: "fixture-capture",
       capture_policy: "robot_los_required",
       observation_count: 3,
@@ -219,6 +228,7 @@ describe("decodeOutbound fixtures", () => {
     expect(
       decodeOutbound(
         JSON.stringify({
+          result_timeout_s: 15,
           type: "localization_observations_request", capture_id: "fixture-capture",
           capture_policy: "robot_los_preferred",
           observation_count: 3,
@@ -226,6 +236,7 @@ describe("decodeOutbound fixtures", () => {
         }),
       ),
     ).toEqual({
+      result_timeout_s: 15,
       type: "localization_observations_request", capture_id: "fixture-capture",
       capture_policy: "robot_los_preferred",
       observation_count: 3,
@@ -298,42 +309,42 @@ describe("decodeOutbound fixtures", () => {
 
   it("encodes nav_joystick_request and rejects invalid duration or unsupported axes", () => {
     expect(
-      JSON.parse(encodeNavJoystickRequest({ linear: [0.4, 0, 0], angular: [0, 0, 0.3] }).trim()),
+      JSON.parse(encodeNavJoystickRequest({ epoch: "test", lease_id: "test", sequence: 1, linear: [0.4, 0, 0], angular: [0, 0, 0.3] }).trim()),
     ).toEqual({
-      type: "nav_joystick_request",
+      type: "nav_joystick_request", epoch: "test", lease_id: "test", sequence: 1,
       linear: [0.4, 0, 0],
       angular: [0, 0, 0.3],
     });
     expect(
       JSON.parse(
-        encodeNavJoystickRequest({ linear: [0.4, 0, 0], angular: [0, 0, 0], duration: 0.5 }).trim(),
+        encodeNavJoystickRequest({ epoch: "test", lease_id: "test", sequence: 1, linear: [0.4, 0, 0], angular: [0, 0, 0], duration: 0.5 }).trim(),
       ),
     ).toEqual({
-      type: "nav_joystick_request",
+      type: "nav_joystick_request", epoch: "test", lease_id: "test", sequence: 1,
       linear: [0.4, 0, 0],
       angular: [0, 0, 0],
       duration: 0.5,
     });
     expect(
       JSON.parse(
-        encodeNavJoystickRequest({ linear: [0.4, 0, 0], angular: [0, 0, 0], duration: 0 }).trim(),
+        encodeNavJoystickRequest({ epoch: "test", lease_id: "test", sequence: 1, linear: [0.4, 0, 0], angular: [0, 0, 0], duration: 0 }).trim(),
       ),
     ).toEqual({
-      type: "nav_joystick_request",
+      type: "nav_joystick_request", epoch: "test", lease_id: "test", sequence: 1,
       linear: [0.4, 0, 0],
       angular: [0, 0, 0],
     });
     expect(() =>
-      encodeNavJoystickRequest({ linear: [0.4, 0, 1], angular: [0, 0, 0] }),
+      encodeNavJoystickRequest({ epoch: "test", lease_id: "test", sequence: 1, linear: [0.4, 0, 1], angular: [0, 0, 0] }),
     ).toThrow(/linear.z/);
     expect(() =>
-      encodeNavJoystickRequest({ linear: [0.4, 0, 0], angular: [0.1, 0, 0] }),
+      encodeNavJoystickRequest({ epoch: "test", lease_id: "test", sequence: 1, linear: [0.4, 0, 0], angular: [0.1, 0, 0] }),
     ).toThrow(/angular.x/);
     expect(() =>
-      encodeNavJoystickRequest({ linear: [0.4, 0, 0], angular: [0, 0, 0], duration: 2.1 }),
+      encodeNavJoystickRequest({ epoch: "test", lease_id: "test", sequence: 1, linear: [0.4, 0, 0], angular: [0, 0, 0], duration: 2.1 }),
     ).toThrow(/duration/);
     expect(() =>
-      encodeNavJoystickRequest({ linear: [0.4, 0, 0], angular: [0, 0, 0], duration: Number.NaN }),
+      encodeNavJoystickRequest({ epoch: "test", lease_id: "test", sequence: 1, linear: [0.4, 0, 0], angular: [0, 0, 0], duration: Number.NaN }),
     ).toThrow(/finite/);
   });
 
@@ -371,7 +382,11 @@ describe("decodeOutbound fixtures", () => {
 
 describe("decodeOutbound errors", () => {
   it("throws on missing fields and unknown type", () => {
-    expect(() => decodeOutbound(JSON.stringify({ type: "hello" }))).toThrow(
+    expect(() => decodeOutbound(JSON.stringify({
+      resume_token: "fixture-resume",
+      odom_reference_id: "fixture-odom",
+      localization: { providers: ["fiducial_marker"] },
+      type: "hello" }))).toThrow(
       /Missing required field/,
     );
     expect(() => decodeOutbound(JSON.stringify({ type: "nope" }))).toThrow(
@@ -383,6 +398,7 @@ describe("decodeOutbound errors", () => {
     expect(() =>
       decodeOutbound(
         JSON.stringify({
+          result_timeout_s: 15,
           type: "localization_observations_request", capture_id: "fixture-capture",
           capture_policy: "robot_los_preferred",
           observation_count: 3,
@@ -392,6 +408,7 @@ describe("decodeOutbound errors", () => {
     expect(() =>
       decodeOutbound(
         JSON.stringify({
+          result_timeout_s: 15,
           type: "localization_observations_request", capture_id: "fixture-capture",
           capture_policy: "any_angle",
           observation_count: 3,
@@ -469,6 +486,7 @@ describe("decodeOutbound errors", () => {
     expect(() =>
       decodeOutbound(
         JSON.stringify({
+          result_timeout_s: 15,
           type: "localization_observations_request", capture_id: "fixture-capture",
           capture_policy: "any_angle",
           observation_count: 0,
@@ -600,28 +618,28 @@ describe("localization_observations binary", () => {
   });
 });
 
-it("decodes optional preview support and paths without changing legacy goal defaults", () => {
+it("decodes explicit preview support and ordinary goals", () => {
   const hello = structuredClone(HELLO_FIXTURE);
   Object.assign(hello.capabilities.navigation.nav_goal, { preview: true });
   const decoded = decodeOutbound(JSON.stringify(hello));
   expect(decoded.type === "hello" && decoded.capabilities.navigation.nav_goal.preview).toBe(true);
-  expect(JSON.parse(encodeNavGoalRequest({ position: [1, 2, 0], orientation: [0, 0, 0, 1], preview: true })).preview).toBe(true);
-  expect(JSON.parse(encodeNavGoalRequest({ position: [1, 2, 0], orientation: [0, 0, 0, 1] })).preview).toBeUndefined();
+  expect(JSON.parse(encodeNavGoalRequest({ epoch: "test", lease_id: "test", sequence: 1, position: [1, 2, 0], orientation: [0, 0, 0, 1], preview: true })).preview).toBe(true);
+  expect(JSON.parse(encodeNavGoalRequest({ epoch: "test", lease_id: "test", sequence: 1, position: [1, 2, 0], orientation: [0, 0, 0, 1] })).preview).toBeUndefined();
   expect(decodeOutbound(JSON.stringify({ type: "nav_goal", preview: true, path_poses: [], ts: 1 }))).toEqual({ type: "nav_goal", preview: true, pose: null, path_poses: [], ts: 1 });
   expect(() => decodeOutbound(JSON.stringify({ type: "nav_goal", preview: "true", path_poses: [], ts: 1 }))).toThrow(/boolean/);
 });
 
 it("preserves preview correlation and rejects malformed identities without changing normal goals", () => {
   const pose = { position: [1, 2, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number] };
-  const request = JSON.parse(encodeNavGoalRequest({ ...pose, preview: true, preview_id: "aim-1" }));
+  const request = JSON.parse(encodeNavGoalRequest({ epoch: "test", lease_id: "test", sequence: 1, ...pose, preview: true, preview_id: "aim-1" }));
   expect(request.preview_id).toBe("aim-1");
   expect(decodeOutbound(JSON.stringify({ type: "nav_goal", preview: true, preview_id: "aim-1", path_poses: [], ts: 1 }))).toMatchObject({ preview_id: "aim-1", preview: true });
-  expect(() => encodeNavGoalRequest({ ...pose, preview_id: "aim-1" })).toThrow(/requires preview/);
-  expect(() => encodeNavGoalRequest({ ...pose, preview: true, preview_id: "" })).toThrow(/preview_id/);
+  expect(() => encodeNavGoalRequest({ epoch: "test", lease_id: "test", sequence: 1, ...pose, preview_id: "aim-1" })).toThrow(/requires preview/);
+  expect(() => encodeNavGoalRequest({ epoch: "test", lease_id: "test", sequence: 1, ...pose, preview: true, preview_id: "" })).toThrow(/preview_id/);
   expect(() => decodeOutbound(JSON.stringify({ type: "nav_goal", preview: true, preview_id: 7, path_poses: [], ts: 1 }))).toThrow(/preview_id/);
 });
 
-it("decodes optional server display metadata while retaining old hello defaults", () => {
+it("decodes optional server display metadata", () => {
   const old = decodeOutbound(JSON.stringify(HELLO_FIXTURE));
   expect(old.type === "hello" && old.server_info).toBeUndefined();
   const info = { robot_ip: "192.168.1.42", dimos_version: "0.4.0", armodule_version: "0.2.0" };
@@ -631,7 +649,7 @@ it("decodes optional server display metadata while retaining old hello defaults"
 });
 
 it("decodes optional localization result deadlines and rejects invalid values", () => {
-  const request = { type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: "any_angle", observation_count: 1 };
+  const request = { result_timeout_s: 15, type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: "any_angle", observation_count: 1 };
   expect(decodeOutbound(JSON.stringify(request))).toEqual(request);
   expect(decodeOutbound(JSON.stringify({ ...request, result_timeout_s: 15 }))).toEqual({ ...request, result_timeout_s: 15 });
   for (const invalid of [0, -1, null, true, "15"]) {
@@ -639,7 +657,7 @@ it("decodes optional localization result deadlines and rejects invalid values", 
   }
 });
 
-it("accepts the optional robot XY heuristic while keeping older hello defaults", () => {
+it("accepts the required robot XY heuristic", () => {
   expect((decodeOutbound(JSON.stringify(HELLO_FIXTURE)) as import("../../Assets/Scripts/DimOSARClient/websocket/protocolTypes").Hello).robot).toEqual(HELLO_FIXTURE.robot);
   const hello = { ...HELLO_FIXTURE, robot: { ...HELLO_FIXTURE.robot, odom_scale_correction_factor: 1.25 } };
   expect((decodeOutbound(JSON.stringify(hello)) as import("../../Assets/Scripts/DimOSARClient/websocket/protocolTypes").Hello).robot).toEqual(hello.robot);
@@ -649,7 +667,7 @@ it("accepts the optional robot XY heuristic while keeping older hello defaults",
 });
 
 it("rejects zero quaternions consistently in navigation, telemetry and camera observations", () => {
-  expect(() => encodeNavGoalRequest({ position: [0, 0, 0], orientation: [0, 0, 0, 0] })).toThrow(/non-zero/);
+  expect(() => encodeNavGoalRequest({ epoch: "test", lease_id: "test", sequence: 1, position: [0, 0, 0], orientation: [0, 0, 0, 0] })).toThrow(/non-zero/);
   expect(() => decodeOutbound(JSON.stringify({ ...POSE_FIXTURE, orientation: [0, 0, 0, 0] }))).toThrow(/non-zero/);
   expect(() => decodeOutbound(JSON.stringify({ ...LOCALIZATION_RESULT_FIXTURE, orientation: [0, 0, 0, 0] }))).toThrow(/non-zero/);
   expect(() => encodeLocalizationObservations([sampleObservation({ camera_orientation: [0, 0, 0, 0] })])).toThrow(/non-zero/);
@@ -691,7 +709,10 @@ it("preserves the validated finishing tail in native and shared interaction snap
   const tail = { generation: 4, group_id: "arm", target_revision: 3, status: "finishing",
     position: [0.1, 0.2, 0.3], orientation: [0, 0, 0, 1], speed_scale: 0.5, joints: { joint: 0.2 } };
   const native = { type: "manipulation_state", available: false, following_tail: tail };
-  const shared = { type: "interaction_state", epoch: "robot", revision: 5, mode: "manual",
+  const shared = {
+    targets: [],
+    motion_busy: false,
+    type: "interaction_state", epoch: "robot", revision: 5, mode: "manual",
     authority: null, target: null, preview: null, active_goal: null, following_tail: tail };
   for (const snapshot of [native, shared]) {
     expect((decodeOutbound(JSON.stringify(snapshot)) as any).following_tail).toEqual(tail);
@@ -710,4 +731,25 @@ it("validates revision-bound observational arm evaluations", () => {
     { joints: { slide: null } }, { joints: null }, { pose: { position: [0,0,0], orientation: [0,0,0,0] } }]) {
     expect(() => decodeOutbound(JSON.stringify({ ...message, evaluation: { ...evaluation, ...invalid } }))).toThrow();
   }
+});
+
+
+it.each([
+  "localization", "resume_token", "odom_reference_id", "robot.odom_scale_correction_factor",
+  "capabilities.manipulation", "capabilities.object_detection", "capabilities.navigation.nav_goal.preview",
+])("requires current hello metadata: %s", field => {
+  const hello = structuredClone(HELLO_FIXTURE) as any;
+  const path = field.split(".");
+  const owner = path.slice(0, -1).reduce((value, key) => value[key], hello);
+  delete owner[path.at(-1)!];
+  expect(() => decodeOutbound(JSON.stringify(hello))).toThrow();
+});
+
+it("requires authority credentials on every navigation command", () => {
+  expect(() => encodeNavGoalRequest({ position: [0, 0, 0], orientation: [0, 0, 0, 1] } as never)).toThrow(/authority/);
+  expect(() => encodeNavJoystickRequest({ linear: [0, 0, 0], angular: [0, 0, 0] } as never)).toThrow(/authority/);
+});
+
+it("rejects standalone navigation publications", () => {
+  expect(() => decodeWireOutbound(JSON.stringify({ type: "nav_goal", ts: 1, path_poses: [] }))).toThrow(/Unknown outbound/);
 });

@@ -7,6 +7,7 @@ import type { ManipulationModel } from "../../../Assets/Scripts/DimOSARClient/ma
 
 it("handles non-OpenYAM joint names, prismatic motion, rotations, and mimic joints", () => {
   const model: ManipulationModel = {
+    gripper_joints: {},
     revision: "fixture",
     root: "base",
     asset_url: null,
