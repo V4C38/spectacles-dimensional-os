@@ -1,64 +1,11 @@
-import { PairedBulk } from "../fixtures/PairedBulk";
+import { FakeClock, FakeTransport, helloAt, stateFrame } from "../fixtures/SessionFixture";
 import { describe, expect, it } from "vitest";
 import { requestUserMessage } from "../../Assets/Scripts/DimOSARClient/agent/userMessageRequest";
 import { ClientTrackingOriginStore } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingOrigin";
-import type { ClientClock, WebSocketTransport } from "../../Assets/Scripts/DimOSARClient/websocket/hostPorts";
 import { ARModuleSession } from "../../Assets/Scripts/DimOSARClient/websocket/arModuleSession";
-import type { Capabilities, Hello, State } from "../../Assets/Scripts/DimOSARClient/websocket/protocolTypes";
+import type { Capabilities } from "../../Assets/Scripts/DimOSARClient/websocket/protocolTypes";
 
-class FakeClock implements ClientClock {
-  nowS = 0;
-  now(): number {
-    return this.nowS;
-  }
-}
-
-class FakeTransport implements WebSocketTransport {
-  readonly bulk = new PairedBulk();
-  createSibling() { return this.bulk; }
-  texts: string[] = [];
-  connect(): void {}
-  close(): void {}
-  sendText(text: string): void {
-    this.texts.push(text);
-  }
-  sendBinary(): void {}
-}
-
-function helloAt(tsClient: number, capabilities?: Partial<Capabilities>): Hello {
-  return {
-    type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
-    client_id: "c3f1a9",
-    time_sync: { ts_client: tsClient, ts_server: 100 },
-    robot: {
-      display_name: "Unitree Go2",
-      body_bounds_m: [0.7, 0.5, 0.55],
-      footprint_m: [0.7, 0.5],
-      base_height_m: 0.33,
-    },
-    capabilities: {
-      lidar: { available: true, reason: null },
-      navigation: {
-        available: true,
-        reason: null,
-        nav_goal: { available: true, reason: null },
-        nav_joystick: { available: true, reason: null },
-      },
-      localization: { available: true, reason: null },
-      estop: { available: true, reason: null },
-      agent: { available: false, reason: "current blueprint has no DimOS agent" },
-      ...capabilities,
-    },
-  };
-}
-
-const STATE: State = {
-  type: "state",
-  server: { connected_clients: 1 },
-  lidar: { enabled: true, min_height_m: 0.1, max_height_m: 1.5, max_range_m: 5 },
-  nav: { state: "idle", outcome: null },
-  agent: { idle: true },
-};
+const STATE = stateFrame();
 
 function readySession(capabilities?: Partial<Capabilities>): {
   session: ARModuleSession;

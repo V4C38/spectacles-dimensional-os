@@ -13,7 +13,13 @@ import math
 import struct
 from typing import Any, Literal, TypedDict
 
-from dimos.ar.localization.types import CapturePolicy, Intrinsics, LocalizationResult, Observation
+from dimos.ar.localization.types import (
+    CapturePolicy,
+    Intrinsics,
+    LocalizationProviderType,
+    LocalizationResult,
+    Observation,
+)
 from dimos.ar.manipulation.protocol import ManipulationRequest, decode_request
 from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavJoystickRequest, NavState
 from dimos.ar.replication.interaction import InteractionRequest
@@ -537,6 +543,10 @@ def observation_from_localization(
     )
 
 
+class LocalizationMetadata(TypedDict):
+    providers: list[LocalizationProviderType]
+
+
 @dataclass(frozen=True)
 class HelloBody:
     robot: RobotDescription
@@ -546,6 +556,7 @@ class HelloBody:
     server_info: dict[str, str] | None = None
     odom_reference_id: str | None = None
     source: dict[str, Any] | None = None
+    localization: LocalizationMetadata | None = None
 
 
 @dataclass(frozen=True)
@@ -565,6 +576,7 @@ class Hello:
     resume_token: str | None = None
     server_follow_stream: bool = False
     independent_ik: bool = False
+    localization: LocalizationMetadata | None = None
 
 
 def _capability_wire(cap: Capability) -> dict[str, Any]:
@@ -596,6 +608,7 @@ def encode_hello(hello: Hello) -> str:
             **({"independent_ik": True} if hello.independent_ik else {}),
             **({"resume_token": hello.resume_token} if hello.resume_token else {}),
             **({"source": hello.source} if hello.source else {}),
+            **({"localization": hello.localization} if hello.localization is not None else {}),
             **({"odom_reference_id": hello.odom_reference_id} if hello.odom_reference_id else {}),
             "time_sync": {
                 "ts_client": hello.time_sync.ts_client,

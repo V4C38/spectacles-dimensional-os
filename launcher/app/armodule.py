@@ -33,6 +33,7 @@ from config import (
     scripts_dir,
 )
 from dimos_config import read_armodule_config
+from robot_sources import BLUEPRINT_CLI
 from tag_config import ui_from_armodule_config
 
 ARMODULE_PORT = 8787
@@ -44,13 +45,8 @@ LOG_BUFFER_SIZE = 500
 SUBSCRIBER_QUEUE_SIZE = 2000
 STOP_GRACE_SECONDS = 8.0
 DIMOS_STOP_GRACE_SECONDS = 60.0
-BLUEPRINTS = ("unitree_go2_ar", "unitree_go2_ar_agentic", "openyam_ar_planner")
+BLUEPRINTS = tuple(BLUEPRINT_CLI)
 CLIENTS = ("specs", "webxr")
-BLUEPRINT_CLI = {
-    "openyam_ar_planner": "dimos-ar.openyam-ar-planner",
-    "unitree_go2_ar": "dimos-ar.unitree-go2-ar",
-    "unitree_go2_ar_agentic": "dimos-ar.unitree-go2-ar-agentic",
-}
 
 _RE_ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _RE_ARMODULE_READY = re.compile(r"ARModule ready\s+[—\-]\s+(ws://\S+)", re.IGNORECASE)
@@ -501,54 +497,6 @@ class ProcessManager:
                 pids.append(pid)
         return pids
 
-    def _signal_pid(self, pid: int, sig: signal.Signals) -> None:
-        try:
-            os.killpg(os.getpgid(pid), sig)
-        except (ProcessLookupError, PermissionError, OSError):
-            try:
-                os.kill(pid, sig)
-            except (ProcessLookupError, PermissionError, OSError):
-                pass
-
-    async def _kill_port_listeners(self, port: int = ARMODULE_PORT) -> bool:
-        """Kill any process listening on ``port``. Returns True if something was targeted."""
-        pids = await self._pids_listening(port)
-        self._stopping_pids.update(pids)
-        for pid in pids:
-            try:
-                group = os.getpgid(pid)
-                if group != os.getpgrp():
-                    self._stopping_pids.add(group)
-            except ProcessLookupError:
-                pass
-        if not pids:
-            return False
-        self._append_log(
-            f"Stopping process(es) on port {port}: " + ", ".join(str(p) for p in pids)
-        )
-        for pid in pids:
-            self._signal_pid(pid, signal.SIGINT)
-        deadline = asyncio.get_running_loop().time() + STOP_GRACE_SECONDS
-        while asyncio.get_running_loop().time() < deadline:
-            await asyncio.sleep(0.25)
-            if not await self._pids_listening(port):
-                self._append_log(f"Port {port} is free.")
-                return True
-        remaining = await self._pids_listening(port)
-        if remaining:
-            self._append_log(
-                f"Port {port} still held — sending SIGKILL to "
-                + ", ".join(str(p) for p in remaining)
-            )
-            for pid in remaining:
-                self._signal_pid(pid, signal.SIGKILL)
-            await asyncio.sleep(0.2)
-        if await self._pids_listening(port):
-            self._append_log(f"Warning: port {port} is still in use.")
-        else:
-            self._append_log(f"Port {port} is free.")
-        return True
-
     async def _running_dimos_pids(self) -> list[int]:
         """PIDs of `dimos` CLIs. Workers share that process group."""
         try:
@@ -579,39 +527,45 @@ class ProcessManager:
                 pids.append(pid)
         return pids
 
-    async def _stop_pids(self, pids: list[int], label: str) -> None:
-        if not pids:
+    async def _clear_before_start(
+        self, *, client: str, takeover_pids: list[int] | None = None
+    ) -> None:
+        occupied = {port: await self._pids_listening(port) for port in STACK_PORTS}
+        occupied = {port: pids for port, pids in occupied.items() if pids or self.port_in_use(port)}
+        if not occupied:
             return
-        self._append_log(f"Stopping {label}: " + ", ".join(str(pid) for pid in pids))
-        for pid in pids:
-            self._signal_pid(pid, signal.SIGINT)
+        listeners = {pid for pids in occupied.values() for pid in pids}
+        requested = set(takeover_pids or [])
+        if any(isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0 for pid in requested):
+            raise ValueError("takeover_pids must contain positive process IDs")
+        if requested - listeners:
+            raise ValueError("Takeover process is no longer listening on a required port; refresh status")
+        if not requested or listeners - requested or any(not pids for pids in occupied.values()):
+            detail = "; ".join(f"{port} (PIDs {', '.join(map(str, pids)) or 'unknown'})" for port, pids in occupied.items())
+            raise RuntimeError(f"Required ports are in use: {detail}. Stop those processes or explicitly select their PIDs for takeover.")
+        self._append_log("Taking over explicitly selected listeners: " + ", ".join(map(str, sorted(requested))))
+        for pid in requested:
+            try:
+                os.kill(pid, signal.SIGINT)
+            except ProcessLookupError:
+                pass
         deadline = asyncio.get_running_loop().time() + STOP_GRACE_SECONDS
-        remaining = list(pids)
-        while remaining and asyncio.get_running_loop().time() < deadline:
+        while asyncio.get_running_loop().time() < deadline:
+            remaining = {pid for port in occupied for pid in await self._pids_listening(port)}
+            if not remaining & requested:
+                break
             await asyncio.sleep(0.25)
-            alive = set(await self._running_dimos_pids())
-            remaining = [pid for pid in remaining if pid in alive]
-        if remaining:
-            self._append_log(
-                "DimOS still running — sending SIGKILL to "
-                + ", ".join(str(pid) for pid in remaining)
-            )
-            for pid in remaining:
-                self._signal_pid(pid, signal.SIGKILL)
+        else:
+            remaining = {pid for port in occupied for pid in await self._pids_listening(port)}
+            for pid in remaining & requested:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             await asyncio.sleep(0.2)
-
-    async def _clear_before_start(self, *, client: str) -> None:
-        await self._stop_pids(
-            await self._running_dimos_pids(), "existing DimOS process(es)"
-        )
-        ports = list(STACK_PORTS)
-        # The optional WebXR gateway has an independent lifetime.
-        for port in ports:
-            await self._kill_port_listeners(port)
-        stuck = [port for port in ports if self.port_in_use(port)]
+        stuck = [port for port in occupied if self.port_in_use(port)]
         if stuck:
-            listed = ", ".join(str(port) for port in stuck)
-            raise RuntimeError(f"port(s) still in use after cleanup: {listed}")
+            raise RuntimeError("Required ports remain in use after takeover: " + ", ".join(map(str, stuck)))
 
     def build_start_argv(
         self,
@@ -905,6 +859,7 @@ class ProcessManager:
         can_port: str | None = None,
         replay: str | None = None,
         replay_streams: dict[str, str] | None = None,
+        takeover_pids: list[int] | None = None,
     ) -> None:
         if blueprint not in BLUEPRINTS:
             raise ValueError(f"blueprint must be one of {', '.join(BLUEPRINTS)}")
@@ -929,7 +884,7 @@ class ProcessManager:
                     if not can["ready"]:
                         raise ValueError(can["message"])
             self._require_vps_credentials(armodule_config)
-            await self._clear_before_start(client=client)
+            await self._clear_before_start(client=client, **({"takeover_pids": takeover_pids} if takeover_pids is not None else {}))
             await self._configure_system_if_needed()
 
             pinned_ip = robot_ip.strip() if robot_ip else None
@@ -1089,6 +1044,7 @@ class ProcessManager:
     ) -> bool:
         if proc is None or proc.returncode is not None:
             return False
+        self._stopping_pids.add(proc.pid)
         self._append_log(f"Stopping {label} (SIGINT)…")
         try:
             os.killpg(proc.pid, signal.SIGINT)
@@ -1110,6 +1066,7 @@ class ProcessManager:
             except ProcessLookupError:
                 pass
             await proc.wait()
+        self._stopping_pids.discard(proc.pid)
         return True
 
     async def _cancel_task(self, task: asyncio.Task[None] | None) -> None:
@@ -1186,15 +1143,13 @@ class ProcessManager:
         async with self._lock:
             self._set_status(phase=Phase.STOPPING)
             stopped_managed = await self._stop_children_unlocked()
-            freed_port = await self._kill_port_listeners(ARMODULE_PORT)
             if stopped_managed:
                 self._append_log("ARModule stopped.")
-            elif not freed_port:
-                self._append_log(f"No ARModule process on port {ARMODULE_PORT}.")
+            else:
+                self._append_log("No launcher-owned runtime process to stop.")
 
             if (
                 stopped_managed
-                or freed_port
                 or self.status.phase in (Phase.RUNNING, Phase.STARTING, Phase.STOPPING)
             ):
                 self._stopping_pids.clear()

@@ -1,6 +1,41 @@
 import { expect, it, vi } from "vitest";
-vi.mock("SpectaclesUIKit.lspkg/Scripts/Components/Frame/Frame", () => ({ Frame: class {} }));
 import { SpecsArmPanelPresenter } from "../../Assets/Scripts/DimOSSpecsClient/manipulation/SpecsArmPanelPresenter";
+import { Frame } from "../mocks/Frame";
+
+
+it("initializes Frame on an enabled host before hiding it or using its native button setters", () => {
+  const objects: any[] = [];
+  const makeObject = (name: string): any => {
+    let scale = vec3.one();
+    const object = { name, enabled: true, setParent: vi.fn(), destroy: vi.fn(),
+      getTransform: () => ({ setLocalScale: (value: vec3) => { scale = value; }, getLocalScale: () => scale }),
+      createComponent: () => { const frame = new Frame(); frame.sceneObject = object; return frame; },
+    };
+    objects.push(object); return object;
+  };
+  vi.stubGlobal("scene", { createSceneObject: makeObject });
+  try {
+    const presenter = new SpecsArmPanelPresenter(makeObject("parent"));
+    expect(presenter.frame.initialized).toBe(true);
+    expect((presenter.frame as unknown as Frame).listenersDuringInitialize).toBe(0);
+    expect(presenter.root.enabled).toBe(false);
+    expect(presenter.frame.showCloseButton).toBe(false);
+    expect(presenter.frame.showFollowButton).toBe(false);
+    // SUK initialize schedules its default hide tween; setting the flag afterward
+    // leaves that tween running even when the arm presenter enables the root.
+    (presenter.frame as unknown as Frame).finishAnimations();
+    presenter.root.enabled = true;
+    expect(presenter.frame.opacity).toBe(1);
+    expect(presenter.frame.isVisible).toBe(true);
+    expect(presenter.frame.roundedRectangle.renderMeshVisual.enabled).toBe(true);
+    expect(presenter.content.setParent).toHaveBeenCalledWith(presenter.frame.content);
+    presenter.dispose();
+    expect(presenter.root.destroy).toHaveBeenCalledOnce();
+    expect((presenter.frame as unknown as Frame).onTranslationStart.size).toBe(0);
+    expect((presenter.frame as unknown as Frame).onScalingUpdate.size).toBe(0);
+  } finally { vi.unstubAllGlobals(); }
+});
+
 import { ARM_PANEL_STYLE } from "../../Assets/Scripts/DimOSARClient/presentation/PanelFrameStyle";
 class Vector {
   constructor(public x = 0, public y = 0, public z = 0) {}

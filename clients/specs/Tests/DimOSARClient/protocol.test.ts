@@ -1,3 +1,4 @@
+import { helloAt, stateFrame } from "../fixtures/SessionFixture";
 import { describe, it, expect } from "vitest";
 import {
   LIDAR_FOURCC,
@@ -20,42 +21,21 @@ import {
 } from "../../Assets/Scripts/DimOSARClient/websocket/protocol";
 import type { LocalizationObservation } from "../../Assets/Scripts/DimOSARClient/websocket/protocolTypes";
 
-const HELLO_FIXTURE = {
-  type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
-  client_id: "c3f1a9",
-  time_sync: { ts_client: 1234.567, ts_server: 5678.901 },
-  robot: {
-    display_name: "Unitree Go2",
-    body_bounds_m: [0.7, 0.5, 0.55],
-    footprint_m: [0.7, 0.5],
-    base_height_m: 0.33,
-  },
-  capabilities: {
-    lidar: { available: true, reason: null },
-    navigation: {
-      available: true,
-      reason: null,
-      nav_goal: { available: true, reason: null },
-      nav_joystick: { available: true, reason: null },
-    },
-    localization: { available: true, reason: null },
-    estop: { available: true, reason: null },
-    agent: { available: false, reason: "current blueprint has no DimOS agent" },
-  },
-};
+const HELLO_FIXTURE = { ...helloAt(1234.567), time_sync: { ts_client: 1234.567, ts_server: 5678.901 } };
 
-const STATE_FIXTURE = {
-  type: "state",
-  server: { connected_clients: 1 },
-  lidar: {
-    enabled: true,
-    min_height_m: 0.1,
-    max_height_m: 1.5,
-    max_range_m: 5.0,
-  },
-  nav: { state: "idle", outcome: null },
-  agent: { idle: true },
-};
+const STATE_FIXTURE = stateFrame();
+
+it("decodes optional selected localization providers without inventing absent metadata", () => {
+  expect(decodeOutbound(JSON.stringify(HELLO_FIXTURE))).not.toHaveProperty("localization");
+  for (const providers of [[], ["fiducial_marker"], ["vps"], ["fiducial_marker", "vps"]]) {
+    expect(decodeOutbound(JSON.stringify({ ...HELLO_FIXTURE, localization: { providers } })))
+      .toHaveProperty("localization", { providers });
+  }
+  for (const localization of [null, {}, { providers: "vps" }, { providers: ["marker"] },
+    { providers: [1] }, { providers: ["vps", "vps"] }]) {
+    expect(() => decodeOutbound(JSON.stringify({ ...HELLO_FIXTURE, localization }))).toThrow(/localization|providers/);
+  }
+});
 
 function hexToBytes(hex: string): Uint8Array {
   const out = new Uint8Array(hex.length / 2);
@@ -620,7 +600,6 @@ describe("localization_observations binary", () => {
   });
 });
 
-
 it("decodes optional preview support and paths without changing legacy goal defaults", () => {
   const hello = structuredClone(HELLO_FIXTURE);
   Object.assign(hello.capabilities.navigation.nav_goal, { preview: true });
@@ -722,7 +701,6 @@ it("preserves the validated finishing tail in native and shared interaction snap
     }
   }
 });
-
 
 it("validates revision-bound observational arm evaluations", () => {
   const evaluation = { group_id: "arm", target_revision: 2, joints: { slide: 0.3 }, pose: null };

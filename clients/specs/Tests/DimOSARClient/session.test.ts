@@ -1,87 +1,19 @@
-import { PairedBulk } from "../fixtures/PairedBulk";
+import { FakeClock, FakeTransport, helloAt, stateFrame } from "../fixtures/SessionFixture";
 import { ARM_FIXTURE } from "../integration-tests/IntegrationArmFixture";
 import { describe, expect, it } from "vitest";
 import { ClientTrackingOriginStore } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingOrigin";
 import { LIDAR_FOURCC } from "../../Assets/Scripts/DimOSARClient/websocket/protocol";
 import {
   AR_MODULE_CLIENT_CONFIG,
-  type ClientClock,
-  type WebSocketTransport,
 } from "../../Assets/Scripts/DimOSARClient/websocket/hostPorts";
 import { ARModuleSession } from "../../Assets/Scripts/DimOSARClient/websocket/arModuleSession";
 import type {
   Capabilities,
   Hello,
   LocalizationObservationsRequest,
-  State,
 } from "../../Assets/Scripts/DimOSARClient/websocket/protocolTypes";
 
-class FakeClock implements ClientClock {
-  nowS = 0;
-  now(): number {
-    return this.nowS;
-  }
-}
-
-class FakeTransport implements WebSocketTransport {
-  readonly bulk = new PairedBulk(data => this.binaries.push(data));
-  createSibling() { return this.bulk; }
-  connectCount = 0;
-  closeCount = 0;
-  texts: string[] = [];
-  binaries: Uint8Array[] = [];
-
-  connect(): void {
-    this.connectCount += 1;
-  }
-
-  close(): void {
-    this.closeCount += 1;
-  }
-
-  sendText(text: string): void {
-    this.texts.push(text);
-  }
-
-  sendBinary(data: Uint8Array): void {
-    this.binaries.push(data);
-  }
-}
-
-function helloAt(tsClient: number, capabilities?: Partial<Capabilities>): Hello {
-  return {
-    type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
-    client_id: "c3f1a9",
-    time_sync: { ts_client: tsClient, ts_server: 100 },
-    robot: {
-      display_name: "Unitree Go2",
-      body_bounds_m: [0.7, 0.5, 0.55],
-      footprint_m: [0.7, 0.5],
-      base_height_m: 0.33,
-    },
-    capabilities: {
-      lidar: { available: true, reason: null },
-      navigation: {
-        available: true,
-        reason: null,
-        nav_goal: { available: true, reason: null },
-        nav_joystick: { available: true, reason: null },
-      },
-      localization: { available: true, reason: null },
-      estop: { available: true, reason: null },
-      agent: { available: false, reason: "current blueprint has no DimOS agent" },
-      ...capabilities,
-    },
-  };
-}
-
-const STATE: State = {
-  type: "state",
-  server: { connected_clients: 1 },
-  lidar: { enabled: true, min_height_m: 0.1, max_height_m: 1.5, max_range_m: 5 },
-  nav: { state: "idle", outcome: null },
-  agent: { idle: true },
-};
+const STATE = stateFrame();
 
 function makeSession(): {
   session: ARModuleSession;
@@ -518,7 +450,6 @@ describe("session config", () => {
   });
 });
 
-
 it("stores preview replies separately from active navigation and clears both on disconnect", () => {
   const { session, transport } = makeSession(); handshake(session, transport);
   const active = { type: "nav_goal", pose: [1, 2, 0, 0], path_poses: [[1, 2, 0, 0]], ts: 1 };
@@ -547,7 +478,6 @@ for (const reference of ["room-a", "room-b", undefined]) {
     session.stop(); expect(originStore.hasTrackingOrigin).toBe(false);
   });
 }
-
 
 it("assigns distinct monotonic revisions to identical agent messages across connection teardown", () => {
   const { session, transport, clock } = makeSession(); handshake(session, transport, clock);
@@ -814,4 +744,26 @@ it("retains the latest congested update while sending a lease renewal", () => {
   expect(JSON.parse(transport.texts.at(-1)!)).toMatchObject({ action: "renew" });
   clock.nowS = 1.1; session.tick();
   expect(JSON.parse(transport.texts.at(-1)!)).toMatchObject({ action: "update", sequence: 69 });
+});
+
+it("exposes one canonical navigation snapshot for standalone and replicated facts", () => {
+  const { session, transport } = makeSession();
+  handshake(session, transport);
+  const interaction = { type: "interaction_state", epoch: "robot", revision: 1, mode: "manual",
+    authority: null, target: null, active_goal: null, preview: null };
+  session.onTransportText(JSON.stringify(interaction) + "\n");
+  const active = { type: "nav_goal", pose: [2, 0, 0, 0], path_poses: [[0, 0, 0, 0], [2, 0, 0, 0]], ts: 1 };
+  session.onTransportText(JSON.stringify(active) + "\n");
+  let view = session.view();
+  expect(view.nav_goal).toBe(view.interaction!.active_goal);
+  expect(session.collaboration.snapshot().activeGoal).toBe(view.nav_goal);
+  const preview = { ...active, preview: true, preview_id: "canonical-preview" };
+  session.onTransportText(JSON.stringify(preview) + "\n");
+  view = session.view();
+  expect(view.nav_preview).toBe(view.interaction!.preview);
+  expect(session.collaboration.snapshot().preview).toBe(view.nav_preview);
+  session.onTransportText(JSON.stringify({ ...interaction, revision: 2 }) + "\n");
+  view = session.view();
+  expect(view.nav_goal).toBeNull(); expect(view.nav_preview).toBeNull();
+  expect(view.interaction!.active_goal).toBeNull(); expect(view.interaction!.preview).toBeNull();
 });

@@ -259,3 +259,54 @@ describe("paired v2 bulk records", () => {
     } finally { iterator.mockRestore(); }
   });
 });
+
+function articulatedModel() {
+  return {
+    revision: "arm-v1", root: "base", asset_url: null,
+    links: [{ name: "base" }, { name: "tip" }],
+    joints: [{ name: "hinge", parent: "base", child: "tip", kind: "revolute",
+      axis: [0, 0, 1], origin: { position: [0, 0, 0], orientation: [0, 0, 0, 1] },
+      mimic: undefined as { joint: string; multiplier: number; offset: number } | undefined }],
+  };
+}
+
+function modelState(model: unknown) {
+  return { type: "manipulation_state", available: true, ts: 0, model, groups: [], observations: {} };
+}
+
+it.each(["disconnected link", "zero movable axis", "unknown mimic", "cyclic mimic", "root parent"])(
+  "rejects %s through both inline and bulk model decoding",
+  scenario => {
+    const model = articulatedModel();
+    if (scenario === "disconnected link") model.links.push({ name: "orphan" });
+    if (scenario === "zero movable axis") model.joints[0].axis = [0, 0, 0];
+    if (scenario === "unknown mimic") model.joints[0].mimic = { joint: "missing", multiplier: 1, offset: 0 };
+    if (scenario === "cyclic mimic") model.joints[0].mimic = { joint: "hinge", multiplier: 1, offset: 0 };
+    if (scenario === "root parent") {
+      model.joints[0].parent = "tip"; model.joints[0].child = "base";
+    }
+    expect(() => decodeManipulation(modelState(model))).toThrow();
+    const f = fixture();
+    const { links, joints, ...metadata } = model;
+    f.peer.receive({ type: "bulk_record", ...f.ref, kind: "model", part: 0, parts: 1,
+      data: { metadata, links, joints } });
+    f.bulk.tick();
+    expect(f.failures).toHaveLength(1);
+    expect(f.bulk.diagnostics().assets).toBe(0);
+  },
+);
+
+it("accepts the same articulated model through inline and bulk decoding", () => {
+  const model = articulatedModel();
+  expect(() => decodeManipulation(modelState(model))).not.toThrow();
+  const f = fixture();
+  const { links, joints, ...metadata } = model;
+  f.peer.receive({ type: "bulk_record", ...f.ref, kind: "model", part: 0, parts: 1,
+    data: { metadata, links, joints } });
+  f.bulk.tick();
+  const hydrated = f.bulk.hydrate({ ...modelState(undefined), model_ref: f.ref });
+  expect(f.failures).toEqual([]);
+  expect(hydrated.pending).toBe(false);
+  expect(() => decodeManipulation(hydrated.value)).not.toThrow();
+  expect(hydrated.value.model).toEqual(model);
+});

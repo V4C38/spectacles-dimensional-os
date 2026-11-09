@@ -6,11 +6,11 @@ import type { RoundedRectangle } from "SpectaclesUIKit.lspkg/Scripts/Visuals/Rou
 import { SETUP_SUCCESS_STYLE, NAVIGATION_COLORS } from "../../DimOSARClient/presentation/WorldVisualStyle";
 import { WorldMeshRenderer, circleMesh, strokeMesh2D } from "./WorldMeshRenderer";
 import type { TextInputField } from "SpectaclesUIKit.lspkg/Scripts/Components/TextInputField/TextInputField";
-import { CONTROL_PANEL_COPY as COPY, CONTROL_PANEL_LAYOUT, controlPanelTab, robotBadgeText } from "../../DimOSARClient/presentation/ControlPanelPresentation";
+import { CONTROL_PANEL_COPY as COPY, CONTROL_PANEL_LAYOUT, CONTROL_PANEL_TYPE, controlPanelTab, robotBadgeText } from "../../DimOSARClient/presentation/ControlPanelPresentation";
 import { createRoundedSurface, createPanelSurface, createText, createIconButton, createTextInput, getFrameComponent, COLOR_WHITE,
-  configureControlPanelFrame, configurePanelText, SnapOS2Styles, setButtonStyle, panelButtonLayer, panelFontSize, uiMaterialLayer, setButtonEnabled, setButtonSelected, type IconButtonResult } from "./UIKit";
+  configureControlPanelFrame, configurePanelText, createRobotLabelText, SnapOS2Styles, setButtonStyle, panelButtonLayer, panelFontSize, uiMaterialLayer, setButtonEnabled, setButtonSelected, type IconButtonResult } from "./UIKit";
 
-export interface ConnectionPresentation { text: string; color: vec4; phase: "entry" | "error" | "connected"; details?: string; }
+export interface ConnectionPresentation { text: string; color: vec4; phase: "entry" | "error" | "connected"; details?: string; capabilities?: readonly string[]; }
 export const SetupWizardStep = { Connect: "connect", Localization: "localization" } as const;
 export type SetupWizardStep = SetupStep;
 export interface SetupWizardFooterState { footerNextLabel: string; footerNextEnabled: boolean; footerShowPrev: boolean; }
@@ -38,6 +38,11 @@ export class SetupWizardView {
   private readonly description: Text;
   private readonly cardTitle: Text;
   private readonly cardBody: Text;
+  private readonly capabilitiesRoot: SceneObject;
+  private readonly capabilityHeading: Text;
+  private capabilityRuns: Text[] = [];
+  private capabilityKey = "";
+  private capabilityLayoutPending = false;
   private readonly inputAnchor: SceneObject;
   private readonly input: TextInputField;
   private readonly connectionToggle: IconButtonResult;
@@ -88,6 +93,9 @@ export class SetupWizardView {
     this.description = this.text(this.body, "", 0, 1, CONTENT, 6, 20);
     this.cardTitle = this.text(this.body, "Connecting", 0, 10, CONTENT, 4, 23);
     this.cardBody = this.text(this.body, "Waiting for the launcher.", 0, -8, CONTENT, 4, 18);
+    this.capabilitiesRoot = global.scene.createSceneObject("ConnectionCapabilities"); this.capabilitiesRoot.setParent(this.body);
+    this.capabilitiesRoot.enabled = false;
+    this.capabilityHeading = this.text(this.capabilitiesRoot, "Capabilities:", 0, 1.35, CONTENT, 2.7, 18);
     this.inputAnchor = global.scene.createSceneObject("ConnectionEntry"); this.inputAnchor.setParent(this.body);
     this.inputAnchor.getTransform().setLocalPosition(new vec3(0, -17.5, 2));
     this.input = createTextInput(this.inputAnchor, "IpInputField", 60, 6.4, new vec3(-10, 0, 0), panelFontSize(20), HorizontalAlignment.Center);
@@ -99,7 +107,7 @@ export class SetupWizardView {
     this.next = this.button(this.body, COPY.continue, (CONTENT + 2) / 3, -29.8, (CONTENT - 4) / 3, () => this.handlers?.onNext());
     this.preview = createRoundedSurface(this.body, "LocalizationCameraPreview", 34, 22, new vec3(-22.5, -5.5, 2), COLOR_WHITE, 0, 11);
     this.previewRoot = this.preview.getSceneObject(); this.previewRoot.enabled = false;
-    this.guide = new WorldMeshRenderer(this.previewRoot, "AprilTag size guide");
+    this.guide = new WorldMeshRenderer(this.previewRoot, "Fiducial marker size guide");
     this.guide.object.getTransform().setLocalPosition(new vec3(0, 0, 0.2));
     const positions: number[] = [], indices: number[] = [];
     for (let side = 0; side < 4; side++) {
@@ -152,6 +160,7 @@ export class SetupWizardView {
     this.cardTitle.text = state.text;
     this.cardTitle.textFill.color = state.color;
     this.cardBody.text = state.details ?? "";
+    this.setCapabilities(state.phase === "connected" ? state.capabilities ?? [] : null);
     this.profile = SETUP_LAYOUTS[state.phase];
     this.layout();
   }
@@ -167,16 +176,69 @@ export class SetupWizardView {
   }
   setVisible(visible: boolean): void { if (!visible) this.setCameraPreview(null); this.heightController.setVisible(visible); }
   placed(): void { this.heightController.placed(); }
+  private setCapabilities(labels: readonly string[] | null): void {
+    const key = JSON.stringify(labels);
+    if (key === this.capabilityKey) return;
+    this.capabilityKey = key;
+    for (const run of this.capabilityRuns) run.getSceneObject().destroy();
+    this.capabilityRuns = [];
+    this.capabilityHeading.text = "Capabilities:";
+    if (labels !== null) {
+      const entries = labels.length ? labels : ["None"];
+      const em = 18 * CONTROL_PANEL_TYPE.dpToMetres * CONTROL_PANEL_TYPE.labelScale;
+      this.capabilityRuns = entries.map((label, index) => {
+        const bold = ["Navigation", "Manipulation", "Localization"].includes(label);
+        const run = createRobotLabelText(this.capabilitiesRoot, `Capability ${label}`, em,
+          0, 0, CONTENT / 100, bold, COLOR_WHITE, 13);
+        run.text = label + (index < entries.length - 1 ? ", " : "");
+        run.horizontalAlignment = HorizontalAlignment.Left; run.verticalAlignment = VerticalAlignment.Center;
+        run.horizontalOverflow = HorizontalOverflow.Overflow;
+        run.worldSpaceRect = Rect.create(0, CONTENT, -1.35, 1.35);
+        return run;
+      });
+    }
+    this.capabilityLayoutPending = this.capabilityRuns.length > 0;
+    this.capabilitiesRoot.enabled = false;
+  }
+  private layoutCapabilityRuns(): boolean {
+    if (!this.capabilityRuns.length) return true;
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const rows: { text: Text; width: number; left: number }[][] = [[]];
+      let width = 0;
+      for (const text of this.capabilityRuns) {
+        const box = text.getBoundingBox(), size = box.getSize().x;
+        // Native font imports can finish after the Text component is allocated.
+        if (!Number.isFinite(size) || size <= 0) return false;
+        if (width + size > CONTENT && rows[rows.length - 1].length) { rows.push([]); width = 0; }
+        rows[rows.length - 1].push({ text, width: size, left: box.left }); width += size;
+      }
+      if (rows.length <= 2 && rows.every(row => row.reduce((sum, run) => sum + run.width, 0) <= CONTENT)) {
+        rows.forEach((row, line) => {
+          let x = -row.reduce((sum, run) => sum + run.width, 0) / 2;
+          for (const run of row) {
+            run.text.getSceneObject().getTransform().setLocalPosition(new vec3(x - run.left, -1.35 - line * 2.7, 0));
+            x += run.width;
+          }
+        });
+        return true;
+      }
+      for (const text of this.capabilityRuns) text.size *= 0.9;
+    }
+    throw new Error("Capabilities cannot fit within two native text lines");
+  }
   tick(deltaS: number): void {
     if (this.disposed) return;
     this.heightController.tick(deltaS);
     // Newly packed content becomes visible once the growing border can contain it.
     const fits = this.heightController.height + 0.01 >= this.heightController.target;
     const connect = this.step === SetupWizardStep.Connect;
-    this.description.getSceneObject().enabled = fits;
+    this.description.getSceneObject().enabled = fits && !connect;
     this.cardTitle.getSceneObject().enabled = fits;
     this.cardBody.getSceneObject().enabled = fits && (!connect || this.profile.rows.details !== undefined);
     this.inputAnchor.enabled = fits && connect;
+    if (this.capabilityLayoutPending) this.capabilityLayoutPending = !this.layoutCapabilityRuns();
+    this.capabilitiesRoot.enabled = fits && connect && this.profile.rows.details !== undefined &&
+      this.capabilityRuns.length > 0 && !this.capabilityLayoutPending;
     this.previewRoot.enabled = fits && !connect && this.captureLayout && this.hasPreview;
     this.previewLabel.getSceneObject().enabled = fits && !connect && this.captureLayout;
     for (const button of [this.previous, this.retry, this.next]) {
@@ -189,12 +251,14 @@ export class SetupWizardView {
     const move = (node: SceneObject, y: number, x = 0) => node.getTransform().setLocalPosition(new vec3(x, y, 2));
     const rect = (text: Text, width: number, height: number) => { text.worldSpaceRect = Rect.create(-width / 2, width / 2, -height / 2, height / 2); };
     if (this.step === SetupWizardStep.Connect) {
-      move(this.description.getSceneObject(), r.intro);
       move(this.cardTitle.getSceneObject(), r.status);
       rect(this.cardTitle, CONTENT, this.profile === SETUP_LAYOUTS.error ? 6.5 : 4);
       move(this.inputAnchor, r.entry);
       this.cardBody.getSceneObject().enabled = r.details !== undefined;
-      if (r.details !== undefined) { move(this.cardBody.getSceneObject(), r.details); rect(this.cardBody, CONTENT, 11.5); }
+      if (r.details !== undefined) {
+        move(this.cardBody.getSceneObject(), r.details + 4.05); rect(this.cardBody, CONTENT, 2.7);
+        move(this.capabilitiesRoot, r.details);
+      }
     } else {
       move(this.description.getSceneObject(), r.provider);
       const capture = this.captureLayout;
@@ -215,7 +279,7 @@ export class SetupWizardView {
     this.body.enabled = true; this.success.enabled = false;
     this.inputAnchor.enabled = !aligning; this.previewRoot.enabled = false; this.previewLabel.getSceneObject().enabled = aligning;
     this.steps.forEach((button, i) => setButtonSelected(button.button, i === (aligning ? 1 : 0)));
-    this.description.getSceneObject().enabled = true;
+    this.description.getSceneObject().enabled = aligning;
     this.description.getSceneObject().getTransform().setLocalPosition(new vec3(0, aligning ? 13.5 : 1, 2));
     this.cardTitle.getSceneObject().getTransform().setLocalPosition(new vec3(aligning ? 19 : 0, aligning ? 2.2 : 10, 2));
     this.cardTitle.worldSpaceRect = Rect.create(aligning ? -19.5 : -39, aligning ? 19.5 : 39, -2, 2);

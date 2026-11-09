@@ -1,6 +1,6 @@
 import { getRobotActivityState, type RobotActivityState } from "@dimos-ar-client/robot/RobotMarkerState";
 import type { RobotSelection } from "@dimos-ar-client/robot/RobotSelection";
-import { availableFeatures, localizationGuidance, localizationProviderLabel } from "@dimos-ar-client/presentation/ControlPanelPresentation";
+import { availableFeatures, localizationGuidance, localizationProviderLabel, localizationKind } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 export { availableFeatures } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 import { SetupFlow, type SetupStep } from "@dimos-ar-client/presentation/SetupFlow";
 import { LidarDisplayController } from "@dimos-ar-client/sensors/LidarDisplayController";
@@ -176,10 +176,7 @@ export class WebXRUIPresenter {
     const link = sessionLinkStatus(view, view.hello?.robot.display_name);
     const episode = this.episode.view();
     const capture = localizationCaptureStatus(view, episode, this.nowS);
-    const policy = this.episode.view().capturePolicy;
-    const kind = view.capabilities?.localization.available !== true ? "unavailable" :
-      policy === "robot_los_required" ? "marker" : policy === "any_angle" ? "vps" :
-        policy === "robot_los_preferred" ? "mixed" : "unknown";
+    const kind = localizationKind(view, episode.capturePolicy);
     const descriptions = {
       connect: "",
       localization: localizationProviderLabel(kind),

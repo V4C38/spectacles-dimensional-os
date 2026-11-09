@@ -32,11 +32,22 @@ def send(channel: socket.socket, value: Any) -> None:
     channel.sendall(struct.pack("!I", len(data)) + data)
 
 
+def synchronize_scene(monitor: Any, snapshot: bytes) -> None:
+    obstacles = pickle.loads(snapshot)
+    for obstacle in monitor.world.get_obstacles():
+        if not monitor.remove_obstacle(obstacle.name):
+            raise ValueError("Planning scene could not retire an obstacle")
+    for obstacle in obstacles:
+        if not monitor.add_obstacle(obstacle):
+            raise ValueError("Planning scene could not install an obstacle")
+
+
 class PlanningWorker:
     def __init__(self, config: Any) -> None:
         self.channel, child = socket.socketpair()
         self.channel.settimeout(60)
         self.lock = threading.Lock()
+        self._closed = False
         self.process = subprocess.Popen(
             [sys.executable, "-m", __name__, str(child.fileno())],
             pass_fds=(child.fileno(),),
@@ -53,15 +64,29 @@ class PlanningWorker:
             self.close()
             raise RuntimeError(str(reply))
 
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
     def call(self, action: str, feedback: Any, *args: Any, **kwargs: Any) -> Any:
         with self.lock:
-            send(self.channel, (action, feedback, args, kwargs))
-            ok, result = receive(self.channel)
+            if self._closed:
+                raise RuntimeError("Planning worker retired")
+            try:
+                send(self.channel, (action, feedback, args, kwargs))
+                ok, result = receive(self.channel)
+            except (OSError, EOFError, ValueError, pickle.UnpicklingError, struct.error):
+                # An unresolved reply cannot be attributed to a later target.
+                self.close()
+                raise
         if not ok:
             raise ValueError(result)
         return result
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         self.channel.close()
         self.process.terminate()
         try:
@@ -124,11 +149,19 @@ def main(fd: int) -> None:
         send(channel, True)
         previous_solutions: dict[str, Any] = {}
         previous_context: Any = None
+        previous_scene: bytes | None = None
         while True:
             action, feedback, args, kwargs = receive(channel)
             try:
                 if feedback is None:
                     raise ValueError("No joint feedback")
+                scene = kwargs.pop("scene", None)
+                if scene is None:
+                    raise ValueError("Planning requires an authoritative scene snapshot")
+                if scene != previous_scene:
+                    synchronize_scene(module._world_monitor, scene)
+                    previous_scene = scene
+                    previous_solutions.clear()
                 world.sync_from_joint_state(feedback)
                 module._state = ManipulationState.IDLE
                 if action == "evaluate":

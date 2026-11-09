@@ -10,7 +10,7 @@ vi.hoisted(() => {
 import * as THREE from "three";
 import * as xb from "xrblocks";
 import { MainMenuView } from "../src/presentation/MainMenuView";
-import { PanelHeightController } from "../src/presentation/PanelHeightController";
+import { PanelHeightAnimation } from "@dimos-ar-client/presentation/PanelHeightAnimation";
 import { RUNTIME_FOOTER_GAP, RUNTIME_LAYOUTS, SETUP_LAYOUTS } from "../src/presentation/PanelLayout";
 import type { WebXRUISnapshot } from "../src/presentation/WebXRUIPresenter";
 import type { GlassSurface } from "../src/presentation/GlassSurface";
@@ -30,7 +30,7 @@ function harness() {
     wizardTitle: "", wizardDescription: "", wizardCardTitle: "Connected", wizardCardBody: "Ready", nextLabel: "Continue", localizationIssue: null,
     captureText: "", captureTone: "muted", backVisible: false, agentMessage: null, hudText: null, hudTone: null,
   };
-  const internals = view as unknown as { heightController: PanelHeightController; plate: GlassSurface; hud: xb.TextView; cardTitle: xb.TextView; chat: THREE.Group;
+  const internals = view as unknown as { heightController: PanelHeightAnimation; plate: GlassSurface; hud: xb.TextView; cardTitle: xb.TextView; chat: THREE.Group;
     manualHelp: THREE.Group; wizardBody: THREE.Group; wizardFooter: THREE.Group; header: THREE.Group; estop: xb.TextButton;
     settingsOpen: boolean; sensorsOpen: boolean; detailsOpen: boolean; appearanceRoot: THREE.Group };
   const apply = (overrides: Partial<WebXRUISnapshot> = {}) => view.apply({ ...snap, ...overrides });

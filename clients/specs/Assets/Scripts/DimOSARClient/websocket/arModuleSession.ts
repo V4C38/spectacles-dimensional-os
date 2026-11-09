@@ -100,8 +100,6 @@ export class ARModuleSession {
   private coalescedControl = 0;
   private state: State | null = null;
   private pose: Pose | null = null;
-  private nav_goal: NavGoal | null = null;
-  private nav_preview: NavGoal | null = null;
   private lidar: Lidar | null = null;
   private manipulation: ManipulationState | null = null;
   private agentMessage: string | null = null;
@@ -380,8 +378,8 @@ export class ARModuleSession {
       hello: this.hello,
       state: this.state,
       pose: this.pose,
-      nav_goal: this.nav_goal,
-      nav_preview: this.nav_preview,
+      nav_goal: this.collaboration.navigation().active_goal,
+      nav_preview: this.collaboration.navigation().preview,
       manipulation: this.manipulation,
       manipulationError: this.manipulationError,
       lidar: this.lidar,
@@ -534,8 +532,8 @@ export class ARModuleSession {
         this.invalidateAssetStream("nav_goal:preview");
         this.invalidateAssetStream("manipulation_state");
       } else {
-        if (value.active_goal === null || !this.sameGoal(value.active_goal, this.nav_goal)) this.invalidateAssetStream("nav_goal:active");
-        if (value.preview === null || !this.sameGoal(value.preview, this.nav_preview)) this.invalidateAssetStream("nav_goal:preview");
+        if (value.active_goal === null || !this.sameGoal(value.active_goal, this.collaboration.navigation().active_goal)) this.invalidateAssetStream("nav_goal:active");
+        if (value.preview === null || !this.sameGoal(value.preview, this.collaboration.navigation().preview)) this.invalidateAssetStream("nav_goal:preview");
       }
     }
     if (stream) this.invalidateAssetStream(stream);
@@ -575,8 +573,6 @@ export class ARModuleSession {
       case "manipulation_result": this.emitOutbound(message); return;
       case "interaction_state":
         if (!(completedAssets ? this.collaboration.completeAssets(message) : this.collaboration.apply(message))) return;
-        this.nav_goal = message.active_goal;
-        this.nav_preview = message.preview;
         break;
       case "interaction_result":
         this.collaboration.accept(message);
@@ -588,8 +584,7 @@ export class ARModuleSession {
         this.pose = message;
         break;
       case "nav_goal":
-        if (message.preview) this.nav_preview = message;
-        else this.nav_goal = message;
+        this.collaboration.applyNavigation(message);
         break;
       case "localization_context":
         if (message.odom_reference_id !== this.hello?.odom_reference_id) return;
@@ -714,8 +709,7 @@ export class ARModuleSession {
     if (!preserveInteraction) this.hello = null;
     this.state = null;
     this.pose = null;
-    this.nav_goal = null;
-    this.nav_preview = null;
+    this.collaboration.clearNavigation();
     this.lidar = null;
     if (!preserveInteraction) this.manipulation = null;
     this.manipulationError = null;

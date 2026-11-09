@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -25,6 +26,7 @@ from config import env_path, merge_env, normalize_log_level, read_env, repo_root
 from dimos_config import merge_armodule_config, read_armodule_config
 from discovery import discover_devices, validate_replay
 from robot_profiles import RobotProfiles
+from robot_sources import SourceBody, SourceSelectionRequired, resolve_robot_source
 from tag_config import (
     DEFAULT_MOUNT,
     LOCALIZATION_POLICY_DEFAULTS,
@@ -46,6 +48,16 @@ def require_local_launcher(request: Request) -> None:
     client = request.client.host if request.client else ""
     if client not in ("127.0.0.1", "::1", "localhost"):
         raise HTTPException(status_code=403, detail="launcher is localhost-only")
+    if request.url.hostname not in {"localhost", "127.0.0.1", "::1"}:
+        raise HTTPException(status_code=403, detail="untrusted launcher host")
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        origin = request.headers.get("origin")
+        if origin:
+            parsed = urlsplit(origin)
+            if (parsed.scheme, parsed.netloc) != (request.url.scheme, request.url.netloc):
+                raise HTTPException(status_code=403, detail="launcher requires same-origin requests")
+        if request.headers.get("sec-fetch-site") == "cross-site":
+            raise HTTPException(status_code=403, detail="cross-site launcher request")
 
 
 @asynccontextmanager
@@ -66,7 +78,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             logger.exception("ARModule stop during launcher shutdown failed")
 
 
-app = FastAPI(title="DimOS ARModule", lifespan=lifespan)
+app = FastAPI(
+    title="DimOS ARModule", lifespan=lifespan,
+    dependencies=[Depends(require_local_launcher)],
+)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
@@ -78,16 +93,8 @@ class SetupBody(BaseModel):
     dimos_ref: str | None = None
 
 
-class SourceBody(BaseModel):
-    mode: Literal["auto", "device", "manual", "simulated"]
-    device_id: str | None = None
-    address: str | None = None
-    replay: str | None = None
-    playback: Literal["simulator", "recording"] = "simulator"
-    streams: dict[str, str] = Field(default_factory=dict)
-
-
 class StartBody(BaseModel):
+    takeover_pids: list[int] | None = None
     source: SourceBody | None = None
     profile_id: str | None = None
     simulation: bool = False
@@ -131,9 +138,11 @@ def _blank_to_none(value: str | None) -> str | None:
     return stripped or None
 
 
-def settings_payload() -> dict[str, Any]:
+def settings_payload(profile_id: str | None = None) -> dict[str, Any]:
     stored = read_env(env_path())
-    ui = ui_from_armodule_config(read_armodule_config())
+    ui = ui_from_armodule_config(
+        robot_profiles.get(profile_id)["armodule"] if profile_id else read_armodule_config()
+    )
     return {
         "openai_api_key": stored.get("OPENAI_API_KEY", ""),
         "multiset_client_id": stored.get("MULTISET_CLIENT_ID", ""),
@@ -190,7 +199,7 @@ async def api_status() -> dict[str, Any]:
     return manager.snapshot()
 
 
-@app.get("/api/dimos-refs", dependencies=[Depends(require_local_launcher)])
+@app.get("/api/dimos-refs")
 async def api_dimos_refs() -> dict[str, Any]:
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -214,7 +223,7 @@ async def api_dimos_refs() -> dict[str, Any]:
     return {"refs": refs, "default": "main"}
 
 
-@app.post("/api/browse-dimos-install", dependencies=[Depends(require_local_launcher)])
+@app.post("/api/browse-dimos-install")
 async def api_browse_dimos_install(request: Request) -> dict[str, str | None]:
     """Open a native folder chooser for an existing DimOS installation."""
     if not await asyncio.to_thread(_has_display):
@@ -318,7 +327,7 @@ def _resolve_dimos_python(path: str) -> str:
     )
 
 
-@app.post("/api/setup", dependencies=[Depends(require_local_launcher)])
+@app.post("/api/setup")
 async def api_setup(body: SetupBody) -> dict[str, Any]:
     try:
         if body.mode == "existing":
@@ -350,7 +359,7 @@ async def api_setup(body: SetupBody) -> dict[str, Any]:
     return manager.snapshot()
 
 
-@app.post("/api/check", dependencies=[Depends(require_local_launcher)])
+@app.post("/api/check")
 async def api_check() -> dict[str, Any]:
     try:
         return await manager.run_check()
@@ -358,17 +367,17 @@ async def api_check() -> dict[str, Any]:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@app.get("/api/settings", dependencies=[Depends(require_local_launcher)])
+@app.get("/api/settings")
 async def api_settings_get() -> dict[str, Any]:
     return settings_payload()
 
 
-@app.get("/api/can/status", dependencies=[Depends(require_local_launcher)])
+@app.get("/api/can/status")
 async def api_can_status(interface: str = "can0") -> dict[str, Any]:
     return await manager.can_status(interface) if interface != "can0" else await manager.can_status()
 
 
-@app.post("/api/can/setup", dependencies=[Depends(require_local_launcher)])
+@app.post("/api/can/setup")
 async def api_can_setup(interface: str = "can0") -> dict[str, Any]:
     try:
         return await manager.setup_can(interface) if interface != "can0" else await manager.setup_can()
@@ -378,12 +387,12 @@ async def api_can_setup(interface: str = "can0") -> dict[str, Any]:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@app.get("/api/planner/status", dependencies=[Depends(require_local_launcher)])
+@app.get("/api/planner/status")
 async def api_planner_status() -> dict[str, Any]:
     return await manager.planner_status()
 
 
-@app.put("/api/settings", dependencies=[Depends(require_local_launcher)])
+@app.put("/api/settings")
 async def api_settings_put(body: SettingsBody) -> dict[str, Any]:
     phase = manager.status.phase.value
     if phase in ("starting", "running", "stopping"):
@@ -422,7 +431,7 @@ async def api_settings_put(body: SettingsBody) -> dict[str, Any]:
         env_updates,
         env_path(),
     )
-    return {**manager.snapshot(), **settings_payload()}
+    return {**manager.snapshot(), **settings_payload(body.profile_id)}
 
 
 @app.get("/api/apriltag/{tag_id}.png")
@@ -443,7 +452,7 @@ async def api_apriltag_pdf(tag_id: int, size_mm: float = 70.0) -> FileResponse:
     return FileResponse(path, media_type="application/pdf")
 
 
-@app.post("/api/apriltag/decode", dependencies=[Depends(require_local_launcher)])
+@app.post("/api/apriltag/decode")
 async def api_apriltag_decode(file: Annotated[UploadFile, File()]) -> dict[str, Any]:
     filename = (file.filename or "").lower()
     if not filename.endswith(".png"):
@@ -458,7 +467,7 @@ async def api_apriltag_decode(file: Annotated[UploadFile, File()]) -> dict[str, 
     return {"marker_id": marker_id}
 
 
-@app.post("/api/armodule/start", dependencies=[Depends(require_local_launcher)])
+@app.post("/api/armodule/start")
 async def api_armodule_start(body: StartBody) -> dict[str, Any]:
     if body.blueprint == "openyam_ar_planner" and (not body.profile_id):
         raise HTTPException(
@@ -472,56 +481,34 @@ async def api_armodule_start(body: StartBody) -> dict[str, Any]:
     replay = None
     simulation = body.simulation
     if body.source:
-        if body.simulation and body.source.mode != "simulated":
-            raise HTTPException(status_code=400, detail="Conflicting simulation and hardware selections")
         source = body.source
         robot = "openyam" if body.blueprint == "openyam_ar_planner" else "unitree_go2"
-        if source.mode in {"auto", "device"}:
-            devices = await api_discovery(robot)
-            choices = devices["devices"]
-            if source.mode == "device":
-                choices = [d for d in choices if d["id"] == source.device_id]
-            if len(choices) != 1:
-                raise HTTPException(status_code=409, detail={"message": "Choose a robot" if choices else ("No devices found; confirm Simulated with another Start click" if source.mode == "auto" else "Selected device unavailable; refresh or choose another connection"), "suggest_simulated": not choices and source.mode == "auto", "devices": choices})
-            address = choices[0]["address"]
-            if robot == "openyam":
-                can_port = address
-            else:
-                robot_ip = address
-        elif source.mode == "manual":
-            if robot != "unitree_go2" or not source.address:
-                raise HTTPException(status_code=400, detail="Manual IP requires a Go2 address")
-            import ipaddress
+        devices = (await api_discovery(robot))["devices"] if source.mode in {"auto", "device"} else []
+        try:
+            resolved = resolve_robot_source(robot, source, devices, simulation=body.simulation)
+        except SourceSelectionRequired as exc:
+            raise HTTPException(status_code=409, detail={
+                "message": str(exc), "suggest_simulated": exc.suggest_simulated,
+                "devices": exc.devices,
+            }) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        robot_ip, can_port, simulation, replay = resolved.robot_ip, resolved.can_port, resolved.simulation, resolved.replay
+        if replay:
+            if not manager.status.dimos_python:
+                raise HTTPException(status_code=409, detail="Select a DimOS environment first")
             try:
-                robot_ip = str(ipaddress.IPv4Address(source.address.strip()))
-            except ipaddress.AddressValueError as exc:
-                raise HTTPException(status_code=400, detail="Enter a valid Go2 IPv4 address") from exc
-        else:
-            simulation = robot == "openyam"
-            robot_ip = "simulated" if robot == "unitree_go2" else None
-            replay = source.replay
-            if robot == "openyam" and source.playback == "recording" and not replay:
-                raise HTTPException(status_code=400, detail="Choose an OpenYAM recording")
-            if robot == "openyam" and source.playback == "simulator":
-                replay = None
-            if replay:
-                path = Path(replay).expanduser()
-                if path.suffix != ".db" or not path.is_file():
-                    raise HTTPException(status_code=400, detail="Choose an existing .db replay")
-                replay = str(path.resolve())
-                if not manager.status.dimos_python:
-                    raise HTTPException(status_code=409, detail="Select a DimOS environment first")
-                try:
-                    info = await validate_replay(manager.status.dimos_python, replay, robot, source.streams)
-                    if info["needs_selection"]:
-                        raise ValueError("Select recording streams before starting")
-                    source.streams = info["streams"]
-                except (ValueError, OSError, TimeoutError) as exc:
-                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                info = await validate_replay(manager.status.dimos_python, replay, robot, source.streams)
+                if info["needs_selection"]:
+                    raise ValueError("Select recording streams before starting")
+                source.streams = info["streams"]
+            except (ValueError, OSError, TimeoutError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         await manager.start_armodule(
             blueprint=body.blueprint,
             client=body.client,
+            **({"takeover_pids": body.takeover_pids} if body.takeover_pids else {}),
             robot_ip=robot_ip,
             **(
                 {
@@ -543,7 +530,7 @@ async def api_armodule_start(body: StartBody) -> dict[str, Any]:
     return manager.snapshot()
 
 
-@app.post("/api/armodule/stop", dependencies=[Depends(require_local_launcher)])
+@app.post("/api/armodule/stop")
 async def api_armodule_stop(force: bool = False) -> dict[str, Any]:
     if force:
         await manager.stop_armodule(force=True)
@@ -552,7 +539,7 @@ async def api_armodule_stop(force: bool = False) -> dict[str, Any]:
     return manager.snapshot()
 
 
-@app.post("/api/webxr/start", dependencies=[Depends(require_local_launcher)])
+@app.post("/api/webxr/start")
 async def api_webxr_start() -> dict[str, Any]:
     try:
         await manager.start_webxr()
@@ -561,13 +548,13 @@ async def api_webxr_start() -> dict[str, Any]:
     return manager.snapshot()
 
 
-@app.post("/api/webxr/stop", dependencies=[Depends(require_local_launcher)])
+@app.post("/api/webxr/stop")
 async def api_webxr_stop() -> dict[str, Any]:
     await manager.stop_webxr()
     return manager.snapshot()
 
 
-@app.post("/api/backend/stop", dependencies=[Depends(require_local_launcher)])
+@app.post("/api/backend/stop")
 async def api_backend_stop() -> dict[str, Any]:
     await manager.stop_backend()
     return manager.snapshot()
@@ -614,7 +601,7 @@ async def api_robot_profiles() -> dict[str, Any]:
     }
 
 
-@app.post("/api/robot-profiles", dependencies=[Depends(require_local_launcher)])
+@app.post("/api/robot-profiles")
 async def api_create_robot_profile(body: RobotProfileBody) -> dict[str, Any]:
     _require_profile_editable()
     try:
@@ -624,7 +611,7 @@ async def api_create_robot_profile(body: RobotProfileBody) -> dict[str, Any]:
 
 
 @app.put(
-    "/api/robot-profiles/{profile_id}", dependencies=[Depends(require_local_launcher)]
+    "/api/robot-profiles/{profile_id}"
 )
 async def api_rename_robot_profile(
     profile_id: str, body: RobotProfileBody
@@ -639,7 +626,7 @@ async def api_rename_robot_profile(
 
 
 @app.delete(
-    "/api/robot-profiles/{profile_id}", dependencies=[Depends(require_local_launcher)]
+    "/api/robot-profiles/{profile_id}"
 )
 async def api_delete_robot_profile(profile_id: str) -> dict[str, bool]:
     _require_profile_editable()
@@ -650,7 +637,7 @@ async def api_delete_robot_profile(profile_id: str) -> dict[str, bool]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.get("/api/discovery", dependencies=[Depends(require_local_launcher)])
+@app.get("/api/discovery")
 async def api_discovery(robot: Literal["unitree_go2", "openyam"]) -> dict[str, Any]:
     python = manager.status.dimos_python
     if not python:
@@ -672,7 +659,7 @@ class ReplayBody(BaseModel):
     streams: dict[str, str] = Field(default_factory=dict)
 
 
-@app.post("/api/replay/inspect", dependencies=[Depends(require_local_launcher)])
+@app.post("/api/replay/inspect")
 async def api_inspect_replay(body: ReplayBody) -> dict[str, Any]:
     if not manager.status.dimos_python:
         raise HTTPException(status_code=409, detail="Select a DimOS environment first")
@@ -682,7 +669,7 @@ async def api_inspect_replay(body: ReplayBody) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.post("/api/browse-replay", dependencies=[Depends(require_local_launcher)])
+@app.post("/api/browse-replay")
 async def api_browse_replay() -> dict[str, str | None]:
     if not await asyncio.to_thread(_has_display):
         raise HTTPException(status_code=409, detail="Enter the local recording path; no desktop chooser is available")
@@ -708,14 +695,17 @@ class PreferencesBody(BaseModel):
     manual_ip: str = ""
 
 
-@app.get("/api/launcher-preferences", dependencies=[Depends(require_local_launcher)])
+@app.get("/api/launcher-preferences")
 async def api_preferences_get() -> dict[str, Any]:
     import preferences
 
-    return preferences.read()
+    try:
+        return PreferencesBody.model_validate(preferences.read()).model_dump()
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid launcher preferences: {exc}") from exc
 
 
-@app.put("/api/launcher-preferences", dependencies=[Depends(require_local_launcher)])
+@app.put("/api/launcher-preferences")
 async def api_preferences_put(body: PreferencesBody) -> dict[str, Any]:
     import preferences
 

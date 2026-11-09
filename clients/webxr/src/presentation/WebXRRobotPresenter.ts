@@ -1,4 +1,4 @@
-import { RobotBoundsAnimation } from "./RobotBoundsAnimation";
+import { RobotBoundsAnimation } from "@dimos-ar-client/presentation/RobotBoundsAnimation";
 import { RobotMarkerLabel } from "./RobotMarkerLabel";
 import { ROBOT_LABEL_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
 import * as THREE from "three";
@@ -23,7 +23,7 @@ import {
   getRobotActivityState,
   robotTitleText,
   type RobotMarkerApplyInput,
-} from "./RobotMarkerState";
+} from "@dimos-ar-client/robot/RobotMarkerState";
 
 export type RobotFeedback = {
   tone: StatusTone;

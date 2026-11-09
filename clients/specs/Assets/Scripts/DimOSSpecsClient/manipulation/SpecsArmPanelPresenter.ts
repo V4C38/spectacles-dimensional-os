@@ -15,15 +15,18 @@ export class SpecsArmPanelPresenter {
 
   constructor(parent: SceneObject) {
     this.root = global.scene.createSceneObject("ArmControlFrame"); this.root.setParent(parent);
-    this.root.enabled = false;
     this.frame = this.root.createComponent(Frame.getTypeName()) as Frame;
+    // Disable SDK hover hiding before initialize schedules its initial opacity tween.
+    this.frame.autoShowHide = false;
+    // Native initialization creates enabled SDK children and emits scaling events synchronously.
+    this.frame.initialize();
     this.frame.showCloseButton = false; this.frame.showFollowButton = false;
+    this.content = global.scene.createSceneObject("ManipulationMenu"); this.content.setParent(this.frame.content);
+    this.configure(); this.reset();
+    this.root.enabled = false;
     this.subscriptions.push(this.frame.onInitialized.add(() => this.configure()));
     this.subscriptions.push(this.frame.onTranslationStart.add(() => { if (!this.configuring) this.pinned = true; }));
     this.subscriptions.push(this.frame.onScalingUpdate.add(() => { if (!this.configuring) { this.pinned = true; this.clamp(); } }));
-    this.frame.initialize();
-    this.content = global.scene.createSceneObject("ManipulationMenu"); this.content.setParent(this.frame.content);
-    this.configure(); this.reset();
   }
   private configure(): void {
     if (this.configured || !isFrameInitialized(this.frame)) return;

@@ -1,3 +1,4 @@
+import { immediateAuthority } from "../../fixtures/ImmediateAuthority";
 import { describe, expect, it } from "vitest";
 import { ManipulationInteraction } from "../../../Assets/Scripts/DimOSARClient/manipulation/ManipulationInteraction";
 import {
@@ -13,6 +14,7 @@ function fixture() {
   let listener: (message: Outbound) => void = () => {};
   const view: any = {
     connection: "ready",
+    hello: { protocol_version: 2, server_follow_stream: false },
     capabilities: { manipulation: { available: true } },
     manipulation: {
       groups: [{ id: "arm", following: true, joint_names: ["joint"] }],
@@ -26,9 +28,11 @@ function fixture() {
       },
     },
   };
+  const authority = immediateAuthority({ now: () => now, ready: () => view.connection === "ready" });
   const interaction = new ManipulationInteraction(
     {
       view: () => view,
+      collaboration: authority.collaboration,
       assetTransferDeadline: (id: string) => assets.get(id) ?? null,
       sendText: (text) => sent.push(JSON.parse(text)),
       subscribeOutbound: (callback) => {
@@ -39,30 +43,40 @@ function fixture() {
     () => now,
   );
   interaction.tick();
+  function pump() {
+    for (let frame = 0; frame < 3; frame++) { authority.tick(); interaction.tick(); }
+  }
   function reply(command: any, payload: object) {
+    if (command.action === "execute") view.manipulation.plan = null;
+    if (payload && "plan_id" in payload) view.manipulation.plan = {
+      ...payload, target_revision: command.target_revision, group_id: command.group_id,
+    };
     listener({
       type: "manipulation_result",
       request_id: command.request_id,
       action: command.action,
       group_id: command.group_id,
       status: "completed",
+      target_revision: command.target_revision,
       ...payload,
     } as Outbound);
+    pump();
   }
   return {
     interaction,
     sent,
     assets,
+    authority,
     reply,
     view,
     tail: (position = pose, joints = { joint: 0.3 }) => {
       view.manipulation.following_tail = { generation: 1, group_id: "arm", status: "finishing", target_revision: 1, ...position, joints };
-      interaction.tick();
+      pump();
     },
     advance: (seconds: number, fresh = true) => {
       now += seconds;
       if (fresh) view.manipulation.observations.arm.measured_at = now;
-      interaction.tick();
+      pump();
     },
   };
 }
@@ -92,7 +106,7 @@ describe("manipulation intent", () => {
       duration: 1,
     });
     f.interaction.end();
-    f.interaction.execute();
+    f.interaction.execute(); f.advance(0);
     expect(f.sent.at(-1).plan_id).toBe("reviewed");
     expect(
       f.sent.some((c) => c.action === "acquire" || c.action === "update"),
@@ -105,7 +119,8 @@ describe("manipulation intent", () => {
     f.interaction.aim(pose);
     f.interaction.end();
     f.reply(acquire, { status: "acquired", token: "late" });
-    expect(f.sent.at(-1)).toMatchObject({ action: "release", token: "late" });
+    expect(f.authority.state.authority).toBeNull();
+    expect(f.sent.some(command => command.action === "release" || command.action === "update")).toBe(false);
     f.advance(1);
     expect(f.sent.some((c) => c.action === "update")).toBe(false);
   });
@@ -117,13 +132,13 @@ describe("manipulation intent", () => {
     f.advance(0.1);
     expect(f.sent.at(-1).action).toBe("update");
     f.interaction.setSelected(true);
-    expect(f.sent.at(-1).action).toBe("release");
+    expect(f.authority.state.authority).toBeNull();
     const before = f.sent.length;
     f.view.connection = "failed";
     f.advance(1);
     f.view.connection = "ready";
     f.advance(1);
-    expect(f.sent.length).toBe(before);
+    expect(f.sent.slice(before).some(command => ["acquire", "update", "execute", "gripper", "reset_joints"].includes(command.action))).toBe(false);
   });
   it("retires obsolete planner replies", () => {
     const f = fixture();
@@ -184,7 +199,7 @@ it("Execute obtains a checked plan and executes exactly its ID without a Plan cl
   f.interaction.begin();
   f.interaction.aim(pose);
   f.interaction.end();
-  f.interaction.execute();
+  f.interaction.execute(); f.advance(0);
   f.advance(0.1);
   const request = f.sent.at(-1);
   expect(request.action).toBe("plan");
@@ -206,7 +221,7 @@ it("deselection and speed changes retire pending execution targets", () => {
   f.interaction.begin();
   f.interaction.aim(pose);
   f.interaction.end();
-  f.interaction.execute();
+  f.interaction.execute(); f.advance(0);
   f.advance(0.1);
   const request = f.sent.at(-1);
   f.interaction.setSelected(false);
@@ -218,7 +233,8 @@ it("deselection and speed changes retire pending execution targets", () => {
     trajectory: [{ time: 0, positions: [0] }],
     duration: 0,
   });
-  expect(f.interaction.target).toBeNull();
+  // The shared draft survives reselection; obsolete local execute intent does not.
+  expect(f.interaction.target).toEqual(pose);
   expect(f.sent.some((c) => c.action === "execute")).toBe(false);
   f.interaction.setSpeedScale(0.4);
   expect(f.interaction.speedScale).toBe(0.4);
@@ -227,7 +243,7 @@ it("deselection and speed changes retire pending execution targets", () => {
 it("Reset is a distinct joint-zero request using the selected speed", () => {
   const f = fixture();
   f.interaction.setSpeedScale(0.1);
-  f.interaction.resetJoints();
+  f.interaction.resetJoints(); f.advance(0);
   expect(f.sent.at(-1)).toMatchObject({
     action: "reset_joints",
     speed_scale: 0.1,
@@ -243,7 +259,7 @@ it("selected gripper intent is attached to the plan without moving the gripper",
   f.interaction.end();
   f.interaction.setGripper(1);
   expect(f.sent.some((c) => c.action === "gripper")).toBe(false);
-  f.interaction.execute();
+  f.interaction.execute(); f.advance(0);
   f.advance(0.1);
   expect(f.sent.at(-1)).toMatchObject({ action: "plan", final_gripper: 1 });
 });
@@ -380,7 +396,7 @@ it("requires Execute for a selected gripper at the measured pose", () => {
   f.interaction.setSelected(true);
   f.interaction.setGripper(1);
   expect(f.sent.some(c => c.action === "gripper")).toBe(false);
-  f.interaction.execute();
+  f.interaction.execute(); f.advance(0);
   expect(f.sent.at(-1)).toMatchObject({ action: "gripper", value: 1 });
   f.advance(0.01);
   expect(f.sent.filter((c) => c.action === "plan")).toHaveLength(0);
@@ -399,7 +415,7 @@ it("does not retry timed-out execution and blocks plans with stale feedback", ()
   f.interaction.end();
   f.advance(0.01);
   f.reply(f.sent.at(-1), planned());
-  f.interaction.execute();
+  f.interaction.execute(); f.advance(0);
   f.view.manipulation.execution = "executing";
   f.advance(6);
   expect(f.sent.filter((c) => c.action === "execute")).toHaveLength(1);
@@ -456,7 +472,7 @@ it("requires a new final plan after speed or gripper intent changes during plann
     final_gripper: 1,
   });
   f.reply(f.sent.at(-1), planned("current-intent"));
-  f.interaction.execute();
+  f.interaction.execute(); f.advance(0);
   expect(f.sent.at(-1)).toMatchObject({
     action: "execute",
     plan_id: "current-intent",
@@ -507,7 +523,7 @@ it("keeps an infeasible following target grabbed, recovers, and finishes moving 
   f.tail({ ...pose, position: [0,0,0.2] }, { joint: 0.2 });
   expect(f.interaction.snapshot().finishing).toBe(true);
   f.interaction.interrupt();
-  expect(f.sent.at(-1).action).toBe("release");
+  expect(f.authority.state.authority).toBeNull();
 });
 
 it("Open/Close drafts deferred gripper intent until Execute", () => {
@@ -522,7 +538,7 @@ it("Open/Close drafts deferred gripper intent until Execute", () => {
   expect(plan).toMatchObject({ action: "plan", final_gripper: 1 });
   f.reply(plan, planned("grasp"));
   expect(f.sent.some(c => c.action === "execute")).toBe(false);
-  f.interaction.execute();
+  f.interaction.execute(); f.advance(0);
   expect(f.sent.at(-1)).toMatchObject({ action: "execute", plan_id: "grasp" });
   f.reply(f.sent.at(-1), { status: "accepted", operation_id: "op" });
   const count = f.sent.length;
@@ -548,7 +564,6 @@ it("returns to Idle at the measured pose even while an older evaluation is pendi
   f.reply(plan, {status:"feasible", joints:{joint:.3}});
   f.advance(0.01);
   expect(f.interaction.plan).toBeNull();
-  expect(f.interaction.previewPlan).toBeNull();
   expect(f.interaction.snapshot().activity).toBe("Idle");
   expect(f.sent.filter((c) => c.action === "evaluate")).toHaveLength(1);
 });
@@ -704,7 +719,7 @@ it("snaps an invalid following sphere to the valid pose without commanding a ret
   expect(f.interaction.dragging).toBe(false);
   expect(f.interaction.target?.position).toEqual(pose.position);
   expect(f.interaction.previewJoints).toEqual({ joint: 0.3 });
-  expect(f.sent.at(-1).action).toBe("release");
+  expect(f.authority.state.authority).toBeNull();
   const count = f.sent.length;
   f.advance(0.1);
   expect(f.sent).toHaveLength(count);
@@ -721,21 +736,29 @@ it("does not apply late follow errors to newer input and validates a pending rel
   f.interaction.end();
   f.reply(current, { status: "infeasible", sequence: current.sequence, code: "ik_failed" });
   expect(f.interaction.target).toEqual(next);
-  expect(f.sent.at(-1).action).toBe("release");
+  expect(f.authority.state.authority).toBeNull();
   expect(f.interaction.snapshot().finishing).toBe(false);
 });
 
-it("regrabs a finishing goal without reacquiring and interrupts on feedback loss or timeout", () => {
-  for (const failure of ["stale", "timeout"] as const) {
-    const f = fixture(); f.interaction.begin(); f.reply(f.sent.at(-1), { status: "acquired", token: "t" });
-    f.interaction.aim(pose); f.advance(0.04); const update = f.sent.at(-1);
-    f.reply(update, { status: "feasible", sequence: update.sequence, joints: { joint: 0.3 } });
-    f.interaction.end(); expect(f.interaction.begin()).toBe(true);
-    expect(f.sent.filter(c => c.action === "acquire")).toHaveLength(1);
-    f.interaction.end(); f.advance(failure === "stale" ? 2.01 : 55.1, failure !== "stale");
-    expect(f.interaction.following).toBe(false);
-    expect(f.sent.some(c => c.action === "cancel")).toBe(true);
-  }
+it("regrabs a released follow goal with a fresh lease and interrupts on feedback loss", () => {
+  const f = fixture(); f.interaction.begin();
+  f.reply(f.sent.at(-1), { status: "acquired", token: "first" });
+  const firstLease = f.authority.state.authority!.lease_id;
+  f.interaction.aim(pose); f.advance(0.04);
+  const update = f.sent.at(-1);
+  f.reply(update, { status: "feasible", sequence: update.sequence, joints: { joint: 0.3 } });
+  f.interaction.end();
+  f.tail();
+  expect(f.interaction.snapshot().finishing).toBe(true);
+  expect(f.interaction.begin()).toBe(true);
+  expect(f.authority.state.authority!.lease_id).not.toBe(firstLease);
+  expect(f.sent.filter(c => c.action === "acquire")).toHaveLength(2);
+  f.reply(f.sent.at(-1), { status: "acquired", token: "second" });
+  f.advance(2.01, false);
+  expect(f.interaction.dragging).toBe(false);
+  expect(f.authority.state.authority).toBeNull();
+  f.view.manipulation.following_tail = null; f.advance(0);
+  expect(f.interaction.following).toBe(false);
 });
 
 it.each(["ik_failed", "joint_limit", "collision"])("decodes %s wire results without ending either gesture", code => {
@@ -829,7 +852,7 @@ it("finishes at the validated solver endpoint despite repeated normal release ca
   f.interaction.end(); f.advance(0.3);
   f.interaction.end(); f.advance(0.21);
   expect(f.interaction.snapshot().finishing).toBe(false);
-  expect(f.sent.at(-1).action).toBe("release");
+  expect(f.authority.state.authority).toBeNull();
   expect(f.interaction.snapshot().activity).toBe("Idle");
 });
 
@@ -838,7 +861,7 @@ it("retires an executed selected draft after authoritative completed state", () 
   f.interaction.setSelected(true); f.interaction.begin();
   f.interaction.aim(pose); f.interaction.end(); f.advance(0.4);
   f.reply(f.sent.at(-1), planned("arrival"));
-  f.interaction.end(); f.interaction.execute();
+  f.interaction.end(); f.interaction.execute(); f.advance(0);
   f.reply(f.sent.at(-1), { status: "accepted", operation_id: "execution" });
   f.view.manipulation.ts = 101;
   f.view.manipulation.execution = "completed";
@@ -858,7 +881,7 @@ it("shows recorded observations while refusing all arm control actions", () => {
   f.view.hello = { source: {kind: "recording", read_only: true, name: "arm.db"} };
   expect(f.interaction.snapshot().canManipulate).toBe(false);
   expect(f.interaction.snapshot().activity).toBe("Recording");
-  f.interaction.begin(); f.interaction.setSelected(true); f.interaction.execute(); f.interaction.cancel();
+  f.interaction.begin(); f.interaction.setSelected(true); f.interaction.execute(); f.advance(0); f.interaction.cancel();
   expect(f.sent).toEqual([]);
 });
 
@@ -910,7 +933,7 @@ it("retains a failed execution target and replans rather than reusing its cancel
   f.interaction.setSelected(true); f.interaction.begin();
   f.interaction.aim(pose); f.interaction.end(); f.advance(.4);
   f.reply(f.sent.at(-1), planned("retry"));
-  f.interaction.end(); f.interaction.execute();
+  f.interaction.end(); f.interaction.execute(); f.advance(0);
   f.reply(f.sent.at(-1), {status:"accepted",operation_id:"failed-execution"});
   f.view.manipulation.ts = 101;
   f.view.manipulation.execution = "aborted";
@@ -921,7 +944,7 @@ it("retains a failed execution target and replans rather than reusing its cancel
   expect(f.interaction.plan).toBeNull();
   expect(f.interaction.snapshot().executing).toBe(false);
   const before = f.sent.length;
-  f.interaction.execute(); f.advance(.4);
+  f.interaction.execute(); f.advance(0); f.advance(.4);
   expect(f.sent.slice(before).some(c=>c.action === "execute")).toBe(false);
   expect(f.sent.slice(before).some(c=>c.action === "plan")).toBe(true);
 });
@@ -973,7 +996,7 @@ it("does not leave stale execution or gripper drafts across 100 selected operati
     f.interaction.aim({...pose,position:[.01*i,0,.3]}); f.interaction.setGripper(i%2);
     f.interaction.end(); f.advance(.05); const plan=f.sent.at(-1);
     expect(plan).toMatchObject({action:"plan",final_gripper:i%2});
-    f.reply(plan,planned(`p${i}`)); f.interaction.execute(); const execution=f.sent.at(-1);
+    f.reply(plan,planned(`p${i}`)); f.interaction.execute(); f.advance(0); const execution=f.sent.at(-1);
     expect(execution).toMatchObject({action:"execute",plan_id:`p${i}`});
     f.reply(execution,{status:"accepted",operation_id:`op${i}`});
     Object.assign(f.view.manipulation,{ts:1000+i,execution:"completed",execution_phase:"gripper",operation_id:`op${i}`});
@@ -1022,7 +1045,7 @@ it("keeps a checked-plan request alive while its bounded trajectory asset is sti
   expect(f.interaction.rejection).toBeNull();
   expect(f.interaction.dragging).toBe(false);
   f.reply(request, planned("slow-trajectory"));
-  expect(f.interaction.previewPlan?.plan_id).toBe("slow-trajectory");
+  expect(f.interaction.plan?.plan_id).toBe("slow-trajectory");
 });
 
 it("bounds a stalled checked-plan asset and ignores its completion after the asset deadline", () => {
@@ -1091,4 +1114,29 @@ it("retains the latest release demand while an obsolete plan retires", () => {
   expect(f.sent.filter(c => c.action === "plan")).toHaveLength(1);
   f.reply(oldPlan, planned("obsolete")); f.advance(.1);
   expect(f.sent.at(-1)).toMatchObject({ action: "plan", position: [.2, 0, .3] });
+});
+
+
+it.each([false, true])("requires shared authority with v2 server_follow_stream=%s", serverStream => {
+  const f = fixture(); f.view.hello.server_follow_stream = serverStream;
+  expect(f.interaction.begin()).toBe(true);
+  const acquire = f.sent.at(-1);
+  expect(acquire).toMatchObject({ action: "acquire", epoch: "test-epoch", lease_id: "test-lease-1" });
+  f.reply(acquire, { status: "acquired", token: "following" });
+  f.interaction.aim(pose); f.advance(.1);
+  expect(f.sent.some(command => command.action === "update")).toBe(!serverStream);
+  expect(f.authority.state.target).toMatchObject(pose);
+  f.interaction.end(); f.advance(1);
+  expect(f.authority.state.authority).toBeNull();
+  const count = f.sent.length; f.advance(1);
+  expect(f.sent).toHaveLength(count);
+});
+
+it("fails before subscribing when the required authority port is absent", () => {
+  let subscribed = false;
+  expect(() => new ManipulationInteraction({
+    view: () => ({}), sendText: () => {},
+    subscribeOutbound: () => { subscribed = true; return () => {}; },
+  } as never, () => 0)).toThrow("Manipulation requires interaction authority");
+  expect(subscribed).toBe(false);
 });

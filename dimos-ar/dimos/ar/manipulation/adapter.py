@@ -1,22 +1,35 @@
 from __future__ import annotations
 
 import inspect
+import pickle
 import threading
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
-from dimos.ar.manipulation.errors import ManipulationError, spatial_error_code
+from dimos.ar.manipulation.errors import (
+    ExecutionNotStartedError,
+    ManipulationError,
+    spatial_error_code,
+)
 from dimos.ar.manipulation.planner_worker import PlanningWorker
 from dimos.control.tasks.pose_target_ik import PinkPoseTargetSolver, PoseTargetIKTaskConfig
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.manipulation_spec import (
+    CommandResult,
     ExecutionResult,
     ExecutionStatus,
     ManipulationSnapshot,
     OperationStatus,
+    PlanningGroupInfo,
     PlanningGroupState,
+    PlanResult,
 )
+from dimos.manipulation.visualization.operator import TargetEvaluationResult
+from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
+
+if TYPE_CHECKING:
+    from dimos.ar.manipulation.module import ARManipulationModuleConfig
 
 
 class _QuiescedExecution:
@@ -43,7 +56,7 @@ class _QuiescedExecution:
 class DimOSManipulationAdapter:
     def __init__(self, module: Any) -> None:
         self.module = module
-        self.config = module.config
+        self.config: ARManipulationModuleConfig = module.config
         self.feedback: JointState | None = None
         self.gripper: float | None = None
         self.gripper_target: float | None = None
@@ -56,16 +69,18 @@ class DimOSManipulationAdapter:
         self._feedback_fk: Any = None
         self.worker: PlanningWorker | None = None
         self.evaluation_worker: PlanningWorker | None = None
+        self._workers_lock = threading.Lock()
+        self._workers_closed = False
+        self._worker_builds: dict[bool, threading.Event] = {}
         self._planning_generation = 0
+        self._plan_scene: bytes | None = None
 
     def prepare_feedback(self) -> None:
-        self.worker = PlanningWorker(self.config)
-        advisory = self.config.model_copy(deep=True)
         try:
-            self.evaluation_worker = PlanningWorker(advisory)
+            self._get_worker(advisory=False)
+            self._get_worker(advisory=True)
         except BaseException:
-            self.worker.close()
-            self.worker = None
+            self.close_workers()
             raise
         model = self.config.model
         frames = tuple(g.tip_link for g in model.planning_groups if g.tip_link)
@@ -84,6 +99,59 @@ class DimOSManipulationAdapter:
             ),
             frames,
         )
+
+    def require_workers_open(self) -> None:
+        with self._workers_lock:
+            if self._workers_closed:
+                raise RuntimeError("Manipulation planning workers are closed; restart the process")
+
+    def _get_worker(self, *, advisory: bool) -> PlanningWorker:
+        while True:
+            with self._workers_lock:
+                if self._workers_closed:
+                    raise RuntimeError("Planning workers are closed")
+                worker = self.evaluation_worker if advisory else self.worker
+                if worker is not None and not worker.closed:
+                    return worker
+                pending = self._worker_builds.get(advisory)
+                if pending is None:
+                    pending = threading.Event()
+                    self._worker_builds[advisory] = pending
+                    break
+            pending.wait()
+        replacement: PlanningWorker | None = None
+        try:
+            config = self.config.model_copy(deep=True) if advisory else self.config
+            replacement = PlanningWorker(config)
+            with self._workers_lock:
+                if not self._workers_closed:
+                    if advisory:
+                        self.evaluation_worker = replacement
+                    else:
+                        self.worker = replacement
+                    return replacement
+            replacement.close()
+            raise RuntimeError("Planning workers closed during startup")
+        finally:
+            with self._workers_lock:
+                if self._worker_builds.get(advisory) is pending:
+                    self._worker_builds.pop(advisory)
+                pending.set()
+
+    def close_workers(self) -> None:
+        with self._workers_lock:
+            if self._workers_closed:
+                return
+            self._workers_closed = True
+            self._planning_generation += 1
+            workers = (self.worker, self.evaluation_worker)
+            self.worker = self.evaluation_worker = None
+            for pending in self._worker_builds.values():
+                pending.set()
+            self._worker_builds.clear()
+        for worker in workers:
+            if worker is not None:
+                worker.close()
 
     def refresh_auxiliary(self) -> None:
         with self._protection_lock:
@@ -109,14 +177,15 @@ class DimOSManipulationAdapter:
     def configure_rpc(self) -> None:
         backend = getattr(self.module._control_coordinator, "rpc", None)
         if backend is not None and isinstance(getattr(backend, "rpc_timeouts", None), dict):
-            backend.rpc_timeouts["task_invoke"] = 0.5
-            backend.rpc_timeouts["set_estop"] = 0.5
+            for method in ("task_invoke", "set_estop", "get_joint_positions",
+                           "protection_status", "protection_resume"):
+                backend.rpc_timeouts[method] = 0.5
 
     @property
     def ready(self) -> bool:
         return hasattr(self.module, "_execution_manager") and self.module._world_monitor is not None
 
-    def get_state(self) -> Any:
+    def get_state(self) -> ManipulationSnapshot:
         # Never enter the planning world or call the coordinator while publishing
         # observations. Full IK holds the planning world's lock for whole solves.
         feedback = self.feedback
@@ -153,13 +222,18 @@ class DimOSManipulationAdapter:
             },
         )
 
-    def evaluate(self, group: str, pose: Any) -> Any:
+    def evaluate(self, group: str, pose: PoseStamped) -> TargetEvaluationResult:
         try:
-            worker = self.evaluation_worker or self.worker
-            assert worker is not None
-            return worker.call(
-                "evaluate", self.feedback, group, pose, seed_context=self._planning_generation
+            worker = self._get_worker(advisory=True)
+            result = worker.call(
+                "evaluate", self.feedback, group, pose, seed_context=self._planning_generation,
+                scene=self.scene_snapshot(),
             )
+            if not isinstance(result, TargetEvaluationResult):
+                raise TypeError("Planning worker returned an invalid evaluation result")
+            if self._workers_closed:
+                raise RuntimeError("Planning workers are closed")
+            return result
         except Exception as exc:
             code = self.error_code(str(exc))
             if code in {"ik_failed", "joint_limit", "collision"}:
@@ -189,17 +263,17 @@ class DimOSManipulationAdapter:
         self._planning_generation += 1
         self.module.clear_planned_path()
 
-    def set_gripper_position(self, value: float, *, planning_group: str) -> Any:
+    def set_gripper_position(self, value: float, *, planning_group: str) -> CommandResult:
         result = self.module.set_gripper_position(value, planning_group=planning_group)
         if result.succeeded:
             self.gripper_target = value
-        return result
+        return cast("CommandResult", result)
 
-    def cancel(self) -> Any:
+    def cancel(self) -> ExecutionResult:
         self._planning_generation += 1
-        return self.module.cancel()
+        return cast("ExecutionResult", self.module.cancel())
 
-    def reset(self) -> Any:
+    def reset(self) -> CommandResult:
         with self._protection_lock:
             if not self.module._control_coordinator.protection_resume():
                 raise ManipulationError(
@@ -209,12 +283,18 @@ class DimOSManipulationAdapter:
             # Publish recovery before runtime clears its stopped flag. Serialize
             # with polling so an older paused response cannot relatch the stop.
             self.protection = self.module._control_coordinator.protection_status()
-        return self.module.reset()
+        return cast("CommandResult", self.module.reset())
 
-    def execute(self, *, blocking: bool, plan_id: str) -> Any:
-        return self.module.execute(blocking=blocking, plan_id=plan_id)
+    def execute(self, *, blocking: bool, plan_id: str) -> ExecutionResult:
+        if self._plan_scene is None or self._plan_scene != self.scene_snapshot():
+            self.clear_planned_path()
+            raise ExecutionNotStartedError("retired", "Planning scene changed; request a new checked plan")
+        return cast("ExecutionResult", self.module.execute(blocking=blocking, plan_id=plan_id))
 
-    def plan_to_poses(self, poses: dict[str, Any], *, speed_scale: float) -> Any:
+    def scene_snapshot(self) -> bytes:
+        return pickle.dumps(self.module._world_monitor.world.get_obstacles(), protocol=5)
+
+    def plan_to_poses(self, poses: dict[str, PoseStamped], *, speed_scale: float) -> PlanResult:
         try:
             result = self._plan("plan_to_poses", poses, speed_scale=speed_scale)
         except Exception as exc:
@@ -226,29 +306,35 @@ class DimOSManipulationAdapter:
             raise ManipulationError(self.error_code(result.message), result.message)
         return result
 
-    def endpoint_pose(self, group: str, joints: dict[str, float]) -> Any:
+    def endpoint_pose(self, group: str, joints: dict[str, float]) -> PoseStamped:
         state = JointState(name=list(joints), position=list(joints.values()))
-        return self.module._world_monitor.get_group_ee_pose(group, state)
+        return cast("PoseStamped", self.module._world_monitor.get_group_ee_pose(group, state))
 
-    def plan_to_joints(self, joints: dict[str, JointState], *, speed_scale: float) -> Any:
+    def plan_to_joints(self, joints: dict[str, JointState], *, speed_scale: float) -> PlanResult:
         return self._plan("plan_to_joints", joints, speed_scale=speed_scale)
 
-    def _plan(self, action: str, targets: Any, *, speed_scale: float) -> Any:
-        assert self.worker is not None
+    def _plan(self, action: str, targets: Any, *, speed_scale: float) -> PlanResult:
         generation = self._planning_generation
-        result = self.worker.call(action, self.feedback, targets, speed_scale=speed_scale)
+        worker = self._get_worker(advisory=False)
+        scene = self.scene_snapshot()
+        result = worker.call(
+            action, self.feedback, targets, speed_scale=speed_scale, scene=scene
+        )
+        if not isinstance(result, PlanResult):
+            raise TypeError("Planning worker returned an invalid plan result")
         with self.module._lock:
-            if generation != self._planning_generation:
+            if self._workers_closed or generation != self._planning_generation or scene != self.scene_snapshot():
                 raise ManipulationError("retired", "Planning result retired")
             if result.succeeded:
                 self.module._last_plan = result.plan
+                self._plan_scene = scene
         return result
 
-    def list_planning_groups(self) -> Any:
-        return self.module.list_planning_groups()
+    def list_planning_groups(self) -> tuple[PlanningGroupInfo, ...]:
+        return cast("tuple[PlanningGroupInfo, ...]", self.module.list_planning_groups())
 
     @staticmethod
-    def evaluation_code(evaluation: Any) -> str:
+    def evaluation_code(evaluation: TargetEvaluationResult) -> str:
         return DimOSManipulationAdapter.error_code(evaluation.message, default="ik_failed")
 
     @staticmethod

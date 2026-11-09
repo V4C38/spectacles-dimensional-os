@@ -7,60 +7,8 @@ from unittest.mock import Mock
 import pytest
 
 from dimos.ar.manipulation.frames import ReferencePose
-from dimos.ar.manipulation.operation import ManipulationOperation
 from dimos.ar.manipulation.runtime import ManipulationRuntime
-from dimos.ar.manipulation.session import ManipulationSession
-from dimos.ar.manipulation.zero import JointZeroOperation
-
-
-def runtime():
-    module = object.__new__(ManipulationRuntime)
-    module.session = ManipulationSession()
-    module.operation = ManipulationOperation()
-    module.lock = threading.RLock()
-    module.planning = threading.Lock()
-    module.started = True
-    # Explicit fake control plane for domain-only native unit cases.
-    module._control_epoch = "robot-reference"
-    module._control_revision = 0
-    module._control_deadline = time.monotonic() + 10000
-    module._retired_control_epochs = set()
-    module.zero = JointZeroOperation(module)
-    module.adapter = SimpleNamespace(ready=False, feedback=SimpleNamespace(ts=time.time()))
-    module.config = SimpleNamespace(
-        feedback_max_age_s=0.5,
-        following_tasks={"arm": "follow"},
-        wire_from_world=ReferencePose(),
-        model=SimpleNamespace(model=SimpleNamespace(load=lambda: SimpleNamespace(xml="<robot/>"))),
-    )
-    observed = SimpleNamespace(joints=SimpleNamespace(ts=time.time()), end_effector_pose=None)
-    module.adapter.get_state = Mock(
-        return_value=SimpleNamespace(
-            groups={"arm": observed}, execution_status=SimpleNamespace(name="IDLE")
-        )
-    )
-    module.adapter.endpoint_pose = Mock(return_value=None)
-    module.adapter.task_invoke = Mock()
-    module.adapter.set_estop = Mock()
-    module.adapter.quiesce = Mock()
-    module.adapter.clear_planned_path = Mock()
-    module.adapter.cancel = Mock(
-        return_value=SimpleNamespace(status=SimpleNamespace(name="ABORTED"), message="cancelled")
-    )
-    module.adapter.reset = Mock(
-        return_value=SimpleNamespace(succeeded=True, status=SimpleNamespace(name="SUCCEEDED"))
-    )
-    module.wait_for_execution = Mock(
-        return_value=SimpleNamespace(status=SimpleNamespace(name="COMPLETED"))
-    )
-    module.adapter.execute = Mock(
-        return_value=SimpleNamespace(status=SimpleNamespace(name="ACCEPTED"), message="accepted")
-    )
-    return module
-
-
-def command(module, action, client="a", **payload):
-    return module.command(client, {"action": action, "group_id": "arm", **payload})
+from test_support.manipulation import command, runtime
 
 
 def test_follow_owner_ordering_release_and_retired_token():
@@ -724,6 +672,7 @@ def test_quiesced_teardown_does_not_cancel_into_a_closed_coordinator(monkeypatch
     native._lifecycle_stop = threading.Event()
     native._lifecycle_thread = None
     native._auxiliary_thread = None
+    native._watchdog_thread = None
     original = SimpleNamespace(cancel=Mock(), close=Mock())
     native._execution_manager = original
 
@@ -1082,3 +1031,474 @@ def test_openyam_reset_accepts_fresh_settled_feedback_inside_configured_toleranc
     module.config.joint_arrival_tolerance_rad = 0.05
     assert command(module, "reset_joints")["status"] == "completed"
     assert module.session.owner is None
+
+
+@pytest.mark.parametrize("blocked_method", ["endpoint_pose", "execute"])
+def test_stop_and_watchdog_do_not_wait_for_execution_admission(blocked_method):
+    module = runtime()
+    module.operation.plan = {
+        "plan_id": "checked", "joint_names": ["joint"],
+        "trajectory": [{"positions": [0.2]}],
+    }
+    entered, release = threading.Event(), threading.Event()
+    replies = []
+    original = getattr(module.adapter, blocked_method)
+
+    def blocked(*args, **kwargs):
+        entered.set()
+        assert release.wait(3)
+        return original(*args, **kwargs)
+
+    setattr(module.adapter, blocked_method, blocked)
+    thread = threading.Thread(target=lambda: replies.append(module.dispatch(
+        "a", {"action": "execute", "group_id": "arm", "plan_id": "checked"})))
+    thread.start()
+    try:
+        assert entered.wait(1)
+        module._control_deadline = time.monotonic() - 1
+        module.advance()
+        module.adapter.set_estop.assert_called_once_with(True)
+        assert module.session.stopped
+        assert module.operation.id is None
+    finally:
+        release.set()
+        thread.join(3)
+    assert not thread.is_alive()
+    assert replies[0]["code"] == "retired"
+    assert module.operation.id is None
+    if blocked_method == "endpoint_pose":
+        module.adapter.execute.assert_not_called()
+
+
+@pytest.mark.parametrize("action,method", [("acquire", "cancel"), ("gripper", "set_gripper_position"), ("resume", "reset")])
+def test_stop_retires_blocked_native_commands_without_waiting_for_their_effect(action, method):
+    module = runtime()
+    module.adapter.set_gripper_position = Mock(return_value=SimpleNamespace(succeeded=True, message="ok"))
+    module.session.stopped = action == "resume"
+    entered, release = threading.Event(), threading.Event()
+    replies = []
+    original = getattr(module.adapter, method)
+    calls = 0
+
+    def blocked(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            assert release.wait(3)
+        return original(*args, **kwargs)
+
+    setattr(module.adapter, method, blocked)
+    worker = threading.Thread(target=lambda: replies.append(module.dispatch(
+        "a", {"action": action, "group_id": "arm", **({"value": 1.0} if action == "gripper" else {})})))
+    worker.start()
+    try:
+        assert entered.wait(1)
+        module.emergency_stop()
+        assert module.session.stopped
+        module.adapter.set_estop.assert_called_with(True)
+    finally:
+        release.set()
+        worker.join(3)
+    assert not worker.is_alive()
+    assert replies[0]["code"] == "retired"
+    assert module.session.stopped
+    assert module.session.token is None
+    assert module._pending_native is None
+
+
+def test_stop_does_not_wait_for_blocked_operation_observation():
+    module = runtime()
+    module.operation.id = "operation"
+    module.operation.kind = "executing"
+    entered, release = threading.Event(), threading.Event()
+    original = module.adapter.get_state
+
+    def blocked():
+        entered.set()
+        assert release.wait(3)
+        return original()
+
+    module.adapter.get_state = blocked
+    worker = threading.Thread(target=module.advance)
+    worker.start()
+    try:
+        assert entered.wait(1)
+        module.emergency_stop()
+        assert module.session.stopped
+        assert module.operation.id is None
+        module.adapter.set_estop.assert_called_once_with(True)
+    finally:
+        release.set()
+        worker.join(3)
+    assert not worker.is_alive()
+    assert module.operation.id is None
+
+
+@pytest.mark.parametrize("path", ["tail", "reconnect"])
+@pytest.mark.parametrize("blocked_effect", ["observation", "target"])
+def test_stop_is_independent_of_tail_and_reconnect_effects(path, blocked_effect):
+    from dimos.ar.manipulation.following_tail import FollowingTail
+
+    module = runtime()
+    body = {"position": [0.2, 0, 0], "orientation": [0, 0, 0, 1], "speed_scale": 0.5}
+    observed = module.adapter.get_state().groups["arm"]
+    observed.joints.name, observed.joints.position = ["joint"], [0.0]
+    if path == "tail":
+        module.following_tail = FollowingTail(1, "arm", 1, "robot", body, {"joint": 0.2}, time.monotonic())
+    else:
+        command(module, "acquire")
+        module._following_target = ("arm", body, None, 1)
+        module.suspend("a", time.monotonic() + 1)
+    entered, release = threading.Event(), threading.Event()
+    original = module.adapter.get_state
+
+    def observe():
+        if blocked_effect == "observation":
+            entered.set()
+            assert release.wait(3)
+        return original()
+
+    def task(_task, method, *args):
+        if blocked_effect == "target" and method == "set_target":
+            entered.set()
+            assert release.wait(3)
+
+    module.adapter.get_state = observe
+    module.adapter.task_invoke = Mock(side_effect=task)
+    worker = threading.Thread(target=module.advance)
+    worker.start()
+    try:
+        assert entered.wait(1)
+        module.emergency_stop()
+        module.adapter.set_estop.assert_called_once_with(True)
+        assert module.session.stopped
+    finally:
+        release.set()
+        worker.join(3)
+    assert not worker.is_alive()
+    assert module.following_tail is None
+    assert module.session.token is None
+
+
+def test_disconnected_client_tombstones_remain_bounded():
+    module = runtime()
+    for index in range(1000):
+        module.disconnect(f"connection-{index}")
+    assert len(module.session.retired) == 256
+    assert "connection-999" in module.session.retired
+    with pytest.raises(ValueError, match="retired"):
+        command(module, "acquire", client="connection-999")
+
+
+@pytest.mark.parametrize("action", ["update", "advisory", "revoke"])
+def test_stop_does_not_wait_for_held_sample_or_retirement_rpc(action):
+    module = runtime()
+    token = command(module, "acquire")["token"]
+    body = {"action": "update", "group_id": "arm", "token": token, "sequence": 1,
+            "ts": time.time(), "position": [0.2, 0, 0], "orientation": [0, 0, 0, 1]}
+    module.adapter.evaluate = Mock(return_value=SimpleNamespace(
+        success=True, message="valid", target_joints=SimpleNamespace(name=["joint"], position=[0.2]),
+        group_poses={},
+    ))
+    if action == "advisory":
+        module.command("a", body)
+    if action == "revoke":
+        module.authority().epoch, module.authority().lease = "epoch", "lease"
+    entered, release = threading.Event(), threading.Event()
+    blocked = "set_target" if action == "update" else "set_validated_target" if action == "advisory" else "clear"
+    count = 0
+
+    def effect(_task, method, *args):
+        nonlocal count
+        if method == blocked:
+            count += 1
+            if count == 1:
+                entered.set()
+                assert release.wait(3)
+
+    module.adapter.task_invoke = Mock(side_effect=effect)
+    def work():
+        if action == "update":
+            module.dispatch("a", body)
+        elif action == "advisory":
+            module.evaluate_following("a", body)
+        else:
+            module.revoke_authority("epoch", "lease", 2, "disconnect")
+
+    worker = threading.Thread(target=work)
+    worker.start()
+    try:
+        assert entered.wait(1)
+        module.emergency_stop()
+        module.adapter.set_estop.assert_called_once_with(True)
+        assert module.session.stopped
+    finally:
+        release.set()
+        worker.join(3)
+    assert not worker.is_alive()
+    assert module.session.token is None
+
+
+@pytest.mark.parametrize("effect", ["reset", "execute", "get_state"])
+def test_zero_operation_native_effects_do_not_hold_stop_lock(effect):
+    module = runtime()
+    observed = module.adapter.get_state().groups["arm"]
+    observed.joints.name, observed.joints.position = ["joint"], [0.3]
+    module.adapter.list_planning_groups = Mock(return_value=[SimpleNamespace(id="arm", joint_names=["joint"])])
+    module.adapter.plan_to_joints = Mock(return_value=SimpleNamespace(
+        succeeded=True, plan=SimpleNamespace(plan_id="zero", trajectory=SimpleNamespace(duration=0.1))
+    ))
+    entered, release = threading.Event(), threading.Event()
+    original = getattr(module.adapter, effect)
+    calls = 0
+
+    def blocked(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            assert release.wait(3)
+        return original(*args, **kwargs)
+
+    setattr(module.adapter, effect, blocked)
+    replies = []
+    worker = threading.Thread(target=lambda: replies.append(module.dispatch(
+        "a", {"action": "reset_joints", "group_id": "arm"})))
+    worker.start()
+    try:
+        assert entered.wait(1)
+        module.emergency_stop()
+        module.adapter.set_estop.assert_called_once_with(True)
+    finally:
+        release.set()
+        worker.join(3)
+    assert not worker.is_alive()
+    assert replies[0]["status"] == "rejected"
+    assert module.session.stopped
+    assert module.operation.id is None
+
+
+def test_control_lease_watchdog_stops_while_lifecycle_observation_is_blocked():
+    module = runtime()
+    module.operation.id = "operation"
+    module.operation.kind = "executing"
+    entered, release = threading.Event(), threading.Event()
+    original = module.adapter.get_state
+
+    def observe():
+        entered.set()
+        assert release.wait(3)
+        return original()
+
+    module.adapter.get_state = observe
+    worker = threading.Thread(target=module.advance)
+    worker.start()
+    try:
+        assert entered.wait(1)
+        module._control_deadline = time.monotonic() - 1
+        module.check_control_lease()
+        module.adapter.set_estop.assert_called_once_with(True)
+        assert module.session.stopped
+    finally:
+        release.set()
+        worker.join(3)
+    assert not worker.is_alive()
+    assert module.operation.id is None
+
+
+def test_held_following_continues_while_an_independent_gripper_rpc_is_pending():
+    module = runtime()
+    token = command(module, "acquire")["token"]
+    entered, release = threading.Event(), threading.Event()
+
+    def gripper(*args, **kwargs):
+        entered.set()
+        assert release.wait(3)
+        return SimpleNamespace(succeeded=True, message="gripper acknowledged")
+
+    module.adapter.set_gripper_position = gripper
+    results = []
+    worker = threading.Thread(target=lambda: results.append(command(module, "gripper", value=1.0)))
+    worker.start()
+    try:
+        assert entered.wait(1)
+        result = command(module, "update", token=token, sequence=1, ts=time.time(),
+                         position=[0.2, 0, 0], orientation=[0, 0, 0, 1])
+        assert result["status"] == "following"
+        assert module.session.token == token
+        assert module.adapter.task_invoke.call_args.args[1] == "set_target"
+    finally:
+        release.set()
+        worker.join(3)
+    assert results[0]["status"] == "completed"
+
+
+def test_scene_retirement_rejects_execution_without_latching_an_emergency_stop():
+    from dimos.ar.manipulation.adapter import DimOSManipulationAdapter
+
+    module = runtime()
+    native = SimpleNamespace(config=module.config, execute=Mock(), clear_planned_path=Mock())
+    adapter = DimOSManipulationAdapter(native)
+    adapter._plan_scene = b"old-scene"
+    adapter.scene_snapshot = Mock(return_value=b"new-scene")
+    module.adapter.execute = adapter.execute
+    module.operation.plan = {"plan_id": "checked", "joint_names": ["joint"],
+                             "trajectory": [{"positions": [0.2]}]}
+    result = module.dispatch("a", {"action": "execute", "group_id": "arm", "plan_id": "checked"})
+    assert result["code"] == "retired"
+    assert result["status"] == "rejected"
+    native.execute.assert_not_called()
+    module.adapter.set_estop.assert_not_called()
+    assert not module.session.stopped
+    assert module.operation.id is None
+    assert module.operation.plan is None
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("native response lost"), ValueError("unknown backend failure")])
+def test_unknown_execution_failure_latches_stop(failure):
+    module = runtime()
+    module.operation.plan = {"plan_id": "checked", "joint_names": ["joint"],
+                             "trajectory": [{"positions": [0.2]}]}
+    module.adapter.execute.side_effect = failure
+    with pytest.raises(type(failure)):
+        command(module, "execute", plan_id="checked")
+    module.adapter.set_estop.assert_called_once_with(True)
+    assert module.session.stopped
+    assert module.operation.id is None
+
+
+def test_lifecycle_does_not_replace_an_unfinished_execution_admission(monkeypatch):
+    from dimos.ar.manipulation.operation import ManipulationOperation
+
+    module = runtime()
+    module.operation.plan = {"plan_id": "checked", "joint_names": ["joint"],
+                             "trajectory": [{"positions": [0.2]}]}
+    entered, release = threading.Event(), threading.Event()
+    accepted = module.adapter.execute.return_value
+
+    def execute(**kwargs):
+        entered.set()
+        assert release.wait(3)
+        return accepted
+
+    def advance(operation, *args, **kwargs):
+        assert not operation.admitting, "an admission proposal could overwrite the native receipt"
+        return False
+
+    monkeypatch.setattr(ManipulationOperation, "advance", advance)
+    module.adapter.execute.side_effect = execute
+    replies = []
+    worker = threading.Thread(target=lambda: replies.append(command(module, "execute", plan_id="checked")))
+    worker.start()
+    try:
+        assert entered.wait(1)
+        module.advance()
+        assert module.operation.admitting
+    finally:
+        release.set()
+        worker.join(3)
+    assert replies[0]["status"] == "accepted"
+    assert not module.operation.admitting
+    assert module.operation.started_at is not None
+
+
+def test_target_retirement_during_endpoint_computation_cannot_dispatch_execution():
+    from test_support.manipulation import _request
+
+    module = runtime()
+    module.operation.plan = {"plan_id": "checked", "target_revision": 7,
+                             "joint_names": ["joint"], "trajectory": [{"positions": [0.2]}]}
+    entered, release = threading.Event(), threading.Event()
+
+    def endpoint(*args):
+        entered.set()
+        assert release.wait(3)
+
+    module.adapter.endpoint_pose = endpoint
+    replies = []
+    worker = threading.Thread(target=lambda: replies.append(module.dispatch("a", _request("execute", plan_id="checked"))))
+    worker.start()
+    try:
+        assert entered.wait(1)
+        module.revoke_authority("robot-reference", "grab-a", 2, "target_changed")
+    finally:
+        release.set()
+        worker.join(3)
+    assert replies[0]["code"] == "retired"
+    module.adapter.execute.assert_not_called()
+    module.adapter.set_estop.assert_not_called()
+    assert module.operation.id is None
+
+
+@pytest.mark.parametrize("status", ["UNCERTAIN", "FAULT"])
+def test_uncertain_execution_receipt_stops_native_motion_before_returning(status):
+    module = runtime()
+    module.operation.plan = {"plan_id": "checked", "joint_names": ["joint"],
+                             "trajectory": [{"positions": [0.2]}]}
+    module.adapter.execute.return_value = SimpleNamespace(status=SimpleNamespace(name=status), message="unknown admission")
+    result = command(module, "execute", plan_id="checked")
+    assert result["status"] == status.lower()
+    module.adapter.set_estop.assert_called_once_with(True)
+    assert module.session.stopped
+    assert module.operation.id is None
+
+
+def test_late_uncertain_execution_receipt_cannot_stop_a_successor():
+    module = runtime()
+    module.operation.plan = {"plan_id": "checked", "joint_names": ["joint"],
+                             "trajectory": [{"positions": [0.2]}]}
+    entered, release = threading.Event(), threading.Event()
+
+    def execute(**kwargs):
+        entered.set()
+        assert release.wait(3)
+        return SimpleNamespace(status=SimpleNamespace(name="UNCERTAIN"), message="late unknown")
+
+    module.adapter.execute.side_effect = execute
+    results = []
+    worker = threading.Thread(target=lambda: results.append(module.dispatch(
+        "a", {"action": "execute", "group_id": "arm", "plan_id": "checked"})))
+    worker.start()
+    try:
+        assert entered.wait(1)
+        module.emergency_stop()
+        command(module, "resume", client="b")
+        token = command(module, "acquire", client="b")["token"]
+        stop_calls = module.adapter.set_estop.call_count
+    finally:
+        release.set()
+        worker.join(3)
+    assert results[0]["code"] == "retired"
+    assert module.session.owner == "b" and module.session.token == token
+    assert not module.session.stopped
+    assert module.adapter.set_estop.call_count == stop_calls
+
+
+def test_retired_gripper_authority_after_feedback_wait_cannot_actuate():
+    from test_support.manipulation import _request
+
+    module = runtime()
+    module.adapter.set_gripper_position = Mock()
+    entered, release = threading.Event(), threading.Event()
+    original = module.adapter.get_state
+
+    def observe():
+        entered.set()
+        assert release.wait(3)
+        return original()
+
+    module.adapter.get_state = observe
+    results = []
+    worker = threading.Thread(target=lambda: results.append(module.dispatch(
+        "a", _request("gripper", value=1.0))))
+    worker.start()
+    try:
+        assert entered.wait(1)
+        module.revoke_authority("robot-reference", "grab-a", 2, "target_changed")
+    finally:
+        release.set()
+        worker.join(3)
+    assert results[0]["code"] == "retired"
+    module.adapter.set_gripper_position.assert_not_called()
+    module.adapter.set_estop.assert_not_called()

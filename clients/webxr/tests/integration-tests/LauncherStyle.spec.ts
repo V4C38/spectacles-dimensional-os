@@ -13,6 +13,11 @@ test("uses compact monochrome desktop chrome in the launcher", async ({ page }, 
   await page.route("**/api/**", route => route.fulfill({ json: { phase: "idle", check_ok: true, host_ip: "192.168.1.2", robot_ip: "192.168.123.161", refs: ["main"] } }));
   await page.addInitScript(() => { (window as any).EventSource = class { onmessage = null; }; });
   await page.goto("/launcher-review");
+  await expect(page.locator("[data-client]")).toHaveCount(2);
+  expect(await page.locator("[data-client]").evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.client).sort())).toEqual(["specs", "webxr"]);
+  await expect(page.locator("#startBtn")).toHaveCount(1);
+  await expect(page.locator("#stopBtn")).toHaveCount(1);
+  await expect(page.locator("#startWebxrBtn, #stopWebxrBtn, #stopBackendBtn")).toHaveCount(0);
   const start = page.locator("#startBtn");
   await expect(start).toBeEnabled();
   await expect(start).toHaveCSS("color", "rgb(23, 23, 25)");
@@ -20,10 +25,18 @@ test("uses compact monochrome desktop chrome in the launcher", async ({ page }, 
   await expect(page.locator(".app-toolbar #actionsBar")).toBeVisible();
   await expect(page.locator(".app")).toHaveCSS("display", "grid");
   await expect(page.locator("#sidePanel")).toHaveCSS("background-color", "rgb(38, 38, 40)");
+  for (const host of ["specs", "webxr"]) {
+    await page.locator(`[data-client=${host}]`).click();
+    await expect(page.locator(`[data-client=${host}]`)).toHaveClass(/active/);
+    await expect(start).toBeVisible();
+    await expect(page.locator("#stopBtn")).toBeVisible();
+    await expect(page.locator(".app-toolbar #actionsBar")).toHaveCount(1);
+  }
   await page.screenshot({ path: info.outputPath("launcher-desktop.png") });
 });
 
-async function launcherWithHardwareChecks(page: import("@playwright/test").Page, plannerReady = true) {
+async function launcherWithHardwareChecks(page: import("@playwright/test").Page, plannerReady = true, preferences: Record<string, unknown> = {}) {
+  const preferenceWrites: Record<string, unknown>[] = [];
   const profiles = ["unitree_go2", "openyam"].map(robot => ({
     id: robot, robot, name: robot, settings: {fiducial_marker: true, vps: false, map_code: null,
       mounts: [{marker_id: 0, print_size_mm: 69.99999999999999, forward_m: 0, lateral_m: 0, up_m: 0, yaw_deg: 0, pitch_deg: 0, roll_deg: 0}]},
@@ -40,6 +53,10 @@ async function launcherWithHardwareChecks(page: import("@playwright/test").Page,
   }
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
+    if (path === "/api/launcher-preferences") {
+      if (route.request().method() === "PUT") preferenceWrites.push(route.request().postDataJSON());
+      return route.fulfill({json: preferences});
+    }
     if (path === "/api/robot-profiles") return route.fulfill({json: {profiles}});
     if (path === "/api/planner/status") return route.fulfill({json: planner});
     if (path === "/api/can/setup") canReady = true;
@@ -53,6 +70,7 @@ async function launcherWithHardwareChecks(page: import("@playwright/test").Page,
   await page.selectOption("#blueprintSelect", "openyam_ar_planner");
   await page.locator("#installBanner").evaluate((node: HTMLDetailsElement) => { node.open = true; });
   await page.locator("#canCard summary").click();
+  return preferenceWrites;
 }
 
 test("OpenYAM CAN card checks readiness, configures on click, and hides for Go2", async ({page}, info) => {
@@ -214,4 +232,23 @@ test("marker dropdown preserves saved IDs, switches presets and accepts uploads"
   await expect(picker).toHaveValue('42');
   await expect(picker.locator('option:checked')).toHaveText('ID 42 (saved)');
   await expect(page.locator('.tag-preview img')).toHaveAttribute('src', /\/api\/apriltag\/42\.png$/);
+});
+
+
+test("loads source and replay preferences from the launcher despite stale browser storage", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("dimos.source.openyam", "simulated");
+    localStorage.setItem("dimos.playback.openyam", "recording");
+    localStorage.setItem("dimos.replay.openyam", "/stale-browser.db");
+  });
+  const writes = await launcherWithHardwareChecks(page, true, {
+    openyam_source: "auto", openyam_playback: "simulator", openyam_replay: "/server-recording.db",
+  });
+  await expect(page.locator("#robotSource")).toHaveValue("auto");
+  await page.selectOption("#robotSource", "simulated");
+  await expect(page.locator("#playbackSource")).toHaveValue("simulator");
+  await expect(page.locator("#replayPath")).toHaveValue("/server-recording.db");
+  await page.selectOption("#playbackSource", "recording");
+  await expect.poll(() => writes.at(-1)?.openyam_playback).toBe("recording");
+  expect(writes.at(-1)).toMatchObject({ openyam_source: "simulated", openyam_replay: "/server-recording.db" });
 });

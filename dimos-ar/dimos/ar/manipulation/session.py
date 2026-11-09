@@ -1,3 +1,4 @@
+from collections import OrderedDict
 from dataclasses import dataclass, field
 
 
@@ -12,12 +13,19 @@ class ManipulationSession:
     rejected_key: tuple[float, ...] | None = None
     evaluated_at: float = float("-inf")
     generation: int = 0
-    retired: set[str] = field(default_factory=set)
+    retired: OrderedDict[str, None] = field(default_factory=OrderedDict)
     cancelling: bool = False
     stopped: bool = False
     stop_confirmed: bool = True
     shutdown: bool = False
     quiesced: bool = False
+
+    def retire_client(self, client_id: str) -> None:
+        self.retired[client_id] = None
+        self.retired.move_to_end(client_id)
+        # The native authority fence rejects old queued envelopes independently.
+        while len(self.retired) > 256:
+            self.retired.popitem(last=False)
 
     def retire(self) -> None:
         self.generation += 1

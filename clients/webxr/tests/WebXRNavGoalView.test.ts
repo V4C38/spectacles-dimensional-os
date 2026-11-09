@@ -63,6 +63,22 @@ it("shows the round cancel button above the goal facing the viewer regardless of
   view.dispose();
 });
 
+it("uses the shared physical Cancel diameter and white cross dimensions", () => {
+  const view = new WebXRNavGoalView();
+  view.cancelObject.geometry.computeBoundingBox();
+  const bounds = view.cancelObject.geometry.boundingBox!;
+  expect(bounds.max.x - bounds.min.x).toBeCloseTo(NAVIGATION_CANCEL_STYLE.diameterM);
+  expect(bounds.max.y - bounds.min.y).toBeCloseTo(NAVIGATION_CANCEL_STYLE.diameterM);
+  const bars = (view as any).glyph as THREE.Mesh<THREE.PlaneGeometry>[];
+  expect(bars).toHaveLength(2);
+  expect(bars.map(bar => bar.rotation.z)).toEqual([Math.PI / 4, -Math.PI / 4]);
+  for (const bar of bars) {
+    expect(bar.geometry.parameters.width).toBe(NAVIGATION_CANCEL_STYLE.glyphLengthM);
+    expect(bar.geometry.parameters.height).toBe(NAVIGATION_CANCEL_STYLE.glyphWidthM);
+  }
+  view.dispose();
+});
+
 it("animates idle, hover, drag and following states without moving the hit surface or goal", () => {
   const view = new WebXRNavGoalView(); view.show();
   const ring = view.object.getObjectByName("NavigationCircle") as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;

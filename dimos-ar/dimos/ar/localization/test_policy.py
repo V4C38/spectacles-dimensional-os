@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from weakref import WeakKeyDictionary
-
 from dimos.ar.localization.policy import LocalizationPolicy
-from dimos.ar.localization.pose_buffer import PoseBuffer
 from dimos.ar.localization.types import (
     CapturePolicy,
     Intrinsics,
@@ -11,21 +8,7 @@ from dimos.ar.localization.types import (
     Observation,
 )
 from dimos.msgs.geometry_msgs.Pose import Pose
-from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-
-_histories: WeakKeyDictionary[LocalizationPolicy, PoseBuffer] = WeakKeyDictionary()
-
-
-def _advance(policy: LocalizationPolicy, x: float, y: float):
-    if policy not in _histories:
-        history = PoseBuffer()
-        _histories[policy] = history
-        policy._travel = lambda: history.latest().travel_m if history.latest() else 0.0
-    history = _histories[policy]
-    latest = history.latest()
-    timestamp = latest.ts_server + 0.1 if latest else 0.0
-    history.push(PoseStamped(ts=timestamp, position=[x, y, 0]))
-    return policy.on_odom()
+from test_support.localization import _advance
 
 
 class _Clock:

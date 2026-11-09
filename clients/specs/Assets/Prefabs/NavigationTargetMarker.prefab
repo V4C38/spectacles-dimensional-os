@@ -119,7 +119,6 @@
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
   Children:
-    - !<own> cf91ee54-3b33-44d8-ad3a-46568459d8e1
     - !<own> 23ea9ecb-4f0c-4d0c-bf06-2dfa4476d664
   Components:
     - !<own> 764cace4-265d-4fac-83be-091331177e28
@@ -136,40 +135,9 @@
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
   Children:
-    - !<own> 40ddc92b-984b-4b78-8d1a-4c04692b2e28
-    - !<own> 61e71bcf-ca0b-485b-998a-0eb4d93f1c2a
-  Components:
-    []
-- !<SceneObject/40ddc92b-984b-4b78-8d1a-4c04692b2e28>
-  PrefabRemaps:
-    []
-  Name: Visual
-  Enabled: true
-  Layers: 1
-  LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Rotation: {x: -90.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 31.000000, y: 31.000002, z: 31.000002}
-    HasSegmentScaleCompensation: false
-  Children:
     []
   Components:
-    - !<own> cad4bd34-279c-46e1-acee-7b7d76fc5872
-- !<SceneObject/61e71bcf-ca0b-485b-998a-0eb4d93f1c2a>
-  PrefabRemaps:
     []
-  Name: MoveDirectionArrow
-  Enabled: true
-  Layers: 1
-  LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 0.400000, z: 0.000000}
-    Rotation: {x: 0.000000, y: 90.000000, z: 90.000000}
-    Scale: {x: 30.000000, y: 30.000000, z: 30.000000}
-    HasSegmentScaleCompensation: false
-  Children:
-    []
-  Components:
-    - !<own> c4b91606-7f5a-484d-b2c1-540762fb1926
 - !<LookAtComponent/764cace4-265d-4fac-83be-091331177e28>
   PrefabRemaps:
     []
@@ -313,46 +281,6 @@
   ScriptTypes:
     "":
       {}
-- !<RenderMeshVisual/bf604d45-39a1-48a1-ae45-e9a8c0e4e531>
-  PrefabRemaps:
-    []
-  Name: component_3
-  Enabled: true
-  RenderOrder: 0
-  StretchMode: Stretch
-  VerticalAlignment: Center
-  HorizontalAlignment: Center
-  MeshShadowMode: None
-  ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
-  ShadowDensity: 1.000000
-  Materials:
-    - !<reference> f0ba4e9a-f6d4-4f23-a7de-2f92ba36eec3
-  Mesh: !<reference> 1a9172a3-5301-44af-b311-6dd12dee99b5
-  Skin: !<reference> 00000000-0000-0000-0000-000000000000
-  BlendShapesEnabled: true
-  BlendNormals: false
-  BlendShapes:
-    {}
-- !<RenderMeshVisual/c4b91606-7f5a-484d-b2c1-540762fb1926>
-  PrefabRemaps:
-    []
-  Name: component_3
-  Enabled: true
-  RenderOrder: 100
-  StretchMode: Stretch
-  VerticalAlignment: Center
-  HorizontalAlignment: Center
-  MeshShadowMode: None
-  ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
-  ShadowDensity: 1.000000
-  Materials:
-    - !<reference> 17e7c266-e30a-4fcc-95d1-cddf8e6f9d36
-  Mesh: !<reference> 48bf52aa-7a6b-4e77-8bc2-246bda8baa70
-  Skin: !<reference> 00000000-0000-0000-0000-000000000000
-  BlendShapesEnabled: true
-  BlendNormals: false
-  BlendShapes:
-    {}
 - !<ScriptComponent/c557e05e-ebb3-4d4a-aafc-1cd41c3450a4>
   PrefabRemaps:
     []
@@ -369,41 +297,6 @@
   ScriptTypes:
     "":
       {}
-- !<RenderMeshVisual/cad4bd34-279c-46e1-acee-7b7d76fc5872>
-  PrefabRemaps:
-    []
-  Name: Render Mesh Visual
-  Enabled: true
-  RenderOrder: 0
-  StretchMode: Stretch
-  VerticalAlignment: Center
-  HorizontalAlignment: Center
-  MeshShadowMode: None
-  ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
-  ShadowDensity: 1.000000
-  Materials:
-    - !<reference> 292c5410-f592-4e05-9e04-1abe6083dfcf
-  Mesh: !<reference> 48bf52aa-7a6b-4e77-8bc2-246bda8baa70
-  Skin: !<reference> 00000000-0000-0000-0000-000000000000
-  BlendShapesEnabled: true
-  BlendNormals: false
-  BlendShapes:
-    {}
-- !<SceneObject/cf91ee54-3b33-44d8-ad3a-46568459d8e1>
-  PrefabRemaps:
-    []
-  Name: Dots
-  Enabled: true
-  Layers: 1
-  LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 8.000000, z: 0.000000}
-    Rotation: {x: 90.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 0.015000, y: 0.015000, z: 0.015000}
-    HasSegmentScaleCompensation: false
-  Children:
-    []
-  Components:
-    - !<own> bf604d45-39a1-48a1-ae45-e9a8c0e4e531
 - !<SceneObject/db2677b2-ed46-4553-ab59-8000c8751a89>
   PrefabRemaps:
     []

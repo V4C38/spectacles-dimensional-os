@@ -6,6 +6,7 @@
     - !<own> 5aa0f98b-e799-448c-a2dc-cae5d04fa2a4
     - !<own> 87343065-62b9-445a-874d-76d42ea6c7e2
     - !<own> 46db0d44-51b3-4fb8-ae1c-6f354b73dd76
+    - !<own> 95092288-acf9-4b37-b010-481f62c80771
   layers: !<Layers/267ee9a7-aff2-4f9d-9a49-f71214747d03>
     userLayers:
       - |
@@ -1037,7 +1038,6 @@
     - !<own> 987602b0-ef22-4a53-85a8-ca0d7eaaa7b4
     - !<own> 75508855-70c3-433c-98df-606a5120f2a9
     - !<own> 027a396b-f3f7-46f2-a4d1-4d075b9be4a7
-    - !<own> cffc9145-8e6a-45b1-90f5-0d0675a95889
   Components:
     - !<own> 43254cd1-512e-4063-b9b0-e802899fa942
 - !<SceneObject/4a8fba8e-5e79-4c17-9b90-eecc02c7b7dc>
@@ -1975,6 +1975,21 @@
     - !<own> a4be667c-356e-4cf4-81ef-21e3e55cb1c2
   Components:
     []
+- !<SceneObject/95092288-acf9-4b37-b010-481f62c80771>
+  PrefabRemaps:
+    []
+  Name: Integration Test Harness
+  Enabled: true
+  Layers: 1
+  LocalTransform: !<TransformEntity>
+    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
+    HasSegmentScaleCompensation: false
+  Children:
+    []
+  Components:
+    - !<own> fc40496b-64e0-426f-b156-31c1730efefd
 - !<SceneObject/95e75362-a3b6-4e6c-ae2d-27aaed65c700>
   PrefabRemaps:
     []
@@ -2711,21 +2726,6 @@
     - !<own> 124ebfc0-9240-4eaf-af6e-ce6ef49c1d7d
   Components:
     []
-- !<SceneObject/cffc9145-8e6a-45b1-90f5-0d0675a95889>
-  PrefabRemaps:
-    []
-  Name: Integration Test Harness
-  Enabled: true
-  Layers: 1
-  LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
-    HasSegmentScaleCompensation: false
-  Children:
-    []
-  Components:
-    - !<own> db4c5226-b21e-42f1-a5c4-6bab149bed54
 - !<SceneObject/d068eba3-1e0b-4b40-aa4c-7096a22b2748>
   PrefabRemaps:
     []
@@ -2871,22 +2871,6 @@
     - !<own> 1036d690-6737-4314-a693-b98c84acb3d3
   Components:
     []
-- !<ScriptComponent/db4c5226-b21e-42f1-a5c4-6bab149bed54>
-  PrefabRemaps:
-    []
-  Name: Integration Test Harness
-  Enabled: true
-  ScriptAsset: !<reference> 478cab96-369a-48e4-a134-7ce0517fe57f
-  ScriptInputsDefault:
-    autoRun: true
-  ScriptTypesDefault:
-    {}
-  ScriptInputs:
-    "":
-      autoRun: false
-  ScriptTypes:
-    "":
-      {}
 - !<SceneObject/dc057694-04b7-4fd1-baaa-44b40d272fc9>
   PrefabRemaps:
     []
@@ -2930,7 +2914,7 @@
   ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
   ShadowDensity: 1.000000
   Materials:
-    - !<reference> 468d0377-075a-4dff-9858-57c01dff1aba
+    - !<reference> 6a9347b8-a3dd-487f-b052-3e6664690749
   Mesh: !<reference> 00000000-0000-0000-0000-000000000000
   Skin: !<reference> 00000000-0000-0000-0000-000000000000
   BlendShapesEnabled: true
@@ -3222,6 +3206,22 @@
     - !<own> 6dc5dd7a-4726-4cb6-b42f-a12f4b6416c3
   Components:
     []
+- !<ScriptComponent/fc40496b-64e0-426f-b156-31c1730efefd>
+  PrefabRemaps:
+    []
+  Name: Integration Test Harness
+  Enabled: true
+  ScriptAsset: !<reference> 478cab96-369a-48e4-a134-7ce0517fe57f
+  ScriptInputsDefault:
+    autoRun: true
+  ScriptTypesDefault:
+    {}
+  ScriptInputs:
+    "":
+      autoRun: false
+  ScriptTypes:
+    "":
+      {}
 - !<SceneObject/fc530e67-51dc-4b55-8306-a92acdd025f6>
   PrefabRemaps:
     []

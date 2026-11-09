@@ -378,7 +378,7 @@ async def test_hung_snapshot_has_one_actual_call_and_stop_stays_independent():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("snapshot_during_command", [False, True])
 async def test_old_idle_snapshot_cannot_retire_accepted_execution(snapshot_during_command):
-    from dimos.ar.test_module import (
+    from test_support.module import (
         _arm_grab,
         _arm_module_with_two_clients,
         _release_arm_grab,
@@ -439,7 +439,7 @@ async def test_old_idle_snapshot_cannot_retire_accepted_execution(snapshot_durin
     _arm_grab(module, "a", planning=True)
     await asyncio.gather(*service._tasks)
     request = ManipulationRequest("execute", "execute", "arm", {})
-    module._pending_arm_motion.add(request.request_id)
+    module._interaction.begin_manipulation_motion(request.request_id)
     module._interaction.set_motion_busy(True)
     try:
         if snapshot_during_command:

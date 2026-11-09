@@ -21,6 +21,7 @@ from dimos.ar.localization.vps.multiset_client import (
 )
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.utils.transform_utils import pose_to_matrix
+from test_support.localization import _intrinsics
 
 _SQRT_HALF = math.sqrt(0.5)
 
@@ -89,19 +90,6 @@ class _FakeSession:
 
     async def close(self):
         pass
-
-
-def _intrinsics(*, width: int = 960, height: int = 720) -> Intrinsics:
-    return Intrinsics(
-        fx=669.53,
-        fy=669.53,
-        cx=width / 2.0,
-        cy=height / 2.0,
-        width=width,
-        height=height,
-        distortion_model="none",
-        distortion=(),
-    )
 
 
 def _jpeg(*, width: int = 960, height: int = 720) -> bytes:

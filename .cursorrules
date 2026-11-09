@@ -110,7 +110,7 @@ throughput.
 |------|------|
 | Whole project | `README.md` |
 | WebSocket message schema | `dimos-ar/PROTOCOL.md` |
-| Clients | `README.md` System Design + `CONTRIBUTING.md` |
+| Clients | `README.md` ARModule / Clients + `CONTRIBUTING.md` |
 | Spectacles / Lens Studio | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | Contributing | `CONTRIBUTING.md` |
 
@@ -175,7 +175,7 @@ When adding lifecycle, wire handlers, coordinators, or presentation logic:
   - `dimos-ar/PROTOCOL.md`
   - `clients/specs/Assets/Scripts/DimOSARClient/websocket/protocol.ts`
 - The ARModule worker must never block; WebSocket runs on a daemon thread.
-- Blueprints are `unitree_go2_ar` and `unitree_go2_ar_agentic` (`dimos-ar/dimos/ar/blueprints.py`). External DimOS CLI names: `dimos run dimos-ar.unitree-go2-ar` / `dimos-ar.unitree-go2-ar-agentic`.
+- Canonical blueprint entry points are declared in `dimos-ar/pyproject.toml`: Go2 navigation/agent compositions, OpenYAM manipulation, and dedicated AR-only replay compositions. Use their declared underscore Python names and hyphenated external CLI names; do not invent aliases.
 - Port **8787** is ARModule's WebSocket.
 - Tests for `dimos.ar` must run from the DimOS `.venv`.
 - For Lens Studio verification, do **not** run `CompileWithLogs` by default.
@@ -188,12 +188,7 @@ When adding lifecycle, wire handlers, coordinators, or presentation logic:
 
 ## Pre-commit CI (agent commits)
 
-Before any git commit, run `./launcher/scripts/run-ci.sh` from the repo root and fix failures
-until it passes.
-
-**Agents:** `run-ci.sh` must run **outside the Cursor sandbox** (`required_permissions: ["all"]`
-or a normal terminal). Sandboxed runs fail when DimOS tries to write logs under
-`~/.local/state/dimos/logs/`.
+[AGENTS.md](AGENTS.md#commit--pull-request-guidelines) owns the exact-code gate before commits, amends and pushes. Run `./launcher/scripts/run-ci.sh` in an unrestricted terminal and require every job to pass; focused tests and prior snapshots do not replace it. Follow the contributor guide for Python 3.12, Node 22 and the pinned DimOS source revision.
 
 ## Dev quick reference
 

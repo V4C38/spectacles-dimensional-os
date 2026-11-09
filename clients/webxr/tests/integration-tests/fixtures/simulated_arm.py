@@ -6,19 +6,14 @@ import time
 from types import SimpleNamespace as Value
 from typing import Any
 
-from dimos.ar.manipulation.frames import ReferencePose
 from dimos.ar.manipulation.runtime import ManipulationRuntime
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from test_support.manipulation import ManipulationConfig
 
 
 class SimulatedArm:
     def __init__(self) -> None:
-        self.config = Value(
-            feedback_max_age_s=0.5,
-            following_tasks={"arm": "follow"},
-            wire_from_world=ReferencePose(),
-            model=None,
-        )
+        self.config = ManipulationConfig()
         self.ready = True
         self.feedback = Value(ts=time.time(), name=["slide"], position=[0.0], velocity=[])
         self.position = 0.0

@@ -23,7 +23,7 @@ removing incompatible split RoboPlan packages before a downgrade. No upstream
 source patches are required.
 
 For the launcher, select **openyam_ar_planner**, **WebXR** or **Specs**, a named **OpenYAM**
-profile, and **Mock hardware** for software development. Profiles are stored in
+profile, and **Simulated** for software development. Profiles are stored in
 `~/.config/dimos/ar-profiles.json`; existing Go2 calibration is migrated into a
 named Go2 profile. Names are editable; stable profile IDs are retained on rename.
 New OpenYAM profiles copy the bundled OpenYAM Bench preset, including its enabled
@@ -123,19 +123,19 @@ Run `./launcher/scripts/run-ci.sh` before implementation PRs. Keep physical
 registration, release latency, tracking error, and hardware outcomes separate from
 software evidence. This feature's software tests start no physical robot.
 
-For the opt-in official-runtime test, first start the mock blueprint on an unused
-port with `ARMODULE__PORT=8799 ARMODULE__IP_RELAY_URL=null`, then run:
+Run the maintained official mock contract in the selected Python 3.12 planning environment:
 
 ```sh
-cd dimos-ar
-DIMOS_AR_TEST_MANIPULATION_URL=ws://127.0.0.1:8799 \
-  /path/to/isolated/.venv/bin/python3 -m pytest tools/test_manipulation_runtime.py
+python dimos-ar/tools/run_mock_manipulation_contract.py
 ```
 
-The test verifies the runtime's simulated flag before dispatching motion. On macOS,
-the Open3D wheel may additionally require Homebrew `libusb`. The experimental
-validation environment uses an isolated official-source installation and RoboPlan
-0.7; no upstream Python source was patched.
+The runner isolates configuration, selects localhost and official mock hardware,
+and verifies the simulated flag before dispatching motion. It covers exact checked
+execution, held unreachable-target recovery, repeated reset, parking, and real native
+scene changes. Use `--python /path/to/isolated/.venv/bin/python3` to select a different
+planning environment. See the [compatibility baseline](../../../../docs/dimos-compatibility.md)
+for supported DimOS and RoboPlan versions. On macOS, the Open3D wheel may additionally
+require Homebrew `libusb`.
 
 ### WebXR controls
 
@@ -267,7 +267,7 @@ parking retains its 20% speed cap and never clears an active emergency stop.
 Selecting OpenYAM shows a CAN setup card. The launcher checks Linux `can0` every
 five seconds while visible: the interface must be UP at 1 Mbit/s, use a transmit
 queue of 1000, and not be bus-off. `ERROR-ACTIVE` is CAN's normal operational
-state. Mock hardware bypasses CAN setup but still needs a working planner.
+state. Simulated connection bypasses CAN setup but still needs a working planner.
 
 Set up CAN invokes the selected environment's official `dimos hardware can setup
 can0` CLI directly, using the Linux native administrator prompt through `pkexec`.
@@ -296,8 +296,11 @@ holds motion, and can recover within the same gesture. Normal release retains th
 invalid target returns to the last validated pose, and motion completes there. Joint-limit warnings use the last 5% of bounded joint ranges.
 
 OpenYAM finger pads open as the independent prismatic joints move toward their
-lower URDF limits (the meshes cross their joint origins). Selection uses mesh triangles, including the gripper; planner collision geometry
-and GLB signatures are unchanged. No arm selection boxes are drawn.
+lower URDF limits (the meshes cross their joint origins). Selection uses mesh triangles,
+including the gripper. When the installed OpenYAM model lacks collision elements,
+the compatibility adapter supplies collision meshes from its exact visual geometry.
+Only mutual finger self contact is excluded; fingers retain environment collision checks.
+The GLB visual signature remains unchanged. No arm selection boxes are drawn.
 
 The mini-menu uses the shared labeled speed slider. Ray capture follows its thumb
 in either menu, independently of the ray-plane calculation that changes its value.
@@ -309,7 +312,10 @@ clocks establish freshness; snapshot publication does not count as a new measure
 
 `ARManipulationModule` owns DimOS lifecycle and the lifecycle update thread.
 `DimOSManipulationAdapter` is the installed-DimOS boundary; private upstream
-collaborators and the quiesced teardown receipt stay there. `ManipulationRuntime`
+collaborators and the quiesced teardown receipt stay there. It owns both planning
+worker lifecycles. A transport failure fails that request and retires its process;
+the next request builds a fresh worker and supplies the current scene. Shutdown
+closes this owner permanently, including replacements still starting. `ManipulationRuntime`
 uses the typed `ManipulationBackend` port and coordinates commands.
 `InteractionCoordinator` owns the robot-wide editing lease and canonical targets.
 `ManipulationSession` owns native following tokens and retirement generations;
@@ -319,7 +325,7 @@ completion; `JointZeroOperation` owns reset/parking settling. Official DimOS
 continues to own measured joints and execution status. The lifecycle thread
 expires leases and advances completion independently of snapshot polling and is
 joined before native teardown. `ManipulationService` owns asynchronous delivery,
-including emergency-stop dispatch. `ManipulationRPC` keeps timed-out native work
+including emergency-stop dispatch. `NativeRPC` keeps timed-out native work
 quarantined until actual completion, so polling cannot accumulate blocked native
 calls. Stop and heartbeat use separate admission lanes.
 

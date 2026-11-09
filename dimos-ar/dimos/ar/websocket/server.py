@@ -23,7 +23,7 @@ from dimos.ar.replication.interaction import InteractionRequest
 from dimos.ar.timing_diagnostics import TimingSummary
 from dimos.ar.websocket.bulk import (
     BULK_BYTES_PER_SECOND,
-    CHUNK_BYTES,
+    MAX_BULK_RECORD_BYTES,
     BulkAssetStore,
     BulkPeer,
     BulkUpload,
@@ -135,6 +135,7 @@ class WebSocketServer:
     ) -> None:
         self._shared_stream_clients: set[str] = set()
         self._resume_tokens: dict[str, str] = {}
+        self._resume_claims: set[str] = set()
         self._disconnect_handles: dict[str, asyncio.TimerHandle] = {}
         self._on_suspend = on_suspend
         self._relay_url = relay_url
@@ -170,7 +171,7 @@ class WebSocketServer:
         self._bulk_tokens: dict[str, str] = {}
         self._capture_ids: dict[str, str] = {}
         self._bulk_peers: dict[str, BulkPeer] = {}
-        self._bulk_budget = TokenBucket(BULK_BYTES_PER_SECOND, CHUNK_BYTES * 2)
+        self._bulk_budget = TokenBucket(BULK_BYTES_PER_SECOND, MAX_BULK_RECORD_BYTES)
         self._ingress: dict[str, TokenBucket] = {}
         self._ingress_timing: dict[str, TimingSummary] = {}
         self._encoder = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ar-bulk-encode")
@@ -199,6 +200,10 @@ class WebSocketServer:
     @property
     def connection_count(self) -> int:
         return len(self._connections)
+
+    @property
+    def logical_session_count(self) -> int:
+        return len(set(self._connections) | set(self._disconnect_handles))
 
     def start(self) -> None:
         if self._serve_future is not None:
@@ -396,19 +401,21 @@ class WebSocketServer:
         finally:
             if handshake_pending:
                 self._pending_handshakes -= 1
-            self._bulk_tokens.pop(client_id, None)
-            self._capture_ids.pop(client_id, None)
-            self._ingress.pop(client_id, None)
-            self._ingress_timing.pop(client_id, None)
-            peer = self._bulk_peers.pop(client_id, None)
-            if self._connections.get(client_id) is websocket:
+            owns_session = self._connections.get(client_id) is websocket
+            peer = None
+            if owns_session:
+                self._bulk_tokens.pop(client_id, None)
+                self._capture_ids.pop(client_id, None)
+                self._ingress.pop(client_id, None)
+                self._ingress_timing.pop(client_id, None)
+                peer = self._bulk_peers.pop(client_id, None)
                 self._connections.pop(client_id, None)
             self._client_ids.pop(websocket, None)
             self._time_sync.pop(websocket, None)
             queued = self._outbound.pop(websocket, None)
             # Retire authority before awaiting either transport. A closed control
             # session must stop being a client even if bulk close or a writer hangs.
-            if registered and websocket not in self._retired_connections:
+            if registered and owns_session and websocket not in self._retired_connections:
                 self._retired_connections.add(websocket)
                 if self._on_disconnect is not None:
                     try:
@@ -496,50 +503,64 @@ class WebSocketServer:
         if hello_request.resume_token is not None:
             matched = next((key for key, value in self._resume_tokens.items()
                             if secrets.compare_digest(value, hello_request.resume_token)), None)
-            if matched is None or matched not in self._disconnect_handles:
+            if (matched is None or matched not in self._disconnect_handles
+                    or matched in self._resume_claims):
                 raise ValueError("resume session expired or still connected")
             client_id = matched
             resume_handle = self._disconnect_handles[client_id]
-        ts_server = time.time()
-        time_sync = TimeSync(ts_client=hello_request.ts_client, ts_server=ts_server)
-        self._time_sync[websocket] = time_sync
-        await self._hello_permit.acquire()
-        work = self._loop.run_in_executor(self._hello_executor, self._hello_supplier, client_id)
-        work.add_done_callback(lambda _work: self._hello_permit.release())
-        work.add_done_callback(lambda done: None if done.cancelled() else done.exception())
-        body = await asyncio.shield(work)
-        token = secrets.token_hex(32)
-        self._bulk_tokens[client_id] = token
-        req = getattr(websocket, "request", None)
-        hello = Hello(
-            client_id=client_id,
-            time_sync=time_sync,
-            robot=body.robot,
-            capabilities=body.capabilities,
-            navigation_inputs=body.navigation_inputs,
-            nav_goal_preview=body.nav_goal_preview,
-            server_info=body.server_info,
-            source=body.source,
-            odom_reference_id=body.odom_reference_id,
-            bulk_url="/ws/bulk" if req is not None and req.path == "/ws" else "/bulk",
-            bulk_token=token,
-            bulk_epoch=self.bulk.epoch,
-            server_follow_stream=hello_request.server_follow_stream,
-            independent_ik=True,
-            resume_token=(hello_request.resume_token or secrets.token_hex(32))
-            if hello_request.resumable else None,
-        )
-        if resume_handle is not None and self._disconnect_handles.get(client_id) is not resume_handle:
-            raise ValueError("resume deadline expired during handshake")
-        await websocket.send(encode_hello(hello))
-        if resume_handle is not None:
-            resume_handle.cancel()
-            self._disconnect_handles.pop(client_id, None)
-        if hello.server_follow_stream:
-            self._shared_stream_clients.add(client_id)
-        if hello.resume_token is not None:
-            self._resume_tokens[client_id] = hello.resume_token
-        return client_id
+            self._resume_claims.add(client_id)
+        published_token: str | None = None
+        completed = False
+        try:
+            ts_server = time.time()
+            time_sync = TimeSync(ts_client=hello_request.ts_client, ts_server=ts_server)
+            self._time_sync[websocket] = time_sync
+            await self._hello_permit.acquire()
+            work = self._loop.run_in_executor(self._hello_executor, self._hello_supplier, client_id)
+            work.add_done_callback(lambda _work: self._hello_permit.release())
+            work.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+            body = await asyncio.shield(work)
+            token = secrets.token_hex(32)
+            req = getattr(websocket, "request", None)
+            hello = Hello(
+                client_id=client_id,
+                time_sync=time_sync,
+                robot=body.robot,
+                capabilities=body.capabilities,
+                navigation_inputs=body.navigation_inputs,
+                nav_goal_preview=body.nav_goal_preview,
+                server_info=body.server_info,
+                source=body.source,
+                localization=body.localization,
+                odom_reference_id=body.odom_reference_id,
+                bulk_url="/ws/bulk" if req is not None and req.path == "/ws" else "/bulk",
+                bulk_token=token,
+                bulk_epoch=self.bulk.epoch,
+                server_follow_stream=hello_request.server_follow_stream,
+                independent_ik=True,
+                resume_token=(hello_request.resume_token or secrets.token_hex(32))
+                if hello_request.resumable else None,
+            )
+            if resume_handle is not None and self._disconnect_handles.get(client_id) is not resume_handle:
+                raise ValueError("resume deadline expired during handshake")
+            self._bulk_tokens[client_id] = token
+            published_token = token
+            await websocket.send(encode_hello(hello))
+            if resume_handle is not None and self._disconnect_handles.get(client_id) is not resume_handle:
+                raise ValueError("resume deadline expired during handshake")
+            if resume_handle is not None:
+                resume_handle.cancel()
+                self._disconnect_handles.pop(client_id, None)
+            if hello.server_follow_stream:
+                self._shared_stream_clients.add(client_id)
+            if hello.resume_token is not None:
+                self._resume_tokens[client_id] = hello.resume_token
+            completed = True
+            return client_id
+        finally:
+            self._resume_claims.discard(client_id)
+            if not completed and published_token == self._bulk_tokens.get(client_id):
+                self._bulk_tokens.pop(client_id, None)
 
     async def _handle_bulk(self, websocket: ws_server.ServerConnection) -> None:
         client_id: str | None = None

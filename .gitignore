@@ -76,9 +76,13 @@ node_modules/
 clients/specs/Tests/coverage/
 .vitest/
 
-# WebXR browser regression artifacts
+# Generated test/review evidence, reports, recordings and disposable projects.
+/Review Data/
+
+# Legacy output paths: exclude accidental output from older tooling.
 clients/webxr/tests/integration-tests/test-results/
 clients/webxr/playwright-report/
-
-# Native Specs integration review artifacts (same layout as WebXR)
 clients/specs/Tests/integration-tests/test-results/
+
+# Vite bundles its configuration into transient sibling modules during startup.
+clients/webxr/vite.config.ts.timestamp-*.mjs

@@ -1,3 +1,4 @@
+import { immediateAuthority } from "../../specs/Tests/fixtures/ImmediateAuthority";
 import { describe, expect, it, vi } from "vitest";
 import { filterJoystick, isMenuButtonPressed, isTriggerPressed, WebXRJoystickController } from "../src/navigation/WebXRJoystickController";
 
@@ -12,7 +13,9 @@ describe("WebXRJoystickController", () => {
 
   it("rate-limits commands and sends an explicit zero on release", () => {
     const sendText = vi.fn();
+    const authority = immediateAuthority();
     const session = {
+      collaboration: authority.collaboration,
       view: () => ({
         connection: "ready",
         capabilities: {
@@ -30,7 +33,8 @@ describe("WebXRJoystickController", () => {
     joystick.tick(1.05, { x: 1, y: 0 });
     expect(sendText).toHaveBeenCalledOnce();
     joystick.tick(1.2, null);
-    expect(sendText).toHaveBeenCalledTimes(2);
-    expect(String(sendText.mock.calls[1][0])).toContain("nav_joystick_request");
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(authority.commands.at(-1)).toMatchObject({ action: "release" });
+    expect(authority.state.authority).toBeNull();
   });
 });

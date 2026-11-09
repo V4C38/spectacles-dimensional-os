@@ -77,6 +77,8 @@ async function aimFloor(page: Page) {
   await page.waitForTimeout(180);
 }
 
+test.use({ video: { mode: "on", size: { width: 1280, height: 900 } } });
+
 test("comparable hand golden path", async ({ page }, info) => {
   test.setTimeout(240000);
   const errors: string[] = [];

@@ -1,10 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.hoisted(() => {
-  vi.stubGlobal("requireAsset", () => ({ mainPass: {} }));
-});
-
 import { NavGoalMarker } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavGoalMarker";
+import { NAVIGATION_CANCEL_STYLE } from "../../Assets/Scripts/DimOSARClient/presentation/WorldVisualStyle";
+
+vi.mock("../../Assets/Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer", async importOriginal => {
+  const actual = await importOriginal<typeof import("../../Assets/Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer")>();
+  return { ...actual, WorldMeshRenderer: class {
+    object = { getTransform: () => ({ setLocalPosition: vi.fn() }) };
+    visual = { setRenderOrder: vi.fn() };
+    positions: number[] = [];
+    indices: number[] = [];
+    triangles(positions: number[], indices: number[]) { this.positions = positions; this.indices = indices; }
+    setColor = vi.fn();
+  } };
+});
 
 function node(name: string, components: Record<string, unknown> = {}, children: SceneObject[] = []): SceneObject {
   return {
@@ -25,11 +34,19 @@ function node(name: string, components: Record<string, unknown> = {}, children: 
 
 describe("NavigationTargetMarker initialization", () => {
   it("initializes native cancellation without legacy VFX children", () => {
-    const button = { onTriggerDown: { add: vi.fn() }, onTriggerUp: { add: vi.fn() }, enabled: true, inactive: false };
-    const cancel = node("button_cancel", { RoundButton: button }, [
-      node("Text_Title", { "Component.Text": {} }),
-    ]);
-    const visual = () => ({ mainMaterial: { mainPass: {} } });
+    const button = {
+      onTriggerDown: { add: vi.fn() }, onTriggerUp: { add: vi.fn() }, enabled: true, inactive: false,
+      renderOrder: 0, initialized: false, colliderWidth: 6, visualWidth: 6, nativeWidth: 6,
+      initialize: vi.fn(function(this: any) { this.initialized = true; }),
+      get width() { return this.nativeWidth; },
+      set width(width: number) {
+        this.nativeWidth = width;
+        if (this.initialized) this.visualWidth = this.colliderWidth = width;
+      },
+    };
+    const label = { text: "Cancel", enabled: true };
+    const labelObject = node("Text_Title", { "Component.Text": label });
+    const cancel = node("button_cancel", { RoundButton: button }, [labelObject]);
     const root = node("NavigationTargetMarker", {}, [
       node("DragInteractable", { Interactable: {
         onTriggerStart: { add: vi.fn() },
@@ -38,9 +55,6 @@ describe("NavigationTargetMarker initialization", () => {
       } }, [node("HintAnchor")]),
       cancel,
       node("NavigationHeadingRoot"),
-      node("Visual", { "Component.RenderMeshVisual": visual() }),
-      node("MoveDirectionArrow", { "Component.RenderMeshVisual": visual() }),
-      node("Dots", { "Component.RenderMeshVisual": visual() }),
     ]);
     const marker = Object.assign(new NavGoalMarker(), { getSceneObject: () => root });
     // ObjectPrefab calls onAwake while children are still being constructed.
@@ -50,6 +64,17 @@ describe("NavigationTargetMarker initialization", () => {
     expect(cancel.enabled).toBe(true);
     expect(button.onTriggerDown.add).not.toHaveBeenCalled();
     expect(() => marker.ensureReady()).not.toThrow();
+    expect(button.width).toBeCloseTo(NAVIGATION_CANCEL_STYLE.diameterM * 100);
+    expect(button.initialize).toHaveBeenCalledOnce();
+    expect(button.colliderWidth).toBe(button.width); expect(button.visualWidth).toBe(button.width);
+    expect(label.text).toBe(""); expect(label.enabled).toBe(false); expect(labelObject.enabled).toBe(false);
+    const cross = (marker as any).cancelIcon;
+    expect(cross.indices).toHaveLength(12);
+    const extent = (NAVIGATION_CANCEL_STYLE.glyphLengthM + NAVIGATION_CANCEL_STYLE.glyphWidthM) * 100 / Math.sqrt(2);
+    const xs = cross.positions.filter((_value: number, index: number) => index % 3 === 0);
+    const ys = cross.positions.filter((_value: number, index: number) => index % 3 === 1);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(extent);
+    expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(extent);
     marker.setPose(new vec3(10, 0, 20), quat.quatIdentity());
     marker.show();
     const onCancel = vi.fn();
@@ -63,6 +88,8 @@ describe("NavigationTargetMarker initialization", () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
     marker.setCancelVisible(true, false);
     expect(button.inactive).toBe(true);
+    expect(cross.setColor).toHaveBeenLastCalledWith([1, 1, 1, 0.4]);
+    expect(label.text).toBe("");
     marker.setCancelVisible(true, true);
     expect(button.inactive).toBe(false);
   });

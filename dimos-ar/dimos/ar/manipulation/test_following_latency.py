@@ -9,7 +9,7 @@ import pytest
 
 from dimos.ar.manipulation.protocol import ManipulationRequest
 from dimos.ar.manipulation.service import ManipulationService
-from dimos.ar.manipulation.test_runtime import command, runtime
+from test_support.manipulation import command, runtime
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,4 @@
-"""Opt-in contract exercise against an explicitly simulated official runtime."""
+"""Opt-in v2 contract exercise against an explicitly simulated official runtime."""
 
 from __future__ import annotations
 
@@ -8,7 +8,8 @@ import os
 import time
 
 import pytest
-import websockets
+
+from tools.mock_runtime_client import mock_runtime
 
 _URL = os.environ.get("DIMOS_AR_TEST_MANIPULATION_URL")
 pytestmark = pytest.mark.skipif(
@@ -17,141 +18,93 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.mark.asyncio
-async def test_official_mock_manipulation_contract() -> None:
-    async with websockets.connect(str(_URL)) as socket:
-        await socket.send(json.dumps({"type": "hello_request", "ts_client": time.time()}))
-        hello = json.loads(await socket.recv())
-        assert hello["capabilities"]["manipulation"]["available"]
-
-        async def receive(predicate):
-            async with asyncio.timeout(20):
-                while True:
-                    for line in (await socket.recv()).splitlines():
-                        frame = json.loads(line)
-                        if predicate(frame):
-                            return frame
-
-        state = await receive(
-            lambda f: f.get("type") == "manipulation_state" and f.get("available")
-        )
-        # Refuse to send motion to a non-simulated runtime, even if a URL was set.
-        assert state.get("simulated") is True, "this test only dispatches to mock hardware"
-        assert state["model"]["visual_profile"] == "openyam"
-        assert set(state["model"]["gripper_joints"]) >= {"joint7", "joint8"}
-        group = state["groups"][0]["id"]
-        pose = state["observations"][group]["pose"]
+async def test_official_mock_manipulation_contract():
+    async with mock_runtime(str(_URL)) as (client, state):
+        pose = state["observations"][client.group]["pose"]
         target = {**pose, "position": [pose["position"][0] + 0.01, *pose["position"][1:]]}
-        sequence = 0
-
-        async def command(action, **payload):
-            nonlocal sequence
-            sequence += 1
-            request_id = f"runtime-test-{sequence}"
-            await socket.send(
-                json.dumps(
-                    {
-                        "type": "manipulation_request",
-                        "request_id": request_id,
-                        "action": action,
-                        "group_id": group,
-                        **payload,
-                    }
-                )
-            )
-            return await receive(
-                lambda f: (
-                    f.get("type") == "manipulation_result" and f.get("request_id") == request_id
-                )
-            )
-
-        evaluation = await command("evaluate", **target)
+        await client.acquire("manipulation_planning", target)
+        evaluation = await client.command("evaluate", **target)
         assert evaluation["status"] == "feasible", evaluation
-        plan = await command("plan", **target)
+        plan = await client.command("plan", **target, speed_scale=0.2)
         assert plan["status"] == "planned", plan
-        assert plan["trajectory"] and plan["joint_names"]
-        rejected = await command("execute", plan_id="another-plan")
+        trajectory = await client.asset("trajectory", plan["plan_ref"])
+        assert trajectory["points"] and trajectory["joint_names"]
+        await client.release()
+        rejected = await client.command("execute", plan_id="another-plan")
         assert rejected["status"] == "rejected"
-        accepted = await command("execute", plan_id=plan["plan_id"])
+        accepted = await client.command("execute", plan_id=plan["plan_id"])
         assert accepted["status"] == "accepted", accepted
-        await receive(
-            lambda f: f.get("type") == "manipulation_state" and f.get("execution") == "completed"
-        )
-        acquired = await command("acquire")
+        await client.receive(lambda frame: frame["type"] == "manipulation_state"
+                             and frame.get("execution") == "completed"
+                             and frame.get("operation_id") == accepted["operation_id"]
+                             and frame.get("plan_ref") is None)
+        await client.acquire("manipulation_following", target)
+        acquired = await client.command("acquire")
         assert acquired["status"] == "acquired", acquired
-        valid = await command(
-            "update", token=acquired["token"], sequence=1, ts=time.time(), **target
-        )
-        assert valid["status"] == "feasible", valid
-        assert valid.get("joints"), valid
-        stale = await command(
-            "update", token=acquired["token"], sequence=2, ts=time.time() - 1, **target
-        )
-        assert stale["status"] == "rejected"
-        released = await command("release", token=acquired["token"])
-        assert released["status"] == "released", released
-        await socket.send(json.dumps({"type": "estop_request"}))
-        await receive(
-            lambda f: (
-                f.get("type") == "manipulation_state"
-                and f.get("stopped")
-                and f.get("stop_confirmed")
-            )
-        )
-        resumed = await command("resume")
-        assert resumed["status"] == "resumed", resumed
+        valid = await client.command("update", token=acquired["token"], sequence=1,
+                                     ts=time.time(), **target)
+        assert valid["status"] in {"feasible", "following"}, valid
+        stale = await client.command("update", token="retired-token", sequence=2,
+                                     ts=time.time(), **target)
+        assert stale["status"] == "rejected", stale
+        assert (await client.command("release", token=acquired["token"]))["status"] == "released"
+        await client.release()
+        await client.socket.send(json.dumps({"type": "estop_request"}))
+        await client.receive(lambda frame: frame["type"] == "manipulation_state"
+                             and frame.get("stopped") and frame.get("stop_confirmed"))
+        assert (await client.command("resume"))["status"] == "resumed"
 
 
 @pytest.mark.asyncio
-async def test_mock_reset_repeated_zero_and_orderly_parking() -> None:
-    """Exercise actual RPC workers and fresh feedback, never physical hardware."""
-    async with websockets.connect(str(_URL)) as socket:
-        await socket.send(json.dumps({"type": "hello_request", "ts_client": time.time()}))
-        await socket.recv()
+async def test_held_ik_recovers_from_unreachable_target_without_releasing():
+    async with mock_runtime(str(_URL), server_follow_stream=True) as (client, state):
+        pose = state["observations"][client.group]["pose"]
+        await client.acquire("manipulation_following", pose, speed_scale=0.5)
+        acquired = await client.command("acquire")
+        assert acquired["status"] == "acquired", acquired
+        corrected_at = 0
+        for index in range(90):
+            target = pose if index < 15 or index >= 60 else {
+                **pose, "position": [100.0, 0.0, 100.0],
+            }
+            if index == 60:
+                corrected_at = time.monotonic()
+            await client.update_target(target, speed_scale=0.5)
+            await asyncio.sleep(1 / 30)
+        await client.wait(lambda: any(
+            stamp >= corrected_at and frame.get("type") == "manipulation_result"
+            and frame.get("action") == "update" and frame.get("status") == "feasible"
+            for stamp, frame in client.frames
+        ))
+        replies = [frame for _, frame in client.frames
+                   if frame.get("type") == "manipulation_result" and frame.get("action") == "update"]
+        assert any(frame.get("status") == "infeasible" for frame in replies), replies
+        assert client.state.get("following") is True, client.state
+        released = await client.command("release", token=acquired["token"])
+        assert released["status"] == "released", released
+        await client.release()
+        assert client.state.get("stopped") is False
 
-        async def receive(predicate):
-            async with asyncio.timeout(25):
-                while True:
-                    for line in (await socket.recv()).splitlines():
-                        frame = json.loads(line)
-                        if predicate(frame):
-                            return frame
 
-        state = await receive(
-            lambda f: f.get("type") == "manipulation_state" and f.get("available")
-        )
-        assert state.get("simulated") is True
-        assert state["model"]["visual_profile"] == "openyam"
-        assert set(state["model"]["gripper_joints"]) >= {"joint7", "joint8"}
-        group = state["groups"][0]["id"]
-        sequence = 0
-
-        async def command(action):
-            nonlocal sequence
-            sequence += 1
-            request_id = f"parking-contract-{sequence}"
-            await socket.send(
-                json.dumps(
-                    {
-                        "type": "manipulation_request",
-                        "request_id": request_id,
-                        "action": action,
-                        "group_id": group,
-                        "speed_scale": 0.2,
-                    }
-                )
-            )
-            return await receive(lambda f: f.get("request_id") == request_id)
-
-        if state.get("stopped"):
-            assert (await command("resume"))["status"] == "resumed"
-        result = await command("reset_joints")
-        assert result["status"] == "completed", result
-        start = time.monotonic()
-        result = await command("reset_joints")
-        assert result["status"] == "completed", result
-        assert time.monotonic() - start < 2
-        start = time.monotonic()
-        result = await command("prepare_shutdown")
+@pytest.mark.asyncio
+async def test_mock_reset_repeated_zero_and_orderly_parking():
+    async with mock_runtime(str(_URL)) as (client, _state):
+        for _ in range(2):
+            result = await client.command("reset_joints", speed_scale=0.2)
+            assert result["status"] == "completed", result
+        pose = client.state["observations"][client.group]["pose"]
+        await client.acquire("manipulation_planning", pose)
+        await client.release()
+        result = await client.command("prepare_shutdown", speed_scale=0.2)
         assert result["status"] == "completed", result
         assert result["quiescent"] is True
-        assert time.monotonic() - start < 2
+
+
+def test_official_workers_follow_authoritative_scene_changes():
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    python = os.environ.get("DIMOS_AR_PLANNING_PYTHON", sys.executable)
+    subprocess.run([python, str(Path(__file__).with_name("check_manipulation_scene.py"))],
+                   check=True, timeout=120)

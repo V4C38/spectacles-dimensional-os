@@ -3,102 +3,25 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
 from contextlib import aclosing
-from pathlib import Path
 from typing import cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
-import pytest_asyncio
 
 from armodule import Phase, ProcessManager
+from tests.processes import Child, error_status, parsed
 
 READY = "ARModule started websocket=ws://0.0.0.0:8787"
 BANNER = "WebSocket: ws://0.0.0.0:8787 (not listening yet — booting DimOS stack…)"
 
 
-class Child:
-    def __init__(self) -> None:
-        self.pid = 42424243
-        self.stdout = asyncio.StreamReader()
-        self.returncode: int | None = None
-        self.exited = asyncio.Event()
-
-    def output(self, line: str) -> None:
-        self.stdout.feed_data((line + "\n").encode())
-
-    def finish(self, code: int = 0) -> None:
-        if self.returncode is None:
-            self.returncode = code
-            self.stdout.feed_eof()
-            self.exited.set()
-
-    async def wait(self) -> int:
-        await self.exited.wait()
-        assert self.returncode is not None
-        return self.returncode
 
 
-@pytest_asyncio.fixture
-async def runtime(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> AsyncIterator[tuple[ProcessManager, list[Child], AsyncMock]]:
-    mgr = ProcessManager(root=tmp_path)
-    children: list[Child] = []
-
-    async def create(*args: object, **kwargs: object) -> Child:
-        child = Child()
-        children.append(child)
-        return child
-
-    async def stop(proc: Child | None, label: str) -> bool:
-        if proc is None:
-            return False
-        was_running = proc.returncode is None
-        proc.finish()
-        return was_running
-
-    spawn = AsyncMock(side_effect=create)
-    monkeypatch.setattr("armodule.asyncio.create_subprocess_exec", spawn)
-    monkeypatch.setattr("armodule.detect_lan_ip", lambda: "10.0.0.8")
-    monkeypatch.setattr(mgr, "_configure_system_if_needed", AsyncMock())
-    monkeypatch.setattr(mgr, "_ensure_webxr_deps", AsyncMock())
-    monkeypatch.setattr(mgr, "_build_webxr", AsyncMock())
-    monkeypatch.setattr(mgr, "planner_status", AsyncMock(return_value={"ready": True}))
-    monkeypatch.setattr(mgr, "can_status", AsyncMock(return_value={"ready": True}))
-    monkeypatch.setattr(mgr, "_kill_port_listeners", AsyncMock(return_value=False))
-    monkeypatch.setattr(mgr, "_stop_one", stop)
-    try:
-        yield mgr, children, spawn
-    finally:
-        await mgr.stop_armodule()
 
 
-async def parsed(mgr: ProcessManager, child: Child, line: str) -> None:
-    """Wait until the real stream reader has parsed this line."""
-    handled = asyncio.Event()
-    original = mgr._parse_armodule_line
-
-    def parse(value: str) -> None:
-        original(value)
-        if value == line:
-            handled.set()
-
-    mgr._parse_armodule_line = parse  # type: ignore[method-assign]
-    try:
-        child.output(line)
-        await asyncio.wait_for(handled.wait(), timeout=1)
-    finally:
-        mgr._parse_armodule_line = original  # type: ignore[method-assign]
 
 
-async def error_status(mgr: ProcessManager) -> None:
-    async with aclosing(mgr.subscribe()) as events:
-        async for event in events:
-            if event.get("type") == "status" and event.get("phase") == "error":
-                return
 
 
 @pytest.mark.asyncio
@@ -125,6 +48,7 @@ async def test_webxr_waits_for_readiness_and_starts_once(runtime, line: str) -> 
     assert spawn.await_count == 2
     assert spawn.await_args.args[:3] == ("npm", "run", "preview")
     assert mgr.status.webxr_local_url == "https://localhost:5173"
+    assert mgr.status.webxr_url == "https://10.0.0.8:5173"
     assert mgr.status.webxr_url == "https://10.0.0.8:5173"
     await parsed(mgr, children[0], line)
     assert spawn.await_count == 2
@@ -444,3 +368,50 @@ async def test_gateway_dependency_install_is_cancelled_without_orphan(runtime, m
     assert mgr._webxr_proc is None
     assert mgr.status.webxr_phase == "stopped"
     assert spawn.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_running_backend_failure_retains_gateway_and_reports_error(runtime):
+    mgr, children, _spawn = runtime
+    await mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr")
+    starting = mgr._webxr_start_task
+    assert starting is not None
+    await parsed(mgr, children[0], READY)
+    await starting
+    gateway = children[1]
+    children[0].finish(1)
+    await asyncio.wait_for(error_status(mgr), 1)
+    assert gateway.returncode is None
+    assert mgr._webxr_proc is gateway
+    assert mgr._proc is None
+    assert mgr.status.phase is Phase.ERROR
+
+
+@pytest.mark.real_clear
+@pytest.mark.asyncio
+async def test_start_checks_owned_ports_before_spawning(runtime, monkeypatch):
+    mgr, _children, spawn = runtime
+    clear = AsyncMock()
+    effects = Mock()
+    effects.attach_mock(clear, "clear")
+    effects.attach_mock(spawn, "spawn")
+    monkeypatch.setattr(mgr, "_clear_before_start", clear)
+    await mgr.start_armodule(blueprint="unitree_go2_ar", client="specs")
+    clear.assert_awaited_once_with(client="specs")
+    assert spawn.await_count == 1
+    assert [call[0] for call in effects.mock_calls][:2] == ["clear", "spawn"]
+
+
+@pytest.mark.real_clear
+@pytest.mark.asyncio
+async def test_start_does_not_inspect_or_signal_unrelated_dimos(runtime, monkeypatch):
+    mgr, _children, _spawn = runtime
+    inspect = AsyncMock(return_value=[111])
+    kill = Mock()
+    monkeypatch.setattr(mgr, "_running_dimos_pids", inspect)
+    monkeypatch.setattr(mgr, "_pids_listening", AsyncMock(return_value=[]))
+    monkeypatch.setattr(mgr, "port_in_use", lambda _port: False)
+    monkeypatch.setattr("armodule.os.kill", kill)
+    await mgr._clear_before_start(client="webxr")
+    inspect.assert_not_awaited()
+    kill.assert_not_called()

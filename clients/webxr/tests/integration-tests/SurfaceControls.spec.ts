@@ -100,6 +100,7 @@ test("solid controls retain their depth and front-face interaction from oblique 
     expect(errors).toEqual([]);
   } finally {
     runtime.close();
-    await writeFile(info.outputPath("review-scenes.json"), JSON.stringify({ scenes }, null, 2));
+    if (process.env.INTEGRATION_EXTRA_MEDIA === "1" || info.status !== "passed")
+      await writeFile(info.outputPath("review-scenes.json"), JSON.stringify({ scenes }, null, 2));
   }
 });

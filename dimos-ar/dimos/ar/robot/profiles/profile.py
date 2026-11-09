@@ -191,7 +191,7 @@ def _immutable_rigid_transform(matrix: NDArray[np.float64]) -> NDArray[np.float6
     rotation = transform[:3, :3]
     if not np.allclose(rotation @ rotation.T, np.eye(3), atol=1e-5):
         raise ValueError("T_base_camera_optical rotation must be orthonormal")
-    if not math.isclose(abs(float(np.linalg.det(rotation))), 1.0, abs_tol=1e-5):
-        raise ValueError("T_base_camera_optical rotation determinant must have absolute value 1")
+    if not math.isclose(float(np.linalg.det(rotation)), 1.0, abs_tol=1e-5):
+        raise ValueError("T_base_camera_optical rotation determinant must be +1")
     transform.setflags(write=False)
     return transform

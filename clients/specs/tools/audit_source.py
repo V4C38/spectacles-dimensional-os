@@ -8,7 +8,7 @@ import hashlib
 import time
 from pathlib import Path
 
-from review import DEFAULT_CLAD, SPECS_ROOT, LensMcp, capture, write_json
+from review import DEFAULT_CLAD, SPECS_ROOT, LensMcp, capture, runtime_error_lines, write_json
 
 FIXTURES = ("ReviewScenario", "ReviewCompileTrigger", "ColorProbe", "InterFontProbe", "CameraFixture",
             "IntegrationScenario", "IntegrationInput", "IntegrationCatalog", "HeaderProbe")
@@ -38,14 +38,38 @@ async def wait_for_compiler(source: Path, output: Path, timeout: float = 600) ->
     raise RuntimeError("Source compiler output did not match current production scripts within the deadline")
 
 
+def source_harness_is_idle(state: dict) -> bool:
+    harness = state.get("harness", {})
+    gates = harness.get("gates", [])
+    return harness.get("hosts") == 1 and len(gates) == 1 and gates[0].get("autoRun") is False
+
+
+def fresh_runtime_errors(logs: Path, offsets: dict[Path, int]) -> list[str]:
+    errors: list[str] = []
+    for path in logs.glob("LensStudioLog-*.txt"):
+        offset = offsets.get(path, 0)
+        if path.stat().st_size < offset:
+            offset = 0
+        with path.open("rb") as stream:
+            stream.seek(offset)
+            errors.extend(runtime_error_lines(stream.read().decode("utf-8", errors="replace")))
+    return list(dict.fromkeys(errors))
+
+
 async def audit(args: argparse.Namespace) -> bool:
     args.output.mkdir(parents=True, exist_ok=True)
     compile_proof = await wait_for_compiler(args.source, args.output)
+    logs = Path.home() / "Library/Preferences/Snap/Lens Studio/logs"
+    offsets = {path: path.stat().st_size for path in logs.glob("LensStudioLog-*.txt")}
     async with LensMcp(args.mcp_config, args.output / "source-audit-mcp") as mcp:
         state = await mcp.editor(
             "const project=pluginSystem.findInterface(Editor.Model.IModel).project;"
+            'const hosts=project.scene.rootSceneObjects.flatMap(function visit(o){return [o,...o.children.flatMap(visit)]}).filter(o=>o.name==="Integration Test Harness");'
+            'const gates=hosts.flatMap(h=>h.getComponents("ScriptComponent").filter(c=>c.inputNames.includes("autoRun")));'
             "return {project:project.projectDirectory.toString(),"
+            'harness:{hosts:hosts.length,gates:gates.map(c=>({autoRun:(c as any).autoRun}))},'
             "roots:project.scene.rootSceneObjects.map(o=>o.name),"
+            "sceneNames:project.scene.rootSceneObjects.flatMap(function names(o){return [o.name,...o.children.flatMap(names)]}),"
             f"fixtureAssets:project.assetManager.assets.filter(a=>{list(FIXTURES)!r}.includes(a.name)).map(a=>a.name)}};"
         )
         if Path(state.get("project", "")).resolve() != args.source:
@@ -53,14 +77,14 @@ async def audit(args: argparse.Namespace) -> bool:
         await mcp.editor('const panel:any=pluginSystem.findInterface(Editor.Dock.IDockManager).panels.find(p=>p.id.toString().includes("PreviewPanel"));if(!panel)throw new Error("Preview missing");panel.resume();panel.refresh();return {resumed:true};')
         await asyncio.sleep(1)
         screenshot = await capture(mcp, args.output, "source-preview")
+    runtime_errors = fresh_runtime_errors(logs, offsets)
     scripts = []
     for path in sorted((args.source / "Assets/Scripts").rglob("*.ts")):
         relative = path.relative_to(args.source)
         cached = args.source / "Cache/TypeScript/Src" / relative
         scripts.append({"path": str(relative), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                         "compilerMatches": cached.is_file() and cached.read_bytes() == path.read_bytes()})
-    scene = (args.source / "Assets/Scene.scene").read_text(encoding="utf-8")
-    fixture_hosts = [name for name in FIXTURES if name + "Host" in scene]
+    fixture_hosts = [name for name in FIXTURES if name + "Host" in state["sceneNames"]]
     logs = Path.home() / "Library/Preferences/Snap/Lens Studio/logs"
     latest = max(logs.glob("LensStudioLog-*.txt"), key=lambda path: path.stat().st_mtime)
     with latest.open("rb") as stream:
@@ -68,12 +92,13 @@ async def audit(args: argparse.Namespace) -> bool:
         lines = stream.read().decode("utf-8", errors="replace").splitlines()
     completions = [line for line in lines if "TypeScript compilation succeeded!" in line]
     passed = (bool(scripts) and all(row["compilerMatches"] for row in scripts)
+              and source_harness_is_idle(state) and not runtime_errors
               and not state["fixtureAssets"] and not fixture_hosts
               and not (args.source / "Assets/Review").exists() and bool(completions))
     result = {"passed": passed, "editor": state, "fixtureHosts": fixture_hosts,
               "hasReviewAssetsDirectory": (args.source / "Assets/Review").exists(),
               "scripts": scripts, "lastNativeCompile": compile_proof,
-              "screenshot": screenshot.name}
+              "screenshot": screenshot.name, "runtimeErrors": runtime_errors}
     write_json(args.output / "source-audit.json", result)
     print(f"{'PASS' if passed else 'FAIL'}: {len(scripts)} production scripts; {args.output / 'source-audit.json'}")
     return passed

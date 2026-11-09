@@ -4,7 +4,7 @@ import type { NavGoal } from "../../DimOSARClient/websocket/protocolTypes";
 import { clientTrackingToSpecsYawPose } from "../utilities/SpecsCoordinates";
 import { AdaptiveStrokeRenderer, WorldMeshRenderer } from "../presentation/WorldMeshRenderer";
 import { ROUTE_STYLE } from "../../DimOSARClient/presentation/WorldVisualStyle";
-import { anchorPathStart, clipPathToCircles, routeRibbon, rangePathY as sharedRangePathY, filletPathCorners as sharedFilletPathCorners } from "./RoutePathGeometry";
+import { anchorPathStart, clipPathToCircles, routeRibbon, rangePathY as sharedRangePathY, filletPathCorners as sharedFilletPathCorners } from "../../DimOSARClient/presentation/RoutePathGeometry";
 
 export type RouteCircle = { center: [number, number, number]; radius: number };
 

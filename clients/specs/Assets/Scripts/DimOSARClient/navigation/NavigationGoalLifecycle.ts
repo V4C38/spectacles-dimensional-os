@@ -90,7 +90,13 @@ export class NavigationGoalLifecycle {
     if (!this.origin || force && this.lastSent && distance(this.lastSent, pose.position) < this.forceNoopDistanceM) return false;
     if (!force && (now - this.lastSentAt < GOAL_SEND_INTERVAL_S || this.lastSent && distance(this.lastSent, pose.position) < GOAL_SEND_MIN_DISTANCE_M)) return false;
     try { this.commands.sendGoal(clientTrackingToOdomPose(pose, this.origin)); } catch { return false; }
-    if (force) this.confirmationId++;
+    this.submitted(now, pose, force);
+    return true;
+  }
+
+  /** Register local intent before its authoritative reply, without sending another command. */
+  submitted(now: number, pose: NavigationPose, confirmed = true): void {
+    if (confirmed) this.confirmationId++;
     this.submissionBaseline = this.view?.nav ?? null;
     this.postAcceptanceIdle = this.sharedCancellation = false;
     this.awaitingFreshFacts = true;
@@ -98,7 +104,6 @@ export class NavigationGoalLifecycle {
     this.active = true; this.resolved = false; this.flash = null; this.elapsed = 0;
     this.pose = clone(pose); this.route = null;
     this.lastSent = [...pose.position]; this.lastSentAt = now;
-    return true;
   }
 
   cancel(): boolean {

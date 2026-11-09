@@ -14,17 +14,15 @@ from dimos.ar.localization.odom_map_transform import OdomMapTransform
 from dimos.ar.localization.policy import LocalizationPolicy
 from dimos.ar.localization.pose_buffer import PoseBuffer
 from dimos.ar.localization.runner import LocalizationRunner
-from dimos.ar.localization.test_coordinator import _coordinator, _observation
-from dimos.ar.localization.test_policy import _advance
 from dimos.ar.localization.types import LocalizedPose
 from dimos.ar.localization.vps.robot_observation_buffer import (
     RobotObservationBuffer,
     RobotObservationSample,
 )
-from dimos.ar.localization.vps.test_robot_observation_buffer import _camera_info, _image
 from dimos.ar.localization.worker import LocalizationWorker
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from test_support.localization import _advance, _camera_info, _coordinator, _image, _observation
 
 
 def _pose(ts: float, *, x: float = 0, yaw: float = 0) -> PoseStamped:

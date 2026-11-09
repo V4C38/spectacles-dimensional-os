@@ -401,7 +401,6 @@ it("retires a full plan whose editing lease expired before its result arrived", 
   f.reply(plan, { status: "planned", plan_id: "expired", joint_names: ["j"],
     trajectory: [{ time: 0, positions: [0] }, { time: 1, positions: [.3] }], duration: 1 });
   expect(f.core.plan).toBeNull();
-  expect(f.core.previewPlan).toBeNull();
   expect(f.native().some(c => c.action === "execute")).toBe(false);
 });
 
@@ -427,4 +426,23 @@ it.each([false, true])("Resume retires temporary authority without republishing 
     .toMatchObject({ kind: "manipulation_following" });
   f.grant(); f.tick();
   expect(f.native().at(-1)).toMatchObject({ action: "acquire" });
+});
+
+it("rejects unsupported following before acquiring robot-wide authority", () => {
+  const f = fixture();
+  f.view.manipulation.groups[0].following = false;
+  expect(f.core.begin()).toBe(false);
+  expect(f.core.dragging).toBe(false);
+  expect(f.core.status).toBe("Following unavailable");
+  expect(f.sent).toEqual([]);
+  expect(f.collaboration.snapshot("manipulation", "arm").pending).toBe(false);
+  expect(f.collaboration.begin("live", "navigation-hand", pose(0))).toBe(true);
+});
+
+it("permits selected planning when native following is unavailable", () => {
+  const f = fixture();
+  f.view.manipulation.groups[0].following = false;
+  f.core.setSelected(true);
+  expect(f.core.begin()).toBe(true);
+  expect(f.sent[0]).toMatchObject({ action: "acquire", kind: "manipulation_planning" });
 });

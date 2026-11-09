@@ -16,16 +16,41 @@ project copies, actual SUK/SIK controls and source-project restoration.
 
 Outputs are ignored and live under:
 
-- `clients/specs/Tests/integration-tests/test-results/<run-id>/`
-- `clients/webxr/tests/integration-tests/test-results/<run-id>/`
+- `Review Data/specs/<run-id>/`
+- `Review Data/webxr/<run-id>/`
 
-Each completed run contains consecutively numbered `01_setup_entry.png` style
-images, `golden-path.mp4` (90–120 seconds), `results.json`, and diagnostics. WebXR
-adds `controller-path.mp4` (20–30 seconds). Images include failure/regression
+Paths are relative to the repository root, regardless of the invoking directory.
+WebXR accepts an explicit run directory through `INTEGRATION_RESULTS_DIR`; native
+review accepts a parent directory through `--output-root`. Quote paths containing
+spaces. Explicit destinations keep their evidence without pruning neighboring runs.
+Direct Playwright invocations use `Review Data/webxr/playwright/` diagnostics.
+Unit reports, coverage, static native compilation and official mock contracts live
+under `Review Data/unit/`, `coverage/`, `native-compile/` and `mock-manipulation/`.
+
+The latest verified golden videos always have these stable top-level paths:
+
+- `Review Data/webxr_golden-path.mp4`
+- `Review Data/specs_golden-path.mp4`
+
+Publication atomically replaces only that client's previous video after the whole
+run passes its functional, golden-media and source checks. Specs also requires the
+production source handoff audit. A complete native `--suite golden` run can publish;
+incomplete, failed, focused-probe and `--keep-open` runs leave the previous video
+intact. Each run keeps its own evidence below the client directory. Explicit output
+overrides change run storage; the latest verified video still publishes at the
+stable repository-root path. Older client-prefixed golden export spellings are
+removed only after a new successful publication; unrelated files remain.
+
+Each completed full run contains consecutively numbered `01_setup_entry.png` style
+images, `golden-path.mp4` (90–120 seconds), `results.json`, and diagnostics. The
+canonical golden video is produced by default for both clients. Set
+`INTEGRATION_EXTRA_MEDIA=1` for WebXR or pass native `--extra-media` to also encode
+controller/probe and supplemental edited clips. Functional tests and failure
+artifacts run regardless of that option. Images include failure/regression
 conditions; the main video follows the successful flow, including ordinary user
 cancellation. Results match by case ID; platform exceptions may change image numbers.
-Existing results are removed only after a new full run passes. Failed or partial
-runs retain prior evidence. No generated recordings or screenshots belong in Git.
+Earlier passing full runs may be removed after a new full run passes. Failed, partial
+and unclassified runs retain their evidence. No generated recordings or screenshots belong in Git.
 
 Videos use real continuous recordings at normal speed, never still-image slideshows.
 Only completed action boundaries are cut. All animation and gesture movement
@@ -87,40 +112,15 @@ Standalone manipulation runs retain their own screenshots, continuous video and
 assertion logs. They do not substitute for the complete shared Go2 catalog or
 physical device sign-off.
 
-## Lens Studio integration-test focus limit
+## Native execution policy
 
-Lens Studio may take focus to start a native integration recording. During the test,
-allow at most **three focus-restoration attempts in total**, spaced at least one
-second apart. The budget does not reset when focus is briefly restored, between
-chapters/suites, or when a process restarts. Never continuously reactivate Lens
-Studio while the user is using another application.
+[AGENTS.md](../../AGENTS.md#lens-studio-integration-test-focus-limit) owns focus,
+Auto Run, disposable-project and source-restoration rules. Every non-`--keep-open`
+native run, including focused probes, must pass the source handoff audit.
 
-After the budget is exhausted and focus is lost again, abort the integration run,
-stop its recorder and scripted interactions, retain diagnostic evidence, and notify
-the user that testing stopped because of the focus limit. Do not retry, restart,
-open/raise another Lens window for cleanup, or continue another native suite until
-the user explicitly authorizes resuming. Time passing is not authorization.
-An earlier inability to restore focus may also abort the run. Any resumed run gets
-a new budget only after that explicit user authorization.
+## Official manipulation runtime
 
-## Integration Test Harness
+`python dimos-ar/tools/run_mock_manipulation_contract.py` exercises the installed DimOS planning/control composition through the current AR control/bulk protocol. Install `dimos-ar[manipulation,dev]` in the selected Python 3.12 environment first. The runner always selects mock hardware, disables relay/localization, uses a temporary configuration, chooses a localhost test port, and owns cleanup of its process group. The local CI gate and dedicated GitHub job run this contract; a browser mock planner does not replace it.
 
-The production scene contains a scene object named **Integration Test Harness**
-with the **Integration Test Harness** script component. Its **Auto Run** (`autoRun`)
-boolean defaults to **false** and must remain false for normal use and device builds.
-The component also forces Auto Run off on Spectacles. Every test scenario checks
-both this switch and `global.deviceInfoSystem.isEditor()` before registering events
-or replacing dependencies: tests cannot run on the device even if the switch was
-saved on accidentally.
-
-Integration tests run only when explicitly requested. The native test runner copies
-the project, attaches the optional scenario to **Integration Test Harness**, and uses
-Lens Studio MCP to set **Auto Run = true** in that disposable editor project. It
-switches Auto Run off on exit, including failure and focus-limit abort, without
-raising the editor. The normal production project retains Auto Run off and contains
-no `Assets/Review` fixtures. Never deploy a disposable test copy.
-
-Before handing the lens back for device testing, verify the production project is
-open, Auto Run is false, no Review scenario assets/hosts are present, and the native
-compiler cache matches production scripts. A test abort must be reported; it must
-never be described as a production build ready for device testing without this check.
+Successful non-golden raw recordings are discarded after validation unless extra
+media is requested. Golden footage, screenshots, logs and failure recordings remain.

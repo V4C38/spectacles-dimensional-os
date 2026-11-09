@@ -96,7 +96,7 @@ it("marks connection complete only after hello and identifies the robot and tele
 });
 
 it.each([
-  ["robot_los_required", "marker", "AprilTag", "guide"],
+  ["robot_los_required", "marker", "Fiducial marker", "guide"],
   ["any_angle", "vps", "VPS", "mapped space"],
   ["robot_los_preferred", "mixed", "VPS", "mapped space"],
 ] as const)("uses provider-appropriate instructions for %s", (policy, kind, description, guidance) => {
@@ -109,10 +109,28 @@ it.each([
 it("uses neutral waiting copy before a capture policy arrives and explains unavailable localization", () => {
   const f = setupFixture(); f.ui.nextSetup();
   expect(f.ui.snapshot().localizationKind).toBe("unknown");
-  expect(f.ui.snapshot().wizardDescription).not.toContain("AprilTag");
+  expect(f.ui.snapshot().wizardDescription).toBe("Waiting for localization…");
   f.setView(view({ hasTrackingOrigin: false, capabilities: { ...capabilities, localization: { available: false, reason: "off" } } }));
   expect(f.ui.snapshot().localizationKind).toBe("unavailable");
   expect(f.ui.snapshot().wizardCardBody).toContain("Skip");
+});
+
+it("updates provider copy from the selected inventory even when capture requests are any-angle", () => {
+  const f = setupFixture("any_angle"); f.ui.nextSetup();
+  for (const [providers, kind, label] of [
+    [["fiducial_marker"], "marker", "Fiducial marker"],
+    [["vps"], "vps", "VPS"],
+    [["fiducial_marker", "vps"], "mixed", "Fiducial marker + VPS"],
+    [[], "unavailable", "No localization provider"],
+  ] as const) {
+    const next = view({ hasTrackingOrigin: false });
+    next.hello!.localization = { providers: [...providers] };
+    f.setView(next);
+    expect(f.ui.snapshot().localizationKind).toBe(kind);
+    expect(f.ui.snapshot().wizardDescription).toBe(label);
+  }
+  f.setView(view({ connection: "awaiting_hello", hello: null, capabilities: null, hasTrackingOrigin: false }));
+  expect(f.ui.snapshot().localizationKind).toBe("unknown");
 });
 
 it("celebrates real alignment briefly and never shows a success check for skipped setup", () => {

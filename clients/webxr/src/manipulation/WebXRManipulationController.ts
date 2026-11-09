@@ -122,8 +122,6 @@ export class WebXRManipulationController {
     });
     const blocked = !supported || this.session.collaboration.snapshot("manipulation", this.interaction.groupId ?? undefined).blocked;
     this.renderer.handle.collider.userData.rayDisabled = blocked;
-    const material = this.renderer.handle.visual.material as THREE.ShaderMaterial;
-    material.uniforms.uCenterColor.value.setHex(blocked ? 0x8e969e : 0xb3b3b3);
   }
 
   dispose(): void {

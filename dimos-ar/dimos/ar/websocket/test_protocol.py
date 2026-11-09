@@ -15,7 +15,6 @@ from dimos.ar.sensors.lidar_settings import LidarSettings
 from dimos.ar.websocket.protocol import (
     HUMAN_INPUT_MAX_CHARS,
     LIDAR_FOURCC,
-    LOCALIZATION_OBSERVATIONS_FOURCC,
     AgentState,
     ClientPose,
     EstopRequest,
@@ -44,6 +43,7 @@ from dimos.ar.websocket.protocol import (
     encode_text,
     observation_from_localization,
 )
+from test_support.websocket import TYPESCRIPT_LOCA_ONE, _encode_localization_observations_frame
 
 
 def _available() -> Capability:
@@ -94,6 +94,7 @@ def test_encode_hello_advertises_interaction_protocol_version() -> None:
     assert msg["time_sync"]["ts_server"] == 2000.0
     assert msg["protocol_version"] == 2
     assert "alignment" not in msg
+    assert "localization" not in msg  # Legacy v2 hello remains valid without inventory.
     assert msg["capabilities"]["estop"]["available"] is True
     assert msg["capabilities"]["navigation"]["nav_goal"]["available"] is True
     assert msg["capabilities"]["navigation"]["nav_joystick"]["available"] is True
@@ -515,31 +516,6 @@ def test_encode_lidar_binary_layout() -> None:
     assert count == 1
     x, y, z = struct.unpack_from("<3f", frame, 16)
     assert (x, y, z) == pytest.approx((1.0, 2.0, 3.0))
-
-
-def _encode_localization_observations_frame(jpeg: bytes, intrinsics_json: bytes) -> bytes:
-    ts_capture = 1.0
-    camera_position = struct.pack("<3f", 0.0, 0.0, 0.0)
-    camera_orientation = struct.pack("<4f", 0.0, 0.0, 0.0, 1.0)
-    record_body = (
-        struct.pack("<dII", ts_capture, len(jpeg), len(intrinsics_json))
-        + struct.pack("<I", 0)
-        + camera_position
-        + camera_orientation
-        + jpeg
-        + intrinsics_json
-    )
-    record = struct.pack("<I", len(record_body)) + record_body
-    return struct.pack("<IH", LOCALIZATION_OBSERVATIONS_FOURCC, 1) + record
-
-
-TYPESCRIPT_LOCA_ONE = bytes.fromhex(
-    "41434f4c01009a000000000000000000f03f0400000066000000000000000000803f"
-    "00000040000040400000000000000000000000000000803fffd8ffd97b226678223a"
-    "3130302c226679223a3130302c226378223a35302c226379223a35302c2277696474"
-    "68223a3130302c22686569676874223a3130302c22646973746f7274696f6e5f6d6f"
-    "64656c223a226e6f6e65222c22646973746f7274696f6e223a5b5d7d"
-)
 
 
 def test_decode_typescript_localization_observations_golden() -> None:

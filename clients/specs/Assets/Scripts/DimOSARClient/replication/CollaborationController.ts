@@ -1,5 +1,5 @@
 import type { InteractionCredentials, InteractionKind, InteractionPose, InteractionResult, InteractionState, InteractionSettings, InteractionTarget } from "./CollaborationTypes";
-import type { Quat } from "../websocket/protocolTypes";
+import type { NavGoal, Quat } from "../websocket/protocolTypes";
 
 export const TARGET_SEND_INTERVAL_S = 0.05;
 export const AUTHORITY_RENEW_INTERVAL_S = 0.1;
@@ -10,7 +10,8 @@ export interface CollaborationPort {
 }
 /** Exact shared facts and presentation-only prediction/interpolation have separate owners. */
 export class CollaborationController {
-  private state: InteractionState | null = null;
+  private state: Omit<InteractionState, "preview" | "active_goal"> | null = null;
+  private navigationFacts: Pick<InteractionState, "preview" | "active_goal"> = { preview: null, active_goal: null };
   private serial = 0;
   private sequence = 0;
   private acquisition: string | null = null;
@@ -32,10 +33,15 @@ export class CollaborationController {
   private settling: { acceptedRevision?: number; settings: InteractionSettings; pose: InteractionPose; sequence: number; key: string; requestId: string; epoch: string } | null = null;
   constructor(private readonly port: CollaborationPort) {}
 
-  raw(): InteractionState | null { return this.state; }
+  raw(): InteractionState | null { return this.state ? { ...this.state, ...this.navigationFacts } : null; }
+  navigation(): Readonly<Pick<InteractionState, "preview" | "active_goal">> { return this.navigationFacts; }
+  applyNavigation(goal: NavGoal): void {
+    this.navigationFacts = { ...this.navigationFacts, [goal.preview ? "preview" : "active_goal"]: goal };
+  }
+  clearNavigation(): void { this.navigationFacts = { preview: null, active_goal: null }; }
   completeAssets(state: InteractionState): boolean {
     if (!this.state || this.state.epoch !== state.epoch || this.state.revision !== state.revision) return false;
-    this.state = { ...this.state, preview: state.preview, active_goal: state.active_goal };
+    this.navigationFacts = { preview: state.preview, active_goal: state.active_goal };
     return true;
   }
   get denialRevision(): number { return this.denial; }
@@ -61,7 +67,7 @@ export class CollaborationController {
       settling: this.settling?.key === key,
       target, rawTarget, phase: rawTarget?.phase ?? null,
       stale: !!authority?.held && now - this.lastStateAt > ACTIVE_TARGET_STALE_S,
-      preview: this.state?.preview ?? null, activeGoal: this.state?.active_goal ?? null };
+      preview: this.navigationFacts.preview, activeGoal: this.navigationFacts.active_goal };
   }
   apply(state: InteractionState): boolean {
     const previous = this.state;
@@ -76,7 +82,9 @@ export class CollaborationController {
       }
       this.clearLocal();
     }
-    this.state = state;
+    const { preview, active_goal, ...authorityState } = state;
+    this.state = authorityState;
+    this.navigationFacts = { preview, active_goal };
     this.lastStateAt = this.port.now();
     const targets = state.targets ?? (state.target ? [state.target] : []);
     for (const target of targets) {
@@ -210,7 +218,7 @@ export class CollaborationController {
     }
     this.flush();
   }
-  reset(): void { this.settling = null; this.clearLocal(); this.state = null; this.histories.clear(); this.sampleOffset = null; this.lastStateAt = -Infinity; this.cancelled.clear(); }
+  reset(): void { this.settling = null; this.clearLocal(); this.state = null; this.clearNavigation(); this.histories.clear(); this.sampleOffset = null; this.lastStateAt = -Infinity; this.cancelled.clear(); }
   private owns(): boolean {
     return !!this.state?.authority && this.state.authority.client_id === this.port.clientId() &&
       (this.lease === this.state.authority.lease_id || this.acquisition === this.state.authority.acquisition_id);

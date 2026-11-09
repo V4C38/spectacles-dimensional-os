@@ -26,3 +26,10 @@ def test_gripper_articulation_and_profile_do_not_depend_on_asset_location():
 def test_gripper_mapping_requires_a_real_bounded_independent_joint():
     with pytest.raises(ValueError, match="articulation"):
         describe_model(XML, gripper_open_at_lower=["missing"])
+
+
+def test_prismatic_arm_axes_are_not_inferred_to_be_grippers():
+    assert describe_model(XML)["gripper_joints"] == {}
+    assert describe_model(XML, gripper_joint_names=["finger_slide"])["gripper_joints"] == {
+        "finger_slide": {"closed": -0.05, "open": 0.0}
+    }

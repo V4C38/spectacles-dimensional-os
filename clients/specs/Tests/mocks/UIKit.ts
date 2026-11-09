@@ -68,3 +68,6 @@ export function findFirstText(_root: unknown): null {
 export function getFrameComponent(_panel: unknown): null { return null; }
 export function setPanelFollowing(_panel: unknown, _enabled: boolean, _scale: number): void {}
 export function placePanelInFront(_panel: unknown, _camera: unknown, _offsetY = 0): void {}
+
+export function isFrameInitialized(frame: { initialized?: boolean } | null): boolean { return frame?.initialized === true; }
+export function configureControlPanelFrame(_frame: unknown, _size: unknown, _scalable: boolean): void {}

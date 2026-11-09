@@ -1,18 +1,21 @@
 import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 // Actual native physics hits feed SIK's own target chooser before driving the registered input.
 import { DimOSSpecsClient } from "../Scripts/DimOSSpecsClient/DimOSSpecsClient";
-import { createIconButton } from "../Scripts/DimOSSpecsClient/presentation/UIKit";
+import { createIconButton, SnapOS2Styles } from "../Scripts/DimOSSpecsClient/presentation/UIKit";
 import { specsToClientTrackingPoint } from "../Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
 import TargetProvider, { type InteractableHitInfo } from "SpectaclesInteractionKit.lspkg/Providers/TargetProvider/TargetProvider";
 import { InteractionManager } from "SpectaclesInteractionKit.lspkg/Core/InteractionManager/InteractionManager";
 import { TargetingMode } from "SpectaclesInteractionKit.lspkg/Core/Interactor/Interactor";
 import { IntegrationInput } from "./IntegrationInput";
+import { IntegrationV2Fixture } from "./IntegrationV2Fixture";
 import { INTEGRATION_CATALOG as CATALOG } from "./IntegrationCatalog";
+import { NAVIGATION_CANCEL_STYLE } from "../Scripts/DimOSARClient/presentation/WorldVisualStyle";
 
 @component
 export class ReviewScenario extends BaseScriptComponent {
   @input startDelayS = 5;
   private root: any;
+  private peer!: IntegrationV2Fixture;
   private input: IntegrationInput | null = null;
   private probe = Physics.createGlobalProbe();
   private gridIndex = -1;
@@ -43,7 +46,7 @@ export class ReviewScenario extends BaseScriptComponent {
   private check(name: string, passed: boolean): void { this.failed ||= !passed; this.emit({ type: "result", name, passed }); }
   private scene(name: string, videoOnly = true): void { this.emit({ type: "scene", name, videoOnly }); }
   private wire(value: unknown): void {
-    this.root.session.onTransportText(JSON.stringify(value) + "\n");
+    this.peer.send(value as Record<string, any>);
     if (this.root.session.view().connection === "failed")
       throw new Error("Native fixture frame rejected: " + this.root.session.view().lastError);
   }
@@ -64,11 +67,18 @@ export class ReviewScenario extends BaseScriptComponent {
     const tracking = root.cameraObject.getComponent("Component.DeviceTracking") as DeviceTracking;
     tracking.enabled = false;
     camera.setWorldRotation(rotation.multiply(quat.angleAxis(-20 * Math.PI / 180, vec3.right())));
+    this.peer = new IntegrationV2Fixture(value => root.session.onTransportText(JSON.stringify(value) + "\n"), "native-overlap", () => getTime());
+    this.peer.onGoal = target => { this.pendingGoal = target; };
+    root.transport.createSibling = () => this.peer;
     root.transport.connect = () => {}; root.transport.close = () => {};
     root.transport.sendText = (text: string) => {
       for (const line of text.trim().split("\n")) {
         const message = JSON.parse(line); this.sent.push(message);
-        if (message.type === "nav_goal_request" && !message.preview) this.pendingGoal = message;
+        if (this.peer.command(message)) continue;
+        if (message.type === "nav_goal_request" && !message.preview) {
+          if (!this.peer.authorizes(message)) throw new Error("Unfenced native overlap navigation");
+          this.pendingGoal = message;
+        }
       }
     };
     root.uiPresenter.setupWizardController.invalidatePending();
@@ -79,11 +89,14 @@ export class ReviewScenario extends BaseScriptComponent {
       time_sync: { ts_client: request.ts_client, ts_server: getTime() }, robot: CATALOG.fixtures.robot,
       capabilities: { lidar: available, localization: available, estop: available, agent: available,
         navigation: { ...available, nav_goal: { ...available, preview: true }, nav_joystick: { available: false, reason: "Hands" } } } });
+    this.peer.reset();
     this.wire({ type: "state", server: { connected_clients: 1 },
       lidar: { enabled: false, min_height_m: -10, max_height_m: 10, max_range_m: 5 },
       nav: { state: "idle", outcome: null }, agent: { idle: true } });
     root.clientTrackingOriginStore.setFromLocalizationResult({ position: origin, orientation: [0, 0, 0, 1], confidence: 1, ts: getTime() });
     this.wire({ type: "pose", position: CATALOG.fixtures.pose, orientation: [0, 0, 0, 1], ts: getTime() });
+    root.uiPresenter.setupWizardController.flow.finish();
+    root.uiPresenter.setupWizardController.hide();
     root.uiPresenter.finishWizard();
     root.navigationController.deps.deviceTracking = { worldOptions: {}, raycastWorldMesh: (from: vec3, to: vec3) => {
       const floor = root.robotPresenter.floorWorldY(), delta = to.sub(from);
@@ -126,7 +139,9 @@ export class ReviewScenario extends BaseScriptComponent {
     if (this.pendingGoal) {
       const goal = this.pendingGoal; this.pendingGoal = null;
       const pose = [...goal.position, 0];
-      this.wire({ type: "nav_goal", pose, path_poses: [[...CATALOG.fixtures.pose.slice(0, 2), 0, 0], pose], ts: getTime() });
+      const frame = { type: "nav_goal", pose, path_poses: [[...CATALOG.fixtures.pose.slice(0, 2), 0, 0], pose], ts: getTime() };
+      this.peer.setGoal(frame);
+      this.wire(frame);
       this.wire({ type: "state", server: { connected_clients: 1 },
         lidar: { enabled: false, min_height_m: -10, max_height_m: 10, max_range_m: 5 },
         nav: { state: "following_path", outcome: null }, agent: { idle: true } });
@@ -144,8 +159,16 @@ export class ReviewScenario extends BaseScriptComponent {
     if (this.elapsed < 3) return;
     this.elapsed = 0; this.phase++;
     if (this.phase === 0) {
-      this.check("unselected-marker-available", !root.selection.isSelected() && root.navigationController.isArmed());
-      this.initial = root.navigationController.currentPose().position;
+      const pose = root.navigationController.currentPose();
+      const view = root.session.view();
+      const ready = !root.selection.isSelected() && root.navigationController.isArmed() && pose !== null;
+      this.check("unselected-marker-available", ready);
+      if (!ready) throw new Error(`Overlap fixture initialization failed: ${JSON.stringify({
+        setupCompleted: root.uiPresenter.isSetupCompleted(), connection: view.connection,
+        tracking: view.hasTrackingOrigin, capabilities: view.capabilities?.navigation,
+        origin: root.clientTrackingOriginStore.T_odom_client, pose,
+      })}`);
+      this.initial = pose.position;
       this.wish = this.initial; this.scene("overlapping-marker-ready");
     } else if (this.phase === 1) {
       input.active = true; this.scene("hover-through-robot-box");
@@ -166,6 +189,31 @@ export class ReviewScenario extends BaseScriptComponent {
         !root.robotPresenter.worldVisuals.hovered && root.navigationController.hovered);
       input.end(); this.scene("release-marker-drag");
     } else if (this.phase === 4) {
+      const marker = root.navigationController.marker, button = marker.cancelButton;
+      const scale = marker.cancelObject.getTransform().getWorldScale();
+      const glyph = marker.cancelIcon.visual.mesh;
+      const vertices = glyph.extractVerticesForAttribute("position");
+      const colors = glyph.extractVerticesForAttribute("color");
+      const xs: number[] = [], ys: number[] = [];
+      for (let i = 0; i < vertices.length; i += 3) { xs.push(vertices[i]); ys.push(vertices[i + 1]); }
+      const extentCm = (NAVIGATION_CANCEL_STYLE.glyphLengthM + NAVIGATION_CANCEL_STYLE.glyphWidthM) * 100 / Math.sqrt(2);
+      const textVisible = (object: SceneObject): boolean => {
+        const text = object.getComponent("Component.Text") as Text | null;
+        if (text?.enabled && object.isEnabledInHierarchy && text.text.trim()) return true;
+        for (let i = 0; i < object.getChildrenCount(); i++) if (textVisible(object.getChild(i))) return true;
+        return false;
+      };
+      this.check("native-cancel-white-cross", vertices.length === 24 &&
+        Math.abs((Math.max(...xs) - Math.min(...xs)) * scale.x - extentCm) < .01 &&
+        Math.abs((Math.max(...ys) - Math.min(...ys)) * scale.y - extentCm) < .01 &&
+        colors.every((value: number) => Math.abs(value - 1) < .001) && !textVisible(marker.cancelObject));
+      const widthCm = button.width * scale.x, hitCm = button.collider.shape.size.x * scale.x;
+      const visualWidthCm = button.visual.size.x * scale.x, radiusCm = button.visual.cornerRadius * scale.x;
+      this.check("native-cancel-physical-size", Math.abs(widthCm - NAVIGATION_CANCEL_STYLE.diameterM * 100) < .01 &&
+        Math.abs(visualWidthCm - widthCm) < .01 && Math.abs(radiusCm * 2 - widthCm) < .01 &&
+        hitCm >= widthCm - .01 && hitCm <= widthCm * 1.25 && button.style === SnapOS2Styles.Special);
+      this.emit({ type: "diagnostic", name: "native-cancel-size", widthCm, hitCm, glyphExtentCm: extentCm,
+        visualWidthCm, radiusCm, initialized: button.initialized, style: button.style, labelVisible: textVisible(marker.cancelObject) });
       this.wish = root.robotPresenter.worldPosition().add(new vec3(0, 10, 0));
       this.scene("robot-box-still-pickable");
     } else if (this.phase === 5) {
@@ -181,6 +229,14 @@ export class ReviewScenario extends BaseScriptComponent {
       this.blocker!.sceneObject.enabled = false; this.scene("marker-priority-restored");
     } else if (this.phase === 7) {
       this.check("marker-available-after-ui-hides", this.markerSelected());
+      this.wish = root.navigationController.marker.cancelObject.getTransform().getWorldPosition();
+      this.scene("navigation-cancel-cross", false);
+    } else if (this.phase === 8) {
+      const button = root.navigationController.marker.cancelButton;
+      this.check("native-cancel-remains-ray-target", this.selected?.interactable === button.interactable);
+      const before = this.sent.filter(row => row.type === "estop_request").length;
+      input.press(button);
+      this.check("native-cancel-press-once", this.sent.filter(row => row.type === "estop_request").length === before + 1);
       this.scene("native-overlap-result", false);
     } else {
       input.restore(); this.emit({ type: "complete", passed: !this.failed }); this.enabled = false;

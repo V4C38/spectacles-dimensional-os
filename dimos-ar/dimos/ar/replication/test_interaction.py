@@ -194,9 +194,9 @@ def test_mode_shared_and_active_agent_turn_blocks_transition(fixture):
     packet = InteractionRequest("mode", "mode", owner.epoch, mode="agent")
     assert owner.handle("b", packet).status == "accepted"
     assert owner.snapshot()["mode"] == "agent" and acquire(owner).status == "busy"
-    owner.agent_busy = True
+    owner.set_agent_busy(True)
     assert owner.handle("c", replace(packet, request_id="manual", mode="manual")).status == "busy"
-    owner.agent_busy = False
+    owner.set_agent_busy(False)
     assert (
         owner.handle("c", replace(packet, request_id="manual2", mode="manual")).status == "accepted"
     )
@@ -410,3 +410,69 @@ def test_identical_updates_acknowledge_cumulative_input_without_content_revision
     assert owner.authority is None
     assert owner.snapshot()["targets"][0]["sequence"] == 6
     assert owner.target.revision == content_revision
+
+
+def test_suspension_updates_only_the_current_owner_deadline(fixture):
+    owner, now = fixture
+    acquire(owner)
+    revision = owner.revision
+    assert not owner.suspend("b", now[0] + 2)
+    assert owner.revision == revision
+    assert owner.suspend("a", now[0] + 2)
+    assert owner.authority.expires_at == now[0] + 2
+    assert owner.revision == revision + 1
+    now[0] += 1
+    assert not owner.poll()
+    now[0] += 1
+    assert owner.poll()
+
+
+def test_unconfirmed_motion_cannot_be_cleared_by_idle_feedback(fixture):
+    from dimos.ar.manipulation.protocol import ManipulationRequest
+
+    owner, _ = fixture
+    owner.begin_manipulation_motion("execute")
+    assert owner.motion_busy
+    owner.observe_manipulation_result(
+        ManipulationRequest("execute", "execute", "arm", {}), {"status": "uncertain"}
+    )
+    assert not owner.manipulation_motion_pending("execute")
+    owner.observe_manipulation_snapshot({"available": True, "execution": "idle"})
+    assert owner.motion_busy
+    assert acquire(owner).status == "busy"
+    owner.request_manipulation_stop()
+    owner.observe_manipulation_snapshot({"available": True, "execution": "idle",
+                                         "stopped": True, "stop_confirmed": True})
+    assert not owner.motion_busy
+    assert acquire(owner, identity="after-stop").status == "accepted"
+
+
+def test_cancel_fence_advances_even_without_a_remaining_draft(fixture):
+    owner, _ = fixture
+    revision = owner.revision
+    owner.cancel_manipulation_target("arm")
+    assert owner.revision == revision + 1
+    assert owner.target is None
+
+
+def test_native_manual_confirmation_uses_the_mode_owner(fixture):
+    owner, _ = fixture
+    assert owner.handle("a", InteractionRequest("agent", "mode", owner.epoch, mode="agent")).status == "accepted"
+    revision = owner.revision
+    owner.confirm_native_manual()
+    assert owner.mode == "manual"
+    assert owner.revision == revision + 1
+    owner.confirm_native_manual()
+    assert owner.revision == revision + 1
+
+
+def test_discrete_motion_admission_reserves_one_revision_per_pending_request():
+    owner = InteractionCoordinator()
+    revision = owner.revision
+    owner.begin_manipulation_motion("operation")
+    assert owner.revision > revision
+    reserved = owner.revision
+    owner.begin_manipulation_motion("operation")
+    assert owner.revision == reserved
+    owner.begin_manipulation_motion("successor")
+    assert owner.revision > reserved

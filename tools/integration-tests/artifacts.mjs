@@ -7,11 +7,57 @@ import {
   writeFile,
   mkdir,
   copyFile,
+  mkdtemp,
+  rename,
+  rm,
+  stat,
 } from "node:fs/promises";
 import { resolve, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { catalog, applicableCases } from "./catalog.mjs";
 
-export function sourceIdentity(cwd) {
+export const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
+export const reviewDataRoot = join(repositoryRoot, "Review Data");
+
+/** Publish only a fully verified run; replacing one client's video is atomic. */
+export async function publishGoldenVideo(root, client, destination = reviewDataRoot) {
+  if (!["webxr", "specs"].includes(client)) throw new Error("Unknown golden video client");
+  const result = JSON.parse(await readFile(join(root, "results.json"), "utf8"));
+  const passedCheck = (name) => result.checks?.some((row) => row.name === name && row.passed === true);
+  if (result.client !== client || !result.passed || !["all", "golden"].includes(result.scope)
+      || !passedCheck("golden_video_present") || !passedCheck("source_unchanged")) return null;
+  if (client === "specs" && (result.sourceAuditState !== "passed" || !passedCheck("source_editor_clean"))) return null;
+  const source = join(root, "golden-path.mp4");
+  if ((await stat(source)).size === 0) throw new Error("Cannot publish an empty golden video");
+  await mkdir(destination, { recursive: true });
+  const target = join(destination, `${client}_golden-path.mp4`);
+  const staging = await mkdtemp(join(destination, `.${client}-golden-`));
+  try {
+    const temporary = join(staging, "golden-path.mp4");
+    await copyFile(source, temporary);
+    // Native handoff and media encoding happen after the original finalization
+    // snapshot. Never publish footage against source changed during either step.
+    const currentSource = sourceIdentity();
+    if (result.source?.fingerprint !== currentSource.fingerprint) {
+      result.passed = false;
+      result.finalSource = currentSource;
+      result.checks.push({ caseId: "artifact_validation", name: "publication_source_unchanged", passed: false });
+      await writeFile(join(root, "results.json"), JSON.stringify(result, null, 2) + "\n");
+      throw new Error("Source changed before golden publication; previous video retained");
+    }
+    await rename(temporary, target);
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+  // Only recognize names used for client golden exports; unrelated media stays.
+  const legacy = new RegExp(`^${client}[-_]golden[-_]path(?:[-_]\\d{4}-\\d{2}-\\d{2}[\\dTZ_.-]*)?\\.mp4$`, "i");
+  for (const entry of await readdir(destination, { withFileTypes: true }))
+    if (entry.isFile() && entry.name !== `${client}_golden-path.mp4` && legacy.test(entry.name))
+      await rm(join(destination, entry.name));
+  return target;
+}
+
+export function sourceIdentity(cwd = repositoryRoot) {
   cwd = execFileSync("git", ["rev-parse", "--show-toplevel"], {
     cwd,
     encoding: "utf8",
@@ -174,7 +220,8 @@ export async function finishRun(root, client, options = {}) {
         id: image.id,
         source: resolve(suite.directory, image.file),
       });
-  const images = await numberImages(root, records);
+  const unique = [...new Map(records.map(record => [`${record.id}\0${resolve(record.source)}`, record])).values()];
+  const images = await numberImages(root, unique);
   for (const row of cases)
     if (row.status === "passed" && !images.some((image) => image.id === row.id))
       row.status = "missing-image";
@@ -182,7 +229,7 @@ export async function finishRun(root, client, options = {}) {
     schemaVersion: catalog.schemaVersion,
     client,
     seed: catalog.fixtures.seed,
-    source: options.source ?? sourceIdentity(root),
+    source: options.source ?? sourceIdentity(),
     scope: options.scope ?? "all",
     cases,
     checks,
@@ -202,9 +249,9 @@ export async function finishRun(root, client, options = {}) {
 
 /** Explicit post-verification cleanup; a failed or missing new run cannot erase evidence. */
 export async function removeOldResults(root, keep) {
-  const { rm } = await import("node:fs/promises");
   root = resolve(root);
-  if (!root.endsWith("/integration-tests/test-results") || !keep.length)
+  const standardRoot = ["webxr", "specs"].some((client) => root === join(reviewDataRoot, client));
+  if ((!standardRoot && !root.endsWith("/integration-tests/test-results")) || !keep.length)
     throw new Error("Unsafe integration cleanup root");
   for (const name of keep) {
     if (name.includes("/") || name.includes(".."))
@@ -215,7 +262,16 @@ export async function removeOldResults(root, keep) {
     if (!result.passed || result.scope !== "all")
       throw new Error("Cleanup requires a completed passing full run");
   }
-  for (const entry of await readdir(root, { withFileTypes: true }))
-    if (entry.isDirectory() && !keep.includes(entry.name))
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    if (!entry.isDirectory() || keep.includes(entry.name)) continue;
+    let result;
+    try {
+      result = JSON.parse(await readFile(join(root, entry.name, "results.json"), "utf8"));
+    } catch (error) {
+      if (error.code === "ENOENT" || error instanceof SyntaxError) continue;
+      throw error;
+    }
+    if (result.passed && result.scope === "all")
       await rm(join(root, entry.name), { recursive: true });
+  }
 }

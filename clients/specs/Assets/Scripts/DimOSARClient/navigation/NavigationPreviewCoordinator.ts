@@ -1,21 +1,21 @@
+import type { InteractionAuthorityPort } from "../replication/CollaborationTypes";
 import { requestNavPreview } from "./navGoalRequest";
-import { clientTrackingToOdomPose, odomToClientTrackingPose } from "../localization/clientTrackingTransforms";
+import { odomToClientTrackingPose } from "../localization/clientTrackingTransforms";
 import type { ClientTrackingOrigin } from "../localization/clientTrackingOrigin";
 import type { ARModuleSession } from "../websocket/arModuleSession";
-import type { NavGoal, Quat, Vec3, YawPose } from "../websocket/protocolTypes";
+import type { NavGoal, Quat, Vec3 } from "../websocket/protocolTypes";
 
 export const PREVIEW_INTERVAL_S = 0.35;
 export const PREVIEW_DISTANCE_M = 0.2;
 export const PREVIEW_HEADING_RAD = Math.PI / 12;
 export const PREVIEW_DEADLINE_S = 5;
-type Aim = { position: Vec3; orientation: Quat; generation: number };
+type Aim = { position: Vec3; orientation: Quat };
 let nextCoordinator = 0;
 
 /** Request/reply lifecycle only; no marker, host coordinates, or motion commands. */
 export class NavigationPreviewCoordinator {
   private readonly prefix = `preview-${++nextCoordinator}`;
   private sequence = 0;
-  private generation = 0;
   private desired: Aim | null = null;
   private pending: { id: string; aim: Aim; deadline: number } | null = null;
   private lastAim: Aim | null = null;
@@ -24,27 +24,19 @@ export class NavigationPreviewCoordinator {
   private origin: ClientTrackingOrigin | null = null;
   private costmap: number | null = null;
   private queued = false;
-  private legacy = false;
-  private path: YawPose[] | null = null;
   private requestedTargetRevision: number | null = null;
 
-  constructor(private readonly session: Pick<ARModuleSession, "view" | "sendText"> & Partial<Pick<ARModuleSession, "collaboration" | "assetTransferDeadline">>) {}
-
-  previewPath(): YawPose[] | null { return this.path; }
+  constructor(private readonly session: Pick<ARModuleSession, "view" | "sendText"> & Partial<Pick<ARModuleSession, "assetTransferDeadline">> & { collaboration: InteractionAuthorityPort }) {
+    if (!session.collaboration) throw new Error("Navigation requires interaction authority");
+  }
 
   apply(origin: ClientTrackingOrigin | null): void {
     const view = this.session.view();
     if (view.connection !== "ready") { this.reset(); return; }
     if (view.capabilities?.navigation.nav_goal.preview !== true) { this.clear(); return; }
     const costmap = view.state?.nav_preview_costmap_ts ?? null;
-    if (origin !== this.origin) {
-      this.generation++;
-      this.path = null;
-      this.queued = true;
-      if (this.desired) this.desired = { ...this.desired, generation: this.generation };
-    }
-    // Costmaps keep changing while driving. Refresh the advisory route without
-    // starving replies for the same aim/origin behind an endless generation gap.
+    if (origin !== this.origin) this.queued = true;
+    // Costmap changes queue a refresh without retiring a correlated request.
     if (costmap !== this.costmap) this.queued = true;
     this.origin = origin;
     this.costmap = costmap;
@@ -52,31 +44,18 @@ export class NavigationPreviewCoordinator {
     if (!response || response === this.lastResponse) return;
     this.lastResponse = response;
     if (!this.pending) return;
-    if (!response.preview_id) {
-      this.legacy = true;
-      this.pending = null;
-      this.path = null;
-      return;
-    }
     if (response.preview_id !== this.pending.id) return;
-    const pending = this.pending;
     this.pending = null;
-    if (origin && this.desired?.generation === pending.aim.generation) this.path = response.path_poses;
   }
 
   aim(position: Vec3, orientation: Quat): void {
     const reference = this.pending?.aim ?? this.lastAim ?? this.desired;
-    if (!this.desired || !reference || changed(reference, { position, orientation }) && this.desired.generation === reference.generation) {
-      this.generation++;
-      if (this.pending) this.queued = true;
-    }
-    this.desired = { position: [...position], orientation: [...orientation], generation: this.generation };
+    if (this.pending && reference && changed(reference, { position, orientation })) this.queued = true;
+    this.desired = { position: [...position], orientation: [...orientation] };
   }
 
   clear(): void {
-    this.generation++;
     this.desired = null;
-    this.path = null;
     this.lastAim = null;
     this.requestedTargetRevision = null;
     this.queued = false;
@@ -90,40 +69,38 @@ export class NavigationPreviewCoordinator {
     this.lastResponse = null;
     this.origin = null;
     this.costmap = null;
-    this.legacy = false;
     this.lastSend = -PREVIEW_INTERVAL_S;
   }
 
   tick(now: number): void {
-    const shared = this.session.collaboration?.snapshot();
-    const canonical = shared?.rawTarget && this.origin ? odomToClientTrackingPose(shared.rawTarget, this.origin) : null;
-    if (shared?.ownsAuthority && canonical && this.pending && changed(this.pending.aim, canonical) && now - this.lastSend >= PREVIEW_INTERVAL_S) {
+    const shared = this.session.collaboration.snapshot();
+    const canonical = shared.rawTarget && this.origin ? odomToClientTrackingPose(shared.rawTarget, this.origin) : null;
+    if (shared.ownsAuthority && canonical && this.pending && changed(this.pending.aim, canonical) && now - this.lastSend >= PREVIEW_INTERVAL_S) {
       this.pending = null;
       this.queued = true;
     }
-    if (shared?.ownsAuthority && shared.preview === null && this.lastAim &&
+    if (shared.ownsAuthority && shared.preview === null && this.lastAim &&
         (shared.rawTarget?.revision !== this.requestedTargetRevision || !this.pending)) this.queued = true;
     if (this.pending && now >= Math.max(this.pending.deadline, this.session.assetTransferDeadline?.(this.pending.id) ?? 0)) {
       this.pending = null;
-      this.path = null;
       this.lastAim = null;
       this.queued = true;
     }
     const desired = this.desired;
-    if (!desired || this.pending || !this.origin || this.legacy ||
+    if (!desired || this.pending || !this.origin ||
         this.session.view().connection !== "ready" ||
         this.session.view().capabilities?.navigation.nav_goal.preview !== true ||
         now - this.lastSend < PREVIEW_INTERVAL_S ||
         (this.lastAim && !changed(this.lastAim, desired) && !this.queued)) return;
-    if (shared && (!shared.ownsAuthority || !shared.rawTarget || !canonical)) return;
-    const requestAim = canonical ? { ...canonical, generation: desired.generation } : desired;
-    const odom = shared?.rawTarget ?? clientTrackingToOdomPose(desired, this.origin);
+    if (!shared.ownsAuthority || !shared.rawTarget || !canonical) return;
+    const requestAim = canonical;
+    const odom = shared.rawTarget;
     const id = `${this.prefix}-${++this.sequence}`;
     try { requestNavPreview(this.session, { ...odom, preview_id: id }); }
-    catch { this.path = null; return; }
+    catch { return; }
     this.pending = { id, aim: requestAim, deadline: now + PREVIEW_DEADLINE_S };
     this.lastAim = requestAim;
-    this.requestedTargetRevision = shared?.rawTarget?.revision ?? null;
+    this.requestedTargetRevision = shared.rawTarget.revision;
     this.queued = false;
     this.lastSend = now;
   }

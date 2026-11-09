@@ -11,7 +11,7 @@ import { Text } from "troika-three-text";
 import { registerRayTarget } from "../input/XRBlocksRayInteraction";
 import { DIMOS_AR_DESIGN } from "../presentation/DimOSARDesign";
 import { GlassSurface } from "../presentation/GlassSurface";
-import { PanelHeightController } from "../presentation/PanelHeightController";
+import { PanelHeightAnimation } from "@dimos-ar-client/presentation/PanelHeightAnimation";
 import { indicatorMaterial } from "../presentation/PoseIndicatorMaterial";
 import { RobotMarkerLabel } from "../presentation/RobotMarkerLabel";
 import { SpeedSlider } from "../presentation/SpeedSlider";
@@ -32,7 +32,7 @@ export class ManipulationControlsView {
   localizationAvailable = false;
   onRecalibrate: (() => void) | null = null;
   readonly buttons = new Map<string, SurfaceButton>();
-  private readonly menuHeight = new PanelHeightController();
+  private readonly menuHeight = new PanelHeightAnimation();
   private readonly speedLabel = new Text();
   private readonly menuPlate: GlassSurface;
   private hoverUntil = 0;

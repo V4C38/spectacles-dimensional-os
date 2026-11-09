@@ -157,11 +157,17 @@ export class IntegrationV2Fixture implements BindableWebSocketTransport {
   private target(request: Value): void {
     const state = this.interaction, authority = state.authority;
     const domain = authority.kind.startsWith("manipulation") ? "manipulation" : "navigation";
+    const previous = state.targets.find((target: Value) => target.domain === domain && target.group_id === (request.group_id ?? authority.group_id ?? undefined));
+    const speed = request.speed_scale ?? previous?.speed_scale ?? .5;
+    const gripper = request.gripper ?? previous?.gripper;
+    const unchanged = previous && JSON.stringify(previous.position) === JSON.stringify(request.position) &&
+      JSON.stringify(previous.orientation) === JSON.stringify(request.orientation) &&
+      previous.speed_scale === speed && previous.gripper === gripper;
     const target = { position: [...request.position], orientation: [...request.orientation], domain,
       ...(request.group_id || authority.group_id ? { group_id: request.group_id ?? authority.group_id } : {}),
-      ...(request.speed_scale !== undefined ? { speed_scale: request.speed_scale } : {}),
-      ...(request.gripper !== undefined ? { gripper: request.gripper } : {}),
-      revision: state.revision + 1, phase: authority.kind.endsWith("planning") ? "draft" : "live",
+      speed_scale: speed, ...(gripper !== undefined ? { gripper } : {}),
+      revision: unchanged ? previous.revision : (previous?.revision ?? 0) + 1,
+      phase: authority.kind.endsWith("planning") ? "draft" : "live",
       sample_ts: this.now(), sequence: request.sequence ?? 0 };
     state.target = target;
     state.targets = [...state.targets.filter((item: Value) => item.domain !== domain || item.group_id !== target.group_id), target];

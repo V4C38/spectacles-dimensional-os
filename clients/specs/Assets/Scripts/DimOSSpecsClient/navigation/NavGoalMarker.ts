@@ -2,15 +2,7 @@ import { NAVIGATION_CANCEL_STYLE, navigationCancelReveal } from "../../DimOSARCl
 import { NavigationMarkerRenderer, type NavigationMarkerStyle } from "./NavigationMarkerRenderer";
 import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable";
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
-
-const CIRCLE_INACTIVE_MATERIAL = requireAsset("../../../Materials/Circle_Inactive.mat") as Material;
-const CIRCLE_ACTIVE_MATERIAL = requireAsset("../../../Materials/Circle_Active.mat") as Material;
-
-type ArrowPass = Pass & {
-  Opacity_Override?: number;
-  AnimatedArrow?: boolean;
-  ArrowSpeed?: number;
-};
+import { WorldMeshRenderer, strokeMesh2D } from "../presentation/WorldMeshRenderer";
 
 export type NavGoalMarkerEvents = {
   onDragTriggerStart?: (interactor: { startPoint?: vec3; endPoint?: vec3 } | null) => void;
@@ -23,16 +15,12 @@ export type NavGoalMarkerEvents = {
 export class NavGoalMarker extends BaseScriptComponent {
   private root: SceneObject | null = null;
   private headingRoot: SceneObject | null = null;
-  private hintAnchor: SceneObject | null = null;
   private dragObject: SceneObject | null = null;
   private dragInteractable: Interactable | null = null;
   private dragCollider: ColliderComponent | null = null;
-  private circleVisual: RenderMeshVisual | null = null;
-  private arrowMaterial: Material | null = null;
-  private dotsMaterial: Material | null = null;
   private cancelButton: RoundButton | null = null;
   private cancelObject: SceneObject | null = null;
-  private cancelLabel: Text | null = null;
+  private cancelIcon: WorldMeshRenderer | null = null;
   private cancelBaseScale: vec3 | null = null;
   private cancelVisible = false;
   private cancelProgress = 0;
@@ -62,22 +50,32 @@ export class NavGoalMarker extends BaseScriptComponent {
     if (!this.dragInteractable) {
       throw new Error("DragInteractable is required");
     }
-    this.hintAnchor = findChild(dragObject, "HintAnchor");
     const cancelObject = findChild(this.root, "button_cancel");
     if (!cancelObject) {
       throw new Error("NavigationTargetMarker.button_cancel is required");
     }
     this.cancelObject = cancelObject;
-    this.cancelBaseScale = cancelObject.getTransform().getLocalScale();
+    this.cancelBaseScale = vec3.one();
     this.cancelButton = cancelObject.getComponent(RoundButton.getTypeName()) as RoundButton;
     if (!this.cancelButton) {
       throw new Error("CancelButton is required");
     }
+    // Prefab buttons defer SDK initialization to OnStart; resize its live visual and collider together.
+    this.cancelButton.initialize();
+    this.cancelButton.width = NAVIGATION_CANCEL_STYLE.diameterM * 100;
     const cancelLabelObject = findChild(cancelObject, "Text_Title");
-    this.cancelLabel = cancelLabelObject
-      ? (cancelLabelObject.getComponent("Component.Text") as Text)
-      : null;
-    this.bindLookObjects();
+    if (cancelLabelObject) {
+      const label = cancelLabelObject.getComponent("Component.Text") as Text | null;
+      if (label) { label.text = ""; label.enabled = false; }
+      cancelLabelObject.enabled = false;
+    }
+    this.cancelIcon = new WorldMeshRenderer(cancelObject, "NavigationCancelCross");
+    const half = NAVIGATION_CANCEL_STYLE.glyphLengthM / Math.sqrt(8);
+    const geometry = strokeMesh2D([[-half, -half, half, half], [-half, half, half, -half]],
+      [1, 1], NAVIGATION_CANCEL_STYLE.glyphWidthM, "xy", 100);
+    this.cancelIcon.triangles(geometry.positions, geometry.indices, [1, 1, 1, 1]);
+    this.cancelIcon.object.getTransform().setLocalPosition(new vec3(0, 0, 0.6));
+    this.cancelIcon.visual.setRenderOrder(this.cancelButton.renderOrder + 1);
     this.setCancelVisible(false);
     this.bindInteractions();
   }
@@ -86,10 +84,6 @@ export class NavGoalMarker extends BaseScriptComponent {
     this.ensureReady();
     if (!this.worldVisuals) {
       this.worldVisuals = new NavigationMarkerRenderer(this.headingRoot ?? this.root!, radiusCm);
-      for (const name of ["Visual", "MoveDirectionArrow", "Dots"]) {
-        const visual = findChild(this.root!, name)?.getComponent("Component.RenderMeshVisual") as RenderMeshVisual | null;
-        if (visual) visual.enabled = false;
-      }
     }
     this.worldVisuals.setRadius(radiusCm);
     if (this.cancelVisible) this.cancelProgress = Math.min(1, this.cancelProgress + Math.max(0, dt) / NAVIGATION_CANCEL_STYLE.revealS);
@@ -163,52 +157,11 @@ export class NavGoalMarker extends BaseScriptComponent {
     this.setRotation(rotation);
   }
 
-  interpolatePose(position: vec3, rotation: quat, lerpSpeed: number): void {
-    this.ensureReady();
-    const transform = this.root!.getTransform();
-    const alpha = 1 - Math.exp(-lerpSpeed * getDeltaTime());
-    transform.setWorldPosition(vec3.lerp(transform.getWorldPosition(), position, alpha));
-    this.setRotation(quat.slerp(this.rotation, rotation, alpha));
-  }
-
-  setDragProbeWorldPosition(position: vec3): void {
-    this.ensureReady();
-    this.hintAnchor?.getTransform().setWorldPosition(position);
-  }
-
   setDragEnabled(enabled: boolean): void {
     this.ensureReady();
     this.bindInteractions();
     const drag = this.dragInteractable as Interactable & { enabled: boolean };
     drag.enabled = enabled;
-  }
-
-  setGoalActive(active: boolean): void {
-    this.ensureReady();
-    if (this.circleVisual) {
-      const next = active ? CIRCLE_ACTIVE_MATERIAL : CIRCLE_INACTIVE_MATERIAL;
-      if (this.circleVisual.mainMaterial !== next) {
-        this.circleVisual.mainMaterial = next;
-      }
-    }
-    const arrowPass = this.arrowPass();
-    if (arrowPass) {
-      arrowPass.Opacity_Override = active ? 0.6 : 0.2;
-    }
-    const dotsPass = this.dotsMaterial?.mainPass as (Pass & { Opacity_Override?: number }) | undefined;
-    if (dotsPass) {
-      dotsPass.Opacity_Override = active ? 0.75 : 0.4;
-    }
-  }
-
-  setArrowAnimating(animating: boolean): void {
-    this.ensureReady();
-    const arrowPass = this.arrowPass();
-    if (!arrowPass) {
-      return;
-    }
-    arrowPass.AnimatedArrow = animating;
-    arrowPass.ArrowSpeed = animating ? 1.0 : 0;
   }
 
   setCancelVisible(visible: boolean, estopAvailable: boolean = true, confirmationId = 0): void {
@@ -226,9 +179,7 @@ export class NavGoalMarker extends BaseScriptComponent {
       button.enabled = visible;
       button.inactive = !estopAvailable;
     }
-    if (this.cancelLabel) {
-      this.cancelLabel.text = estopAvailable ? "Cancel" : "Cancel\nUnavailable";
-    }
+    this.cancelIcon?.setColor([1, 1, 1, estopAvailable ? 1 : 0.4]);
   }
 
   private applyCancelReveal(): void {
@@ -264,42 +215,6 @@ export class NavGoalMarker extends BaseScriptComponent {
   destroy(): void {
     this.unbindEvents();
     this.getSceneObject().destroy();
-  }
-
-  private bindLookObjects(): void {
-    if (!CIRCLE_INACTIVE_MATERIAL || !CIRCLE_ACTIVE_MATERIAL) {
-      throw new Error("Circle materials are required");
-    }
-    const visual = findChild(this.root!, "Visual");
-    const arrow = findChild(this.root!, "MoveDirectionArrow");
-    const dots = findChild(this.root!, "Dots");
-    if (!visual) {
-      throw new Error("Visual is required");
-    }
-    if (!arrow) {
-      throw new Error("MoveDirectionArrow is required");
-    }
-    if (!dots) {
-      throw new Error("Dots is required");
-    }
-    this.circleVisual = visual.getComponent("Component.RenderMeshVisual") as RenderMeshVisual;
-    if (!this.circleVisual) {
-      throw new Error("Visual is required");
-    }
-    const arrowVisual = arrow.getComponent("Component.RenderMeshVisual") as RenderMeshVisual;
-    const dotsVisual = dots.getComponent("Component.RenderMeshVisual") as RenderMeshVisual;
-    if (!arrowVisual) {
-      throw new Error("MoveDirectionArrow is required");
-    }
-    if (!dotsVisual) {
-      throw new Error("Dots is required");
-    }
-    this.arrowMaterial = arrowVisual.mainMaterial;
-    this.dotsMaterial = dotsVisual.mainMaterial;
-  }
-
-  private arrowPass(): ArrowPass | null {
-    return (this.arrowMaterial?.mainPass as ArrowPass | undefined) ?? null;
   }
 
   private setRotation(rotation: quat): void {

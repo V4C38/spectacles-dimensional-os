@@ -3,11 +3,10 @@ import { ArmStrokeRenderer } from "./ArmStrokeRenderer";
 import { EndEffectorStatusPill } from "./EndEffectorStatusPill";
 import { endEffectorAngles, endEffectorDisplayPose } from "../../DimOSARClient/manipulation/ManipulationVisuals";
 import { ARM_PANEL_STYLE, PANEL_PIN_SEGMENTS, PANEL_SCAN_SEGMENTS } from "../../DimOSARClient/presentation/PanelFrameStyle";
-import { manipulationPreviewPlan, manipulationMenuRows, manipulationButtonEnabled, endEffectorAction, manipulationPathOpacity } from "../../DimOSARClient/manipulation/ManipulationPresentation";
+import { manipulationObservedJoints, manipulationProposedJoints, manipulationActivePlan, manipulationMenuRows, manipulationButtonEnabled, endEffectorAction, manipulationPathOpacity } from "../../DimOSARClient/manipulation/ManipulationPresentation";
 import { PanelHeightAnimation } from "../../DimOSARClient/presentation/PanelHeightAnimation";
 import { armMotionContext, ArmJointFilter } from "../../DimOSARClient/manipulation/ArmJointFilter";
 import { ArmTrajectoryProgress } from "../../DimOSARClient/manipulation/ArmTrajectoryProgress";
-import { gripperJointValues } from "../../DimOSARClient/manipulation/ArmToolKinematics";
 import { ARM_VISUAL_STYLE as STYLE, armShapeEdges, armPointDisplacement, armLinkWeight, armLinkPresentation, ArmMeshFade, ArmPointOpacity, armPointOpacityKey, ArmOpacityCadence } from "../../DimOSARClient/manipulation/ManipulationVisuals";
 import { ARM_MATERIAL, configureArmMaterial, ARM_SURFACE_MATERIAL, configureArmSurface } from "./ArmMaterial";
 import type { ManipulationInputCapture } from "../../DimOSARClient/manipulation/ManipulationInputCapture";
@@ -19,7 +18,7 @@ import { createIconButton, createText, createRobotLabelText,  panelButtonLayer, 
 import { clientTrackingToSpecsPoint, clientTrackingToSpecsPose } from "../utilities/SpecsCoordinates";
 import { odomToClientTrackingPose } from "../../DimOSARClient/localization/clientTrackingTransforms";
 import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
-import { composePose, linkPoses, samplePlan, manipulationPlanPath } from "../../DimOSARClient/manipulation/ModelKinematics";
+import { composePose, linkPoses, manipulationPlanPath } from "../../DimOSARClient/manipulation/ModelKinematics";
 import type { ManipulationController } from "../../DimOSARClient/manipulation/ManipulationController";
 import type { ManipulationPose, ManipulationState } from "../../DimOSARClient/manipulation/ManipulationTypes";
 import type { Vec3 } from "../../DimOSARClient/websocket/protocolTypes";
@@ -234,15 +233,16 @@ export class ManipulationRenderer {
     const dt = this.lastTime ? Math.max(0, Math.min(0.1, now - this.lastTime)) : 1 / 60; this.lastTime = now;
     const context = armMotionContext(model.revision, interaction.groupId, origin);
     if (this.context !== context) { this.jointFilter.reset(); this.previewFilter.reset(); this.progress.reset(); this.context = context; }
-    const observedValues = Object.assign({}, ...Object.values(state.observations ?? {}).map(o => o.joints ?? {}), gripperJointValues(model, group, observed?.gripper));
+    const observedValues = manipulationObservedJoints(model, state, group);
     const all = this.jointFilter.sample(model, observedValues, context, now, .1, observed?.measured_at ?? undefined, observed?.joint_velocities);
     const root: ManipulationPose = state.root_pose ?? { position: [0, 0, 0], orientation: [0, 0, 0, 1] };
-    const plan = state.stopped ? null : (intent.executing ? state.plan : interaction.plan) ?? null;
+    const plan = manipulationActivePlan(state, interaction.plan, intent.executing);
     if (intent.dragging || state.stopped) this.core.presentation.reset();
     const playback = this.core.presentation.sample(plan, now);
-    const configuration = playback.playing && plan ? samplePlan(plan, playback.time)
-      : manipulationPreviewPlan(plan, selected, intent.dragging, !!interaction.rejection) && plan ? samplePlan(plan, plan.duration) : interaction.previewJoints;
-    const proposed = { ...observedValues, ...configuration, ...gripperJointValues(model, group, selected ? interaction.desiredGripper : observed?.gripper) };
+    const proposed = manipulationProposedJoints(model, group, observedValues, {
+      plan, playback, selected, dragging: intent.dragging, rejected: !!interaction.rejection,
+      solution: interaction.previewJoints, opening: selected ? interaction.desiredGripper : observed?.gripper,
+    });
     if(interaction.previewJoints !== this.previousSolution) { this.previousSolution = interaction.previewJoints; this.solutionSequence++; }
     const source = selected ? `${plan?.plan_id ?? this.solutionSequence}` : `${this.solutionSequence}`;
     const values = playback.playing ? this.previewFilter.playback(model,proposed,context,now,playback.time) : this.previewFilter.sample(model, proposed, context, now, .1, source);

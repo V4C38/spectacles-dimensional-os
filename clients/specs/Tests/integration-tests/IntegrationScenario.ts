@@ -1,9 +1,10 @@
 import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 // Hardware inputs are deterministic fixtures. Production state owners, SIK/SUK controls and renderers run unchanged.
 import { DimOSSpecsClient } from "../Scripts/DimOSSpecsClient/DimOSSpecsClient";
+import { availableCapabilityLabels } from "../Scripts/DimOSARClient/presentation/ControlPanelPresentation";
 import { SetupWizardStep } from "../Scripts/DimOSSpecsClient/presentation/SetupWizardView";
 import { getFrameComponent } from "../Scripts/DimOSSpecsClient/presentation/UIKit";
-import { RUNTIME_LAYOUTS, RUNTIME_PANEL_SCALE, SETUP_LAYOUTS } from "../Scripts/DimOSSpecsClient/presentation/PanelLayout";
+import { RUNTIME_LAYOUTS, RUNTIME_PANEL_SCALE, SETUP_LAYOUTS, SETUP_PANEL_SCALE } from "../Scripts/DimOSSpecsClient/presentation/PanelLayout";
 import { specsToClientTrackingPoint, clientTrackingToSpecsPoint } from "../Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
 import { decodeLocalizationObservations, LIDAR_FOURCC } from "../Scripts/DimOSARClient/websocket/protocol";
 import { WristMenuController } from "../Scripts/DimOSSpecsClient/presentation/WristMenuController";
@@ -202,7 +203,7 @@ export class ReviewScenario extends BaseScriptComponent {
     this.wire(goal);
     if (!preview) this.state("following_path", null);
   }
-  private ready(capabilities = this.caps, reconnect = false): void {
+  private ready(capabilities = this.caps, reconnect = false, providers: ("fiducial_marker" | "vps")[] = ["vps"]): void {
     const session = this.root.session;
     if (session.view().connection === "ready")
       return;
@@ -211,7 +212,7 @@ export class ReviewScenario extends BaseScriptComponent {
     session.onTransportOpen();
     const request = [...this.sent].reverse().find(row => row.type === "hello_request");
     this.wire({ type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "native-integration", odom_reference_id: "native-fixture-odom", time_sync: { ts_client: request.ts_client, ts_server: getTime() },
-      robot: CATALOG.fixtures.robot, capabilities });
+      robot: CATALOG.fixtures.robot, capabilities, localization: { providers } });
     this.peer.reset();
     this.state("idle", null);
     this.pose(CATALOG.fixtures.pose);
@@ -324,7 +325,7 @@ export class ReviewScenario extends BaseScriptComponent {
       captureBounds: this.captureBounds(step.id),
       cameraAspect: (this.root.cameraObject.getComponent("Component.Camera") as Camera).aspect,
       videoOnly: this.profile !== "golden" && step.id === "navigation_failure",
-      screenshotOffsetS: step.id === "navigation_cancelled" ? 1.55 :
+      screenshotOffsetS: step.id === "connection_ready" ? 1.6 : step.id === "navigation_cancelled" ? 1.55 :
         step.id === "navigation_success" ? 0.45 : step.id === "navigation_failure" ? 0.55 : 0.8,
     });
     try {
@@ -345,11 +346,34 @@ export class ReviewScenario extends BaseScriptComponent {
     switch (id) {
       case "setup_entry":
         this.headerMetrics();
-        this.check(id, controller.isVisible() && controller.flow.step === "connect" && !controller.view.previous.sceneObject.enabled);
+        this.check(id, controller.isVisible() && controller.flow.step === "connect" && !controller.view.previous.sceneObject.enabled &&
+          controller.view.description.text === "" && !controller.view.description.getSceneObject().enabled &&
+          controller.view.heightController.target === SETUP_LAYOUTS.entry.height);
         break;
       case "connection_ready":
         this.ready();
-        this.later(0.3, () => root.session.view().connection === "ready" && root.session.view().hello.robot.display_name === CATALOG.fixtures.robot.display_name);
+        this.later(1.2, () => {
+          const view = controller.view, session = root.session.view();
+          const labels = availableCapabilityLabels(session.capabilities);
+          const runs = view.capabilityRuns as Text[];
+          const completeLabels = runs.map(run => run.text.replace(/, $/, ""));
+          const positions = runs.map(run => run.getSceneObject().getTransform().getLocalPosition());
+          const bounds = runs.every((run, index) => {
+            const box = run.getBoundingBox(), left = positions[index].x + box.left;
+            return box.getSize().x > 0 && left >= -40.01 && left + box.getSize().x <= 40.01;
+          });
+          const fonts = runs.every((run, index) => {
+            const principal = ["Navigation", "Manipulation", "Localization"].includes(completeLabels[index]);
+            return run.font.name.includes(principal ? "Inter-Semibold" : "Inter-Regular");
+          });
+          this.emit({ type: "capability-summary", labels: completeLabels,
+            fonts: runs.map(run => run.font.name), lines: [...new Set(positions.map(position => position.y))], bounds });
+          return session.connection === "ready" && session.hello.robot.display_name === CATALOG.fixtures.robot.display_name &&
+            view.cardBody.text === `Robot: ${CATALOG.fixtures.robot.display_name}` &&
+            view.capabilityHeading.text === "Capabilities:" && view.capabilitiesRoot.isEnabledInHierarchy &&
+            !view.description.getSceneObject().enabled && JSON.stringify(completeLabels) === JSON.stringify(labels) &&
+            new Set(positions.map(position => position.y)).size <= 2 && fonts && bounds;
+        });
         break;
       case "localization_capture":
         this.press(controller.view.next.button);
@@ -556,11 +580,23 @@ export class ReviewScenario extends BaseScriptComponent {
         this.later(1, () => menu.page === "diagnostics" && menu.diagnostics.window.scrollDimensions.y > menu.diagnostics.window.windowSize.y && menu.diagnostics.window.scrollPositionNormalized.y < -0.9);
         break;
       }
-      case "world_marker":
+      case "world_marker": {
         this.worldOnly();
-        this.wire({ type: "agent_skill", name: "ar_place_marker", args: { id: "integration-door", title: "Doorway", x: this.goal[0], y: this.goal[1], z: 0.7 } });
-        this.later(0.5, () => root.annotations.size() === 1);
+        const place = (title: string) => this.wire({ type: "agent_skill", name: "ar_place_marker",
+          args: { id: "integration-door", title, x: this.goal[0], y: this.goal[1], z: 0.7 } });
+        const rendered = () => root.annotations._entries.get("integration-door")?.visual?.title;
+        place("Doorway");
+        let original: Text | null = null, initialTitle = false, updatedTitle = false;
+        this.after(.3, () => { original = rendered(); initialTitle = original?.text === "Doorway"; place("Doorway updated"); });
+        this.after(.6, () => {
+          updatedTitle = rendered() === original && rendered()?.text === "Doorway updated";
+          place("Doorway");
+          root.annotations.recompose(root.clientTrackingOriginStore.T_odom_client);
+        });
+        this.later(.9, () => root.annotations.size() === 1 && initialTitle && updatedTitle &&
+          rendered() === original && rendered()?.text === "Doorway");
         break;
+      }
       case "relocalize":
         this.showMenu();
         this.autoLocalize = true;
@@ -640,6 +676,7 @@ export class ReviewScenario extends BaseScriptComponent {
     };
     visit(this.root.uiPresenter.setupWizardPanel);
     print(`SPECS_HEADER_METRICS ${JSON.stringify(rows)}`);
+    this.check("native-header-metrics", rows.length >= 2);
   }
   private regression(id: string): void {
     const root = this.root, ui = root.uiPresenter, menu = ui.mainMenuView, controller = ui.setupWizardController;
@@ -648,16 +685,49 @@ export class ReviewScenario extends BaseScriptComponent {
         root.session.stop();
         controller.start(false);
         const backHidden = !controller.view.previous.sceneObject.enabled;
-        this.after(0.2, () => this.press(controller.view.next.button));
-        let skipped = false;
-        this.after(0.5, () => { skipped = ui.isSetupCompleted() && menu.page === "main"; this.press(this.button("Global settings")); });
-        this.after(0.8, () => this.press(this.button("Setup")));
-        let runtimeBack = false;
-        this.after(1.3, () => { runtimeBack = controller.view.previous.sceneObject.enabled; this.press(controller.view.previous.button); });
-        this.later(1.6, () => {
-          const completed = ui.isSetupCompleted();
-          print(`SETUP_NAVIGATION ${JSON.stringify({ backHidden, skipped, runtimeBack, completed, step: controller.flow.step })}`);
-          return backHidden && skipped && runtimeBack && completed;
+        let skipped = false, settingsOpened = false, runtimeRestarted = false, runtimeBack = false;
+        // Each dependent action is scheduled after its predecessor actually runs.
+        // Native frame stalls can batch absolute offsets; the deferred setup
+        // restart must receive a natural frame before checking its result.
+        this.after(0.2, () => {
+          this.press(controller.view.next.button);
+          this.after(0.2, () => {
+            skipped = ui.isSetupCompleted() && menu.page === "main";
+            this.showMenu();
+            this.after(0.2, () => {
+              this.press(this.button("Global settings"));
+              this.after(0.2, () => {
+                settingsOpened = menu.page === "settings";
+                const setup = this.button("Setup");
+                const deadline = this.clock + 2;
+                const pressReadySetup = () => {
+                  // The settings header is available during panel expansion, but
+                  // MainMenuView keeps its body hidden until the height fits.
+                  if (!setup.getSceneObject().isEnabledInHierarchy || !setup.interactable.enabled) {
+                    if (this.clock >= deadline) {
+                      print(`SETUP_CONTROL_TIMEOUT ${JSON.stringify({ hierarchyEnabled: setup.getSceneObject().isEnabledInHierarchy, interactableEnabled: setup.interactable.enabled, inactive: setup.inactive, height: menu.heightController.height, targetHeight: menu.heightController.target, page: menu.page })}`);
+                      this.check("setup-control-ready", false, id);
+                      return;
+                    }
+                    this.after(0.05, pressReadySetup);
+                    return;
+                  }
+                  this.press(setup);
+                  this.after(0.2, () => {
+                    runtimeRestarted = controller.isVisible() && !ui.isSetupCompleted();
+                    runtimeBack = controller.view.previous.sceneObject.enabled;
+                    this.press(controller.view.previous.button);
+                    this.later(0.2, () => {
+                      const completed = ui.isSetupCompleted();
+                      print(`SETUP_NAVIGATION ${JSON.stringify({ backHidden, skipped, settingsOpened, runtimeRestarted, runtimeBack, completed, step: controller.flow.step })}`);
+                      return backHidden && skipped && settingsOpened && runtimeRestarted && runtimeBack && completed;
+                    }, id);
+                  });
+                };
+                pressReadySetup();
+              });
+            });
+          });
         });
         break;
       }
@@ -683,16 +753,46 @@ export class ReviewScenario extends BaseScriptComponent {
       }
       case "localization_providers": {
         root.session.stop();
-        this.ready();
+        this.ready(this.caps, false, ["fiducial_marker"]);
         this.input!.active = false;
         controller.start(true);
         ui.mainUIFrame.enabled = false;
         this.after(0.4, () => this.press(controller.view.next.button));
-        let mixed = false, unavailable = false;
-        this.after(0.7, () => { this.captureRequest("robot_los_preferred"); mixed = root.episode.view().capturePolicy === "robot_los_preferred"; });
-        this.after(1, () => { this.captureFailure = true; this.captureRequest("any_angle"); });
-        this.after(1.6, () => { unavailable = root.episode.view().phase === "failed" && !!root.episode.view().lastError; this.captureFailure = false; });
-        this.later(2, () => mixed && unavailable && controller.view.cardBody.text.length > 0);
+        let marker = false, vps = false, mixed = false, none = false, unavailable = false;
+        const observations: unknown[] = [];
+        const observe = (label: string, guide: boolean): boolean => {
+          const actual = { label: controller.view.description.text, guide: controller.view.guide.object.enabled,
+            policy: root.episode.view().capturePolicy, providers: root.session.view().hello?.localization?.providers };
+          observations.push(actual);
+          return actual.label === label && actual.guide === guide && actual.policy === "any_angle";
+        };
+        const select = (providers: ("fiducial_marker" | "vps")[]) => {
+          root.episode.reset();
+          root.session.stop();
+          this.ready(this.caps, false, providers);
+          this.captureRequest("any_angle");
+        };
+        this.after(0.7, () => { marker = observe("Fiducial marker", true); });
+        this.after(0.8, () => select(["vps"]));
+        this.after(1.1, () => { vps = observe("VPS", false); });
+        this.after(1.2, () => select(["fiducial_marker", "vps"]));
+        this.after(1.5, () => { mixed = observe("Fiducial marker + VPS", true); });
+        this.after(1.6, () => select([]));
+        this.after(1.9, () => { none = observe("No localization provider", false); });
+        this.after(2, () => {
+          this.captureFailure = true;
+          select(["vps"]);
+          // Inventory changes reset/queue capture while paused. Resume through
+          // the public owner before checking an actual camera failure.
+          root.episode.requestStart();
+        });
+        this.after(2.6, () => {
+          unavailable = root.episode.view().phase === "failed" && !!root.episode.view().lastError;
+          this.captureFailure = false;
+          print("LOCALIZATION_PROVIDERS " + JSON.stringify({ marker, vps, mixed, none, unavailable, observations }));
+        });
+        this.later(2.8, () => marker && vps && mixed && none && unavailable && controller.view.cardBody.text.length > 0);
+        this.after(3.2, () => { this.captureFailure = false; select(["vps"]); });
         break;
       }
       case "localization_rejection": {
@@ -853,7 +953,25 @@ export class ReviewScenario extends BaseScriptComponent {
         const top = () => { const t = ui.setupWizardPanel.getTransform(); return t.getWorldPosition().add(t.getWorldRotation().multiplyVec3(new vec3(0, frame.totalSize.y * t.getWorldScale().y / 2, 0))); };
         const anchor = top();
         let valid = true;
-        const measure = (key: keyof typeof SETUP_LAYOUTS) => { valid &&= Math.abs(frame.totalSize.x - 90) < .01 && Math.abs(frame.totalSize.y - SETUP_LAYOUTS[key].height) < .01 && top().distance(anchor) < .05; };
+        const follow = frame.followButton;
+        const following = frame.following;
+        const followEnabled = follow.interactable.enabled && follow.getSceneObject().isEnabledInHierarchy;
+        this.press(follow); const toggled = frame.following !== following;
+        this.press(follow); const restored = frame.following === following;
+        valid &&= toggled && restored;
+        print(`COMPACT_FOLLOW ${JSON.stringify({ followEnabled, toggled, restored, following })}`);
+        const measure = (key: keyof typeof SETUP_LAYOUTS) => {
+          const scale = ui.setupWizardPanel.getTransform().getWorldScale().y;
+          const height = frame.totalSize.y, expectedHeight = SETUP_LAYOUTS[key].height;
+          const diameter = follow.size.x * follow.getSceneObject().getTransform().getLocalScale().x;
+          const topMovement = top().distance(anchor);
+          const checks = { width: Math.abs(frame.totalSize.x - 90) < .01,
+            height: Math.abs(height - expectedHeight) < .01,
+            worldHeight: Math.abs(height * scale - expectedHeight * SETUP_PANEL_SCALE) < .01,
+            followDiameter: Math.abs(diameter - 7.2) < .05, fixedTop: topMovement < .05 };
+          valid &&= Object.values(checks).every(Boolean);
+          print(`COMPACT_FRAME ${JSON.stringify({ key, width: frame.totalSize.x, height, expectedHeight, scale, expectedWorldHeight: expectedHeight * SETUP_PANEL_SCALE, worldHeight: height * scale, diameter, topMovement, checks })}`);
+        };
         controller.view.setConnectionState({ phase: "error", text: "Fixture error", color: new vec4(1, .3, .3, 1) });
         this.after(.5, () => { controller.view.tick(.5); measure("error"); controller.view.setConnectionState({ phase: "connected", text: "Connected", details: "Ready to localize", color: vec4.one() }); });
         this.after(1, () => { controller.view.tick(.5); measure("connected"); controller.view.setCaptureLayout(false); controller.view.applyStepLayout(SetupWizardStep.Localization); });
@@ -864,17 +982,26 @@ export class ReviewScenario extends BaseScriptComponent {
       case "native_audio_reset": {
         const audio = root.textToSpeechAudio, owner = audio.getSceneObject(), enabled = audio.enabled, ownerEnabled = owner.enabled;
         let safe = true;
+        controller.start(true);
+        const toggleConnection = () => {
+          const before = controller._connectionMethod;
+          this.press(controller.view.connectionToggle.button);
+          safe &&= controller._connectionMethod !== before;
+        };
         try {
           audio.enabled = false;
           root.tts.stop();
           safe &&= !root.tts.isPlaying;
+          toggleConnection();
           audio.enabled = true;
           owner.enabled = false;
           root.tts.stop();
           safe &&= !root.tts.isPlaying;
+          toggleConnection();
           owner.enabled = true;
           root.tts.stop();
           safe &&= !root.tts.isPlaying;
+          toggleConnection();
         }
         finally {
           audio.enabled = enabled;

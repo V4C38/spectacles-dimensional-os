@@ -1,9 +1,9 @@
 import { resolve, join, basename } from "node:path";
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir, readFile, rm } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { makeVisualReviews } from "../visual-review.mjs";
 import { catalog } from "./catalog.mjs";
-import { documents, finishRun } from "./artifacts.mjs";
+import { documents, finishRun, sourceIdentity, publishGoldenVideo } from "./artifacts.mjs";
 
 export function alignRecording(directory, manifest) {
   if (!manifest.sync || manifest.sync.aligned) return;
@@ -84,7 +84,12 @@ export async function extractStills(directory, manifest) {
   );
 }
 export async function finalize(root, client, scope = "all") {
+  const extraMedia = process.env.INTEGRATION_EXTRA_MEDIA === "1";
   root = resolve(root);
+  const finalSource = sourceIdentity();
+  let initialSource;
+  try { initialSource = JSON.parse(await readFile(join(root, "run.json"), "utf8")).source; }
+  catch (error) { if (error.code !== "ENOENT") throw error; }
   const manifests = await documents(root, "review-scenes.json");
   const validation = [];
   for (const row of manifests)
@@ -108,7 +113,7 @@ export async function finalize(root, client, scope = "all") {
       }
     }
   for (const row of manifests)
-    if (["golden", "controller"].includes(row.value.profile)) {
+    if (["golden", "controller"].includes(row.value.profile) && row.value.recordingRetained !== false) {
       try {
         await extractStills(row.directory, row.value);
       } catch (error) {
@@ -123,6 +128,7 @@ export async function finalize(root, client, scope = "all") {
   // Encoder enumerates direct child suite directories; each recording stays in its suite.
   const parents = new Map();
   for (const row of manifests) {
+    if (row.value.profile !== "golden" && !extraMedia) continue;
     const parent = resolve(row.directory, "..");
     parents.set(parent, [
       ...(parents.get(parent) ?? []),
@@ -162,18 +168,36 @@ export async function finalize(root, client, scope = "all") {
       name: "golden_video_present",
       passed: videos.some((path) => path.endsWith("/golden-path.mp4")),
     });
-    if (client === "webxr" && scope === "all")
+    if (extraMedia && client === "webxr" && scope === "all")
       artifactChecks.push({
         caseId: "artifact_validation",
         name: "controller_video_present",
         passed: videos.some((path) => path.endsWith("/controller-path.mp4")),
       });
   }
-  return finishRun(root, client, {
+  if (initialSource) artifactChecks.push({
+    caseId: "artifact_validation", name: "source_unchanged",
+    passed: initialSource.fingerprint === finalSource.fingerprint,
+  });
+  const result = await finishRun(root, client, {
+    source: initialSource ?? finalSource,
     scope,
     checks: artifactChecks,
-    metadata: { videos: videos.map((path) => path.replace(root + "/", "")) },
+    metadata: { finalSource, videos: videos.map((path) => path.replace(root + "/", "")) },
   });
+  if (result.passed && !extraMedia && process.env.INTEGRATION_DEFER_MEDIA_CLEANUP !== "1") {
+    for (const row of manifests) {
+      if (row.value.profile === "golden" || !row.value.recording) continue;
+      const recording = resolve(row.directory, row.value.recording);
+      if (!recording.startsWith(root + "/")) throw new Error("Recording cleanup escaped run directory");
+      await rm(recording, { force: true });
+      row.value.recordingRetained = false;
+      await writeFile(row.path, JSON.stringify(row.value, null, 2) + "\n");
+    }
+  }
+  // Specs must first restore and audit the production project in its native runner.
+  if (client === "webxr") await publishGoldenVideo(root, client);
+  return result;
 }
 if (
   process.argv[1] &&
@@ -190,7 +214,12 @@ if (
         [],
       ),
   );
-  const result = await finalize(args.run, args.client, args.scope ?? "all");
-  process.stdout.write(`${result.passed ? "PASS" : "FAIL"}: ${args.run}\n`);
-  process.exitCode = result.passed ? 0 : 1;
+  if (args["publish-only"]) {
+    const target = await publishGoldenVideo(args.run, args.client);
+    process.stdout.write(`${target ? "Published: " + target : "Golden publication skipped: run is not fully verified"}\n`);
+  } else {
+    const result = await finalize(args.run, args.client, args.scope ?? "all");
+    process.stdout.write(`${result.passed ? "PASS" : "FAIL"}: ${args.run}\n`);
+    process.exitCode = result.passed ? 0 : 1;
+  }
 }

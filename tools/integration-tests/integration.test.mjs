@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { catalog, applicableCases, validateCatalog } from "./catalog.mjs";
-import { coverage, numberImages, finishRun } from "./artifacts.mjs";
+import { coverage, numberImages, finishRun, reviewDataRoot, publishGoldenVideo } from "./artifacts.mjs";
 
 test("catalog contains one unambiguous shared golden order and explicit platform exceptions", () => {
   assert.equal(validateCatalog(), true);
@@ -159,13 +159,18 @@ test("native runtime failures survive aggregation even if individual assertions 
   }
 });
 
-test("cleanup requires verified complete results and retains the new run", async () => {
+test("cleanup requires a full pass and retains failed, partial and unclassified evidence", async () => {
   const { mkdir, access } = await import("node:fs/promises");
   const { removeOldResults } = await import("./artifacts.mjs");
   const parent = await mkdtemp(join(tmpdir(), "integration-cleanup-")),
     root = join(parent, "integration-tests/test-results");
   try {
     await mkdir(join(root, "old"), { recursive: true });
+    await writeFile(join(root, "old/results.json"), JSON.stringify({ passed: true, scope: "all" }));
+    for (const [name, result] of [["failed", { passed: false, scope: "all" }], ["partial", { passed: true, scope: "golden" }], ["unknown", null]]) {
+      await mkdir(join(root, name));
+      if (result) await writeFile(join(root, name, "results.json"), JSON.stringify(result));
+    }
     await mkdir(join(root, "new"));
     await writeFile(
       join(root, "new/results.json"),
@@ -180,6 +185,105 @@ test("cleanup requires verified complete results and retains the new run", async
     await removeOldResults(root, ["new"]);
     await access(join(root, "new"));
     await assert.rejects(access(join(root, "old")));
+    for (const name of ["failed", "partial", "unknown"]) await access(join(root, name));
+    await assert.rejects(removeOldResults(parent, ["new"]), /Unsafe integration cleanup root/);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("finalization preserves startup provenance and rejects a changed source", async () => {
+  const { finalize } = await import("./finalize.mjs");
+  const { sourceIdentity } = await import("./artifacts.mjs");
+  const { mkdir } = await import("node:fs/promises");
+  const parent = join(reviewDataRoot, "unit/integration-tooling");
+  await mkdir(parent, { recursive: true });
+  const root = await mkdtemp(join(parent, "provenance-"));
+  try {
+    const initial = { ...sourceIdentity(root), fingerprint: "different-startup-source" };
+    await writeFile(join(root, "run.json"), JSON.stringify({ source: initial }));
+    const result = await finalize(root, "webxr", "golden");
+    assert.deepEqual(result.source, initial);
+    assert.equal(result.checks.find(row => row.name === "source_unchanged").passed, false);
+    assert.equal(result.passed, false);
+    assert.notEqual(result.finalSource.fingerprint, initial.fingerprint);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("explicit output paths outside the checkout retain source provenance", async () => {
+  const { finalize } = await import("./finalize.mjs");
+  const { sourceIdentity } = await import("./artifacts.mjs");
+  const root = await mkdtemp(join(tmpdir(), "integration external evidence "));
+  try {
+    const source = sourceIdentity();
+    await writeFile(join(root, "run.json"), JSON.stringify({ source }));
+    const result = await finalize(root, "webxr", "regression");
+    assert.deepEqual(result.source, source);
+    assert.equal(result.checks.find(row => row.name === "source_unchanged").passed, true);
+    assert.equal(result.passed, false); // Missing real case evidence still fails.
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("latest client golden videos replace atomically after complete verification", async () => {
+  const { mkdir, access, readdir } = await import("node:fs/promises");
+  const { sourceIdentity } = await import("./artifacts.mjs");
+  const parent = await mkdtemp(join(tmpdir(), "golden publication with spaces "));
+  const output = join(parent, "Review Data"), run = join(parent, "run evidence");
+  const result = {
+    client: "webxr", passed: true, scope: "all", source: sourceIdentity(),
+    checks: ["golden_video_present", "source_unchanged"].map((name) => ({ name, passed: true })),
+  };
+  try {
+    await mkdir(run);
+    await mkdir(output);
+    await writeFile(join(output, "webxr_golden-path.mp4"), "previous webxr");
+    await writeFile(join(output, "specs_golden-path.mp4"), "previous specs");
+    await writeFile(join(output, "webxr-golden-path.mp4"), "legacy spelling");
+    await writeFile(join(output, "webxr_golden-path-2026-11-09T10-00-00Z.mp4"), "legacy date");
+    await writeFile(join(output, "webxr_other-video.mp4"), "user export");
+    await writeFile(join(run, "results.json"), JSON.stringify(result));
+    // A missing replacement must leave the prior successful video untouched.
+    await assert.rejects(publishGoldenVideo(run, "webxr", output), { code: "ENOENT" });
+    assert.equal(await readFile(join(output, "webxr_golden-path.mp4"), "utf8"), "previous webxr");
+    await writeFile(join(run, "golden-path.mp4"), "verified new webxr");
+    assert.equal(await publishGoldenVideo(run, "webxr", output), join(output, "webxr_golden-path.mp4"));
+    assert.equal(await readFile(join(output, "webxr_golden-path.mp4"), "utf8"), "verified new webxr");
+    assert.equal(await readFile(join(output, "specs_golden-path.mp4"), "utf8"), "previous specs");
+    await access(join(output, "webxr_other-video.mp4"));
+    await assert.rejects(access(join(output, "webxr-golden-path.mp4")));
+    await assert.rejects(access(join(output, "webxr_golden-path-2026-11-09T10-00-00Z.mp4")));
+    assert.equal((await readdir(output)).some((name) => name.startsWith(".webxr-golden-")), false);
+
+    for (const changed of [{ passed: false }, { scope: "regression" }, { checks: [] }]) {
+      await writeFile(join(run, "results.json"), JSON.stringify({ ...result, ...changed }));
+      await writeFile(join(run, "golden-path.mp4"), "unverified replacement");
+      assert.equal(await publishGoldenVideo(run, "webxr", output), null);
+      assert.equal(await readFile(join(output, "webxr_golden-path.mp4"), "utf8"), "verified new webxr");
+    }
+
+    const native = { ...result, client: "specs", scope: "golden", sourceAuditState: "pending" };
+    await writeFile(join(run, "results.json"), JSON.stringify(native));
+    assert.equal(await publishGoldenVideo(run, "specs", output), null);
+    assert.equal(await readFile(join(output, "specs_golden-path.mp4"), "utf8"), "previous specs");
+    native.sourceAuditState = "passed";
+    native.checks = [...native.checks, { name: "source_editor_clean", passed: true }];
+    await writeFile(join(run, "results.json"), JSON.stringify(native));
+    await writeFile(join(run, "golden-path.mp4"), "verified complete native golden");
+    await publishGoldenVideo(run, "specs", output);
+    assert.equal(await readFile(join(output, "specs_golden-path.mp4"), "utf8"), "verified complete native golden");
+    assert.equal(await readFile(join(output, "webxr_golden-path.mp4"), "utf8"), "verified new webxr");
+    // A handoff/encoding-time change invalidates an earlier passing source check.
+    await writeFile(join(run, "results.json"), JSON.stringify({ ...native, source: { ...native.source, fingerprint: "source-before-handoff" } }));
+    await writeFile(join(run, "golden-path.mp4"), "stale source video");
+    await assert.rejects(publishGoldenVideo(run, "specs", output), /Source changed before golden publication/);
+    assert.equal(await readFile(join(output, "specs_golden-path.mp4"), "utf8"), "verified complete native golden");
+    const rejected = JSON.parse(await readFile(join(run, "results.json"), "utf8"));
+    assert.equal(rejected.passed, false);
+    assert.equal(rejected.checks.find((row) => row.name === "publication_source_unchanged").passed, false);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }

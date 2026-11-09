@@ -18,14 +18,14 @@ def path() -> Path:
 def read() -> dict[str, Any]:
     try:
         data = json.loads(path().read_text())
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            raise TypeError("launcher preferences must be a JSON object")
+        return data
     except FileNotFoundError:
         address = read_env(env_path()).get("ROBOT_IP", "").strip()
         if address in {"simulated", "fake", "mock", "replay"}:
             return {"go2_source": "simulated"}
         return {"go2_source": "manual", "manual_ip": address} if address else {}
-    except ValueError:
-        return {}
 
 
 def save(values: dict[str, Any]) -> None:

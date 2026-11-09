@@ -1,3 +1,4 @@
+import { immediateAuthority } from "../../fixtures/ImmediateAuthority";
 import { expect, it, vi } from "vitest";
 import { ManipulationController } from "../../../Assets/Scripts/DimOSARClient/manipulation/ManipulationController";
 
@@ -10,18 +11,19 @@ function fixture() {
       observations: { arm: { joints: { joint: 0 }, measured_at: 0, gripper: 0 } } },
   };
   const stop = vi.fn();
-  const core = new ManipulationController({ view: () => view,
+  const authority = immediateAuthority({ ready: () => view.connection === "ready" });
+  const core = new ManipulationController({ view: () => view, collaboration: authority.collaboration,
     sendText: (text: string) => sent.push(JSON.parse(text)), requestEstop: stop,
     subscribeOutbound: (callback: (message: any) => void) => { listener = callback; return () => {}; },
   } as never, () => 0, stop);
   core.tick();
-  return { core, sent, view, stop, reply(command: any, extra: object) {
+  return { core, sent, view, stop, authority, reply(command: any, extra: object) {
     listener({ type: "manipulation_result", request_id: command.request_id,
       action: command.action, group_id: command.group_id, status: "completed", ...extra });
   } };
 }
 
-it("suspends once, discards the target, and releases a late acquisition", () => {
+it("suspends once, discards the target, and retires a late acquisition", () => {
   const f = fixture();
   expect(f.core.interaction.begin()).toBe(true);
   const acquire = f.sent.at(-1);
@@ -30,7 +32,8 @@ it("suspends once, discards the target, and releases a late acquisition", () => 
   expect(f.core.interaction.target).toBeNull();
   expect(f.sent.filter(c => c.action === "cancel")).toHaveLength(1);
   f.reply(acquire, { token: "late" });
-  expect(f.sent.at(-1)).toMatchObject({ action: "release", token: "late" });
+  expect(f.authority.state.authority).toBeNull();
+  expect(f.sent.some(command => command.action === "release" || command.action === "update")).toBe(false);
 });
 
 it("never sends a release on a closed session", () => {

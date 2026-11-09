@@ -513,6 +513,7 @@ function decodeHello(data: Record<string, unknown>): Hello {
   return {
     type: "hello",
     ...(data.source === undefined ? {} : { source: decodeSource(asObject(data.source, "source")) }),
+    ...(data.localization === undefined ? {} : { localization: decodeLocalizationProviders(asObject(data.localization, "localization")) }),
     protocol_version: 2,
     bulk_url: requireString(data, "bulk_url"),
     bulk_token: requireString(data, "bulk_token"),
@@ -527,6 +528,19 @@ function decodeHello(data: Record<string, unknown>): Hello {
     robot: decodeRobot(asObject(requireKey(data, "robot"), "robot")),
     capabilities: decodeCapabilities(asObject(requireKey(data, "capabilities"), "capabilities")),
   };
+}
+
+function decodeLocalizationProviders(data: Record<string, unknown>): NonNullable<Hello["localization"]> {
+  const raw = requireKey(data, "providers");
+  if (!Array.isArray(raw)) throw new Error("localization.providers must be an array");
+  const providers: NonNullable<Hello["localization"]>["providers"] = [];
+  for (const provider of raw) {
+    if (provider !== "fiducial_marker" && provider !== "vps")
+      throw new Error("localization.providers must contain fiducial_marker or vps");
+    if (providers.includes(provider)) throw new Error("localization.providers must not contain duplicates");
+    providers.push(provider);
+  }
+  return { providers };
 }
 
 function decodeServerInfo(data: Record<string, unknown>): { robot_ip?: string; dimos_version?: string; armodule_version?: string } {

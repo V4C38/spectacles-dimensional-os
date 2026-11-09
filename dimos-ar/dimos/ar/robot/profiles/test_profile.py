@@ -172,3 +172,10 @@ def test_robot_profile_rejects_malformed_camera_transform() -> None:
 def test_get_profile_unknown_name_raises() -> None:
     with pytest.raises(ValueError, match="unknown robot"):
         get_profile(cast("RobotName", "anvil_openyam"))
+
+
+def test_robot_profile_rejects_reflected_camera_transform() -> None:
+    reflected = np.eye(4)
+    reflected[0, 0] = -1.0
+    with pytest.raises(ValueError, match="determinant"):
+        _profile(T_base_camera_optical=reflected)

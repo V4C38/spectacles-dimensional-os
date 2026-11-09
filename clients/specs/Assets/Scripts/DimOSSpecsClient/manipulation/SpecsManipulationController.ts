@@ -1,8 +1,6 @@
 import { sameArmTrackingOrigin } from "../../DimOSARClient/manipulation/ArmJointFilter";
 import { specsToClientTrackingPose } from "../utilities/SpecsCoordinates";
 import { ManipulationInputCapture } from "../../DimOSARClient/manipulation/ManipulationInputCapture";
-import TargetProvider, { type InteractableHitInfo } from "SpectaclesInteractionKit.lspkg/Providers/TargetProvider/TargetProvider";
-import { SpecsNavigationTargetPriority } from "../navigation/SpecsNavigationTargetPriority";
 import { ManipulationController } from "../../DimOSARClient/manipulation/ManipulationController";
 import { ManipulationGesture } from "../../DimOSARClient/manipulation/ManipulationGesture";
 import { clientTrackingToOdomPose } from "../../DimOSARClient/localization/clientTrackingTransforms";
@@ -19,7 +17,6 @@ export class SpecsManipulationController {
   private readonly gesture = new ManipulationGesture();
   private lastOrigin: ClientTrackingOrigin | null = null;
   private selected = false;
-  private readonly targetPriority: SpecsNavigationTargetPriority<InteractableHitInfo>;
   constructor(private readonly session: ARModuleSession,
     private readonly origin: () => ClientTrackingOrigin | null, parent: SceneObject,
     private readonly camera: SceneObject, private readonly select: () => void, stop: () => void, recalibrate: () => void = () => {}) {
@@ -27,8 +24,6 @@ export class SpecsManipulationController {
     const capture = new ManipulationInputCapture();
     this.renderer = new ManipulationRenderer(parent, this.core, stop, capture, recalibrate);
     this.input = new SpecsManipulationInput(this, capture);
-    this.targetPriority = new SpecsNavigationTargetPriority(TargetProvider,
-      object => this.renderer.ownsMesh(object), object => this.renderer.ownsHandle(object));
   }
   setSelected(selected: boolean): void {
     if (selected !== this.selected) this.interrupt();
@@ -73,5 +68,5 @@ export class SpecsManipulationController {
       this.session.view().hello?.robot.display_name ?? "Arm");
     this.input.updateCursor();
   }
-  dispose(): void { this.suspend(); this.core.dispose(); this.targetPriority.dispose(); this.renderer.dispose(); }
+  dispose(): void { this.suspend(); this.core.dispose(); this.renderer.dispose(); }
 }

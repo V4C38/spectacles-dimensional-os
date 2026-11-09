@@ -11,11 +11,12 @@ import app as launcher_app
 from config import env_path, merge_env, migrate_legacy_env, read_env
 
 
-def test_settings_read_uses_launcher_env_file(tmp_path: Path) -> None:
-    merge_env({"OPENAI_API_KEY": "sk-test"}, env_path(tmp_path))
-
-    assert read_env(env_path(tmp_path))["OPENAI_API_KEY"] == "sk-test"
-    assert read_env(tmp_path).get("OPENAI_API_KEY") is None
+def test_settings_read_uses_launcher_env_file(tmp_path: Path, monkeypatch) -> None:
+    target = env_path(tmp_path)
+    merge_env({"OPENAI_API_KEY": "sk-test"}, target)
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=wrong-legacy-location\n")
+    monkeypatch.setattr(launcher_app, "env_path", lambda: target)
+    assert launcher_app.settings_payload()["openai_api_key"] == "sk-test"
 
 
 def test_migrate_legacy_repo_env(tmp_path: Path) -> None:
@@ -145,3 +146,109 @@ async def test_settings_put_rejects_duplicate_marker_ids(
         )
     assert exc_info.value.status_code == 400
     assert "unique" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_profile_settings_response_uses_saved_profile(tmp_path, monkeypatch):
+    from robot_profiles import RobotProfiles
+
+    monkeypatch.setattr(launcher_app, "robot_profiles", RobotProfiles(tmp_path / "profiles.json"))
+    monkeypatch.setattr(launcher_app, "env_path", lambda: tmp_path / "launcher.env")
+    profile = launcher_app.robot_profiles.create("unitree_go2")
+    response = await launcher_app.api_settings_put(
+        launcher_app.SettingsBody(profile_id=profile["id"], fiducial_marker=True)
+    )
+    assert response["fiducial_marker"] is True
+    assert launcher_app.settings_payload()["fiducial_marker"] is False
+
+
+@pytest.mark.parametrize("origin,fetch_site,allowed", [
+    ("http://localhost:8790", "same-origin", True),
+    ("https://unrelated.example", "cross-site", False),
+    (None, None, True),
+    (None, "cross-site", False),
+])
+def test_launcher_mutation_origin_boundary(origin, fetch_site, allowed):
+    from fastapi import HTTPException
+    from starlette.requests import Request
+
+    headers = [(b"host", b"localhost:8790")]
+    if origin:
+        headers.append((b"origin", origin.encode()))
+    if fetch_site:
+        headers.append((b"sec-fetch-site", fetch_site.encode()))
+    request = Request({"type": "http", "method": "POST", "scheme": "http",
+                       "path": "/api/armodule/stop", "query_string": b"",
+                       "headers": headers, "server": ("localhost", 8790),
+                       "client": ("127.0.0.1", 1234)})
+    if allowed:
+        launcher_app.require_local_launcher(request)
+    else:
+        with pytest.raises(HTTPException) as error:
+            launcher_app.require_local_launcher(request)
+        assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_cross_origin_stop_never_dispatches(monkeypatch):
+    from httpx import ASGITransport, AsyncClient
+
+    stop = AsyncMock()
+    monkeypatch.setattr(launcher_app.manager, "stop_armodule", stop)
+    transport = ASGITransport(app=launcher_app.app, client=("127.0.0.1", 1234))
+    async with AsyncClient(transport=transport, base_url="http://localhost:8790") as client:
+        denied = await client.post("/api/armodule/stop?force=true",
+                                   headers={"Origin": "https://unrelated.example"})
+        assert denied.status_code == 403
+        stop.assert_not_awaited()
+        accepted = await client.post("/api/armodule/stop?force=true",
+                                     headers={"Origin": "http://localhost:8790"})
+        assert accepted.status_code == 200
+        stop.assert_awaited_once_with(force=True)
+
+
+@pytest.mark.asyncio
+async def test_untrusted_host_cannot_read_launcher_settings(monkeypatch):
+    from unittest.mock import Mock
+
+    from httpx import ASGITransport, AsyncClient
+
+    payload = Mock(return_value={"openai_api_key": "fake-secret"})
+    monkeypatch.setattr(launcher_app, "settings_payload", payload)
+    transport = ASGITransport(app=launcher_app.app, client=("127.0.0.1", 1234))
+    async with AsyncClient(transport=transport, base_url="http://unrelated.example") as client:
+        response = await client.get("/api/settings")
+    assert response.status_code == 403
+    payload.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_local_boundary_applies_to_status_routes_too(monkeypatch):
+    from unittest.mock import Mock
+
+    from httpx import ASGITransport, AsyncClient
+
+    snapshot = Mock(return_value={})
+    monkeypatch.setattr(launcher_app.manager, "snapshot", snapshot)
+    transport = ASGITransport(app=launcher_app.app, client=("127.0.0.1", 1234))
+    async with AsyncClient(transport=transport, base_url="http://unrelated.example") as client:
+        response = await client.get("/api/status")
+    assert response.status_code == 403
+    snapshot.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("saved", ["[]", "{broken"] )
+async def test_invalid_preferences_are_reported_and_preserved(tmp_path, monkeypatch, saved):
+    from fastapi import HTTPException
+
+    import preferences
+
+    target = tmp_path / "preferences.json"
+    target.write_text(saved)
+    monkeypatch.setattr(preferences, "path", lambda: target)
+    with pytest.raises(HTTPException) as error:
+        await launcher_app.api_preferences_get()
+    assert error.value.status_code == 400
+    assert "Invalid launcher preferences" in error.value.detail
+    assert target.read_text() == saved

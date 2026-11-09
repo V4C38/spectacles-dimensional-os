@@ -11,8 +11,8 @@ from typing import Any
 
 from dimos.ar.manipulation.errors import ManipulationError, spatial_error_code
 from dimos.ar.manipulation.protocol import ManipulationRequest
-from dimos.ar.manipulation.rpc import ManipulationRPC
 from dimos.ar.manipulation.spec import ARManipulationSpec
+from dimos.ar.native_rpc import NativeRPC
 from dimos.ar.timing_diagnostics import TimingSummary
 from dimos.ar.websocket.protocol import encode_text
 
@@ -41,7 +41,7 @@ class ManipulationService:
     ) -> None:
         self._advisory_timing = TimingSummary("AR advisory IK timing")
         self._advisory_started: dict[tuple[str, str], float] = {}
-        self._rpc = ManipulationRPC(runtime)
+        self._rpc = NativeRPC(runtime)
         self._send = send
         self._broadcast = broadcast
         self._on_ready = on_ready

@@ -12,7 +12,8 @@ let serverLog = "";
 test.afterEach(async ({}, info) => {
   if (info.status !== "passed") console.error(serverLog);
   await info.attach("armodule-server", { body: serverLog, contentType: "text/plain" });
-  await saveCaseProof(info, ["multi_client_replication"], [], {
+  await saveCaseProof(info, info.title.startsWith("one selected planner")
+    ? { multi_client_replication: "02-multi_client_replication.png" } : {}, {
     multi_client_replication: ["single_planner", "shared_target", "observer_grey_cross", "handover", "owner_disconnect"],
   });
 });
@@ -328,8 +329,13 @@ test("a brief socket reconnect retains the arm grab without E-stop or duplicate 
     const before = await armState(page);
     await page.evaluate(() => {
       const { session } = (window as any).multi;
+      (window as any).multi.retiredSocket = session.transport.socket;
       session.transport.socket.close(4000, "test transient connection loss");
     });
+    await expect.poll(() => page.evaluate(() => {
+      const { session, retiredSocket } = (window as any).multi;
+      return session.transport.socket !== retiredSocket && session.transport.socket?.readyState === WebSocket.OPEN;
+    })).toBe(true);
     await expect.poll(async () => (await armState(page)).client).toBe(before.client);
     await expect.poll(() => page.evaluate(() => (window as any).multi.session.view().connection)).toBe("ready");
     expect((await armState(page)).native.stopped).toBe(false);

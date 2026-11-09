@@ -86,7 +86,10 @@ export function strokeJoints2D(segments: readonly (readonly number[])[], progres
 /** Lower-view popups face slightly upward toward the wearer. */
 export const VIEWER_NOTIFICATION_STYLE = { upwardTiltRad: Math.PI / 15 } as const;
 
-export const NAVIGATION_CANCEL_STYLE = { revealS: 0.28, heightM: 0.38, connectorClearanceM: 0.105 } as const;
+export const NAVIGATION_CANCEL_STYLE = {
+  revealS: 0.28, heightM: 0.38, connectorClearanceM: 0.105,
+  diameterM: 0.12, glyphLengthM: 0.044, glyphWidthM: 0.0065,
+} as const;
 
 /** Cancel rises and grows together; its connector ends below the scaled label. */
 export function navigationCancelReveal(progress: number, circleHeightM: number) {

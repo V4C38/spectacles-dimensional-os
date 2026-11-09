@@ -1,5 +1,7 @@
 import type { ManipulationInteraction } from "./ManipulationInteraction";
-import type { ManipulationPlan, ManipulationState } from "./ManipulationTypes";
+import { gripperJointValues } from "./ArmToolKinematics";
+import { samplePlan } from "./ModelKinematics";
+import type { ManipulationGroup, ManipulationModel, ManipulationPlan, ManipulationState } from "./ManipulationTypes";
 
 export class ManipulationPresentation {
   previewRequested = false;
@@ -76,4 +78,38 @@ export function manipulationPreviewPlan(
   rejected: boolean,
 ): ManipulationPlan | null {
   return selected && !dragging && !rejected ? plan : null;
+}
+
+
+export function manipulationObservedJoints(
+  model: ManipulationModel, state: ManipulationState, group: ManipulationGroup | undefined,
+): Record<string, number> {
+  const observed = group ? state.observations?.[group.id] : null;
+  return Object.assign({}, ...Object.values(state.observations ?? {}).map(row => row.joints ?? {}),
+    gripperJointValues(model, group, observed?.gripper));
+}
+
+export function manipulationActivePlan(state: ManipulationState, draft: ManipulationPlan | null,
+  executing: boolean): ManipulationPlan | null {
+  return state.stopped ? null : (executing ? state.plan : draft) ?? null;
+}
+
+/** Both renderers articulate the same measured base, live IK, reviewed endpoint and gripper draft. */
+export function manipulationProposedJoints(
+  model: ManipulationModel, group: ManipulationGroup | undefined, measured: Record<string, number>,
+  input: {
+    plan: ManipulationPlan | null;
+    playback: { playing: boolean; time: number };
+    selected: boolean;
+    dragging: boolean;
+    rejected: boolean;
+    solution: Record<string, number> | null;
+    opening: number | null | undefined;
+  },
+): Record<string, number> {
+  const { plan, playback } = input;
+  const configuration = playback.playing && plan ? samplePlan(plan, playback.time)
+    : manipulationPreviewPlan(plan, input.selected, input.dragging, input.rejected) && plan
+      ? samplePlan(plan, plan.duration) : input.solution;
+  return { ...measured, ...configuration, ...gripperJointValues(model, group, input.opening) };
 }

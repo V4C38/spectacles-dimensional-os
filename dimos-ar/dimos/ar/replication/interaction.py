@@ -15,6 +15,8 @@ import time
 from typing import Any, Literal
 from uuid import uuid4
 
+from dimos.ar.manipulation.protocol import ManipulationRequest
+
 LEASE_DURATION_S = 0.5
 MAX_REQUESTS_PER_CLIENT = 128
 NAV_PREVIEW_POSITION_TOLERANCE_M = 0.2
@@ -119,16 +121,21 @@ class InteractionCoordinator:
         self._clock = clock
         self._lease_duration = lease_duration_s
         self.epoch = uuid4().hex
-        self.revision = 0
-        self.mode: InteractionMode = "manual"
-        self.authority: Authority | None = None
+        self._revision = 0
+        self._mode: InteractionMode = "manual"
+        self._authority: Authority | None = None
         self.target: SharedTarget | None = None
         self._targets: dict[tuple[str, str | None], SharedTarget] = {}
         self.preview: dict[str, Any] | None = None
         self._preview_aim: tuple[float, float, float, float] | None = None
         self.active_goal: dict[str, Any] | None = None
-        self.agent_busy = False
-        self.motion_busy = False
+        self._pending_arm_motion: set[str] = set()
+        self._arm_uncertain = False
+        self._arm_stop_pending = False
+        self._arm_native_busy = False
+        self._arm_retired_motion: tuple[str, int] | None = None
+        self._agent_busy = False
+        self._motion_busy = False
         self.following_tail: dict[str, Any] | None = None
         self._tail_floor = 0
         self._clients: set[str] = set()
@@ -136,6 +143,31 @@ class InteractionCoordinator:
         self._cancelled: dict[str, OrderedDict[str, None]] = {}
         self._acquisitions: dict[str, OrderedDict[str, str]] = {}
         self._retired: list[tuple[Authority, str]] = []
+
+    @property
+    def revision(self) -> int:
+        return self._revision
+
+    @property
+    def mode(self) -> InteractionMode:
+        return self._mode
+
+    @property
+    def agent_busy(self) -> bool:
+        return self._agent_busy
+
+    @property
+    def motion_busy(self) -> bool:
+        return self._motion_busy
+
+    @property
+    def authority(self) -> Authority | None:
+        return self._authority
+
+    @property
+    def mode_change_available(self) -> bool:
+        return not (self._authority is not None or self._agent_busy
+                    or self._motion_busy or self.following_tail is not None)
 
     def connect(self, client_id: str) -> None:
         self._clients.add(client_id)
@@ -145,7 +177,7 @@ class InteractionCoordinator:
 
     def disconnect(self, client_id: str) -> None:
         self._clients.discard(client_id)
-        if self.authority is not None and self.authority.client_id == client_id:
+        if self._authority is not None and self._authority.client_id == client_id:
             self._retire("disconnect")
         self._requests.pop(client_id, None)
         self._cancelled.pop(client_id, None)
@@ -158,11 +190,11 @@ class InteractionCoordinator:
         return {
             "type": "interaction_state",
             "epoch": self.epoch,
-            "revision": self.revision,
-            "motion_busy": self.motion_busy,
+            "revision": self._revision,
+            "motion_busy": self._motion_busy,
             "following_tail": copy.deepcopy(self.following_tail),
-            "mode": self.mode,
-            "authority": self.authority.wire() if self.authority is not None else None,
+            "mode": self._mode,
+            "authority": self._authority.wire() if self._authority is not None else None,
             "target": self.target.wire() if self.target is not None else None,
             "targets": [target.wire() for target in self._targets.values()],
             "preview": copy.deepcopy(self.preview),
@@ -170,7 +202,7 @@ class InteractionCoordinator:
         }
 
     def poll(self) -> bool:
-        if self.authority is not None and self._clock() >= self.authority.expires_at:
+        if self._authority is not None and self._clock() >= self._authority.expires_at:
             self._retire("expired")
             return True
         return False
@@ -185,8 +217,8 @@ class InteractionCoordinator:
         self.preview = None
         self.active_goal = None
         self.following_tail = None
-        self.revision += 1
-        self._tail_floor = self.revision
+        self._revision += 1
+        self._tail_floor = self._revision
 
     def reset(self) -> None:
         self._retire("reference_reset")
@@ -198,7 +230,7 @@ class InteractionCoordinator:
         self._requests = {client: OrderedDict() for client in self._clients}
         self._cancelled = {client: OrderedDict() for client in self._clients}
         self._acquisitions = {client: OrderedDict() for client in self._clients}
-        self.revision += 1
+        self._revision += 1
 
     def authorized(
         self,
@@ -209,9 +241,9 @@ class InteractionCoordinator:
         kind: InteractionKind | None = None,
     ) -> bool:
         self.poll()
-        authority = self.authority
+        authority = self._authority
         return bool(
-            self.mode == "manual"
+            self._mode == "manual"
             and client_id in self._clients
             and epoch == self.epoch
             and authority is not None
@@ -238,9 +270,9 @@ class InteractionCoordinator:
         )
         if (
             epoch != self.epoch
-            or self.authority is None
-            or self.authority.lease_id != lease_id
-            or self.authority.kind != "navigation_planning"
+            or self._authority is None
+            or self._authority.lease_id != lease_id
+            or self._authority.kind != "navigation_planning"
             or self.target is None
             or target_revision > self.target.revision
             or (
@@ -253,7 +285,7 @@ class InteractionCoordinator:
 
         self.preview = copy.deepcopy(frame)
         self._preview_aim = source_pose
-        self.revision += 1
+        self._revision += 1
         return True
 
     @staticmethod
@@ -294,7 +326,7 @@ class InteractionCoordinator:
         import copy
 
         if tail is not None and (
-            self.authority is not None or tail.get("generation", -1) < self._tail_floor
+            self._authority is not None or tail.get("generation", -1) < self._tail_floor
         ):
             return
         if tail != self.following_tail:
@@ -318,14 +350,14 @@ class InteractionCoordinator:
                                               sample_ts=self._clock(), phase="draft")
                         self._targets[(target.domain, target.group_id)] = self.target
             self.following_tail = copy.deepcopy(tail)
-            self.revision += 1
+            self._revision += 1
 
     def clear_manipulation_target(self, group_id: str) -> None:
         previous = self._targets.pop(("manipulation", group_id), None)
         if previous is not None:
             if self.target is previous:
                 self.target = None
-            self.revision += 1
+            self._revision += 1
 
     def set_manipulation_gripper(self, group_id: str, value: float) -> None:
         key = ("manipulation", group_id)
@@ -337,18 +369,112 @@ class InteractionCoordinator:
         self._targets[key] = target
         if self.target is previous:
             self.target = target
-        self.revision += 1
+        self._revision += 1
+
+    def observe_manipulation_snapshot(self, snapshot: dict[str, Any]) -> None:
+        if snapshot.get("available") is not True:
+            return
+        execution = snapshot.get("execution")
+        self.set_following_tail(snapshot.get("following_tail"))
+        self._arm_native_busy = (
+            snapshot.get("operation") in {"resetting", "parking"}
+            or execution in {"accepted", "executing", "uncertain", "fault"}
+        )
+        # Live following is scoped to the editing lease; a normal release must
+        # allow immediate takeover while native handoff finishes asynchronously.
+        # Accepted execution/reset/parking and unresolved stop outcomes retain
+        # their independent robot-wide busy guards.
+        # A transport timeout can leave native work running. Only an explicit,
+        # confirmed stop resolves that uncertainty; missing observations cannot.
+        stopped = (
+            snapshot.get("stopped") is True
+            and snapshot.get("stop_confirmed") is True
+            and snapshot.get("following") is not True
+            and not self._arm_native_busy
+            and execution in {"idle", "completed", "aborted", "rejected"}
+        )
+        if stopped:
+            self._arm_uncertain = self._arm_stop_pending = False
+        self._update_manipulation_busy()
+
+    def observe_manipulation_result(self, request: ManipulationRequest, result: dict[str, Any]) -> None:
+        retired = self._arm_retired_motion
+        revision = request.payload.get("authority_revision", -1)
+        if (retired is not None and request.payload.get("authority_epoch") == retired[0]
+                and revision <= retired[1]):
+            self._pending_arm_motion.discard(request.request_id)
+            return
+        if (request.action == "cancel" and request.request_id in self._pending_arm_motion
+                and result.get("status") in {"cancelled", "completed", "aborted", "no_execution", "succeeded"}):
+            self._arm_retired_motion = (self.epoch, revision)
+            self._pending_arm_motion.clear()
+            self._arm_native_busy = self._arm_uncertain = self._arm_stop_pending = False
+            self.set_motion_busy(False)
+            return
+        if request.action == "gripper" and result.get("status") == "completed":
+            authority = self._authority
+            if (request.payload.get("authority_epoch") == self.epoch
+                    and (authority is None or authority.lease_id == request.payload.get("authority_lease"))):
+                self.set_manipulation_gripper(request.group_id, request.payload["value"])
+        if request.action in {"execute", "reset_joints", "prepare_shutdown", "cancel"}:
+            self._pending_arm_motion.discard(request.request_id)
+            if (result.get("status") in {"uncertain", "fault"}
+                    or (request.action == "cancel" and result.get("status") not in {"cancelled", "completed", "aborted", "no_execution", "succeeded"})):
+                self._arm_uncertain = True
+            self._update_manipulation_busy(accepted=result.get("status") == "accepted")
+
+    def _update_manipulation_busy(self, *, accepted: bool = False) -> None:
+        self.set_motion_busy(bool(self._pending_arm_motion) or self._arm_native_busy
+                             or self._arm_uncertain or self._arm_stop_pending or accepted)
+
+    def begin_manipulation_motion(self, request_id: str) -> None:
+        if request_id in self._pending_arm_motion:
+            return
+        self._pending_arm_motion.add(request_id)
+        # A released lease is revoked through its last revision. Reserve a new
+        # admission even if native busy facts have not changed since release.
+        self._revision += 1
+        self._update_manipulation_busy()
+
+    def manipulation_motion_pending(self, request_id: str) -> bool:
+        return request_id in self._pending_arm_motion
+
+    def request_manipulation_stop(self) -> None:
+        self._arm_stop_pending = True
+        self._update_manipulation_busy()
+
+    def set_agent_busy(self, busy: bool) -> None:
+        self._agent_busy = busy
+
+    def confirm_native_manual(self) -> None:
+        if self._mode != "manual":
+            self._mode = "manual"
+            self._revision += 1
+
+    def suspend(self, client_id: str, deadline: float) -> bool:
+        if not math.isfinite(deadline):
+            raise ValueError("suspension deadline must be finite")
+        if self._authority is None or self._authority.client_id != client_id:
+            return False
+        self._authority = replace(self._authority, expires_at=deadline)
+        self._revision += 1
+        return True
+
+    def cancel_manipulation_target(self, group_id: str) -> None:
+        self.clear_manipulation_target(group_id)
+        # Cancellation must outrank revocation even when no draft remains.
+        self._revision += 1
 
     def set_motion_busy(self, busy: bool) -> None:
-        if busy != self.motion_busy:
-            self.motion_busy = busy
-            self.revision += 1
+        if busy != self._motion_busy:
+            self._motion_busy = busy
+            self._revision += 1
 
     def set_active_goal(self, frame: dict[str, Any] | None) -> None:
         import copy
 
         self.active_goal = copy.deepcopy(frame)
-        self.revision += 1
+        self._revision += 1
 
     def handle(
         self,
@@ -365,10 +491,10 @@ class InteractionCoordinator:
         if previous is not None:
             # A replayed grant can report success only while that exact lease is live.
             if previous.lease_id is not None and (
-                self.authority is None or self.authority.lease_id != previous.lease_id
+                self._authority is None or self._authority.lease_id != previous.lease_id
             ):
                 return self._result(request, "stale", "lease_retired")
-            return replace(previous, revision=self.revision)
+            return replace(previous, revision=self._revision)
         if request.action == "snapshot":
             result = self._result(request, "accepted", "snapshot")
         elif request.epoch != self.epoch:
@@ -377,31 +503,31 @@ class InteractionCoordinator:
             acquisition = request.acquisition_id or request.request_id
             self._remember(self._cancelled[client_id], acquisition, None)
             if (
-                self.authority is not None
-                and self.authority.client_id == client_id
-                and self.authority.acquisition_id == acquisition
+                self._authority is not None
+                and self._authority.client_id == client_id
+                and self._authority.acquisition_id == acquisition
             ):
                 self._retire("cancelled_acquisition")
             result = self._result(request, "accepted", "acquisition_cancelled")
         elif request.action == "mode":
-            result = self._mode(request)
+            result = self._change_mode(request)
         elif request.action == "acquire":
             result = self._acquire(client_id, request)
         elif not self.authorized(client_id, request.epoch, request.lease_id):
-            result = self._result(request, "busy" if self.authority else "stale", "not_owner")
+            result = self._result(request, "busy" if self._authority else "stale", "not_owner")
         else:
             result = self._owned(request, commit)
         self._remember(cache, request.request_id, result)
         return result
 
-    def _mode(self, request: InteractionRequest) -> InteractionResult:
+    def _change_mode(self, request: InteractionRequest) -> InteractionResult:
         if request.mode not in ("manual", "agent"):
             return self._result(request, "rejected", "invalid_mode")
-        if self.authority is not None or self.agent_busy or self.motion_busy or self.following_tail:
+        if not self.mode_change_available:
             return self._result(request, "busy", "robot_busy")
-        if self.mode != request.mode:
-            self.mode = request.mode
-            self.revision += 1
+        if self._mode != request.mode:
+            self._mode = request.mode
+            self._revision += 1
         return self._result(request, "accepted", "mode_changed")
 
     def _acquire(self, client_id: str, request: InteractionRequest) -> InteractionResult:
@@ -410,14 +536,14 @@ class InteractionCoordinator:
             return self._result(request, "stale", "acquisition_cancelled")
         known = self._acquisitions[client_id].get(acquisition)
         if known is not None:
-            if self.authority is not None and self.authority.lease_id == known:
+            if self._authority is not None and self._authority.lease_id == known:
                 return self._result(request, "accepted", "already_acquired", known)
             return self._result(request, "stale", "acquisition_retired")
         if (
-            self.mode != "manual"
-            or self.agent_busy
-            or self.motion_busy
-            or self.authority is not None
+            self._mode != "manual"
+            or self._agent_busy
+            or self._motion_busy
+            or self._authority is not None
         ):
             return self._result(request, "busy", "robot_busy")
         if request.kind not in (
@@ -430,7 +556,7 @@ class InteractionCoordinator:
             return self._result(request, "rejected", "invalid_kind")
         lease = uuid4().hex
         self.following_tail = None
-        self.authority = Authority(
+        self._authority = Authority(
             client_id,
             request.source_id or "default",
             acquisition,
@@ -441,13 +567,13 @@ class InteractionCoordinator:
             group_id=request.group_id,
         )
         self._remember(self._acquisitions[client_id], acquisition, lease)
-        self.revision += 1
+        self._revision += 1
         if request.position is not None and request.orientation is not None:
             self._update_target(request, sequence=-1)
         elif request.kind != "joystick":
             domain = "manipulation" if request.kind.startswith("manipulation_") else "navigation"
             self.target = self._targets.get((domain, request.group_id))
-        self._tail_floor = self.revision
+        self._tail_floor = self._revision
         return self._result(request, "accepted", "acquired", lease)
 
     def _owned(
@@ -455,11 +581,11 @@ class InteractionCoordinator:
         request: InteractionRequest,
         commit: Callable[[SharedTarget, InteractionKind], bool] | None,
     ) -> InteractionResult:
-        authority = self.authority
+        authority = self._authority
         assert authority is not None
         if request.action == "renew":
-            self.authority = replace(authority, expires_at=self._clock() + self._lease_duration)
-            self.revision += 1
+            self._authority = replace(authority, expires_at=self._clock() + self._lease_duration)
+            self._revision += 1
             return self._result(request, "accepted", "renewed", authority.lease_id)
         if request.action == "cancel":
             if authority.kind == "navigation_planning":
@@ -478,17 +604,17 @@ class InteractionCoordinator:
                 return self._result(request, "rejected", "pose_required")
         else:
             self._update_target(request, sequence=request.sequence)
-        self.authority = replace(
+        self._authority = replace(
             authority,
             sequence=request.sequence,
             expires_at=self._clock() + self._lease_duration,
         )
-        self.revision += 1
+        self._revision += 1
         if request.action == "update":
             return self._result(request, "accepted", "updated", authority.lease_id)
         if request.action == "release" and authority.kind == "navigation_planning":
-            self.authority = replace(self.authority, held=False)
-            self.revision += 1
+            self._authority = replace(self._authority, held=False)
+            self._revision += 1
             return self._result(request, "accepted", "planning", authority.lease_id)
         target = self.target
         if authority.kind in {"live", "navigation_planning"} and target is not None:
@@ -501,7 +627,7 @@ class InteractionCoordinator:
 
     def _update_target(self, request: InteractionRequest, *, sequence: int) -> None:
         assert request.position is not None and request.orientation is not None
-        assert self.authority is not None
+        assert self._authority is not None
         position = request.position
         orientation = request.orientation
         if not all(math.isfinite(v) for v in (*position, *orientation)):
@@ -511,12 +637,12 @@ class InteractionCoordinator:
             raise ValueError("target orientation must be nonzero")
         orientation = tuple(v / norm for v in orientation)  # type: ignore[assignment]
         domain: Literal["navigation", "manipulation"] = (
-            "manipulation" if self.authority.kind.startswith("manipulation_") else "navigation"
+            "manipulation" if self._authority.kind.startswith("manipulation_") else "navigation"
         )
-        group = self.authority.group_id
+        group = self._authority.group_id
         previous = self._targets.get((domain, group))
         phase: Literal["draft", "live", "committed"] = (
-            "draft" if self.authority.kind.endswith("planning") else "live"
+            "draft" if self._authority.kind.endswith("planning") else "live"
         )
         speed = (
             request.speed_scale
@@ -542,7 +668,7 @@ class InteractionCoordinator:
             self.target = replace(previous, phase=phase, sequence=sequence)
             self._targets[(domain, group)] = self.target
             if previous.phase != phase:
-                self.revision += 1
+                self._revision += 1
             return
         self.target = SharedTarget(
             position,
@@ -561,15 +687,15 @@ class InteractionCoordinator:
             self.preview, source_pose=self._preview_aim
         ):
             self.preview = None
-        self.revision += 1
+        self._revision += 1
 
     def _retire(self, reason: str) -> None:
-        if self.authority is None:
+        if self._authority is None:
             return
-        self._retired.append((self.authority, reason))
-        self.authority = None
+        self._retired.append((self._authority, reason))
+        self._authority = None
         self.preview = None
-        self.revision += 1
+        self._revision += 1
 
     def _result(
         self,
@@ -579,7 +705,7 @@ class InteractionCoordinator:
         lease_id: str | None = None,
     ) -> InteractionResult:
         return InteractionResult(
-            request.request_id, status, code, self.epoch, self.revision, lease_id
+            request.request_id, status, code, self.epoch, self._revision, lease_id
         )
 
     @staticmethod

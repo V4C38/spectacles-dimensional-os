@@ -71,7 +71,7 @@ export class NavigationController {
     if (!enabled && this.inputEnabled) { this.cancelDrag(); this.setMeshTracking(false); }
     this.inputEnabled = enabled;
   }
-  cancel(): void { this.interaction.cancel(getTime()); this.render(0); }
+  cancel(): boolean { const sent = this.interaction.cancel(getTime()); this.render(0); return sent; }
   cancelDrag(): void { this.directSource = null; this.dragPlanes.clear(); this.interaction.cancelDrag(); this.render(0); }
   cancelSource(sourceId: string): void {
     if (this.directSource === sourceId) this.cancelDrag();

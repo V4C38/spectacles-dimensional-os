@@ -27,9 +27,9 @@ export const RUNTIME_LAYOUTS = {
   alignment: panelProfile(23, [["guidance", 7], ["actions", 6.4]]),
 } as const;
 export const SETUP_LAYOUTS = {
-  entry: panelProfile(14.5, [["intro", 3], ["status", 4], ["entry", 6.4]]),
-  error: panelProfile(14.5, [["intro", 3], ["status", 6.5], ["entry", 6.4]]),
-  connected: panelProfile(14.5, [["intro", 3], ["status", 4], ["entry", 6.4], ["details", 11.5]]),
+  entry: panelProfile(14.5, [["status", 4], ["entry", 6.4]]),
+  error: panelProfile(14.5, [["status", 6.5], ["entry", 6.4]]),
+  connected: panelProfile(14.5, [["status", 4], ["entry", 6.4], ["details", 11.5]]),
   capture: panelProfile(14.5, [["provider", 3], ["camera", 22], ["previewLabel", 2.2, 1.2]]),
   message: panelProfile(14.5, [["provider", 3], ["status", 4], ["details", 10]]),
   success: panelProfile(23, [["glyph", 18.8], ["title", 5], ["detail", 4]], false),

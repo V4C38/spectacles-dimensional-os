@@ -65,6 +65,8 @@ export interface Hello {
   resume_token?: string;
   server_follow_stream?: boolean;
   independent_ik?: boolean;
+  /** Configured provider inventory; absent only on older protocol-v2 servers. */
+  localization?: { providers: ("fiducial_marker" | "vps")[] };
   source?: { kind: "recording"; read_only: boolean; name: string };
   protocol_version: 2;
   bulk_url: string;

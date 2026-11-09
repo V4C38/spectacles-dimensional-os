@@ -5,7 +5,7 @@ import {
   COLOR_WARN,
   COLOR_WHITE,
 } from "./UIKit";
-import type { AgentResponseSeverity } from "../agent/AgentResponseClassification";
+import type { AgentResponseSeverity } from "../../DimOSARClient/agent/AgentResponseClassification";
 export type AgentActivityState = "idle" | "busy";
 export type { AgentResponseSeverity };
 

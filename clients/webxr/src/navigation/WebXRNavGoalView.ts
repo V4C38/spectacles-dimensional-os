@@ -19,7 +19,7 @@ const MARKER_COLOR = 0xffffff;
 const IDLE_OPACITY = FLOOR_MARKER_STYLE.idleOpacity;
 const FLASH_COLORS: Record<NavFlash, number> = { succeeded: 0x30d158, cancelled: 0xff453a, failed: 0xff9f0a };
 const GOAL_RADIUS_M = FLOOR_MARKER_STYLE.radiusM;
-const CANCEL_DIAMETER_M = 0.12;
+const CANCEL_DIAMETER_M = NAVIGATION_CANCEL_STYLE.diameterM;
 
 export class WebXRNavGoalView {
   readonly object: THREE.Group;
@@ -94,7 +94,7 @@ export class WebXRNavGoalView {
     tintButtonBacking(this.cancelBacking, this.cancelObject.material.uniforms.uTint.value);
     this.cancelObject.add(this.cancelBacking);
     for (const angle of [Math.PI / 4, -Math.PI / 4]) {
-      const bar = new THREE.Mesh(new THREE.PlaneGeometry(0.044, 0.0065), this.glyphMaterial);
+      const bar = new THREE.Mesh(new THREE.PlaneGeometry(NAVIGATION_CANCEL_STYLE.glyphLengthM, NAVIGATION_CANCEL_STYLE.glyphWidthM), this.glyphMaterial);
       bar.rotation.z = angle;
       bar.position.z = 0.002;
       bar.raycast = () => {};

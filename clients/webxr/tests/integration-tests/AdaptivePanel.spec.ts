@@ -60,15 +60,15 @@ test("adaptive setup and runtime panels keep a fixed top through resizing", asyn
     const entry = await state(page, {});
     await capture("setup-connecting");
     const connected = await state(page, { connectComplete: true, connectionTone: "success", wizardCardTitle: "Connected to dimOS ARModule",
-      wizardCardBody: "WebSocket connected\nRobot: Go2\nAvailable: Navigation, Agent, LiDAR" });
+      wizardCardBody: "WebSocket connected\nRobot: Go2\nCapabilities: Navigation, Agent, LiDAR" });
     expect(connected.height).toBeGreaterThan(entry.height);
     expect(connected.top).toEqual(entry.top);
     await capture("setup-connected");
     await state(page, { connectionTone: "error", wizardCardTitle: "Connection failed", wizardCardBody: "The server could not be reached. Reconnect to try again." });
     await capture("setup-connection-error");
-    await state(page, { wizardStep: "localization", localizationKind: "marker", wizardDescription: "AprilTag", wizardCardTitle: "Frame the tag", wizardCardBody: "Frame the tag at the guide’s approximate size." });
+    await state(page, { wizardStep: "localization", localizationKind: "marker", wizardDescription: "Fiducial marker", wizardCardTitle: "Frame the tag", wizardCardBody: "Frame the tag at the guide’s approximate size." });
     await capture("setup-capture");
-    await state(page, { wizardStep: "localization", localizationIssue: "Camera unavailable", wizardDescription: "AprilTag", wizardCardTitle: "Camera unavailable", wizardCardBody: "The camera is unavailable. Try again or skip to continue." });
+    await state(page, { wizardStep: "localization", localizationIssue: "Camera unavailable", wizardDescription: "Fiducial marker", wizardCardTitle: "Camera unavailable", wizardCardBody: "The camera is unavailable. Try again or skip to continue." });
     await capture("setup-camera-error");
     await state(page, { wizardStep: "localization", localizationKind: "unavailable", wizardDescription: "No localization provider", wizardCardTitle: "Localization unavailable", wizardCardBody: "Skip to continue without localization." });
     await capture("setup-unavailable");

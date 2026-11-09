@@ -3,9 +3,10 @@ import { writeFile } from "node:fs/promises";
 import { bootstrap } from "./fixtures/Runtime";
 import { setSelection } from "./fixtures/Input";
 import { saveCaseProof } from "./fixtures/CaseProof";
+import { captureManipulationDetail } from "./fixtures/ManipulationCapture";
 
 test.afterEach(async ({}, info) => {
-  await saveCaseProof(info, []);
+  await saveCaseProof(info, {});
 });
 
 async function aimHandle(page: Page) {
@@ -540,7 +541,8 @@ for (const selected of [false, true]) {
       await expect.poll(async () => (await preview()).rejected).toBe(true);
       expect(await preview()).toMatchObject({ dragging: true, joints: valid, error: null });
       expect(fixture.commands.some(c => c.action === "release" || c.action === "cancel")).toBe(false);
-      await page.screenshot({ path: test.info().outputPath(`ik-${selected ? "planning" : "following"}-retained.png`) });
+      await captureManipulationDetail(page, test.info(), `ik-${selected ? "planning" : "following"}-retained`);
+      expect(await preview()).toMatchObject({ dragging: true, joints: valid, rejected: true });
       fixture.setIKFailure(null);
       await page.evaluate(() => { (window as any).questDevice.controllers.right.position.y -= 0.04; });
       await expect.poll(async () => (await preview()).rejected).toBe(false);
@@ -695,7 +697,11 @@ test("the selected near-EE action executes a checked draft and stays available u
       return app.interaction.hit(w.xb.core.input.rightController)?.object.userData.manipulationAction;
     })).toBe("execute");
     expect(fixture.commands.some(c => c.action === "execute")).toBe(false);
-    await page.screenshot({ path: info.outputPath("near-ee-execute.png") });
+    await captureManipulationDetail(page, info, "near-ee-execute");
+    await expect.poll(() => page.evaluate(() => {
+      const w = window as any, app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
+      return app.interaction.hit(w.xb.core.input.rightController)?.object.userData.manipulationAction;
+    })).toBe("execute");
     await setSelection(page, 1); await setSelection(page, 0);
     await expect.poll(() => fixture.commands.filter(c => c.action === "execute").length).toBe(1);
     expect(fixture.commands.some(c => c.action === "gripper")).toBe(false);
@@ -1133,7 +1139,7 @@ test("keeps advisory IK progressing for a minute through delayed plans, regrabs 
             orientation: [...initial.orientation] });
           if (probe.frames % 8 === 0) interaction.setSpeedScale(probe.frames % 16 === 0 ? 0.35 : 0.7);
         }
-        const pending = [...interaction.pending.values()] as any[];
+        const pending = [...interaction.requests.pending.values()] as any[];
         probe.maxPending = Math.max(probe.maxPending, pending.length);
         probe.maxEvaluations = Math.max(probe.maxEvaluations, pending.filter(p => p.action === "evaluate").length);
         probe.maxPlans = Math.max(probe.maxPlans, pending.filter(p => p.action === "plan").length);

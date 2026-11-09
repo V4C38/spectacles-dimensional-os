@@ -26,3 +26,7 @@ export interface InteractionResult {
 export interface InteractionCredentials { epoch: string; lease_id: string; sequence: number; }
 
 export interface InteractionSettings { group_id?: string; speed_scale?: number; gripper?: number; }
+
+/** Interaction consumers depend on authority operations, not session or transport internals. */
+export type InteractionAuthorityPort = Pick<import("./CollaborationController").CollaborationController,
+  "raw" | "snapshot" | "denialRevision" | "begin" | "update" | "credentials" | "release" | "confirm" | "cancel">;

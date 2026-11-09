@@ -21,6 +21,7 @@ class ARManipulationModuleConfig(ManipulationModuleConfig):  # type: ignore[misc
     following_tasks: dict[str, str] = Field(default_factory=dict)
     model_asset_url: str | None = None
     model_visual_profile: str | None = None
+    gripper_joint_names: list[str] = Field(default_factory=list)
     gripper_open_at_lower: list[str] = Field(default_factory=list)
     wire_from_world: ReferencePose = Field(default_factory=ReferencePose)
     joint_arrival_tolerance_rad: float = Field(default=0.02, gt=0, le=0.1)
@@ -37,6 +38,7 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
         self._lifecycle_stop = threading.Event()
         self._lifecycle_thread: threading.Thread | None = None
         self._auxiliary_thread: threading.Thread | None = None
+        self._watchdog_thread: threading.Thread | None = None
         self._closing = False
 
     @rpc
@@ -46,7 +48,10 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
 
     @rpc
     def start(self) -> None:
-        if self._lifecycle_thread is not None and self._lifecycle_thread.is_alive():
+        self._adapter.require_workers_open()
+        if any(thread is not None and thread.is_alive() for thread in (
+            self._lifecycle_thread, self._auxiliary_thread, self._watchdog_thread
+        )):
             raise RuntimeError("prior manipulation lifecycle has not stopped; restart the process")
         self._closing = False
         self._adapter.configure_rpc()
@@ -58,6 +63,10 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
             target=self._advance, name="ar-manipulation-lifecycle", daemon=True
         )
         self._lifecycle_thread.start()
+        self._watchdog_thread = threading.Thread(
+            target=self._watch_control, name="ar-manipulation-watchdog", daemon=True
+        )
+        self._watchdog_thread.start()
         self._auxiliary_thread = threading.Thread(
             target=self._refresh_auxiliary, name="ar-manipulation-auxiliary", daemon=True
         )
@@ -69,6 +78,13 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
                 self._runtime.advance()
             except Exception:
                 logger.exception("Manipulation lifecycle update failed")
+
+    def _watch_control(self) -> None:
+        while not self._lifecycle_stop.wait(0.025):
+            try:
+                self._runtime.check_control_lease()
+            except Exception:
+                logger.exception("Manipulation control watchdog failed")
 
     def _refresh_auxiliary(self) -> None:
         while not self._lifecycle_stop.wait(0.1):
@@ -87,20 +103,17 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
             self._runtime.session.stopped = True
             self._runtime.retire()
         self._lifecycle_stop.set()
-        if self._lifecycle_thread is not None:
-            self._lifecycle_thread.join()
-            self._lifecycle_thread = None
-        if self._auxiliary_thread is not None:
-            self._auxiliary_thread.join(timeout=1)
-            self._auxiliary_thread = None
+        self._adapter.close_workers()
+        for name in ("_lifecycle_thread", "_auxiliary_thread", "_watchdog_thread"):
+            thread = getattr(self, name)
+            if thread is not None:
+                thread.join(timeout=1)
+                if thread.is_alive():
+                    logger.warning("Native manipulation worker remains quarantined", worker=name)
+                else:
+                    setattr(self, name, None)
         if self._runtime.session.quiesced:
             self._adapter.prepare_teardown()
-        if self._adapter.evaluation_worker is not None:
-            self._adapter.evaluation_worker.close()
-            self._adapter.evaluation_worker = None
-        if self._adapter.worker is not None:
-            self._adapter.worker.close()
-            self._adapter.worker = None
         super().stop()
 
     def _on_joint_state(self, msg: JointState) -> None:

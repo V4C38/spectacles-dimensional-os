@@ -16,11 +16,12 @@ from dimos.ar.websocket.bulk import (
     TokenBucket,
     binary_chunks,
 )
-from dimos.ar.websocket.test_protocol import (
+from test_support.websocket import (
     TYPESCRIPT_LOCA_ONE,
+    ServerHarness,
     _encode_localization_observations_frame,
+    _send_hello_request,
 )
-from dimos.ar.websocket.test_server import ServerHarness, _send_hello_request
 
 
 def _plan(count: int = 8192) -> dict:
@@ -463,3 +464,33 @@ async def test_upload_cancel_is_idempotent_and_bulk_cache_error_identifies_refer
             assert h._server.connection_count == 1
     finally:
         h.stop()
+
+
+@pytest.mark.asyncio
+async def test_largest_lidar_record_progresses_despite_continuous_control_pressure():
+    from unittest.mock import AsyncMock
+
+    socket = AsyncMock()
+    checks = 0
+
+    def controls_pending():
+        nonlocal checks
+        checks += 1
+        return True
+
+    peer = BulkPeer(socket, "epoch", TokenBucket(1_048_576, 65_536),
+                    lambda: 1, controls_pending)
+    payload = bytes(65_536)
+    await asyncio.wait_for(peer._send(payload), 2)
+    socket.send.assert_awaited_once_with(payload)
+    assert checks > 1
+
+
+@pytest.mark.asyncio
+async def test_impossible_bulk_record_fails_instead_of_waiting_forever():
+    from unittest.mock import AsyncMock
+
+    peer = BulkPeer(AsyncMock(), "epoch", TokenBucket(1_048_576, 65_536),
+                    lambda: 1, lambda: False)
+    with pytest.raises(ValueError, match="burst capacity"):
+        await peer.consume(65_537)

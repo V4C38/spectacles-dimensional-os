@@ -14,7 +14,7 @@ import { SurfaceButton, type ButtonVariant } from "./SurfaceButton";
 import { DIMOS_AR_DESIGN, cornerRadius } from "./DimOSARDesign";
 import { GlassSurface } from "./GlassSurface";
 import { PANEL_TOP, RUNTIME_LAYOUTS, SETUP_LAYOUTS, panelFooterY, panelProfile, type PanelProfile } from "./PanelLayout";
-import { PanelHeightController } from "./PanelHeightController";
+import { PanelHeightAnimation } from "@dimos-ar-client/presentation/PanelHeightAnimation";
 import type { AgentDraftSnapshot } from "@dimos-ar-client/agent/AgentDraftSession";
 import { disposeTextResources } from "./TextResources";
 import { ScrollableTextView } from "./ScrollableTextView";
@@ -73,7 +73,7 @@ export class MainMenuView {
   private readonly wizard = new THREE.Group();
   private readonly wizardBody = new THREE.Group();
   private readonly wizardFooter = new THREE.Group();
-  private readonly heightController = new PanelHeightController();
+  private readonly heightController = new PanelHeightAnimation();
   private heightInitialized = false;
   private layoutProfile: PanelProfile | null = null;
   private readonly fittedContent = new Map<THREE.Object3D, number>();

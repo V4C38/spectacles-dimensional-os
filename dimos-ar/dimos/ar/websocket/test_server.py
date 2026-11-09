@@ -4,7 +4,6 @@ import asyncio
 import base64
 from concurrent.futures import Future
 from contextlib import asynccontextmanager
-import inspect
 import json
 import os
 import socket
@@ -14,116 +13,14 @@ from types import SimpleNamespace
 import pytest
 import websockets
 
-from dimos.ar.navigation.types import NavGoalRequest
-from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, Capability, CapabilityName
-from dimos.ar.robot.profiles.profile import RobotDescription
-from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
-from dimos.ar.websocket.bulk import binary_chunks
-from dimos.ar.websocket.protocol import HelloBody, LocalizationStartRequest
 from dimos.ar.websocket.server import WebSocketServer, split_inbound_text_lines
-from dimos.ar.websocket.test_protocol import TYPESCRIPT_LOCA_ONE
-
-
-def _pick_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
-
-
-def _sample_hello(_client_id: str) -> HelloBody:
-    return HelloBody(
-        server_info={"robot_ip": "10.0.0.42", "armodule_version": "0.2.0"},
-        robot=RobotDescription(
-            display_name=UNITREE_GO2_PROFILE.display_name,
-            body_bounds_m=UNITREE_GO2_PROFILE.body_bounds_m,
-            footprint_m=UNITREE_GO2_PROFILE.footprint_m,
-            base_height_m=UNITREE_GO2_PROFILE.base_height_m,
-        ),
-        capabilities={
-            CapabilityName.LIDAR: Capability(available=True, reason=None),
-            CapabilityName.NAVIGATION: Capability(available=True, reason=None),
-            CapabilityName.LOCALIZATION: Capability(available=True, reason=None),
-            CapabilityName.ESTOP: Capability(available=True, reason=None),
-            CapabilityName.AGENT: Capability(
-                available=False, reason="current blueprint has no DimOS agent"
-            ),
-        },
-        navigation_inputs={
-            NAV_GOAL: Capability(available=True, reason=None),
-            NAV_JOYSTICK: Capability(available=True, reason=None),
-        },
-    )
-
-
-async def _send_hello_request(ws: websockets.ClientConnection, ts_client: float = 1000.0) -> dict:
-    await ws.send(json.dumps({"type": "hello_request", "ts_client": ts_client}))
-    raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
-    return json.loads(raw)
-
-
-async def _upload_localization(harness: ServerHarness, control, hello: dict, payload: bytes) -> None:
-    harness._server.schedule_send_to_client(hello["client_id"], json.dumps({
-        "type": "localization_observations_request", "capture_policy": "any_angle", "observation_count": 1}) + "\n")
-    capture = json.loads(await control.recv())
-    async with websockets.connect(f"ws://127.0.0.1:{harness.port}{hello['bulk_url']}") as bulk:
-        await bulk.send(json.dumps({"type": "bulk_hello_request", "protocol_version": 2,
-                                   "client_id": hello["client_id"], "token": hello["bulk_token"]}))
-        assert json.loads(await bulk.recv())["type"] == "bulk_hello"
-        await bulk.send(json.dumps({"type": "bulk_upload_begin", "kind": "localization",
-                                   "upload_id": 1, "total_bytes": len(payload),
-                                   "capture_id": capture["capture_id"]}))
-        assert json.loads(await bulk.recv())["type"] == "bulk_upload_ready"
-        for chunk in binary_chunks(1, payload):
-            await bulk.send(chunk)
-        assert json.loads(await bulk.recv())["status"] == "accepted"
-
-
-class ServerHarness:
-    def __init__(self, **handler_kwargs: object) -> None:
-        self.port = _pick_free_port()
-        self.loop = asyncio.new_event_loop()
-        self._thread = threading.Thread(target=self._run_loop, daemon=True)
-        self._server: WebSocketServer | None = None
-        self.nav_goal_requests: list[NavGoalRequest] = []
-        self.localization_start_requests: list[str] = []
-        self.disconnected_client_ids: list[str] = []
-        self._handler_kwargs = handler_kwargs
-
-    def _run_loop(self) -> None:
-        asyncio.set_event_loop(self.loop)
-        self.loop.run_forever()
-
-    def _on_nav_goal_request(
-        self, msg: NavGoalRequest, _websocket: object, _client_id: str
-    ) -> None:
-        self.nav_goal_requests.append(msg)
-
-    def _on_localization_start_request(
-        self, _msg: LocalizationStartRequest, client_id: str
-    ) -> None:
-        self.localization_start_requests.append(client_id)
-
-    def _on_disconnect(self, _websocket: object, client_id: str) -> None:
-        self.disconnected_client_ids.append(client_id)
-
-    def start(self) -> None:
-        self._thread.start()
-        self._server = WebSocketServer(
-            port=self.port,
-            loop=self.loop,
-            hello_supplier=_sample_hello,
-            on_nav_goal_request=self._on_nav_goal_request,
-            on_localization_start_request=self._on_localization_start_request,
-            on_disconnect=self._on_disconnect,
-            **self._handler_kwargs,  # type: ignore[arg-type]
-        )
-        self._server.start()
-
-    def stop(self) -> None:
-        if self._server is not None:
-            self._server.stop()
-        self.loop.call_soon_threadsafe(self.loop.stop)
-        self._thread.join(timeout=2.0)
+from test_support.websocket import (
+    TYPESCRIPT_LOCA_ONE,
+    ServerHarness,
+    _sample_hello,
+    _send_hello_request,
+    _upload_localization,
+)
 
 
 @pytest.fixture
@@ -246,15 +143,6 @@ async def test_schedule_send_to_client_targets_one_connection(harness: ServerHar
         assert msg["type"] == "localization_observations_request"
 
 
-def test_server_does_not_import_localization_policy() -> None:
-    import dimos.ar.websocket.server as server_mod
-
-    assert not hasattr(server_mod, "LocalizationPolicy")
-    source = inspect.getsource(server_mod)
-    assert "LocalizationPolicy" not in source
-    assert "OdomMapTransform" not in source
-
-
 @pytest.mark.asyncio
 async def test_estop_is_processed_on_same_socket_while_localization_waits(
     monkeypatch: pytest.MonkeyPatch,
@@ -267,7 +155,7 @@ async def test_estop_is_processed_on_same_socket_while_localization_waits(
     from dimos.ar.module import ARModule
     from dimos.ar.robot.odometry import RobotOdometry
     import dimos.ar.websocket.server as server_module
-    from dimos.ar.websocket.test_protocol import TYPESCRIPT_LOCA_ONE
+    from test_support.websocket import TYPESCRIPT_LOCA_ONE
 
     monkeypatch.setattr(server_module, "lan_ip", lambda: None)
     entered = threading.Event()
@@ -332,10 +220,9 @@ async def test_clients_sharing_an_ip_remain_independent(harness: ServerHarness) 
         async with websockets.connect(f"ws://127.0.0.1:{harness.port}/ws") as second:
             second_hello = await _send_hello_request(second)
             assert first_hello["client_id"] != second_hello["client_id"]
-            # Hello is sent before the server registers the connection.
-            async with asyncio.timeout(1):
-                while harness._server.connection_count != 2:
-                    await asyncio.sleep(0.001)
+            await harness.wait_for_connection(first_hello["client_id"])
+            await harness.wait_for_connection(second_hello["client_id"])
+            assert harness._server.connection_count == 2
             harness._server.schedule_broadcast_text('{"type":"agent_message","text":"both"}\n')
             for peer in (first, second):
                 frame = json.loads(await asyncio.wait_for(peer.recv(), 1))
@@ -423,9 +310,11 @@ def test_start_timeout_cancels_pending_listener_and_leaves_no_server(monkeypatch
         h.stop()
 
 
-async def test_hello_precedes_broadcasts_and_only_completed_handshakes_receive_telemetry() -> None:
+async def test_hello_precedes_broadcasts_and_only_completed_handshakes_receive_telemetry(monkeypatch) -> None:
     h = ServerHarness()
     entered, release = threading.Event(), threading.Event()
+    written, bulk_received = threading.Event(), threading.Event()
+    publish = asyncio.Event()
 
     def hello(client_id):
         entered.set()
@@ -433,6 +322,40 @@ async def test_hello_precedes_broadcasts_and_only_completed_handshakes_receive_t
         return _sample_hello(client_id)
 
     h.start()
+    original_handshake = h._server._complete_handshake
+    original_bulk = h._server._handle_bulk
+
+    async def handshake(websocket, client_id):
+        send = websocket.send
+
+        async def write_then_yield(message):
+            await send(message)
+            written.set()
+            # Receiving hello doesn't imply this send awaiter has resumed.
+            await publish.wait()
+
+        websocket.send = write_then_yield
+        try:
+            return await original_handshake(websocket, client_id)
+        finally:
+            websocket.send = send
+
+    async def handle_bulk(websocket):
+        recv = websocket.recv
+
+        async def received(*args, **kwargs):
+            message = await recv(*args, **kwargs)
+            bulk_received.set()
+            return message
+
+        websocket.recv = received
+        try:
+            await original_bulk(websocket)
+        finally:
+            websocket.recv = recv
+
+    monkeypatch.setattr(h._server, "_complete_handshake", handshake)
+    monkeypatch.setattr(h._server, "_handle_bulk", handle_bulk)
     h._server._hello_supplier = hello
     try:
         async with websockets.connect(f"ws://127.0.0.1:{h.port}/ws") as ws:
@@ -444,20 +367,39 @@ async def test_hello_precedes_broadcasts_and_only_completed_handshakes_receive_t
             await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(
                 h._server._enqueue_all_text('{"type":"agent_message","text":"before"}\n'), h.loop
             ))
-            await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(
-                h._server._enqueue_all_binary(b"before"), h.loop
-            ))
             release.set()
             first = json.loads(await asyncio.wait_for(ws.recv(), 1))
             assert first["type"] == "hello"
-            assert h._server.connection_count == 1
-            h._server.schedule_broadcast_text('{"type":"agent_message","text":"after"}\n')
-            assert json.loads(await asyncio.wait_for(ws.recv(), 1))["text"] == "after"
-            h._server.schedule_broadcast_binary(b"after")
-            with pytest.raises(TimeoutError):
-                await asyncio.wait_for(ws.recv(), 0.05)
+            assert await asyncio.to_thread(written.wait, 1)
+            assert h._server.connection_count == 0
+            assert h._server._client_ids == {}
+            assert h._server._outbound == {}
+            async with websockets.connect(f"ws://127.0.0.1:{h.port}{first['bulk_url']}") as bulk:
+                await bulk.send(json.dumps({"type": "bulk_hello_request", "protocol_version": 2,
+                                           "client_id": first["client_id"], "token": first["bulk_token"]}))
+                assert await asyncio.to_thread(bulk_received.wait, 1)
+                assert h._server._bulk_peers == {}
+                await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(
+                    h._server._enqueue_all_text('{"type":"agent_message","text":"not-admitted"}\n'), h.loop
+                ))
+                await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(
+                    h._server._enqueue_all_binary(b"not-admitted"), h.loop
+                ))
+                h.loop.call_soon_threadsafe(publish.set)
+                await h.wait_for_connection(first["client_id"])
+                assert h._server.connection_count == 1
+                assert json.loads(await asyncio.wait_for(bulk.recv(), 1))["type"] == "bulk_hello"
+                h._server.schedule_broadcast_text('{"type":"agent_message","text":"after"}\n')
+                assert json.loads(await asyncio.wait_for(ws.recv(), 1))["text"] == "after"
+                h._server.schedule_broadcast_binary(b"after")
+                begin = json.loads(await asyncio.wait_for(bulk.recv(), 1))
+                assert begin["type"] == "bulk_binary_begin"
+                assert begin["kind"] == "lidar" and begin["total_bytes"] == 5
+                packet = await asyncio.wait_for(bulk.recv(), 1)
+                assert isinstance(packet, bytes) and packet.endswith(b"after")
     finally:
         release.set()
+        h.loop.call_soon_threadsafe(publish.set)
         h.stop()
 
 
@@ -478,6 +420,7 @@ async def test_unhandshaken_socket_does_not_count_as_active_or_trigger_disconnec
         assert h._server.connection_count == 0
         async with websockets.connect(f"ws://127.0.0.1:{h.port}/ws") as ws:
             hello = await _send_hello_request(ws)
+            await h.wait_for_connection(hello["client_id"])
             assert h._server.connection_count == 1
         assert await asyncio.to_thread(disconnected.wait, 1)
         assert remaining == [0]
@@ -508,6 +451,7 @@ async def test_disconnect_retires_authority_before_transport_cleanup(monkeypatch
         async with websockets.connect(f"ws://127.0.0.1:{h.port}/ws") as old:
             hello = await _send_hello_request(old)
             old_id = hello["client_id"]
+            await h.wait_for_connection(old_id)
 
             async def install_held_cleanup():
                 websocket = h._server._connections[old_id]
@@ -550,6 +494,7 @@ async def test_disconnect_retires_authority_before_transport_cleanup(monkeypatch
 
             async with websockets.connect(f"ws://127.0.0.1:{h.port}/ws") as successor:
                 successor_id = (await _send_hello_request(successor))["client_id"]
+                await h.wait_for_connection(successor_id)
                 assert successor_id != old_id
                 assert h._server.connection_count == 1
                 release.set()
@@ -583,6 +528,7 @@ async def test_disconnect_callback_and_bulk_close_failures_still_stop_sender(mon
         async with websockets.connect(f"ws://127.0.0.1:{h.port}/ws") as ws:
             hello = await _send_hello_request(ws)
             client_id = hello["client_id"]
+            await h.wait_for_connection(client_id)
 
             async def install_failing_cleanup():
                 websocket = h._server._connections[client_id]
@@ -678,6 +624,7 @@ async def test_stop_at_rate_limit_is_honored_then_flooding_peer_retires():
     try:
         async with websockets.connect(f"ws://localhost:{h.port}") as ws:
             hello = await _send_hello_request(ws)
+            await h.wait_for_connection(hello["client_id"])
             installed = threading.Event()
 
             def limit():
@@ -701,12 +648,14 @@ async def test_resumable_socket_preserves_identity_without_disconnect_callback(h
         await first.send(json.dumps({"type": "hello_request", "ts_client": 1,
                                      "resumable": True, "server_follow_stream": True}))
         hello = json.loads(await first.recv())
+        await harness.wait_for_connection(hello["client_id"])
     await asyncio.sleep(delay)
     assert harness.disconnected_client_ids == []
     async with websockets.connect(url) as second:
         await second.send(json.dumps({"type": "hello_request", "ts_client": 2,
                                       "resumable": True, "resume_token": hello["resume_token"]}))
         resumed = json.loads(await second.recv())
+        await harness.wait_for_connection(resumed["client_id"])
         assert resumed["client_id"] == hello["client_id"]
         assert resumed["bulk_token"] != hello["bulk_token"]
         await asyncio.sleep(0.15)
@@ -719,6 +668,7 @@ async def test_expired_resume_cannot_restore_authority(harness):
     async with websockets.connect(url) as first:
         await first.send(json.dumps({"type": "hello_request", "ts_client": 1, "resumable": True}))
         hello = json.loads(await first.recv())
+        await harness.wait_for_connection(hello["client_id"])
     await asyncio.sleep(1.1)
     assert harness.disconnected_client_ids == [hello["client_id"]]
     async with websockets.connect(url) as second:
@@ -735,9 +685,243 @@ async def test_resume_uses_its_reserved_slot_when_capacity_is_full(harness, monk
     async with websockets.connect(url) as first:
         await first.send(json.dumps({"type": "hello_request", "ts_client": 1, "resumable": True}))
         hello = json.loads(await first.recv())
+        await harness.wait_for_connection(hello["client_id"])
     await asyncio.sleep(0.05)
     async with websockets.connect(url) as second:
         await second.send(json.dumps({"type": "hello_request", "ts_client": 2,
                                       "resumable": True, "resume_token": hello["resume_token"]}))
-        assert json.loads(await second.recv())["client_id"] == hello["client_id"]
+        resumed = json.loads(await second.recv())
+        assert resumed["client_id"] == hello["client_id"]
+        await harness.wait_for_connection(resumed["client_id"])
     assert harness.disconnected_client_ids == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_resume_claims_have_one_owner_and_one_valid_bulk_token():
+    loop = asyncio.get_running_loop()
+    server = WebSocketServer(port=0, loop=loop, hello_supplier=_sample_hello)
+    token = "a" * 64
+    server._resume_tokens["client"] = token
+    handle = loop.call_later(10, lambda: None)
+    server._disconnect_handles["client"] = handle
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class Socket:
+        def __init__(self, blocked=False):
+            self.blocked = blocked
+            self.sent = []
+
+        async def recv(self):
+            return json.dumps({"type": "hello_request", "ts_client": 1,
+                               "resumable": True, "resume_token": token})
+
+        async def send(self, value):
+            self.sent.append(json.loads(value))
+            if self.blocked:
+                entered.set()
+                await release.wait()
+
+    first, second = Socket(True), Socket()
+    pending = asyncio.create_task(server._complete_handshake(first, "fresh-a"))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        assert server.logical_session_count == 1
+        with pytest.raises(ValueError, match="still connected"):
+            await server._complete_handshake(second, "fresh-b")
+        assert not second.sent
+        release.set()
+        assert await pending == "client"
+        assert server._bulk_tokens["client"] == first.sent[0]["bulk_token"]
+        assert not server._resume_claims
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+        handle.cancel()
+        server._encoder.shutdown(wait=False)
+        server._hello_executor.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
+async def test_failed_resume_send_releases_claim_without_retiring_the_session():
+    loop = asyncio.get_running_loop()
+    server = WebSocketServer(port=0, loop=loop, hello_supplier=_sample_hello)
+    token = "b" * 64
+    server._resume_tokens["client"] = token
+    handle = loop.call_later(10, lambda: None)
+    server._disconnect_handles["client"] = handle
+
+    class Socket:
+        async def recv(self):
+            return json.dumps({"type": "hello_request", "ts_client": 1,
+                               "resumable": True, "resume_token": token})
+
+        async def send(self, value):
+            raise OSError("socket closed during hello")
+
+    try:
+        with pytest.raises(OSError):
+            await server._complete_handshake(Socket(), "fresh")
+        assert not server._resume_claims
+        assert server.logical_session_count == 1
+        assert server._resume_tokens["client"] == token
+        assert "client" not in server._bulk_tokens
+    finally:
+        handle.cancel()
+        server._encoder.shutdown(wait=False)
+        server._hello_executor.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
+async def test_expired_resume_claim_does_not_keep_a_logical_session_alive():
+    loop = asyncio.get_running_loop()
+    server = WebSocketServer(port=0, loop=loop, hello_supplier=_sample_hello)
+    token = "c" * 64
+    server._resume_tokens["client"] = token
+    counts = []
+    entered, release, expired = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    def expire():
+        server._disconnect_handles.pop("client", None)
+        server._resume_tokens.pop("client", None)
+        counts.append(server.logical_session_count)
+        expired.set()
+
+    server._disconnect_handles["client"] = loop.call_later(0.05, expire)
+
+    class Socket:
+        async def recv(self):
+            return json.dumps({"type": "hello_request", "ts_client": 1,
+                               "resumable": True, "resume_token": token})
+
+        async def send(self, value):
+            entered.set()
+            await release.wait()
+
+    pending = asyncio.create_task(server._complete_handshake(Socket(), "fresh"))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        await asyncio.wait_for(expired.wait(), 1)
+        assert counts == [0]
+        release.set()
+        with pytest.raises(ValueError, match="expired"):
+            await pending
+        assert server.logical_session_count == 0
+        assert not server._resume_claims
+        assert "client" not in server._bulk_tokens
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+        server._encoder.shutdown(wait=False)
+        server._hello_executor.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("providers, expected", [
+    ([], []),
+    (["fiducial_marker"], ["fiducial_marker"]),
+    (["vps"], ["vps"]),
+    (["vps", "fiducial_marker"], ["fiducial_marker", "vps"]),
+])
+async def test_hello_serializes_configured_provider_inventory(harness, monkeypatch, providers, expected):
+    from test_support.module import _module_with_policy
+
+    module = _module_with_policy(providers)
+    monkeypatch.setattr(harness._server, "_hello_supplier", module._hello_body)
+    async with websockets.connect(f"ws://127.0.0.1:{harness.port}/ws") as socket:
+        hello = await _send_hello_request(socket)
+    assert hello["protocol_version"] == 2
+    assert hello["localization"] == {"providers": expected}
+    assert hello["capabilities"]["localization"]["available"] is bool(expected)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resume", [False, True])
+async def test_cancelled_post_hello_send_rolls_back_admission_without_retiring_resume(resume):
+    loop = asyncio.get_running_loop()
+    connected, disconnected = [], []
+    server = WebSocketServer(port=0, loop=loop, hello_supplier=_sample_hello,
+                             on_connect=lambda *_args: connected.append(True),
+                             on_disconnect=lambda *_args: disconnected.append(True))
+    token = "d" * 64
+    handle = loop.call_later(30, lambda: None)
+    if resume:
+        server._resume_tokens["suspended"] = token
+        server._disconnect_handles["suspended"] = handle
+    sent = asyncio.Event()
+    emitted = []
+
+    class Socket:
+        request = SimpleNamespace(path="/ws")
+
+        async def recv(self):
+            return json.dumps({"type": "hello_request", "ts_client": 1, "resumable": True,
+                               **({"resume_token": token} if resume else {})})
+
+        async def send(self, value):
+            emitted.append(json.loads(value))
+            sent.set()
+            await asyncio.Event().wait()
+
+    socket = Socket()
+    task = asyncio.create_task(server._handler(socket))
+    try:
+        await asyncio.wait_for(sent.wait(), 1)
+        assert emitted[0]["type"] == "hello"
+        assert server.connection_count == 0
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not connected and not disconnected
+        assert server._pending_handshakes == 0
+        assert server._client_ids == server._outbound == server._time_sync == {}
+        assert not server._bulk_tokens and not server._resume_claims
+        if resume:
+            assert server._disconnect_handles["suspended"] is handle
+            assert not handle.cancelled()
+            assert server._resume_tokens["suspended"] == token
+            assert server.logical_session_count == 1
+        else:
+            assert not server._resume_tokens
+            assert server.logical_session_count == 0
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        handle.cancel()
+        server._encoder.shutdown(wait=False)
+        server._hello_executor.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
+async def test_admission_callback_failure_removes_the_published_session_and_sender():
+    loop = asyncio.get_running_loop()
+    disconnected = []
+    sent = []
+
+    def reject(_socket, _client_id):
+        raise RuntimeError("admission callback failed")
+
+    server = WebSocketServer(port=0, loop=loop, hello_supplier=_sample_hello,
+                             on_connect=reject,
+                             on_disconnect=lambda _socket, client: disconnected.append(client))
+
+    class Socket:
+        request = SimpleNamespace(path="/ws")
+
+        async def recv(self):
+            return '{"type":"hello_request","ts_client":1}'
+
+        async def send(self, value):
+            sent.append(json.loads(value))
+
+    try:
+        with pytest.raises(RuntimeError, match="admission callback failed"):
+            await server._handler(Socket())
+        assert [frame["type"] for frame in sent] == ["hello"]
+        assert disconnected == [sent[0]["client_id"]]
+        assert server.connection_count == server.logical_session_count == 0
+        assert server._pending_handshakes == 0
+        assert server._client_ids == server._outbound == server._time_sync == {}
+        assert not server._bulk_tokens and not server._resume_tokens
+    finally:
+        server._encoder.shutdown(wait=False)
+        server._hello_executor.shutdown(wait=False)

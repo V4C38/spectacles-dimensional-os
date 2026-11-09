@@ -1,0 +1,7 @@
+# Additional offline fixtures and calibration dependencies for CI.
+# Runtime and test tools are owned by pyproject.toml's project/dev dependencies.
+numpy
+opencv-python-headless
+Pillow
+scipy
+trimesh>=4

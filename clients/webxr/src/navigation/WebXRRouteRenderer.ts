@@ -9,7 +9,7 @@ import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/clientT
 import { odomToClientTrackingYawPose } from "@dimos-ar-client/localization/clientTrackingTransforms";
 import type { Vec3, YawPose } from "@dimos-ar-client/websocket/protocolTypes";
 import { clientTrackingToWebxrPoint } from "../utilities/WebXRCoordinates";
-import { anchorPathStart, clipPathToCircles, filletPathCorners, rangePathY, routeRibbon, type RouteCircle } from "./RoutePathGeometry";
+import { anchorPathStart, clipPathToCircles, filletPathCorners, rangePathY, routeRibbon, type RouteCircle } from "@dimos-ar-client/presentation/RoutePathGeometry";
 
 export type RouteStyle = { preview?: boolean; executing?: boolean; startCircle?: RouteCircle; endCircle?: RouteCircle };
 

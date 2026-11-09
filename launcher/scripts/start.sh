@@ -302,7 +302,6 @@ fi
 
 SELECTED_BLUEPRINT="${STACK_IDS[$SELECTED_INDEX]}"
 STACK_LABEL="${MENU_LABELS[$SELECTED_INDEX]}"
-CLI_BLUEPRINT="dimos-ar.${SELECTED_BLUEPRINT//_/-}"
 
 if [[ "${SELECTED_BLUEPRINT}" == "openyam_ar_planner" ]]; then
   unset ROBOT_IP
@@ -347,22 +346,12 @@ if [[ ! -x "${DIMOS_CLI}" ]]; then
   exit 1
 fi
 
-if [[ "${SELECTED_BLUEPRINT}" == "openyam_ar_planner" && -n "${REPLAY_DB:-}" ]]; then
-  CLI_BLUEPRINT="dimos-ar.openyam-ar-replay"
-  REPLAY=0
-elif [[ "${REPLAY}" -eq 1 ]]; then
-  CLI_BLUEPRINT="dimos-ar.unitree-go2-ar-replay"
-  REPLAY=0
-fi
+# Source policy is shared with the launcher API; this emits only fixed CLI tokens.
+RUNTIME_ARGS="$("${PYTHON}" "${SCRIPT_DIR}/../app/robot_sources.py" "${SELECTED_BLUEPRINT}" "${REPLAY}")"
 RUN_CMD=("${DIMOS_CLI}")
-if [[ "${SELECTED_BLUEPRINT}" == "openyam_ar_planner" && "${DIMOS_AR_SIMULATION:-0}" == "1" && -z "${REPLAY_DB:-}" ]]; then
-  RUN_CMD+=(--simulation=mock)
-fi
-if [[ "${REPLAY}" -eq 1 ]]; then
-  RUN_CMD+=(--replay)
-  if [[ -n "${REPLAY_DB:-}" ]]; then RUN_CMD+=(--replay-db "${REPLAY_DB}"); fi
-fi
-RUN_CMD+=(run "${CLI_BLUEPRINT}")
+while IFS= read -r runtime_arg; do
+  RUN_CMD+=("${runtime_arg}")
+done <<< "${RUNTIME_ARGS}"
 if [[ -n "${PINNED_IP}" ]]; then
   RUN_CMD+=(--robot-ip "${PINNED_IP}")
 fi

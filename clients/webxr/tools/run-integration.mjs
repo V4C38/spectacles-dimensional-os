@@ -6,6 +6,7 @@ import {
   runId,
   sourceIdentity,
   removeOldResults,
+  reviewDataRoot,
 } from "../../../tools/integration-tests/artifacts.mjs";
 import { finalize } from "../../../tools/integration-tests/finalize.mjs";
 const client = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -15,7 +16,10 @@ for (const executable of ["ffmpeg", "ffprobe"]) {
       `${executable} is required before running integration tests`,
     );
 }
-const output = join(client, "tests/integration-tests/test-results", runId());
+const defaultRoot = join(reviewDataRoot, "webxr");
+const output = process.env.INTEGRATION_RESULTS_DIR
+  ? resolve(process.env.INTEGRATION_RESULTS_DIR)
+  : join(defaultRoot, runId());
 await mkdir(output, { recursive: true });
 const source = sourceIdentity(client);
 await writeFile(
@@ -57,7 +61,7 @@ try {
   );
   console.error(error);
 }
-if (passed && command.status === 0)
+if (passed && command.status === 0 && dirname(output) === defaultRoot)
   await removeOldResults(dirname(output), [basename(output)]);
 console.log(`${passed && command.status === 0 ? "PASS" : "FAIL"}: ${output}`);
 process.exitCode = passed && command.status === 0 ? 0 : 1;

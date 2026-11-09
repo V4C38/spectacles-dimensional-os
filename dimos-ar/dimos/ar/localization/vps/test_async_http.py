@@ -9,7 +9,7 @@ import pytest
 import pytest_asyncio
 
 from dimos.ar.localization.vps.multiset_client import MultisetVpsClient, MultisetVpsClientConfig
-from dimos.ar.localization.vps.test_multiset_client import _intrinsics
+from test_support.localization import _intrinsics
 
 
 @pytest_asyncio.fixture

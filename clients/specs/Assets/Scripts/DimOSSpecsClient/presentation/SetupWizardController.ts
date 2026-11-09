@@ -1,7 +1,7 @@
 import { getRobotActivityState } from "../../DimOSARClient/robot/RobotMarkerState";
 import { SpecsConnectionController } from "./SpecsConnectionController";
 import { SETUP_PANEL_SCALE } from "./PanelLayout";
-import { availableFeatures, localizationGuidance, localizationProviderLabel } from "../../DimOSARClient/presentation/ControlPanelPresentation";
+import { availableCapabilityLabels, localizationGuidance, localizationProviderLabel, localizationKind } from "../../DimOSARClient/presentation/ControlPanelPresentation";
 import { SetupFlow } from "../../DimOSARClient/presentation/SetupFlow";
 require("LensStudio:TextInputModule");
 
@@ -38,7 +38,7 @@ const WIZARD_STEP_TITLES = {
 } as const;
 
 const WIZARD_STEP_DESCRIPTIONS = {
-  [SetupWizardStep.Connect]: "Start the launcher on your Mac.",
+  [SetupWizardStep.Connect]: "",
   [SetupWizardStep.Localization]: "Look at the robot while the headset captures views for localization.",
 } as const;
 
@@ -450,7 +450,8 @@ export class SetupWizardController {
       text: error ?? (connected ? status.text : this.resolvingPin ? "Resolving PIN…" : this._isConnecting ? status.text : this._connectionMethod === "pin" ? "Enter a 6-digit PIN" : "Enter an IP address"),
       color: error ? COLOR_ERROR : connected ? statusToneColor("success") : COLOR_WARN,
       phase: error ? "error" : connected ? "connected" : "entry",
-      details: connected ? `Robot: ${view.hello?.robot.display_name ?? "Unavailable"}\n${availableFeatures(view.capabilities)}` : undefined,
+      details: connected ? `Robot: ${view.hello?.robot.display_name ?? "Unavailable"}` : undefined,
+      capabilities: connected ? availableCapabilityLabels(view.capabilities) : [],
     });
   }
 
@@ -468,9 +469,7 @@ export class SetupWizardController {
     this.refreshRobotBadge();
     const sessionView = this.deps.session.view();
     const episodeView = this.deps.episode.view();
-    const policy = episodeView.capturePolicy;
-    const kind = sessionView.capabilities?.localization.available !== true ? "unavailable" :
-      policy === "any_angle" ? "vps" : policy === "robot_los_required" ? "marker" : policy === "robot_los_preferred" ? "mixed" : "unknown";
+    const kind = localizationKind(sessionView, episodeView.capturePolicy);
     this.view.setCaptureLayout?.(kind !== "unavailable" && !episodeView.lastError);
     this.view.setLocalizationProvider?.(localizationProviderLabel(kind));
     this.view.setMarkerGuide?.(kind === "marker" || kind === "mixed");

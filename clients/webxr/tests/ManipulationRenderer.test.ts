@@ -930,3 +930,20 @@ it("retains both EE handles, arm transforms, and Preview through a short feedbac
     expect(r.handle.object.visible).toBe(false); expect(r.measuredHandle.object.visible).toBe(false);
   } finally {r.dispose();}
 });
+
+
+it("owns the visible handle's rejection, stale and blocked center colors", () => {
+  const renderer = new ManipulationRenderer();
+  const color = () => (renderer.handle.visual.material as THREE.ShaderMaterial).uniforms.uCenterColor.value.getHex();
+  rejection = { revision: 1, pose, message: "IK failed" };
+  applyRenderer(renderer, state, origin, "arm", false, pose, null, null, 1, "", true);
+  expect(color()).toBe(0xffcc00);
+  applyRenderer(renderer, state, origin, "arm", false, pose, null, null, 2, "", true, "Arm", { blocked: true });
+  expect(color()).toBe(0x8e969e);
+  rejection = null;
+  applyRenderer(renderer, state, origin, "arm", false, pose, null, null, 3, "", false);
+  expect(color()).toBe(0xffcc00);
+  applyRenderer(renderer, state, origin, "arm", false, pose, null, null, 4, "", true);
+  expect(color()).toBe(0xb3b3b3);
+  renderer.dispose();
+});

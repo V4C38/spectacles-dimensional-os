@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setMockTime } from "../setup/lens-globals";
 
 const mocks = vi.hoisted(() => {
-  return { next: () => {}, previous: () => {}, toggle: () => {}, edit: () => {}, footer: vi.fn(), connection: vi.fn(), captureLayout: vi.fn(), initializeInput: vi.fn(), submit: () => {}, input: "" };
+  return { next: () => {}, previous: () => {}, toggle: () => {}, edit: () => {}, footer: vi.fn(), content: vi.fn(), connection: vi.fn(), captureLayout: vi.fn(), initializeInput: vi.fn(), submit: () => {}, input: "" };
 });
 
 vi.mock("../../Assets/Scripts/DimOSSpecsClient/presentation/SetupWizardView", () => ({
@@ -12,7 +12,7 @@ vi.mock("../../Assets/Scripts/DimOSSpecsClient/presentation/SetupWizardView", ()
     dispose() {}
     getInputText() { return mocks.input; }
     clearInput() { mocks.input = ""; }
-    setStepContent() {}
+    setStepContent(title: string, description: string) { mocks.content(title, description); }
     applyStepLayout() {}
     setInputEnabled() {}
     setConnectionToggleVisible() {}
@@ -31,7 +31,7 @@ function harness(storage = new Map<string, string>(), options: {
   connection?: string; advance?: boolean;
   resolve?: SetupWizardControllerDeps["ipRelayClient"]["resolve"];
 } = {}) {
-  const view = { connection: options.connection ?? "ready", hasTrackingOrigin: false, hello: null };
+  const view = { connection: options.connection ?? "ready", hasTrackingOrigin: false, hello: null as unknown, capabilities: null as unknown };
   const finished = vi.fn();
   const dismissed = vi.fn();
   const episode = { reset: vi.fn(), pause: vi.fn(), requestStart: vi.fn(), view: () => ({ phase: "capturing" }) };
@@ -72,6 +72,22 @@ beforeEach(() => {
   setMockTime(0);
   mocks.footer.mockClear();
   mocks.initializeInput.mockClear();
+});
+
+it("starts directly with the connection controls and separates available capabilities from the robot", () => {
+  const { controller, view } = harness(new Map(), { advance: false });
+  expect(mocks.content).toHaveBeenLastCalledWith("Connect", "");
+  view.hello = { robot: { display_name: "Test robot" } };
+  view.capabilities = {
+    navigation: { available: true }, manipulation: { available: false },
+    localization: { available: true }, lidar: { available: true },
+    agent: { available: false }, estop: { available: true },
+  };
+  controller.onSessionViewChanged();
+  expect(mocks.connection).toHaveBeenLastCalledWith(expect.objectContaining({
+    phase: "connected", details: "Robot: Test robot",
+    capabilities: ["Navigation", "LiDAR", "Localization", "Emergency Stop"],
+  }));
 });
 
 it("retains submitted PINs across wizard instances", () => {

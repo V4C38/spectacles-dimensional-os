@@ -1,136 +1,90 @@
-"""Installed-runtime regression probe. Requires explicit mock on localhost:8799.
+"""Compare mock arm drag and checked Execute arrival times at three speeds.
 
-Refuses motion unless manipulation_state.simulated is true. Start the mock
-with DIMOS_AR_SIMULATION=1 and ARMODULE__PORT=8799, then wait for runtime ready.
+Requires an explicitly simulated official runtime on localhost (default port 8799).
+The default three repetitions check median arrival-time parity within ten percent.
 """
 
+import argparse
 import asyncio
 import json
 import math
 import statistics
 import time
 
-import websockets
+if __package__:
+    from .mock_runtime_client import mock_runtime
+else:
+    from mock_runtime_client import mock_runtime
 
 
-async def main():
-    async with websockets.connect("ws://127.0.0.1:8799") as ws:
-        replies = {}
-        latest = {}
-        counter = 0
-        await ws.send(json.dumps({"type": "hello_request", "ts_client": time.time()}))
+async def benchmark(url, repeats=3):
+    async with mock_runtime(url, server_follow_stream=True) as (client, state):
+        home = state["observations"][client.group]["pose"]
+        target = {**home, "position": [home["position"][0] + 0.04, *home["position"][1:]]}
 
-        async def read():
-            async for raw in ws:
-                for line in raw.splitlines():
-                    frame = json.loads(line)
-                    if frame["type"] == "manipulation_state":
-                        latest.update(frame)
-                    if frame["type"] == "manipulation_result":
-                        replies[frame["request_id"]] = frame
+        def error(pose):
+            actual = client.state["observations"][client.group]["pose"]
+            return math.dist(pose["position"], actual["position"])
 
-        reader = asyncio.create_task(read())
+        async def execute(pose, speed):
+            await client.acquire("manipulation_planning", pose, speed_scale=speed)
+            plan = await client.command("plan", **pose, speed_scale=speed)
+            assert plan["status"] == "planned", plan
+            await client.release()
+            started = time.monotonic()
+            result = await client.command("execute", plan_id=plan["plan_id"])
+            assert result["status"] == "accepted", result
+            return started, result["operation_id"]
 
-        async def wait(predicate, timeout=30):
-            async with asyncio.timeout(timeout):
-                while not predicate():
-                    await asyncio.sleep(0.01)
-
-        await wait(lambda: latest.get("available"))
-        assert latest.get("simulated") is True
-        group = latest["groups"][0]["id"]
-
-        async def cmd(action, **body):
-            nonlocal counter
-            counter += 1
-            id = str(counter)
-            await ws.send(
-                json.dumps(
-                    dict(
-                        type="manipulation_request",
-                        request_id=id,
-                        action=action,
-                        group_id=group,
-                        **body,
-                    )
-                )
-            )
-            await wait(lambda: id in replies)
-            result = replies[id]
-            if result["status"] in ("rejected", "infeasible"):
-                raise RuntimeError(result)
-            return result
-
-        if latest.get("stopped"):
-            await cmd("resume")
-        home = latest["observations"][group]["pose"]
-        target = dict(home, position=[home["position"][0] + 0.04, *home["position"][1:]])
-
-        def error(p):
-            actual = latest["observations"][group]["pose"]
-            return math.dist(p["position"], actual["position"])
-
-        async def move(p, speed):
-            if error(p) < 0.002:
-                return
-            plan = await cmd("plan", **p, speed_scale=speed)
-            await cmd("execute", plan_id=plan["plan_id"])
-            await wait(lambda: error(p) < 0.002)
-            await cmd("cancel")
-            await asyncio.sleep(0.2)
+        async def finish_execution(operation_id):
+            await client.wait(lambda: client.state.get("operation_id") == operation_id
+                              and client.state.get("execution") == "completed")
+            await client.wait(lambda: not client.shared["motion_busy"])
 
         results = []
-        for speed in (0.25, 0.5, 1) * 3:
+        for speed in (0.25, 0.5, 1) * repeats:
             for mode in ("execute", "drag"):
-                await move(home, 1)
+                if error(home) >= 0.002:
+                    _, operation = await execute(home, 1)
+                    await finish_execution(operation)
                 if mode == "execute":
-                    plan = await cmd("plan", **target, speed_scale=speed)
-                    start = time.monotonic()
-                    await cmd("execute", plan_id=plan["plan_id"])
-                    await wait(lambda: error(target) < 0.005, 15)
+                    started, operation = await execute(target, speed)
+                    await client.wait(lambda: error(target) < 0.005, timeout=15)
+                    arrival = time.monotonic() - started
+                    await finish_execution(operation)
                 else:
-                    token = (await cmd("acquire"))["token"]
-                    start = time.monotonic()
-                    seq = 0
+                    await client.acquire("manipulation_following", home, speed_scale=speed)
+                    acquired = await client.command("acquire")
+                    assert acquired["status"] == "acquired", acquired
+                    started = time.monotonic()
                     while error(target) >= 0.005:
-                        if time.monotonic() - start > 15:
-                            raise RuntimeError("drag timeout")
-                        seq += 1
-                        counter += 1
-                        await ws.send(
-                            json.dumps(
-                                dict(
-                                    type="manipulation_request",
-                                    request_id=str(counter),
-                                    action="update",
-                                    group_id=group,
-                                    token=token,
-                                    sequence=seq,
-                                    ts=time.time(),
-                                    speed_scale=speed,
-                                    **target,
-                                )
-                            )
-                        )
+                        if time.monotonic() - started > 15:
+                            raise TimeoutError("Mock following did not reach the target")
+                        await client.update_target(target, speed_scale=speed)
                         await asyncio.sleep(1 / 30)
-                results.append({"speed": speed, "mode": mode, "arrival": time.monotonic() - start})
-                await cmd("cancel")
-                await asyncio.sleep(0.2)
+                    arrival = time.monotonic() - started
+                    released = await client.command("release", token=acquired["token"])
+                    assert released["status"] == "released", released
+                    await client.release()
+                    await client.wait(lambda: not client.shared["motion_busy"])
+                results.append({"speed": speed, "mode": mode, "arrival": arrival})
         comparisons = []
         for speed in (0.25, 0.5, 1):
-            execute = statistics.median(
-                r["arrival"] for r in results if r["speed"] == speed and r["mode"] == "execute"
-            )
-            drag = statistics.median(
-                r["arrival"] for r in results if r["speed"] == speed and r["mode"] == "drag"
-            )
-            comparisons.append(
-                {"speed": speed, "execute_s": execute, "drag_s": drag, "ratio": drag / execute}
-            )
+            execute_time = statistics.median(row["arrival"] for row in results
+                                             if row["speed"] == speed and row["mode"] == "execute")
+            drag_time = statistics.median(row["arrival"] for row in results
+                                          if row["speed"] == speed and row["mode"] == "drag")
+            comparisons.append({"speed": speed, "execute_s": execute_time,
+                                "drag_s": drag_time, "ratio": drag_time / execute_time})
+        parked = await client.command("prepare_shutdown", speed_scale=0.2)
+        assert parked["status"] == "completed", parked
         print(json.dumps({"samples": results, "medians": comparisons}, indent=2))
-        reader.cancel()
-        assert all(0.9 <= result["ratio"] <= 1.1 for result in comparisons), comparisons
+        assert all(0.9 <= row["ratio"] <= 1.1 for row in comparisons), comparisons
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--url", default="ws://127.0.0.1:8799")
+    parser.add_argument("--repeats", type=int, choices=range(1, 11), default=3)
+    args = parser.parse_args()
+    asyncio.run(benchmark(args.url, args.repeats))

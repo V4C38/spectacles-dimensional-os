@@ -21,8 +21,7 @@ jobs:
       - name: Install dev tools and package
         run: |
           python -m pip install --upgrade pip
-          pip install websockets pytest pytest-asyncio ruff mypy numpy opencv-python-headless Pillow scipy dimos "aiohttp>=3.9,<4" "requests>=2.32,<3" langchain-core "trimesh>=4"
-          pip install -e . --no-deps
+          GIT_LFS_SKIP_SMUDGE=1 pip install -r requirements-ci.txt -e "dimos @ git+https://github.com/dimensionalOS/dimos.git@$(cat ../.dimos-revision)" -e ".[dev]"
 
       - name: Ruff
         run: ruff check .
@@ -31,10 +30,21 @@ jobs:
         run: mypy dimos/ar
 
       - name: Pytest (unit tests without robot hardware)
-        run: pytest
+        run: pytest --junitxml="../Review Data/unit/backend/junit.xml"
 
       - name: WebXR offline camera calibration regression
-        run: python -m pytest ../clients/webxr/tools/test_calibrate.py
+        run: python -m pytest ../clients/webxr/tools/test_calibrate.py --junitxml="../Review Data/unit/calibration/junit.xml"
+
+      - name: Upload Python test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-test-reports
+          path: |
+            Review Data/unit/backend/
+            Review Data/unit/calibration/
+          retention-days: 14
+          if-no-files-found: warn
 
   launcher:
     runs-on: ubuntu-latest
@@ -61,7 +71,16 @@ jobs:
         run: ruff check .
 
       - name: Pytest
-        run: pytest
+        run: pytest --junitxml="../../Review Data/unit/launcher/junit.xml"
+
+      - name: Upload launcher test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: launcher-test-reports
+          path: Review Data/unit/launcher/
+          retention-days: 14
+          if-no-files-found: warn
 
   client-specs-tests:
     runs-on: ubuntu-latest
@@ -75,12 +94,26 @@ jobs:
         run: git lfs pull --include="clients/specs/Assets/Materials/Shaders/*.ss_graph" --exclude=""
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
       - run: npm ci
       - run: npm test
       - name: Native review tooling unit tests
         working-directory: .
-        run: python3 -m unittest discover -s clients/specs/Tests/integration-tests -p 'test_*.py'
+        run: |
+          set -o pipefail
+          mkdir -p "Review Data/unit/specs-tooling"
+          python3 -m unittest discover -s clients/specs/Tests/integration-tests -p 'test_*.py' 2>&1 | tee "Review Data/unit/specs-tooling/output.log"
+      - name: Upload Specs test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: specs-test-reports
+          path: |
+            Review Data/unit/specs/
+            Review Data/unit/specs-tooling/
+            Review Data/coverage/specs/
+          retention-days: 14
+          if-no-files-found: warn
 
   client-webxr-tests:
     runs-on: ubuntu-latest
@@ -91,15 +124,14 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install and verify ARModule integration server
         run: |
           python -m pip install --upgrade pip
-          python -m pip install websockets numpy opencv-python-headless Pillow scipy dimos "aiohttp>=3.9,<4" "requests>=2.32,<3" langchain-core "trimesh>=4"
-          python -m pip install -e ../../dimos-ar --no-deps
+          GIT_LFS_SKIP_SMUDGE=1 python -m pip install -r ../../dimos-ar/requirements-ci.txt -e "dimos @ git+https://github.com/dimensionalOS/dimos.git@$(cat ../../.dimos-revision)" -e "../../dimos-ar[dev]"
           python -c "from dimos.ar.module import ARModule"
       - run: npm ci
       - run: npm test
@@ -108,13 +140,43 @@ jobs:
       - name: Install review video encoder
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Verify integration contract and continuous encoding
-        run: node --test ../../tools/integration-tests/integration.test.mjs ../../tools/visual-review.test.mjs
+        run: |
+          mkdir -p "../../Review Data/unit/integration-tooling"
+          node --test --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=junit --test-reporter-destination="../../Review Data/unit/integration-tooling/junit.xml" \
+            ../../tools/integration-tests/integration.test.mjs ../../tools/visual-review.test.mjs
       - run: npm run test:integration
       - name: Upload browser visual reviews
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: webxr-visual-review
-          path: clients/webxr/tests/integration-tests/test-results/
+          path: |
+            Review Data/webxr_golden-path.mp4
+            Review Data/webxr/
+            Review Data/unit/webxr/
+            Review Data/unit/integration-tooling/
+            Review Data/coverage/webxr/
+          retention-days: 14
+          if-no-files-found: warn
+
+  manipulation-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install official planning runtime
+        run: GIT_LFS_SKIP_SMUDGE=1 python -m pip install -e "dimos[planning] @ git+https://github.com/dimensionalOS/dimos.git@$(cat .dimos-revision)" -e "./dimos-ar[manipulation,dev]"
+      - name: Verify official mock manipulation contract
+        run: python dimos-ar/tools/run_mock_manipulation_contract.py
+
+      - name: Upload official mock diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mock-manipulation-reports
+          path: Review Data/mock-manipulation/
           retention-days: 14
           if-no-files-found: warn

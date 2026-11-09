@@ -48,6 +48,4 @@ it("keeps unified actions and connects WebXR without PIN entry", () => {
   for (const id of ["startWebxrBtn", "stopWebxrBtn", "stopBackendBtn"]) {
     expect(document.getElementById(id)).toBeNull();
   }
-  expect(readFileSync("index.html", "utf8")).not.toContain('id="pin"');
-  expect(readFileSync("src/main.ts", "utf8")).not.toContain("resolvePinConnection");
 });

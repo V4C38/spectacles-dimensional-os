@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from armodule import BLUEPRINT_CLI, ProcessManager
+import pytest
+
+from armodule import ProcessManager
 
 
 def test_start_argv_discovers_when_no_robot_ip(tmp_path: Path) -> None:
@@ -52,14 +54,6 @@ def test_setup_argv_clone_vs_python(tmp_path: Path) -> None:
     assert "--dimos-ref" not in existing
 
 
-def test_setup_sh_has_dimos_ref_and_no_stack() -> None:
-    source = (Path(__file__).resolve().parents[2] / "scripts" / "setup.sh").read_text(
-        encoding="utf-8"
-    )
-    assert "--dimos-ref" in source
-    assert "DIMOS_VERSION=" in source
-    assert "DIMOS_REF=" in source
-    assert "--stack" not in source
 
 
 def test_parse_dimos_refs_prefers_main_and_skips_peeled_tags() -> None:
@@ -78,29 +72,33 @@ def test_parse_dimos_refs_prefers_main_and_skips_peeled_tags() -> None:
     assert all(not item.endswith("^{}") for item in refs)
 
 
-def test_setup_and_start_require_blueprint_entry_points() -> None:
-    scripts = Path(__file__).resolve().parents[2] / "scripts"
-    lib = (scripts / "dimos_lib.sh").read_text(encoding="utf-8")
-    setup = (scripts / "setup.sh").read_text(encoding="utf-8")
-    start = (scripts / "start.sh").read_text(encoding="utf-8")
-    assert 'entry_points(group="dimos.blueprints")' in lib
-    assert "unitree-go2-ar-agentic" in lib
-    assert "python_has_dimos_ar" in setup
-    assert "stale install" in setup
-    assert "python_has_dimos_ar" in start
-    assert "dimos.blueprints" in start
+@pytest.mark.parametrize("script, arguments, error", [
+    ("setup.sh", ["--dimos-ref"], "--dimos-ref requires"),
+    ("setup.sh", ["--dimos-python"], "--dimos-python requires"),
+    ("setup.sh", ["--clone-dir"], "--clone-dir requires"),
+    ("setup.sh", ["--stack"], "Unknown option: --stack"),
+    ("start.sh", ["--blueprint"], "--blueprint requires"),
+    ("start.sh", ["--robot-ip"], "--robot-ip requires"),
+    ("start.sh", ["--stack"], "Unknown option: --stack"),
+])
+def test_shell_argument_errors_stop_before_runtime_or_installation(tmp_path, script, arguments, error):
+    import shutil
+    import subprocess
 
-
-def test_start_sh_maps_blueprint_to_cli() -> None:
-    source = (Path(__file__).resolve().parents[2] / "scripts" / "start.sh").read_text(
-        encoding="utf-8"
+    scripts = tmp_path / "launcher" / "scripts"
+    scripts.mkdir(parents=True)
+    original = Path(__file__).resolve().parents[2] / "scripts" / script
+    command = scripts / script
+    shutil.copyfile(original, command)
+    # Isolate runtime discovery from the host even if argument parsing regresses.
+    (scripts / "dimos_lib.sh").write_text(
+        'find_dimos_python() { touch "${BASH_SOURCE[0]}.invoked"; return 1; }\n'
+        'find_bootstrap_python() { touch "${BASH_SOURCE[0]}.invoked"; return 1; }\n'
+        'print_dimos_python_help() { :; }\n'
     )
-    assert BLUEPRINT_CLI["unitree_go2_ar"] == "dimos-ar.unitree-go2-ar"
-    assert BLUEPRINT_CLI["unitree_go2_ar_agentic"] == "dimos-ar.unitree-go2-ar-agentic"
-    for python_name in BLUEPRINT_CLI:
-        assert python_name in source
-    assert 'CLI_BLUEPRINT="dimos-ar.${SELECTED_BLUEPRINT//_/-}"' in source
-    assert "--replay" in source
-    assert "Host IP:" in source
-    assert "--stack" not in source
-    assert "DIMOS_AR_TAG_MOUNTS" not in source
+    completed = subprocess.run(["/bin/bash", str(command), *arguments],
+                               env={"PATH": "/usr/bin:/bin", "CI": "1"},
+                               capture_output=True, text=True, timeout=5, check=False)
+    assert completed.returncode == 1
+    assert error in completed.stderr
+    assert not (scripts / "dimos_lib.sh.invoked").exists()

@@ -21,10 +21,11 @@ void strokeMetrics(out vec3 a, out vec3 b, out vec3 p, out vec2 normal,
     vec2 uv3 = system.getSurfaceUVCoord3();
     vec2 uv4 = system.getSurfaceUVCoord4();
     vec2 uv5 = system.getSurfaceUVCoord5();
-    mat4 viewWorld = system.getMatrixViewWorld();
+    // armWorld already applies the link pose; exclude the object's model matrix.
+    mat4 view = system.getMatrixView();
     mat4 projection = system.getMatrixProjection();
-    a = (viewWorld * vec4(armWorld(vec3(uv4.y, uv5.x, uv5.y)), 1.0)).xyz;
-    b = (viewWorld * vec4(armWorld(vec3(uv1.x, uv1.y, uv2.x)), 1.0)).xyz;
+    a = (view * vec4(armWorld(vec3(uv4.y, uv5.x, uv5.y)), 1.0)).xyz;
+    b = (view * vec4(armWorld(vec3(uv1.x, uv1.y, uv2.x)), 1.0)).xyz;
     viewport = vec2(max(1.0, ViewportHeightPx) * abs(projection[1][1] / projection[0][0]), max(1.0, ViewportHeightPx));
     vec4 ca = projection * vec4(a, 1.0);
     vec4 cb = projection * vec4(b, 1.0);

@@ -126,7 +126,7 @@ def generate(base: dict[str, Any], custom: dict[str, Any], parameter: dict[str, 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", type=Path, required=True, help="Licensed Lens Studio 5.15 .app")
-    parser.add_argument("--source-graph", type=Path, default=SHADERS / "AnimatedNoiseWaves.ss_graph")
+    parser.add_argument("--source-graph", type=Path, default=Path(__file__).with_name("templates") / "AnimatedNoiseWaves.ss_graph")
     parser.add_argument("--sources", type=Path, default=SHADERS, help="Readable .customCode sources")
     parser.add_argument("--out", type=Path, required=True, help="Explicit output directory")
     args = parser.parse_args()

@@ -45,3 +45,62 @@ async def test_native_goal_backlog_is_bounded_and_cancel_retires_pending():
     finally:
         release.set()
         await service.close()
+
+
+@pytest.mark.asyncio
+async def test_explicit_stop_recovers_only_after_native_stop_is_confirmed():
+    runtime = Mock()
+    runtime.ar_navigation_goal.side_effect = TimeoutError("unknown outcome")
+    runtime.ar_navigation_recover.return_value = False
+    service = NavigationControlService(runtime, lambda: ("epoch", 3), Mock())
+    try:
+        service.submit(PoseStamped(ts=1), "epoch", 1)
+        await service._worker
+        assert service.faulted
+        assert not service.submit(PoseStamped(ts=2), "epoch", 2)
+        service.cancel()
+        await service._recovery
+        assert service.faulted
+        runtime.ar_navigation_recover.return_value = True
+        service.cancel()
+        await service._recovery
+        assert not service.faulted
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_cannot_overtake_an_actual_timed_out_native_goal():
+    entered, release = threading.Event(), threading.Event()
+    runtime = Mock()
+
+    def goal(*args):
+        entered.set()
+        assert release.wait(3)
+        return True
+
+    runtime.ar_navigation_goal.side_effect = goal
+    runtime.ar_navigation_recover.return_value = True
+    service = NavigationControlService(runtime, lambda: ("epoch", 3), Mock())
+    call = service._rpc.call
+
+    async def short_call(method, *args, **kwargs):
+        if method == "ar_navigation_goal":
+            kwargs["timeout"] = 0.02
+        return await call(method, *args, **kwargs)
+
+    service._rpc.call = short_call
+    try:
+        service.submit(PoseStamped(ts=1), "epoch", 1)
+        assert await asyncio.to_thread(entered.wait, 1)
+        await service._worker
+        service.cancel()
+        await asyncio.sleep(0.05)
+        assert service.faulted
+        runtime.ar_navigation_recover.assert_not_called()
+        release.set()
+        await service._recovery
+        assert not service.faulted
+    finally:
+        release.set()
+        await service.close()

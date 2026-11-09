@@ -7,7 +7,7 @@ import pytest
 
 from dimos.ar.manipulation.protocol import ManipulationRequest
 from dimos.ar.replication.interaction import InteractionRequest
-from dimos.ar.test_module import _module_with_policy
+from test_support.module import _module_with_policy
 
 
 def arm_module():
@@ -154,7 +154,7 @@ def test_repeated_equal_target_does_not_revoke_selected_plan():
 
 def test_uncertain_execution_keeps_robot_busy_until_explicit_confirmed_stop():
     module = arm_module()
-    module._pending_arm_motion.add("execute")
+    module._interaction.begin_manipulation_motion("execute")
     module._on_manipulation_result(
         ManipulationRequest("execute", "execute", "arm", {}),
         {"status": "uncertain", "code": "rpc_uncertain"},
@@ -225,8 +225,6 @@ async def test_native_agent_resume_refusal_restores_manual_mode():
 
 def test_terminal_operation_identity_does_not_keep_the_robot_locked():
     module = arm_module()
-    module._pending_arm_motion.clear()
-    module._arm_uncertain = module._arm_stop_pending = False
     for execution in ("completed", "aborted", "idle"):
         module._on_manipulation_snapshot({
             "available": True, "execution": execution,
@@ -249,8 +247,10 @@ def test_confirmed_cancel_clears_its_draft_but_never_a_successor(current_lease):
 def test_cancel_bypasses_motion_busy_and_confirmed_stop_fences_late_acceptance():
     module = arm_module()
     authority = module._interaction.authority
-    module._arm_uncertain = module._arm_native_busy = True
-    module._interaction.set_motion_busy(True)
+    module._interaction.observe_manipulation_result(
+        ManipulationRequest("uncertain", "execute", "arm", {}), {"status": "uncertain"}
+    )
+    module._interaction.observe_manipulation_snapshot({"available": True, "execution": "uncertain"})
     prior_revision = module._interaction.revision
     module._on_manipulation_request(ManipulationRequest("stop", "cancel", "arm", {
         "epoch": module._interaction.epoch, "lease_id": authority.lease_id, "sequence": 1,
@@ -321,4 +321,38 @@ def test_reset_admission_clears_only_its_group_draft_and_fences_native_work():
     assert module._interaction.target is None
     assert module._interaction.snapshot()["targets"] == [other.wire()]
     assert module._interaction.motion_busy
-    assert "reset" in module._pending_arm_motion
+    assert module._interaction.manipulation_motion_pending("reset")
+
+
+@pytest.mark.parametrize("action", ["execute", "reset_joints", "prepare_shutdown"])
+def test_released_target_motion_reserves_revision_after_revoke(action):
+    import time
+
+    from dimos.ar.replication.manipulation_authority import ManipulationAuthorityFence
+
+    module = arm_module()
+    owner = module._interaction
+    authority, target = owner.authority, owner.target
+    assert authority is not None and target is not None
+    module._on_interaction_request(InteractionRequest(
+        "release", "release", owner.epoch, lease_id=authority.lease_id, sequence=1,
+        position=target.position, orientation=target.orientation,
+    ), "owner")
+    assert owner.authority is None
+    epoch, lease, retired_revision, _reason = module._manipulation_service.revoke.call_args.args
+    fence = ManipulationAuthorityFence()
+    assert fence.revoke(epoch, lease, retired_revision)
+    module._on_manipulation_request(ManipulationRequest(
+        "successor", action, "arm", {"epoch": epoch, "target_revision": target.revision,
+                                    "plan_id": "reviewed-plan", "speed_scale": 0.2},
+    ), "owner", 0)
+    request = module._manipulation_service.submit.call_args.args[0]
+    assert request.payload["authority_revision"] > retired_revision
+    assert request.payload["authority_revision"] == owner.revision
+    if action != "reset_joints":
+        assert request.payload["target_revision"] == target.revision
+    admission = fence.admit(request.payload)
+    assert admission is not None
+    assert admission.deadline > time.monotonic()
+    assert not fence.revoke(epoch, lease, retired_revision)
+    assert fence.current(admission)

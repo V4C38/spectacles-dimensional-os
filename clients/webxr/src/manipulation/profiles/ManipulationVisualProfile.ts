@@ -1,6 +1,6 @@
 import type { Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
 import type { ManipulationModel } from "@dimos-ar-client/manipulation/ManipulationTypes";
-import { OPENYAM_FOREARM_BOXES } from "./OpenYAMVisualProfile";
+import { OPENYAM_FOREARM_BOXES } from "@dimos-ar-client/manipulation/ManipulationVisuals";
 
 interface ManipulationVisualProfile {
   rootBoundsRotationY: number;

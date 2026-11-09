@@ -1,87 +1,18 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 import threading
 
-import numpy as np
 import pytest
 
-from dimos.ar.localization.coordinator import LocalizationCoordinator
-from dimos.ar.localization.odom_map_transform import OdomMapTransform
-from dimos.ar.localization.policy import LocalizationPolicy
-from dimos.ar.localization.pose_buffer import PoseBuffer
-from dimos.ar.localization.types import Intrinsics, LocalizedPose, Observation
+from dimos.ar.localization.types import LocalizedPose
 from dimos.ar.localization.vps.robot_observation_buffer import (
-    RobotObservationBuffer,
     RobotObservationSample,
 )
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
-
-
-def _observation(ts_server: float = 10.0) -> Observation:
-    return Observation(
-        jpeg=b"jpeg",
-        intrinsics=Intrinsics(
-            fx=100.0,
-            fy=100.0,
-            cx=50.0,
-            cy=50.0,
-            width=100,
-            height=100,
-            distortion_model="none",
-            distortion=(),
-        ),
-        camera_pose=Pose(0.0, 0.0, 0.0),
-        ts_server=ts_server,
-    )
-
-
-class _FixedLocalizer:
-    def __init__(self, result: LocalizedPose | None) -> None:
-        self.result = result
-        self.calls: list[list[Observation]] = []
-
-    async def localize(self, observations: Sequence[Observation]) -> LocalizedPose | None:
-        self.calls.append(list(observations))
-        return self.result
-
-
-def _coordinator(
-    *,
-    providers: list[str],
-    marker: _FixedLocalizer | None = None,
-    vps: _FixedLocalizer | None = None,
-    robot_sample: RobotObservationSample | None = None,
-) -> LocalizationCoordinator:
-    policy = LocalizationPolicy(providers)
-    odom_map_transform = OdomMapTransform()
-    robot_observations = RobotObservationBuffer(
-        pose_buffer=PoseBuffer(),
-        T_base_camera_optical=np.eye(4),
-    )
-    if robot_sample is not None:
-        robot_observations._samples.append(robot_sample)
-
-    class Marker:
-        def snapshot(self):
-            return self
-
-        def localize(self, observations):
-            marker.calls.append(list(observations))
-            return marker.result
-
-    return LocalizationCoordinator(
-        policy=policy,
-        odom_map_transform=odom_map_transform,
-        robot_observations=robot_observations,
-        marker=Marker() if marker is not None else None,
-        vps=vps,
-        map_code="office",
-        clock=lambda: 3.0,
-    )
+from test_support.localization import _coordinator, _FixedLocalizer, _observation
 
 
 async def test_marker_success_preserves_metric_alignment() -> None:

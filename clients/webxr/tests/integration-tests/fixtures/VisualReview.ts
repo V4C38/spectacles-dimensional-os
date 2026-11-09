@@ -4,7 +4,7 @@ import type { Page, TestInfo } from "@playwright/test";
 const reviews = new WeakMap<Page, { startedAt: number; scenes: { name: string; at: number }[] }>();
 const INCLUDED = new Set(["connected.png", "localization.png", "laser-empty-space.png", "robot-selected.png", "laser-navigation.png", "robot-control-menu.png", "agent-control-menu.png", "source-anchored-menu.png", "following-path.png", "setup-success.png", "floor-probe.png", "floor-aim-preview.png", "navigation-succeeded.png", "navigation-cancelled.png"]);
 
-export function startVisualReview(page: Page): void { reviews.set(page, { startedAt: Date.now(), scenes: [] }); }
+export function startVisualReview(page: Page): void { if (process.env.INTEGRATION_EXTRA_MEDIA !== "1") return; reviews.set(page, { startedAt: Date.now(), scenes: [] }); }
 export function markVisualReview(page: Page, name: string): void {
   const review = reviews.get(page);
   if (!review || !INCLUDED.has(name) || review.scenes.some(scene => scene.name === name)) return;

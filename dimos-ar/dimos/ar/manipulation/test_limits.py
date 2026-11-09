@@ -80,35 +80,45 @@ def test_recovery_path_only_enters_the_margin_inward():
 def test_finger_collision_policy_keeps_visuals_and_arm_collisions():
     import pickle
 
-    from dimos.ar.manipulation.collision_model import without_finger_collisions
+    from dimos.ar.manipulation.collision_model import with_finger_self_collision_exclusion
 
     original = safe_openyam_model(make_openyam_model_config())
-    config = without_finger_collisions(original)
+    config = with_finger_self_collision_exclusion(original)
     before = ET.fromstring(original.model.load().xml)
     after = ET.fromstring(pickle.loads(pickle.dumps(config.model)).load().xml)
-    disabled = {
-        joint.find("child").attrib["link"]
-        for joint in before.findall("joint")
-        if joint.get("name") in {"joint7", "joint8"}
-    }
-    assert len(disabled) >= 2
-    original_links = {link.attrib["name"]: link for link in before.findall("link")}
-    for link in after.findall("link"):
-        name = link.attrib["name"]
-        assert [ET.tostring(v) for v in link.findall("visual")] == [
-            ET.tostring(v) for v in original_links[name].findall("visual")
-        ]
-        if name in disabled:
-            assert not link.findall("collision")
-        else:
-            assert len(link.findall("collision")) == len(original_links[name].findall("collision"))
+    assert ET.tostring(after) == ET.tostring(before)
+    assert ("tip_left", "tip_right") in config.collision_exclusion_pairs
+    assert not original.collision_exclusion_pairs
+    assert all(
+        "tip_left" in pair or "tip_right" in pair
+        for pair in config.collision_exclusion_pairs
+    )
 
 
 def test_collision_model_survives_blueprint_config_serialization():
-    from dimos.ar.manipulation.collision_model import without_finger_collisions
+    from dimos.ar.manipulation.collision_model import with_finger_self_collision_exclusion
     from dimos.manipulation.planning.spec.config import RobotModelConfig
 
-    config = without_finger_collisions(safe_openyam_model(make_openyam_model_config()))
+    config = with_finger_self_collision_exclusion(safe_openyam_model(make_openyam_model_config()))
     restored = RobotModelConfig.model_validate(config.model_dump())
     assert restored.model.load().xml == config.model.load().xml
     assert restored.model.load().joints == config.model.load().joints
+
+
+def test_openyam_collision_compatibility_preserves_exact_visual_geometry():
+    from dimos.ar.manipulation.collision_model import with_openyam_collision_geometry
+
+    original = safe_openyam_model(make_openyam_model_config())
+    config = with_openyam_collision_geometry(original)
+    before = ET.fromstring(original.model.load().xml)
+    after = ET.fromstring(config.model.load().xml)
+    links = {link.attrib["name"]: link for link in before.findall("link")}
+    for link in after.findall("link"):
+        visuals = links[link.attrib["name"]].findall("visual")
+        assert len(link.findall("collision")) == len(visuals)
+        for collision, visual in zip(link.findall("collision"), visuals, strict=True):
+            assert ET.tostring(collision.find("geometry")) == ET.tostring(visual.find("geometry"))
+            assert ET.tostring(collision.find("origin")) == ET.tostring(visual.find("origin"))
+    assert config.joint_names == original.joint_names
+    assert config.model.load().package_paths == original.model.load().package_paths
+    assert with_openyam_collision_geometry(config) is config

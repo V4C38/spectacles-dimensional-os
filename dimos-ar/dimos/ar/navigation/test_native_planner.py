@@ -175,3 +175,27 @@ def test_native_adapter_constructs_with_installed_planner_configuration():
     config = getattr(module._planner, "_global_config", None)
     if config is not None:
         assert config.robot_width == 0.73
+
+
+def test_recovery_requires_an_available_planner_and_confirmed_empty_goal():
+    import time
+
+    from dimos.ar.navigation.control_fence import NavigationControlFence
+    from dimos.ar.navigation.native_planner import ARReplanningAStarPlanner
+
+    module = object.__new__(ARReplanningAStarPlanner)
+    module._ar_fence = NavigationControlFence()
+    module._ar_stop_write_failed = False
+    module._emit_stop_velocity = Mock()
+    lock = threading.Lock()
+    module._planner = SimpleNamespace(_lock=lock, _current_goal=object())
+    module._planner.retire_goal_requests = Mock(side_effect=lambda: setattr(module._planner, "_current_goal", None))
+    lock.acquire()
+    try:
+        assert not module.ar_navigation_recover("epoch", 1, time.monotonic() + 0.5)
+        module._planner.retire_goal_requests.assert_not_called()
+    finally:
+        lock.release()
+    assert module.ar_navigation_recover("epoch", 2, time.monotonic() + 0.5)
+    module._planner.retire_goal_requests.assert_called_once()
+    assert not module._ar_fence.allowed()

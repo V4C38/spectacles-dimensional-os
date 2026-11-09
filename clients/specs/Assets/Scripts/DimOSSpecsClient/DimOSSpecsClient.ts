@@ -2,7 +2,7 @@ import { SpecsManipulationController } from "./manipulation/SpecsManipulationCon
 import { applyLocalizationNotification } from "./../DimOSARClient/presentation/NotificationCenter";
 import { RobotSelection } from "../DimOSARClient/robot/RobotSelection";
 import { SpecsNavigationInput } from "./navigation/SpecsNavigationInput";
-import { SpecsNavigationTargetPriority } from "./navigation/SpecsNavigationTargetPriority";
+import { SpecsTargetPriority } from "./presentation/SpecsTargetPriority";
 import TargetProvider, { type InteractableHitInfo } from "SpectaclesInteractionKit.lspkg/Providers/TargetProvider/TargetProvider";
 import { ViewerNotificationPresenter } from "./presentation/ViewerNotificationPresenter";
 import { SpecsLaserPresenter } from "./presentation/SpecsLaserPresenter";
@@ -70,7 +70,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
   readonly selection = new RobotSelection();
   private manipulation: SpecsManipulationController | null = null;
   private navigationInput: SpecsNavigationInput | null = null;
-  private navigationTargetPriority: SpecsNavigationTargetPriority<InteractableHitInfo> | null = null;
+  private targetPriority: SpecsTargetPriority<InteractableHitInfo> | null = null;
   private previewRoute: NavGoalPresenter | null = null;
   private notifications: ViewerNotificationPresenter | null = null;
   private lasers: SpecsLaserPresenter | null = null;
@@ -190,7 +190,11 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     this.navGoalPresenter = navGoalPresenter;
     this.previewRoute = new NavGoalPresenter(parent);
     this.navigationInput = new SpecsNavigationInput(navigationController, this.robotPresenter);
-    this.navigationTargetPriority = new SpecsNavigationTargetPriority(TargetProvider,
+    this.targetPriority = new SpecsTargetPriority(TargetProvider);
+    this.targetPriority.addPolicy(
+      object => this.manipulation?.renderer.ownsMesh(object) === true,
+      object => this.manipulation?.renderer.ownsHandle(object) === true);
+    this.targetPriority.addPolicy(
       object => this.robotPresenter.ownsTarget(object), object => navigationController.ownsPriorityTarget(object));
     this.notifications = new ViewerNotificationPresenter(this.cameraObject);
     this.createEvent("OnPauseEvent").bind(() => {
@@ -222,8 +226,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       this.destroyed = true;
       this.uiPresenter.dispose();
       this.unsubscribeSelection?.(); this.unsubscribeSelection = null;
-      this.manipulation?.dispose(); this.manipulation = null;
-      this.navigationTargetPriority?.dispose();
+      this.targetPriority?.dispose(); this.targetPriority = null;
       this.manipulation?.dispose(); this.manipulation = null;
       const dispatcher = LensConfig.getInstance().updateDispatcher;
       if (this.laserStart) dispatcher.removeEvent(this.laserStart);
@@ -434,7 +437,9 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     if (this.session?.view().capabilities?.estop.available !== true) return;
     try {
       this.navigationInput?.reset(); this.speechController?.endRecording(true);
-      if (this.navigationController?.interaction.snapshot().goalActive) this.navigationController.cancel();
+      if (this.navigationController?.interaction.snapshot().goalActive) {
+        if (!this.navigationController.cancel()) throw new Error("Stop request could not be sent");
+      }
       else this.session.requestEstop();
       this.notifications?.show({ text: "Emergency stop requested", tone: "danger", glyph: "stop", priority: 100 });
     } catch { this.notifications?.show({ text: "Stop request failed", tone: "danger", glyph: "stop", priority: 100 }); }

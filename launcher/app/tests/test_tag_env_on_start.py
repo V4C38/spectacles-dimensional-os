@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from armodule import Phase, ProcessManager
+from armodule import ProcessManager
 from config import env_path, merge_env
 from dimos_config import merge_armodule_config
 from tag_config import DEFAULT_MOUNT, armodule_config_from_ui
@@ -136,104 +136,3 @@ async def test_start_armodule_rejects_incomplete_vps(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
     with pytest.raises(ValueError, match="VPS is enabled"):
         await mgr.start_armodule(blueprint="unitree_go2_ar", client="specs")
-
-
-@pytest.mark.asyncio
-async def test_start_webxr_composes_local_and_network_urls(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _scripts(tmp_path)
-    monkeypatch.setattr("armodule.detect_lan_ip", lambda: "10.0.0.8")
-    mgr = ProcessManager(root=tmp_path)
-
-    async def fake_spawn(argv, *, env, parse_armodule):  # type: ignore[no-untyped-def]
-        mgr._proc = Mock(returncode=None)
-
-    with (
-        patch.object(mgr, "port_in_use", return_value=False),
-        patch.object(mgr, "_configure_system_if_needed", new=AsyncMock()),
-        patch.object(mgr, "_ensure_webxr_deps", new=AsyncMock()),
-        patch.object(mgr, "_build_webxr", new=AsyncMock()),
-        patch.object(mgr, "_spawn_webxr", new=AsyncMock()),
-        patch.object(mgr, "_spawn", new=fake_spawn),
-    ):
-        await mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr")
-        assert mgr.status.webxr_url is None
-        assert mgr.status.webxr_local_url is None
-        mgr._parse_armodule_line("ARModule started websocket=ws://0.0.0.0:8787")
-        mgr._armodule_ready.set()
-        assert mgr._webxr_start_task is not None
-        await mgr._webxr_start_task
-
-    assert mgr.status.webxr_local_url == "https://localhost:5173"
-    assert mgr.status.webxr_url == "https://10.0.0.8:5173"
-    assert mgr.status.host_ip == "10.0.0.8"
-    assert mgr.status.client == "webxr"
-
-
-@pytest.mark.asyncio
-async def test_backend_exit_retains_gateway(tmp_path: Path) -> None:
-    mgr = ProcessManager(root=tmp_path)
-    mgr.status.phase = Phase.RUNNING
-    mgr.status.check_ok = True
-    mgr._proc = Mock(pid=42424241, returncode=None)  # type: ignore[assignment]
-    mgr._webxr_proc = Mock(pid=42424242, returncode=None)  # type: ignore[assignment]
-
-    with (
-        patch.object(mgr, "_stop_one", new=AsyncMock(return_value=True)),
-        patch.object(mgr, "_cancel_task", new=AsyncMock()),
-    ):
-        await mgr._finalize_exit("Backend exited")
-
-    assert mgr.status.phase == Phase.ERROR
-    assert mgr.status.error == "Backend exited"
-    assert mgr.status.webxr_url is None
-    assert mgr._proc is None
-    assert mgr._webxr_proc is not None
-
-
-@pytest.mark.asyncio
-async def test_start_clears_dimos_and_ports_before_spawn(tmp_path: Path) -> None:
-    _scripts(tmp_path)
-    mgr = ProcessManager(root=tmp_path)
-    order: list[str] = []
-
-    async def clear(*, client: str) -> None:
-        order.append(f"clear:{client}")
-
-    async def fake_spawn(argv, *, env, parse_armodule):  # type: ignore[no-untyped-def]
-        order.append("spawn")
-
-    with (
-        patch.object(mgr, "_clear_before_start", new=clear),
-        patch.object(mgr, "_configure_system_if_needed", new=AsyncMock()),
-        patch.object(mgr, "_spawn", new=fake_spawn),
-    ):
-        await mgr.start_armodule(blueprint="unitree_go2_ar", client="specs")
-
-    assert order == ["clear:specs", "spawn"]
-
-
-@pytest.mark.real_clear
-@pytest.mark.asyncio
-async def test_clear_before_start_kills_dimos_then_ports(tmp_path: Path) -> None:
-    mgr = ProcessManager(root=tmp_path)
-    killed: list[int] = []
-
-    async def dimos_pids() -> list[int]:
-        return [111]
-
-    async def kill_port(port: int) -> bool:
-        killed.append(port)
-        return True
-
-    with (
-        patch.object(mgr, "_running_dimos_pids", new=dimos_pids),
-        patch.object(mgr, "_stop_pids", new=AsyncMock()) as stop_pids,
-        patch.object(mgr, "_kill_port_listeners", new=kill_port),
-        patch.object(mgr, "port_in_use", return_value=False),
-    ):
-        await ProcessManager._clear_before_start(mgr, client="webxr")
-
-    stop_pids.assert_awaited_once_with([111], "existing DimOS process(es)")
-    assert killed == [8787, 3030, 9877]

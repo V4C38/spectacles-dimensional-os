@@ -357,6 +357,7 @@ connection, and replies with `hello`.
     "footprint_m": [0.70, 0.50],
     "base_height_m": 0.33
   },
+  "localization": { "providers": ["fiducial_marker", "vps"] },
   "capabilities": {
     "lidar": { "available": true, "reason": null },
     "navigation": {
@@ -387,6 +388,7 @@ connection, and replies with `hello`.
 | `capabilities.*.reason` | string \| null | Human-readable, non-null exactly when `available` is `false`. |
 | `capabilities.navigation.nav_goal` | `{ available, reason, preview? }` | Can send `nav_goal_request`. Always present. Optional boolean `preview` defaults to false. |
 | `capabilities.navigation.nav_joystick` | `{ available, reason }` | Can send `nav_joystick_request`. Always present. |
+| `localization.providers` | `("fiducial_marker" \| "vps")[]` | Optional localization metadata. Configured provider inventory in canonical order: fiducial marker, then VPS. An explicit empty array means unavailable; absent metadata means an older v2 server did not advertise its inventory. |
 
 `navigation.available` is true when any nested input is available. Clients that
 need a specific input check that nested key; Specs point-and-click checks
@@ -398,13 +400,17 @@ ARModule keeps `ts_server - ts_client` as the per-connection offset. The client
 may use the same pair for its own UI timing; localization does not require the
 client to know server time.
 
-Which localization provider is configured is a deployment fact and is not on
-the wire. `hello.capabilities.localization.available` is `false` (with `reason`)
-when no provider is configured. `lidar`, `navigation`, and `estop` may also be
+ARModule advertises its configured localization inventory as
+`hello.localization.providers`. Clients use this inventory for provider labels
+(`Fiducial marker` and `VPS`), rather than inferring a provider from transient
+capture geometry. The metadata is additive and optional in protocol v2: missing
+metadata is unknown, while an explicit empty array means no provider is configured.
+`hello.capabilities.localization.available` is `false` (with `reason`) when no
+provider is configured. `lidar`, `navigation`, and `estop` may also be
 `available=false` with `reason` when the selected robot profile does not offer
 them. `agent` is `available=false` with `reason` when the current blueprint
-did not configure a DimOS agent. Capture geometry is a `capture_policy` on each
-`localization_observations_request`, not a hello field.
+did not configure a DimOS agent. Capture geometry remains a `capture_policy` on
+each `localization_observations_request`; it does not identify the provider inventory.
 
 ## Outbound messages (server → client)
 

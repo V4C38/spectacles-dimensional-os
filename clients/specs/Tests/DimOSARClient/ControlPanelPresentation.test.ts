@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
-import { CONTROL_PANEL_SCALE, CONTROL_PANEL_CONTROLS, controlPanelTab, CONTROL_PANEL_COPY, CONTROL_PANEL_LAYOUT, robotBadgeText, sensorStatusText, localizationGuidance, localizationProviderLabel } from "../../Assets/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
+import { CONTROL_PANEL_SCALE, CONTROL_PANEL_CONTROLS, controlPanelTab, CONTROL_PANEL_COPY, CONTROL_PANEL_LAYOUT, robotBadgeText, sensorStatusText, localizationGuidance, localizationProviderLabel, localizationKind, availableFeatures } from "../../Assets/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
+import { helloAt } from "../fixtures/SessionFixture";
 
 it("uses one set of panel proportions and command labels across hosts", () => {
   expect(CONTROL_PANEL_LAYOUT.width / CONTROL_PANEL_LAYOUT.height).toBeCloseTo(0.9 / 0.76);
@@ -7,10 +8,34 @@ it("uses one set of panel proportions and command labels across hosts", () => {
   expect(robotBadgeText("Go2", "Connected", true, "Following Path")).toBe("Go2\nSelected · Following path");
   expect(robotBadgeText("Go2", "Disconnected", true, "Idle")).toBe("Go2\nDisconnected");
 });
-it("keeps alignment guidance tied to the capture policy", () => {
-  expect(localizationProviderLabel("mixed")).toBe("AprilTag + VPS");
+it("names fiducial localization and keeps guidance appropriate to the providers", () => {
+  expect(localizationProviderLabel("marker")).toBe("Fiducial marker");
+  expect(localizationProviderLabel("mixed")).toBe("Fiducial marker + VPS");
   expect(localizationGuidance("mixed")).toBe("Frame the tag, or look around the mapped space.");
   expect(localizationGuidance("unavailable")).toBe("Skip to continue without localization.");
+});
+it("prefers configured provider inventory over a task-specific capture policy", () => {
+  const hello = helloAt(0);
+  const view = { hello, capabilities: hello.capabilities };
+  for (const [providers, kind] of [
+    [["fiducial_marker"], "marker"], [["vps"], "vps"],
+    [["fiducial_marker", "vps"], "mixed"], [[], "unavailable"],
+  ] as const) {
+    hello.localization = { providers: [...providers] };
+    expect(localizationKind(view, "any_angle")).toBe(kind);
+  }
+  hello.localization = undefined;
+  expect(localizationKind(view, "robot_los_required")).toBe("marker");
+  expect(localizationKind(view, "robot_los_preferred")).toBe("mixed");
+  expect(localizationKind(view, null)).toBe("unknown");
+  expect(localizationKind({ hello: null, capabilities: null }, "any_angle")).toBe("unknown");
+  hello.capabilities.localization = { available: false, reason: "off" };
+  hello.localization = { providers: ["vps"] };
+  expect(localizationKind(view, "any_angle")).toBe("unavailable");
+});
+it("uses a plain single-line Capabilities prefix for available features", () => {
+  expect(availableFeatures(helloAt(0).capabilities)).toBe("Capabilities: Navigation, LiDAR, Localization, Emergency Stop");
+  expect(availableFeatures(null)).toBe("Capabilities: None");
 });
 it("formats actual sensor facts without confusing received points with the local limit", () => {
   expect(sensorStatusText(true, 2300, "Not capturing", "Tracking", "—")).toBe("Received: 2300 points · Range shared with clients\nCamera: Not capturing\nTracking · Surfaces: —");

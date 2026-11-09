@@ -7,13 +7,14 @@ transport, camera capture, recognition and tracked input poses are deterministic
 fixtures. Physical hand tracking, recognition quality, hardware audio playback
 and on-device performance still need Spectacles checks.
 
-Start the 5.15 CLAD app and its MCP server, then reserve the MCP session:
+Install the official Python MCP SDK into your chosen tools environment and activate it. Set `DIMOS_CLAD_ROOT` to your CLAD installation root (default `~/.local/share/ls515-clad`), containing the app and `ls515-clad/state/mcp.json`, or pass `--app` and `--mcp-config` explicitly. Start the 5.15 CLAD app and its MCP server, then reserve the MCP session:
 
 ```sh
-/Volumes/M2_EXT_1/CLAD/tools-venv/bin/python clients/specs/tools/review.py
+python3 clients/specs/tools/review.py
 ```
 
-The default `--suite all` runs both suites. Use `--suite golden` or
+The default `--suite all` runs the golden and regression suites plus the manipulation
+and navigation-overlap probes. Use `--suite golden` or
 `--suite regression` for diagnosis. The golden path follows all 25 shared
 chapters in about 103 seconds at normal speed. It records continuous rendered
 footage and performs **no screenshot exports during the flow**. The shared
@@ -21,14 +22,19 @@ finalizer extracts its stills after capture finishes. The 18 regression/platform
 separately and export native Preview PNGs after their assertions. Brief outcome
 animations use frames from the continuous recording.
 
-Results default to `clients/specs/Tests/integration-tests/test-results/<runId>/`:
+Results default to `Review Data/specs/<runId>/`:
 
-- `golden-path.mp4`: readable 1280×900, 30 fps, 90–120 second continuous walkthrough.
+- `golden-path.mp4`: readable 1280×900, 30 fps, 90–120 second continuous walkthrough, produced by default.
 - `01_setup_entry.png`, etc.: catalog-ordered case evidence, matching WebXR names.
 - `results.json`: catalog coverage, assertion results and source identity.
 - `golden/` and `regression/`: per-suite manifests, events, native logs and evidence.
 - `<suite>/diagnostics/`: original recording, frame-clock metadata and recorder log.
 - `editor-restoration.json`: source project restoration result.
+
+After a complete successful `all` or `golden` run and the production source handoff
+audit, the latest video is atomically published as **`Review Data/specs_golden-path.mp4`**.
+Failed, incomplete, focused-probe and `--keep-open` runs preserve the prior video.
+This stable publication path also applies when `--output-root` changes run storage.
 
 The raw recording contains only Preview content, including aspect-preserving
 padding when needed. Chapter framing uses camera-projected UI/world bounds.
@@ -45,12 +51,16 @@ restores and resumes the real source project after success or failure. It never
 hand edits scene files. `--keep-open` is an explicit diagnostic opt-out: that
 project contains fake hardware ports and scripted UI transitions.
 
-Use `--app`, `--mcp-config`, `--work-root` and `--output-root` on other machines.
+Disposable projects default to `Review Data/specs-work/<runId>/`.
+Use `--app`, `--mcp-config`, `--work-root` and `--output-root` to override defaults.
+Quote paths containing spaces, for example `--output-root "/path/to/review evidence"`.
 The private MCP JSON contains `url` and `token`; credentials are never copied to
 projects or results. Requirements are the official Python `mcp` package, Node.js,
 FFmpeg, Xcode command-line tools, Screen Recording permission, and Accessibility
 permission for the terminal/recorder. `--recorder` selects an existing binary;
 otherwise Swift compilation is cached under `~/Library/Caches/dimos-specs-review`.
+
+Run native compilation/review and the official mock manipulation contract sequentially. Cold Lens imports can saturate the desktop and exceed the unchanged 500 ms control lease; the resulting E-stop is a valid fail-closed response, not a reason to loosen deadlines.
 
 Cold SDK imports may take several minutes. The 600-second deadline accommodates
 regression PNG exports that can each pause Preview for 30 seconds. Golden timing
@@ -64,6 +74,10 @@ runner-created disposable project and refreshes the test harness; it does not
 refresh production scripts. Use a fresh default run to validate changed source.
 Do not hot reload during recording; duplicate chapter names fail the run.
 
+Canonical full golden video and all functional/failure evidence remain enabled by
+default. Pass `--extra-media` for edited probe and supplemental review clips. A
+focused probe without `--keep-open` must also pass the restored-source audit.
+
 Run tooling checks without Lens Studio:
 
 ```sh
@@ -73,16 +87,13 @@ python3 -m unittest discover -s clients/specs/Tests/integration-tests -p 'test_*
 Focused repo-backed probes use the same runner and restoration contract:
 
 ```sh
-/Volumes/M2_EXT_1/CLAD/tools-venv/bin/python clients/specs/tools/review.py --harness clients/specs/Tests/integration-tests/HeightProfiles.ts
-/Volumes/M2_EXT_1/CLAD/tools-venv/bin/python clients/specs/tools/review.py --harness clients/specs/Tests/integration-tests/NativeInteractionProbe.ts
-/Volumes/M2_EXT_1/CLAD/tools-venv/bin/python clients/specs/tools/review.py --harness clients/specs/Tests/integration-tests/BendyLaserProbe.ts
-/Volumes/M2_EXT_1/CLAD/tools-venv/bin/python clients/specs/tools/review.py --harness clients/specs/Tests/integration-tests/NavMarkerOverlapProbe.ts
+python3 clients/specs/tools/review.py --harness clients/specs/Tests/integration-tests/BendyLaserProbe.ts
+python3 clients/specs/tools/review.py --harness clients/specs/Tests/integration-tests/NavMarkerOverlapProbe.ts
 ```
 
-`HeightProfiles` measures setup heights and fixed world top edge.
-`NativeInteractionProbe` exercises PIN/IP, follow and restart with real disabled
-or idle audio. `HeaderProbe` measures native title baselines. These diagnostic
-runs cannot substitute for complete catalog coverage.
+Setup profile heights, fixed top edge, follow controls, PIN/IP, audio reset,
+frame grabbing and header metrics belong to the shared catalog scenarios.
+Focused probes retain only additional coverage and cannot replace a full run.
 `BendyLaserProbe` verifies that the straight beam mirrors the rendered SIK cursor,
 including during motion and held input, and checks width, opacity, start offset,
 tracking loss, direct input and native ray-only targets. `NavMarkerOverlapProbe`
@@ -95,18 +106,21 @@ has `name === caseId`; additional measurements are allowed. Scenes include
 catalog ID, duration and optional normalized capture bounds. Completion alone
 cannot pass a suite: mandatory cases need actual assertions and image evidence.
 The Source byte/compiler audit gates overall success and is saved under
-`diagnostics/source-audit/`. Old result directories are removed with the shared safe cleanup command only
-after a complete, passing `all` run; failed and partial runs never trigger cleanup.
+`diagnostics/source-audit/`. Earlier passing full runs in the default results directory may be removed only
+after a complete, passing `all` run. Failed, partial and unclassified evidence stays;
+explicit output directories never trigger automatic cleanup of neighboring runs.
 
 # Rebuilding world shaders
 
 Readable shader code is checked in under `Assets/Materials/Shaders/*.customCode`.
+The custom-node template lives under `tools/shaders/templates/`, outside shipped
+Lens assets.
 The legacy graph generator uses those files, the installed 5.15 Empty graph and
 an existing project custom-code/float-parameter node as templates:
 
 ```sh
 python3 clients/specs/tools/shaders/generate.py \
-  --app '/Volumes/M2_EXT_1/CLAD/LS 5.15 CLAD.app' \
+  --app "$DIMOS_CLAD_ROOT/LS 5.15 CLAD.app" \
   --out /tmp/specs-shaders
 ```
 
@@ -134,7 +148,10 @@ python3 clients/specs/tools/compile_scripts.py --include clients/specs/Tests/int
 ```
 
 The command copies current scripts and cached package declarations into a disposable
-directory, writes `compile.log` and `result.json`, and never upgrades the project.
+`Review Data/native-compile/compile-<unique>/` directory, writes `compile.log` and
+`result.json`, and never upgrades the project. Use `--output-root` to select another directory.
+`--include` uses the same harness preparation as Preview, including sibling fixtures
+and the generated shared catalog; stale Review assets from the cache are excluded.
 A pass proves native TypeScript/component compilation only, not GPU rendering,
 scene wiring, stereo alignment or on-device performance.
 
@@ -156,43 +173,9 @@ overlap, and camera listener counts must return to zero between runtime batches.
 Compare FPS/worst-frame time and a Spectacles Monitor trace; desktop virtual-time
 budget tests cannot establish headset thermal, memory or stereo behavior.
 
-## Lens Studio integration-test focus limit
+## Native execution policy
 
-Lens Studio may take focus to start a native integration recording. During the test,
-allow at most **three focus-restoration attempts in total**, spaced at least one
-second apart. The budget does not reset when focus is briefly restored, between
-chapters/suites, or when a process restarts. Never continuously reactivate Lens
-Studio while the user is using another application.
-
-After the budget is exhausted and focus is lost again, abort the integration run,
-stop its recorder and scripted interactions, retain diagnostic evidence, and notify
-the user that testing stopped because of the focus limit. Do not retry, restart,
-open/raise another Lens window for cleanup, or continue another native suite until
-the user explicitly authorizes resuming. Time passing is not authorization.
-An earlier inability to restore focus may also abort the run. Any resumed run gets
-a new budget only after that explicit user authorization.
-
-## Integration Test Harness
-
-The production scene contains a scene object named **Integration Test Harness**
-with the **Integration Test Harness** script component. Its **Auto Run** (`autoRun`)
-boolean defaults to **false** and must remain false for normal use and device builds.
-The component also forces Auto Run off on Spectacles. Every test scenario checks
-both this switch and `global.deviceInfoSystem.isEditor()` before registering events
-or replacing dependencies: tests cannot run on the device even if the switch was
-saved on accidentally.
-
-Integration tests run only when explicitly requested. The native test runner copies
-the project, attaches the optional scenario to **Integration Test Harness**, and uses
-Lens Studio MCP to set **Auto Run = true** in that disposable editor project. It
-switches Auto Run off on exit, including failure and focus-limit abort, without
-raising the editor. The normal production project retains Auto Run off and contains
-no `Assets/Review` fixtures. Never deploy a disposable test copy.
-
-Before handing the lens back for device testing, verify the production project is
-open, Auto Run is false, no Review scenario assets/hosts are present, and the native
-compiler cache matches production scripts. A test abort must be reported; it must
-never be described as a production build ready for device testing without this check.
+[AGENTS.md](../../../AGENTS.md#lens-studio-integration-test-focus-limit) owns the focus-restoration budget, abort/resume rules, editor-only harness requirements and production handoff checks. Follow that policy for every run. The runner shares one budget across suites, disables the disposable harness on exit, and gates success on restored production source with Auto Run false and matching compiler bytes. Never deploy a disposable test copy.
 
 ## Specs arm rendering
 
@@ -206,8 +189,11 @@ queue. Global fades, poses and warning colors remain at display rate.
 
 SpecsArmPanelPresenter owns the native Frame, attached/pinned state and placement.
 Controls live under Frame.content; the frame's top center attaches 13 cm below the
-localized base-label origin in the viewing plane. Grabbing/resizing pins it; Pin
+localized arm-base origin in the viewing plane. Grabbing/resizing pins it; Pin
 returns it to the current base. Missing arm root poses hide the frame rather than
 placing it at odometry zero. The full native command now includes ManipulationProbe,
 which checks Frame ancestry, anchor geometry and outline upload budgets. These
 checks remain opt-in through Integration Test Harness and cannot run on device.
+
+Successful non-golden raw recordings are discarded after validation unless extra
+media is requested. Golden footage, screenshots, logs and failure recordings remain.

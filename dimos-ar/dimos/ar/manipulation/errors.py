@@ -22,3 +22,7 @@ class ManipulationError(ValueError):
         super().__init__(message)
         self.code = code
         self.failed_joints = failed_joints or []
+
+
+class ExecutionNotStartedError(ManipulationError):
+    """A checked admission failure that guarantees no motion was dispatched."""

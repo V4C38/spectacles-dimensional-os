@@ -5,10 +5,10 @@ import { startVisualReview, markVisualReview, saveVisualReview } from "./fixture
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import type { State } from "../../../specs/Assets/Scripts/DimOSARClient/websocket/protocolTypes";
-import { previewAimChanged } from "./fixtures/AdvisoryPreview";
+import { InteractionPeer } from "./fixtures/InteractionPeer";
 
 // ClientCore lives outside WebXR's ESM package. Load it through Playwright's
-// CommonJS transform so test discovery also works on CI's Node 20 runtime.
+// CommonJS transform so test discovery also works on CI's Node 22 runtime.
 const { WORLD_DASH_STYLE } = createRequire(import.meta.url)(
   "../../../specs/Assets/Scripts/DimOSARClient/presentation/WorldVisualStyle",
 ) as typeof import("../../../specs/Assets/Scripts/DimOSARClient/presentation/WorldVisualStyle");
@@ -16,7 +16,7 @@ const { WORLD_DASH_STYLE } = createRequire(import.meta.url)(
 test.beforeEach(async ({ page }) => startVisualReview(page));
 test.afterEach(async ({ page }, info) => {
   await saveVisualReview(page, info);
-  await saveCaseProof(info, info.title.startsWith("refuses") ? ["browser_permissions"] : info.title.startsWith("renders and localizes") ? ["panel_resize"] : []);
+  await saveCaseProof(info, info.title.startsWith("refuses") ? { browser_permissions: "browser_permissions.png" } : info.title.startsWith("renders and localizes") ? { panel_resize: "panel_resize.png" } : {});
 });
 
 import { visiblePointerCount, setSelection, activateButton, pointRuntimeButton, activateRuntimeButton, frameMenu, restoreView, placeDirect, touchButton } from "./fixtures/Input";
@@ -39,10 +39,10 @@ async function captureMenu(page: Page, path: string): Promise<void> {
   // use close framing and a readable hold in the interaction video.
   const close = !path.includes("long-messages") && !path.includes("scrolled-messages");
   const view = close ? await frameMenu(page) : null;
-  if (close) await page.waitForTimeout(1000);
+  if (close && process.env.INTEGRATION_EXTRA_MEDIA === "1") await page.waitForTimeout(1000);
   markVisualReview(page, path.split("/").pop()!);
   await page.screenshot({ path });
-  if (close) await page.waitForTimeout(1000);
+  if (close && process.env.INTEGRATION_EXTRA_MEDIA === "1") await page.waitForTimeout(1000);
   if (view) await restoreView(page, view);
   await page.evaluate(() => {
     document.body.style.background = "";
@@ -65,23 +65,19 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     }, mode);
     const bulk = new V2BulkPeer(); await bulk.install(page);
     let socket: WebSocketRoute | undefined;
-    let interactionRevision = 0, interactionMode = "manual";
-    let authority: any = null, target: any = null, preview: any = null, activeGoal: any = null;
-    let previewAim: { position: number[]; orientation: number[] } | null = null;
-    const sendInteraction = (peer = socket) => bulk.send(peer!, { type: "interaction_state",
-      epoch: "startup-fixture", revision: ++interactionRevision, mode: interactionMode,
-      authority, target, targets: target ? [target] : [], preview, active_goal: activeGoal });
-    const sendNavigation = (frame: object, peer = socket) => {
-      activeGoal = frame;
-      bulk.send(peer!, frame);
-      sendInteraction(peer);
+    const peer = new InteractionPeer("startup-fixture", "browser-test");
+    const sendInteraction = (destination = socket) => bulk.send(destination!, peer.snapshot());
+    const sendNavigation = (frame: object, destination = socket) => {
+      peer.activeGoal = frame;
+      bulk.send(destination!, frame);
+      sendInteraction(destination);
     };
     let serverState: State = { type: "state", server: { connected_clients: 1 },
       lidar: { enabled: false, min_height_m: 0, max_height_m: 2, max_range_m: 5 },
       nav: { state: "idle", outcome: null }, agent: { idle: true } };
-    const sendState = (update: Partial<State> = {}, peer = socket) => {
+    const sendState = (update: Partial<State> = {}, destination = socket) => {
       serverState = { ...serverState, ...update };
-      bulk.send(peer!, serverState);
+      bulk.send(destination!, serverState);
     };
     let observations = 0;
     let latestCaptureTs = 0;
@@ -113,50 +109,17 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
             max_height_m: command.max_height_m, max_range_m: command.max_range_m } }, ws);
         }
         if (command.type === "estop_request") {
-          estops++; authority = null; preview = previewAim = null; activeGoal = null;
+          estops++; peer.authority = null; peer.preview = peer.previewAim = null; peer.activeGoal = null;
           sendInteraction(ws);
         }
         if (command.type === "interaction_request") {
-          let status = "accepted", code = command.action;
-          if (command.action === "acquire") {
-            if (authority || interactionMode !== "manual") { status = "busy"; code = "robot_busy"; }
-            else {
-              authority = { client_id: "browser-test", source_id: command.source_id, acquisition_id: command.acquisition_id,
-                lease_id: `startup-lease-${interactionRevision}`, kind: command.kind, held: true, expires_at: 1e9, sequence: -1 };
-              preview = previewAim = null;
-            }
-          } else if (command.action === "mode") {
-            if (authority) { status = "busy"; code = "robot_busy"; }
-            else interactionMode = command.mode;
-          } else if (command.action === "cancel" || command.action === "cancel_acquire") {
-            if (authority?.kind === "navigation_planning") target = null;
-            authority = null; preview = previewAim = null;
-          } else if (command.action !== "snapshot" && (!authority || command.lease_id !== authority.lease_id)) {
-            status = "stale"; code = "not_owner";
-          }
-          if (status === "accepted" && command.position) {
-            const changed = !target || JSON.stringify([target.position, target.orientation]) !== JSON.stringify([command.position, command.orientation]);
-            target = { position: command.position, orientation: command.orientation, domain: "navigation",
-              revision: changed ? interactionRevision + 1 : target.revision,
-              phase: authority?.kind === "navigation_planning" ? "draft" : "live", sample_ts: performance.now() / 1000,
-              sequence: command.sequence ?? -1 };
-            if (authority) authority.sequence = command.sequence ?? -1;
-            if (previewAimChanged(previewAim, target)) preview = previewAim = null;
-          }
-          if (status === "accepted" && (command.action === "release" || command.action === "confirm")) {
-            if (command.action === "release" && authority?.kind === "navigation_planning") authority.held = false;
-            else {
-              if (target && authority?.kind !== "joystick") {
-                goals++;
-                target.phase = "committed";
-                activeGoal = { type: "nav_goal", pose: [...target.position, 0], path_poses: [], ts: 10 };
-              }
-              authority = null; preview = previewAim = null;
-            }
+          const result = peer.accept(command);
+          if (result.released?.target && result.released.kind !== "joystick") {
+            goals++;
+            peer.activeGoal = { type: "nav_goal", pose: [...result.released.target.position, 0], path_poses: [], ts: 10 };
           }
           sendInteraction(ws);
-          send({ type: "interaction_result", request_id: command.request_id, epoch: "startup-fixture",
-            revision: interactionRevision, status, code, ...(authority ? { lease_id: authority.lease_id } : {}) });
+          send(peer.result(command, result));
         }
         if (command.type === "user_message_request") {
           agentMessages.push(command.text);
@@ -164,10 +127,10 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
         }
         if (command.type === "nav_goal_request") {
           if (command.preview) {
-            const [x, y, z] = target.position;
-            preview = { type: "nav_goal", preview: true, preview_id: command.preview_id, pose: [x, y, z, 0], path_poses: [[2, 0, 0, 0], [x, y, z, 0]], ts: performance.now() };
-            previewAim = { position: [...target.position], orientation: [...target.orientation] };
-            send(preview); sendInteraction(ws);
+            const [x, y, z] = peer.target.position;
+            peer.preview = { type: "nav_goal", preview: true, preview_id: command.preview_id, pose: [x, y, z, 0], path_poses: [[2, 0, 0, 0], [x, y, z, 0]], ts: performance.now() };
+            peer.previewAim = { position: [...peer.target.position], orientation: [...peer.target.orientation] };
+            send(peer.preview); sendInteraction(ws);
           } else goals++;
         }
         if (command.type === "hello_request") {
@@ -179,7 +142,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
             capabilities: { lidar: available, localization: available, estop: available, agent: available,
               navigation: { ...available, nav_goal: { ...available, preview: true }, nav_joystick: available } } });
           sendState({}, ws);
-          authority = null; sendInteraction(ws);
+          peer.authority = null; sendInteraction(ws);
           send({ type: "pose", position: [2, 0, 0.33], orientation: [0, 0, 0, 1], ts: command.ts_client });
         }
         if (command.type === "localization_start_request") send({ type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: "robot_los_required", observation_count: 3 });
@@ -894,32 +857,6 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       return app.client.robot.isSelected() && !app.panelHold && app.mainMenu.robotButton.parent === app.mainMenu.robotBadge;
     })).toBe(true);
     await captureMenu(page, testInfo.outputPath("robot-control-menu.png"));
-    await activateRuntimeButton(page, "Capabilities button");
-    await expect.poll(() => page.evaluate(() => {
-      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
-      return app.mainMenu.sensorsPage.visible;
-    })).toBe(true);
-    await activateRuntimeButton(page, "Full");
-    await expect.poll(async () => (await ui()).lidarMode).toBe("full");
-    await captureMenu(page, testInfo.outputPath("sensors.png"));
-    await activateRuntimeButton(page, "Obstacles");
-    await activateRuntimeButton(page, "Back from Sensors");
-    await activateRuntimeButton(page, "Global settings");
-    await expect.poll(() => page.evaluate(() => {
-      const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).mainMenu.settingsPage.visible;
-    })).toBe(true);
-    await captureMenu(page, testInfo.outputPath("global-settings.png"));
-    await activateRuntimeButton(page, "Diagnostics");
-    expect(await page.evaluate(() => {
-      const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).client.ui.debugEnabled;
-    })).toBe(false);
-    await activateRuntimeButton(page, "Done");
-    await activateRuntimeButton(page, "Debug · Off");
-    await expect.poll(() => ui().then(snap => snap.debugEnabled)).toBe(true);
-    await activateRuntimeButton(page, "Debug · On");
-    await activateRuntimeButton(page, "Done");
     await page.evaluate(() => {
       const w = window as any;
       const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);

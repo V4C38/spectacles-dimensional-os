@@ -132,6 +132,8 @@
   let replayInspectionGeneration = 0;
   let preferencesEdited = false;
   let preferencesSave = Promise.resolve();
+  const launcherPreferences = { go2_source: "auto", openyam_source: "auto", replay: "", openyam_replay: "", openyam_playback: "simulator" };
+  const replayPreferenceKey = robot => robot === "openyam" ? "openyam_replay" : "replay";
   const discoveredRobots = {go2: [], openyam: []};
   function applyBlueprintInfo() {
     blueprint = blueprintSelect.value;
@@ -154,7 +156,7 @@
     }
     $("editConnection").disabled = configLocked || manipulation;
     $("connectionEditor").classList.add("hidden");
-    const rememberedSource = localStorage.getItem(`dimos.source.${manipulation ? "openyam" : "go2"}`) || "auto";
+    const rememberedSource = launcherPreferences[`${manipulation ? "openyam" : "go2"}_source`] || "auto";
     if ((rememberedSource.startsWith("device:") || rememberedSource === "manual") && ![...$("robotSource").options].some(option => option.value === rememberedSource)) {
       const option = document.createElement("option"); option.value = rememberedSource; option.textContent = option.value === "manual" ? `${robotIp.value.trim()} (manual)` : `${option.value.slice(7)} (saved)`; $("robotSource").insertBefore(option, $("robotSource").querySelector('[value="simulated"]'));
     }
@@ -1453,8 +1455,8 @@
     const robot = manipulationSelected() ? "openyam" : "go2";
     if (robot !== playbackRobot) {
       playbackRobot = robot;
-      $("replayPath").value = localStorage.getItem(`dimos.replay.${robot}`) || "";
-      $("playbackSource").value = robot === "openyam" ? localStorage.getItem("dimos.playback.openyam") || "simulator" : "recording";
+      $("replayPath").value = launcherPreferences[replayPreferenceKey(robot)] || "";
+      $("playbackSource").value = robot === "openyam" ? launcherPreferences.openyam_playback || "simulator" : "recording";
       $("replayStreams").replaceChildren();
       $("replayStatus").textContent = "";
     }
@@ -1468,7 +1470,7 @@
   }
   robotIp.addEventListener("change", () => { void saveLauncherPreferences(); });
   $("robotSource").addEventListener("change", () => {
-    localStorage.setItem(`dimos.source.${manipulationSelected() ? "openyam" : "go2"}`, $("robotSource").value);
+    launcherPreferences[`${manipulationSelected() ? "openyam" : "go2"}_source`] = $("robotSource").value;
     syncSource();
     void saveLauncherPreferences();
   });
@@ -1521,7 +1523,7 @@
   });
   $("editReplay").addEventListener("click", () => $("replayEditor").classList.toggle("hidden"));
   $("playbackSource").addEventListener("change", () => {
-    if (manipulationSelected()) localStorage.setItem("dimos.playback.openyam", $("playbackSource").value);
+    if (manipulationSelected()) launcherPreferences.openyam_playback = $("playbackSource").value;
     syncSource(); void saveLauncherPreferences();
   });
   async function inspectReplay() {
@@ -1554,9 +1556,9 @@
   $("replayPath").addEventListener("change", () => {
     const robot = manipulationSelected() ? "openyam" : "go2";
     const path = $("replayPath").value.trim();
-    if (path === (localStorage.getItem(`dimos.replay.${robot}`) || "")) return;
+    if (path === (launcherPreferences[replayPreferenceKey(robot)] || "")) return;
     replayStreams[robot] = {};
-    localStorage.setItem(`dimos.replay.${robot}`, path);
+    launcherPreferences[replayPreferenceKey(robot)] = path;
     syncSource(); void saveLauncherPreferences(); void inspectReplay();
   });
   $("browseReplay").addEventListener("click", async () => {
@@ -1569,23 +1571,23 @@
     } catch (error) { $("discoveryStatus").textContent = String(error); }
   });
   $("defaultReplay").addEventListener("click", () => {
-    $("replayPath").value = ""; localStorage.removeItem(`dimos.replay.${playbackRobot}`);
+    $("replayPath").value = ""; launcherPreferences[replayPreferenceKey(playbackRobot)] = "";
     replayStreams[playbackRobot] = {}; replayInspectionGeneration++;
     $("replayStreams").replaceChildren(); $("replayStatus").textContent = "";
     syncSource(); void saveLauncherPreferences();
   });
-  void fetch("/api/launcher-preferences").then(response => response.ok ? response.json() : {}).then(preferences => {
+  void fetch("/api/launcher-preferences").then(async response => {
+    if (!response.ok) throw new Error((await response.json()).detail || "Could not load saved preferences");
+    return response.json();
+  }).then(preferences => {
     if (configLocked || preferencesEdited) return;
-    for (const [robot, key] of [["go2", "go2_source"], ["openyam", "openyam_source"]]) {
-      if (typeof preferences[key] === "string") localStorage.setItem(`dimos.source.${robot}`, preferences[key]);
+    for (const key of Object.keys(launcherPreferences)) {
+      if (typeof preferences[key] === "string") launcherPreferences[key] = preferences[key];
     }
-    if (typeof preferences.replay === "string") localStorage.setItem("dimos.replay.go2", preferences.replay);
-    if (typeof preferences.openyam_replay === "string") localStorage.setItem("dimos.replay.openyam", preferences.openyam_replay);
-    if (typeof preferences.openyam_playback === "string") localStorage.setItem("dimos.playback.openyam", preferences.openyam_playback);
     Object.assign(replayStreams, preferences.replay_streams || {});
     playbackRobot = null;
     if (typeof preferences.manual_ip === "string") robotIp.value = preferences.manual_ip;
-    const value = localStorage.getItem(`dimos.source.${manipulationSelected() ? "openyam" : "go2"}`) || "auto";
+    const value = launcherPreferences[`${manipulationSelected() ? "openyam" : "go2"}_source`] || "auto";
     if (![...$("robotSource").options].some(option => option.value === value) && (value.startsWith("device:") || value === "manual")) {
       const option = document.createElement("option"); option.value = value; option.textContent = option.value === "manual" ? `${robotIp.value.trim()} (manual)` : `${option.value.slice(7)} (saved)`; $("robotSource").insertBefore(option, $("robotSource").querySelector('[value="simulated"]'));
     }
@@ -1594,11 +1596,8 @@
   }).catch(error => appendLog(`Could not load launcher preferences: ${error}`));
   async function saveLauncherPreferences() {
     preferencesEdited = true;
-    localStorage.setItem(`dimos.source.${manipulationSelected() ? "openyam" : "go2"}`, $("robotSource").value);
-    const body = JSON.stringify({
-      go2_source: localStorage.getItem("dimos.source.go2") || "auto", openyam_source: localStorage.getItem("dimos.source.openyam") || "auto",
-      replay: localStorage.getItem("dimos.replay.go2") || "", openyam_replay: localStorage.getItem("dimos.replay.openyam") || "",
-      openyam_playback: localStorage.getItem("dimos.playback.openyam") || "simulator", replay_streams: replayStreams, manual_ip: robotIp.value.trim() });
+    launcherPreferences[`${manipulationSelected() ? "openyam" : "go2"}_source`] = $("robotSource").value;
+    const body = JSON.stringify({ ...launcherPreferences, replay_streams: replayStreams, manual_ip: robotIp.value.trim() });
     preferencesSave = preferencesSave.catch(() => {}).then(async () => {
       const response = await fetch("/api/launcher-preferences", {method: "PUT", headers: {"Content-Type": "application/json"}, body});
       if (!response.ok) throw new Error("Could not save launcher preferences");

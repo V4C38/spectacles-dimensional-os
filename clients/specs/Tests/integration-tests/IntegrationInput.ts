@@ -11,6 +11,7 @@ export class IntegrationInput {
   direction = new vec3(0, -0.2, -1).normalize();
   point = new vec3(0, -20, -100);
   delta = vec3.zero();
+  orientation = quat.quatIdentity();
   private previousHeld = false;
   private restored = false;
   private descriptors: [
@@ -28,7 +29,7 @@ export class IntegrationInput {
     const fields: Record<string, () => unknown> = {
       startPoint: () => this.from, endPoint: () => this.point, direction: () => this.direction,
       planecastPoint: () => this.point, targetHitPosition: () => this.point,
-      orientation: () => quat.quatIdentity(), distanceToTarget: () => this.point.distance(this.from),
+      orientation: () => this.orientation, distanceToTarget: () => this.point.distance(this.from),
       currentInteractable: () => this.target, previousInteractable: () => this.target,
       isTriggering: () => this.held, wasTriggering: () => this.previousHeld,
       currentTrigger: () => this.held ? InteractorTriggerType.Pinch : InteractorTriggerType.None,
@@ -78,11 +79,11 @@ export class IntegrationInput {
   press(button: {
     interactable: Interactable;
     inactive?: boolean;
-  }): void { if (button.inactive || button.interactable.enabled === false)
+  }, sample: () => void = () => {}): void { if (button.inactive || button.interactable.enabled === false)
     return;
     if (!button.interactable.getSceneObject().isEnabledInHierarchy)
       throw new Error(`Cannot press hidden native control: ${button.interactable.getSceneObject().name}`);
-    this.hover(button.interactable); this.start(); this.end(); this.unhover(); }
+    this.hover(button.interactable); this.start(); sample(); this.end(); sample(); this.unhover(); }
   cancel(): void {
     const target = this.target;
     this.held = false;

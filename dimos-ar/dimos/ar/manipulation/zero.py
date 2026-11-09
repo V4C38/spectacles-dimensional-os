@@ -24,23 +24,23 @@ class JointZeroOperation:
         runtime = self.runtime
         tolerance = getattr(runtime.config, "joint_arrival_tolerance_rad", 0.02)
         with runtime.lock:
-            if shutdown:
-                if runtime.session.stopped or runtime.session.cancelling:
-                    runtime.session.shutdown = True
-                    if runtime.session.stop_confirmed:
-                        runtime.adapter.quiesce()
-                        runtime.session.quiesced = True
-                    return {
-                        "status": "skipped",
-                        "message": "Emergency stop active; automatic motion skipped",
-                        "quiescent": runtime.session.quiesced,
-                    }
-            else:
+            skip = shutdown and (runtime.session.stopped or runtime.session.cancelling)
+            if skip:
+                runtime.session.shutdown = True
+                quiesce = runtime.session.stop_confirmed
+        if skip:
+            if quiesce:
+                runtime.adapter.quiesce()
+                with runtime.lock:
+                    runtime.session.quiesced = True
+            return {"status": "skipped", "message": "Emergency stop active; automatic motion skipped",
+                    "quiescent": runtime.session.quiesced}
+        runtime.fresh(group)
+        with runtime.lock:
+            if not shutdown:
                 runtime.require_owner(client_id, group)
                 if runtime.operation.id is not None:
                     raise ManipulationError("busy", "execution active or outcome uncertain")
-            runtime.fresh(group)
-            # Acquire before changing ownership: a rejected reset cannot retire a planner.
             if not runtime.planning.acquire(blocking=False):
                 raise ManipulationError("busy", "Planning is pending; retry reset")
             runtime.retire()
@@ -65,8 +65,12 @@ class JointZeroOperation:
         try:
             with runtime.lock:
                 require_current()
-                runtime.clear_following()
-                ready = runtime.adapter.reset()
+            runtime.clear_following()
+            with runtime.lock:
+                require_current()
+            ready = runtime.adapter.reset()
+            with runtime.lock:
+                require_current()
                 if not ready.succeeded:
                     runtime.session.stopped = True
                     runtime.session.stop_confirmed = False
@@ -105,12 +109,14 @@ class JointZeroOperation:
             )
             with runtime.lock:
                 require_current()
-                if planned is not None and (not planned.succeeded or planned.plan is None):
-                    raise ValueError(planned.message)
-                if planned is not None:
-                    result = runtime.adapter.execute(blocking=False, plan_id=planned.plan.plan_id)
-                    if result.status.name not in {"ACCEPTED", "COMPLETED", "SUCCEEDED"}:
-                        raise ValueError(result.message)
+            if planned is not None and (not planned.succeeded or planned.plan is None):
+                raise ValueError(planned.message)
+            if planned is not None:
+                result = runtime.adapter.execute(blocking=False, plan_id=planned.plan.plan_id)
+                with runtime.lock:
+                    require_current()
+                if result.status.name not in {"ACCEPTED", "COMPLETED", "SUCCEEDED"}:
+                    raise ValueError(result.message)
             started = time.monotonic()
             nominal_end = started + (planned.plan.trajectory.duration if planned is not None else 0)
             deadline = min(operation_deadline, nominal_end + 3.0)
@@ -153,22 +159,20 @@ class JointZeroOperation:
                         if now - settled >= 0.5:
                             with runtime.lock:
                                 require_current()
-                                # Approximate measured arrival is sufficient. The official
-                                # reset confirms stopping and returns to IDLE even if the
-                                # executor has not declared its exact endpoint complete.
-                                ready = runtime.adapter.reset()
+                            ready = runtime.adapter.reset()
+                            with runtime.lock:
+                                require_current()
                                 if not ready.succeeded:
                                     runtime.session.stopped = True
                                     runtime.session.stop_confirmed = False
                                     raise ValueError(ready.message)
-                                if shutdown:
-                                    runtime.adapter.quiesce()
+                            if shutdown:
+                                runtime.adapter.quiesce()
+                                with runtime.lock:
+                                    require_current()
                                     runtime.session.quiesced = True
-                                return {
-                                    "status": "completed",
-                                    "message": "Zero pose confirmed",
-                                    "quiescent": runtime.session.quiesced,
-                                }
+                            return {"status": "completed", "message": "Zero pose confirmed",
+                                    "quiescent": runtime.session.quiesced}
                     else:
                         settled = None
                 time.sleep(0.05)
@@ -180,20 +184,26 @@ class JointZeroOperation:
             )
         except Exception:
             with runtime.lock:
-                # An obsolete worker must never stop or reset a newer operation.
-                if runtime.session.generation == epoch and not runtime.session.stopped:
-                    try:
-                        ready = runtime.adapter.reset()
-                    except Exception:
+                current = runtime.session.generation == epoch and not runtime.session.stopped
+            if current:
+                try:
+                    ready = runtime.adapter.reset()
+                except Exception:
+                    with runtime.lock:
+                        if runtime.session.generation == epoch:
+                            runtime.session.stopped = True
+                            runtime.session.stop_confirmed = False
+                    raise
+                with runtime.lock:
+                    current = runtime.session.generation == epoch
+                    if current and not ready.succeeded:
                         runtime.session.stopped = True
                         runtime.session.stop_confirmed = False
-                        raise
-                    if not ready.succeeded:
-                        runtime.session.stopped = True
-                        runtime.session.stop_confirmed = False
-                    elif shutdown:
-                        runtime.adapter.quiesce()
-                        runtime.session.quiesced = True
+                if current and ready.succeeded and shutdown:
+                    runtime.adapter.quiesce()
+                    with runtime.lock:
+                        if runtime.session.generation == epoch:
+                            runtime.session.quiesced = True
             raise
         finally:
             with runtime.lock:

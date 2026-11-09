@@ -12,7 +12,7 @@ Read `CONTRIBUTING.md` for architecture and scene-wiring rules.
 
 ## Build, Test, and Development Commands
 
-- `./launcher/scripts/run-ci.sh`: run Python linting, mypy, pytest, both Vitest suites, and the WebXR build. Use a normal terminal outside the agent sandbox: DimOS logging writes under `~/.local/state/dimos/logs/`.
+- `./launcher/scripts/run-ci.sh`: run the complete validation gate with Python 3.12 and Node 22, including Python lint/type/unit checks, launcher tests, both Vitest suites, WebXR build, and browser integration. Use a normal terminal outside the agent sandbox: DimOS logging writes under `~/.local/state/dimos/logs/`.
 - In `clients/webxr/`, run `npm ci`, then `npm run dev` for HTTPS development or `npm run build` for type checking and production output. Run ARModule on the same machine for the `/ar` proxy.
 - In `clients/specs/Tests/`, run `npm ci` and `npm test`.
 - In `dimos-ar/`, use the installed DimOS environment: `/path/to/dimos/.venv/bin/python3 -m pytest`.
@@ -30,11 +30,34 @@ Use pytest/pytest-asyncio for Python (`test_*.py`) and Vitest for TypeScript (`*
 
 History uses short descriptive subjects, such as “Joystick navigation support”; follow that style. PRs should explain behavior changes, reference relevant issues, report validation, and include screenshots for visual changes.
 
-Before every commit, amend, or push, run `./launcher/scripts/run-ci.sh` on the exact code being committed and require all jobs to pass. This includes Python lint/type/unit checks, launcher tests, both client suites, WebXR build, integration tooling tests, and the complete WebXR browser integration suite. Selected tests, previous runs against different code, and native Lens compilation do not replace this gate. After a code change or failure, fix it and rerun the full script before committing or pushing. Report the result; if the full gate cannot run, explain the blocker and do not commit or push unless the user explicitly authorizes skipping it.
+Use focused tests for the behavior being changed during development. Batch related changes and fixes, then run the full `./launcher/scripts/run-ci.sh` gate once at the end of the completed change set. Do not alternate individual edits with repeated full-suite runs.
+
+After a small follow-up fix, rerun the relevant tests rather than restarting the complete gate. Documentation, formatting, whitespace, and Git metadata changes do not justify another full run. Repeat the full gate only when new changes introduce substantial cross-system risk, a failure requires broader verification, or the user explicitly requests it. A single final validation checkpoint covers committing and pushing the same change set; do not rerun tests separately for each Git command.
+
+Report the checks actually completed and any deferred verification. If the user explicitly directs a commit or push without further tests, honor that instruction and disclose the remaining validation limits. Never imply that an interrupted or failed run passed.
 
 ## Architecture & Protocol Rules
 
 Import installed DimOS; do not edit upstream source. Reuse ClientCore without copying it or adding platform APIs. Change `dimos-ar/PROTOCOL.md`, Python `websocket/protocol.py`, and ClientCore `websocket/protocol.ts` together. Manipulate Lens `.scene` files through Lens Studio MCP tools rather than hand editing.
+
+The complete functional gate has no numeric test cutoff. Both client integration
+runners produce the canonical golden-path video by default and retain failure
+artifacts. Supplemental edited videos/reports are opt-in (`INTEGRATION_EXTRA_MEDIA=1`
+for WebXR, native `--extra-media`); this never skips functional tests.
+
+All generated test/review evidence defaults to the gitignored repository-root
+`Review Data/`: browser/native runs under `webxr/` and `specs/`, unit reports under
+`unit/`, coverage under `coverage/`, native compilation under `native-compile/`,
+and official mock contracts under `mock-manipulation/`. Disposable native review
+projects belong in `specs-work/`. Preserve explicit output overrides and quote paths
+containing spaces. Source fixtures, build products and dependency caches keep their
+own directories. Retain failed or incomplete run evidence during automatic cleanup.
+
+Publish the latest verified golden videos at `Review Data/webxr_golden-path.mp4`
+and `Review Data/specs_golden-path.mp4`. Replace each atomically after its complete
+run passes, including source handoff for Specs. A complete `--suite golden` native
+run can publish; failed, incomplete, focused-probe and `--keep-open` runs cannot.
+Keep only one published top-level golden video per client.
 
 ## Lens Studio integration-test focus limit
 
@@ -73,3 +96,6 @@ Before handing the lens back for device testing, verify the production project i
 open, Auto Run is false, no Review scenario assets/hosts are present, and the native
 compiler cache matches production scripts. A test abort must be reported; it must
 never be described as a production build ready for device testing without this check.
+
+Successful non-golden raw recordings are discarded after validation unless extra
+media is requested. Golden footage, screenshots, logs and failure recordings remain.

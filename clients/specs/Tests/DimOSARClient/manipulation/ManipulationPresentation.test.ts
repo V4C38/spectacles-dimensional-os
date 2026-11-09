@@ -41,3 +41,25 @@ it("keeps an old reviewed endpoint out of every subsequent live drag", () => {
   expect(manipulationPreviewPlan(plan, false, false, false)).toBeNull();
   expect(manipulationPreviewPlan(plan, true, false, true)).toBeNull();
 });
+
+
+import { manipulationActivePlan, manipulationObservedJoints, manipulationProposedJoints } from "../../../Assets/Scripts/DimOSARClient/manipulation/ManipulationPresentation";
+it("derives the same articulated joints for live IK, rejected drafts, reviewed plans and playback", () => {
+  const model: any = { joints: [], links: [] };
+  const state: any = { observations: { arm: { joints: { j: .2 } }, other: { joints: { auxiliary: .7 } } }, plan };
+  const group: any = { id: "arm", has_gripper: false };
+  const measured = manipulationObservedJoints(model, state, group);
+  expect(measured).toEqual({ j: .2, auxiliary: .7 });
+  const input = { plan, playback: { playing: false, time: 0 }, selected: true, dragging: true,
+    rejected: false, solution: { j: .4 }, opening: null };
+  const derive = (changes: Partial<typeof input> = {}) => manipulationProposedJoints(model, group, measured, { ...input, ...changes });
+  expect(derive()).toEqual({ j: .4, auxiliary: .7 });
+  expect(derive({ dragging: false })).toEqual({ j: 1, auxiliary: .7 });
+  expect(derive({ dragging: false, rejected: true })).toEqual({ j: .4, auxiliary: .7 });
+  expect(derive({ playback: { playing: true, time: .5 } })).toEqual({ j: .5, auxiliary: .7 });
+  expect(measured).toEqual({ j: .2, auxiliary: .7 });
+  expect(state.observations.arm.joints).toEqual({ j: .2 });
+  expect(manipulationActivePlan({ ...state, stopped: true }, plan, false)).toBeNull();
+  expect(manipulationActivePlan(state, null, true)).toBe(plan);
+  expect(manipulationActivePlan(state, null, false)).toBeNull();
+});

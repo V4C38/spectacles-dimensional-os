@@ -2,7 +2,10 @@
 
 from dataclasses import replace
 
-from dimos.ar.manipulation.collision_model import without_finger_collisions
+from dimos.ar.manipulation.collision_model import (
+    with_finger_self_collision_exclusion,
+    with_openyam_collision_geometry,
+)
 from dimos.ar.manipulation.following import ARManipulationCoordinator
 from dimos.ar.manipulation.frames import ReferencePose
 from dimos.ar.manipulation.limits import safe_openyam_model, soft_joint_limits
@@ -15,7 +18,7 @@ from dimos.core.coordination.blueprints import autoconnect
 from dimos.robot.manipulators.common.blueprints import cartesian_ik_task, coordinator
 from dimos.robot.manipulators.openyam.config import make_openyam_model_config, openyam_hardware
 
-_model = without_finger_collisions(safe_openyam_model(make_openyam_model_config()))
+_model = with_finger_self_collision_exclusion(with_openyam_collision_geometry(safe_openyam_model(make_openyam_model_config())))
 _hardware = openyam_hardware()
 if _hardware.adapter_type == "openyam_damiao":
     _hardware.adapter_kwargs["safety_limits"] = soft_joint_limits(_model)
@@ -34,6 +37,7 @@ openyam_ar_planner = autoconnect(
         following_tasks=_tasks,
         model_asset_url="/models/openyam.glb",
         model_visual_profile="openyam",
+        gripper_joint_names=["joint7", "joint8"],
         gripper_open_at_lower=["joint7", "joint8"],
         joint_arrival_tolerance_rad=0.05,
     ),

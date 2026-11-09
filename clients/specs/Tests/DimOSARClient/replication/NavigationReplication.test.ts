@@ -133,3 +133,28 @@ describe("navigation replication adapter", () => {
     expect(nav.snapshot().draft).toBeNull(); expect(nav.snapshot().position[0]).toBe(0);
   });
 });
+
+it.each([null, { position: [3, 0, 0] as [number, number, number], blocked: true }])(
+  "retires a direct drag released over invalid placement %j",
+  placement => {
+    const { nav, collaboration, state, sent } = fixture();
+    nav.hold(0, { position: [2, 0, 0], blocked: false }, true, "hand");
+    const request = sent[0];
+    collaboration.apply({ ...state, revision: 1, authority: {
+      client_id: "local", source_id: "hand", acquisition_id: request.acquisition_id,
+      lease_id: "nav-lease", kind: "live", held: true, sequence: -1, expires_at: 1,
+    } });
+    collaboration.accept({ type: "interaction_result", request_id: request.request_id,
+      epoch: "robot", revision: 1, status: "accepted", code: "acquired", lease_id: "nav-lease" });
+    nav.hold(0.1, { position: [3, 0, 0], blocked: false }, true, "hand");
+    expect(nav.isDragging()).toBe(true);
+    nav.release(0.2, placement, "hand");
+    expect(sent.at(-1)).toMatchObject({ action: "cancel", lease_id: "nav-lease" });
+    expect(nav.isDragging()).toBe(false);
+    const count = sent.length;
+    collaboration.tick();
+    expect(sent).toHaveLength(count);
+    collaboration.apply({ ...state, revision: 2 });
+    expect(collaboration.begin("manipulation_planning", "arm", undefined, { group_id: "arm" })).toBe(true);
+  },
+);

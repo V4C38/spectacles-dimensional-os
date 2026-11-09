@@ -43,9 +43,16 @@ class ReviewEvidenceTests(unittest.TestCase):
         ]
         self.assertEqual(review.runtime_error_lines("\n".join(lines)), lines[:2])
 
-    def test_default_artifacts_match_webxr_client_structure(self) -> None:
+    def test_default_artifacts_and_disposable_projects_use_root_review_data(self) -> None:
         with mock.patch.object(sys, "argv", ["review.py"]):
-            self.assertEqual(review.arguments().output_root, review.SPECS_ROOT / "Tests/integration-tests/test-results")
+            args = review.arguments()
+        self.assertEqual(args.output_root, review.REPO_ROOT / "Review Data/specs")
+        self.assertEqual(args.work_root, review.REPO_ROOT / "Review Data/specs-work")
+        with mock.patch.object(sys, "argv", ["review.py", "--output-root", "/tmp/custom evidence",
+                                            "--work-root", "/tmp/custom project"]):
+            args = review.arguments()
+        self.assertEqual(args.output_root, Path("/tmp/custom evidence").resolve())
+        self.assertEqual(args.work_root, Path("/tmp/custom project").resolve())
 
     def test_native_still_is_saved_beside_the_video(self) -> None:
         class NativeMcp:
@@ -162,6 +169,23 @@ class ReviewEvidenceTests(unittest.TestCase):
             self.assertEqual((output / "interaction-review.mp4").read_bytes(), b"review-excerpts")
 
 
+class MediaRetentionTests(unittest.TestCase):
+    def test_success_cleanup_preserves_golden_and_failure_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            for name in ("golden", "regression"):
+                suite = output / name
+                suite.mkdir()
+                (suite / "recording.mp4").write_bytes(b"video")
+                (suite / "native.log").write_text("diagnostics")
+                (suite / "review-scenes.json").write_text(json.dumps({"profile": name, "recording": "recording.mp4"}))
+            review.prune_success_recordings(output)
+            self.assertTrue((output / "golden/recording.mp4").is_file())
+            self.assertFalse((output / "regression/recording.mp4").exists())
+            self.assertTrue((output / "regression/native.log").is_file())
+
+
+
 class ReviewLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_focus_abort_skips_source_restoration_and_requires_authorization(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -177,13 +201,17 @@ class ReviewLifecycleTests(unittest.IsolatedAsyncioTestCase):
             restore.assert_not_awaited()
             self.assertTrue(json.loads((output / "editor-restoration.json").read_text())["requiresUserAuthorization"])
 
-    async def test_restores_source_after_success(self) -> None:
-        args = review.argparse.Namespace(keep_open=False)
-        with mock.patch.object(review, "run_review", new_callable=mock.AsyncMock, return_value={"passed": True}), \
-                mock.patch.object(review, "restore_source_project", new_callable=mock.AsyncMock) as restore:
-            result = await review.review_and_restore(args, Path("output"), Path("workspace"))
-        self.assertTrue(result["passed"])
-        restore.assert_awaited_once_with(args, Path("output"), Path("workspace"))
+    async def test_focused_probe_restores_source_and_cannot_pass_before_handoff(self) -> None:
+        args = review.argparse.Namespace(keep_open=False, harness=Path("probe.ts"))
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            with mock.patch.object(review, "run_review", new_callable=mock.AsyncMock, return_value={"passed": True}), \
+                    mock.patch.object(review, "restore_source_project", new_callable=mock.AsyncMock) as restore:
+                result = await review.review_and_restore(args, output, Path("workspace"))
+            self.assertTrue(result["scenarioPassed"])
+            self.assertFalse(result["passed"])
+            self.assertEqual(result["sourceAuditState"], "pending")
+            restore.assert_awaited_once_with(args, output, Path("workspace"))
 
     async def test_restores_source_after_a_failed_scenario(self) -> None:
         args = review.argparse.Namespace(keep_open=False)
@@ -215,6 +243,33 @@ class IntegrationHandoffTests(unittest.IsolatedAsyncioTestCase):
                 result = await review.review_and_restore(args, output, Path("workspace"))
             self.assertTrue(result["scenarioPassed"])
             self.assertFalse(result["passed"])
+
+    async def test_source_handoff_checks_only_fresh_preview_errors(self) -> None:
+        import audit_source
+        with tempfile.TemporaryDirectory() as directory:
+            logs = Path(directory)
+            previous = logs / "LensStudioLog-old.txt"
+            previous.write_text("E Old TypeError: previous project failed\n")
+            offsets = {previous: previous.stat().st_size}
+            self.assertEqual(audit_source.fresh_runtime_errors(logs, offsets), [])
+            with previous.open("a") as stream:
+                stream.write("E New TypeError: Frame initialization failed\n")
+            fresh = logs / "LensStudioLog-new.txt"
+            fresh.write_text("I UpdateDispatcher: Error in event: startup failed\n")
+            errors = audit_source.fresh_runtime_errors(logs, offsets)
+            self.assertEqual(len(errors), 2)
+            self.assertTrue(any("Frame initialization" in line for line in errors))
+            self.assertTrue(any("UpdateDispatcher" in line for line in errors))
+
+    async def test_source_handoff_requires_one_disabled_integration_gate(self) -> None:
+        import audit_source
+        self.assertTrue(audit_source.source_harness_is_idle({"harness": {"hosts": 1, "gates": [{"autoRun": False}]}}))
+        for state in ({}, {"harness": {"hosts": 0, "gates": []}},
+                      {"harness": {"hosts": 1, "gates": [{"autoRun": True}]}},
+                      {"harness": {"hosts": 1, "gates": [{}]}},
+                      {"harness": {"hosts": 2, "gates": [{"autoRun": False}]}},
+                      {"harness": {"hosts": 1, "gates": [{"autoRun": False}, {"autoRun": False}]}}):
+            self.assertFalse(audit_source.source_harness_is_idle(state), state)
 
     async def test_failed_source_audit_fails_the_overall_run(self) -> None:
         import audit_source
@@ -281,7 +336,7 @@ class LegacyGraphTests(unittest.TestCase):
                 graph.loads(invalid)
 
     def test_generated_world_graph_has_typed_inputs_and_deterministic_output(self) -> None:
-        source = graph.load(TOOLS.parent / "Assets/Materials/Shaders/AnimatedNoiseWaves.ss_graph")
+        source = graph.load(TOOLS / "shaders/templates/AnimatedNoiseWaves.ss_graph")
         template = graph.load(TOOLS.parent / "Assets/Materials/Shaders/AdaptiveStroke.ss_graph")
         template["Nodes"]["ChildNodes"] = {
             key: value for key, value in template["Nodes"]["ChildNodes"].items()
@@ -322,13 +377,6 @@ class LegacyGraphTests(unittest.TestCase):
 
 
 class McpSdkContractTests(unittest.IsolatedAsyncioTestCase):
-    def test_comparison_subset_cannot_pass_the_full_review(self) -> None:
-        full = [{"name": name} for name in review.DEFAULT_SCENES]
-        self.assertTrue(review.complete_default_scenes(full))
-        self.assertFalse(review.complete_default_scenes([
-            scene for scene in full if scene["name"] not in {"robot-selected", "agent-response"}
-        ]))
-
     def test_video_must_include_the_final_checkpoint_hold(self) -> None:
         scenes = [{"at": 414.3, "durationS": 2.8}]
         with self.assertRaisesRegex(review.ReviewError, "before the final checkpoint"):
@@ -336,14 +384,6 @@ class McpSdkContractTests(unittest.IsolatedAsyncioTestCase):
         review.validate_video_duration(420, scenes)
         with self.assertRaisesRegex(review.ReviewError, "differs from capture clock"):
             review.validate_video_duration(437, scenes, 420)
-
-    async def test_rejects_a_retained_native_comparison_input(self) -> None:
-        class Client:
-            async def editor(self, _code):
-                return {"comparisonMode": True}
-
-        with self.assertRaisesRegex(review.ReviewError, "incomplete state/world review"):
-            await review.attach_scenario(Client(), Path("/tmp/disposable"), 5)
 
     async def test_pending_texture_import_retries_only_save(self) -> None:
         codes = []

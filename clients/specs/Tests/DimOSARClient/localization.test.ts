@@ -1,4 +1,4 @@
-import { PairedBulk } from "../fixtures/PairedBulk";
+import { FakeClock, FakeTransport, helloAt, stateFrame } from "../fixtures/SessionFixture";
 import { describe, expect, it } from "vitest";
 import { ClientTrackingOriginStore } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingOrigin";
 import {
@@ -19,18 +19,14 @@ import {
   type CameraCaptureSource,
   type CameraTrackingSource,
   type CaptureGeometry,
-  type ClientClock,
-  type WebSocketTransport,
 } from "../../Assets/Scripts/DimOSARClient/websocket/hostPorts";
 import { decodeLocalizationObservations } from "../../Assets/Scripts/DimOSARClient/websocket/protocol";
 import { ARModuleSession } from "../../Assets/Scripts/DimOSARClient/websocket/arModuleSession";
 import type {
-  Hello,
   Intrinsics,
   LocalizationObservation,
   LocalizationObservationsRequest,
   Quat,
-  State,
   Vec3,
   YawPose,
 } from "../../Assets/Scripts/DimOSARClient/websocket/protocolTypes";
@@ -163,45 +159,7 @@ const INTRINSICS: Intrinsics = {
   distortion: [],
 };
 
-const STATE: State = {
-  type: "state",
-  server: { connected_clients: 1 },
-  lidar: { enabled: true, min_height_m: 0.1, max_height_m: 1.5, max_range_m: 5 },
-  nav: { state: "idle", outcome: null },
-  agent: { idle: true },
-};
-
-class FakeClock implements ClientClock {
-  nowS = 0;
-  now(): number {
-    return this.nowS;
-  }
-}
-
-class FakeTransport implements WebSocketTransport {
-  readonly bulk = new PairedBulk(data => this.binaries.push(data));
-  createSibling() { return this.bulk; }
-  connectCount = 0;
-  closeCount = 0;
-  texts: string[] = [];
-  binaries: Uint8Array[] = [];
-
-  connect(): void {
-    this.connectCount += 1;
-  }
-
-  close(): void {
-    this.closeCount += 1;
-  }
-
-  sendText(text: string): void {
-    this.texts.push(text);
-  }
-
-  sendBinary(data: Uint8Array): void {
-    this.binaries.push(data);
-  }
-}
+const STATE = stateFrame();
 
 class FakeTracking implements CameraTrackingSource {
   position: Vec3 = [0, 0, 0];
@@ -292,32 +250,6 @@ class FakeCapture implements CameraCaptureSource {
     }
     return Promise.resolve(this.observation());
   }
-}
-
-function helloAt(tsClient: number): Hello {
-  return {
-    type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
-    client_id: "c3f1a9",
-    time_sync: { ts_client: tsClient, ts_server: 100 },
-    robot: {
-      display_name: "Unitree Go2",
-      body_bounds_m: [0.7, 0.5, 0.55],
-      footprint_m: [0.7, 0.5],
-      base_height_m: 0.33,
-    },
-    capabilities: {
-      lidar: { available: true, reason: null },
-      navigation: {
-        available: true,
-        reason: null,
-        nav_goal: { available: true, reason: null },
-        nav_joystick: { available: true, reason: null },
-      },
-      localization: { available: true, reason: null },
-      estop: { available: true, reason: null },
-      agent: { available: false, reason: "current blueprint has no DimOS agent" },
-    },
-  };
 }
 
 function handshake(session: ARModuleSession, transport: FakeTransport, clock: FakeClock): void {
@@ -944,7 +876,6 @@ describe("localization capture", () => {
   });
 });
 
-
 it("measures a three-frame batch separately from server wait and applies the first valid result immediately", async () => {
   const f = makeController(); f.controller.dispose(); f.clock.nowS = 0;
   const traces: string[] = [];
@@ -1037,7 +968,6 @@ it("invalidates pending result acceptance when setup pauses", async () => {
   expect(f.controller.view().phase).toBe("idle");
 });
 
-
 it("honors a host's explicit exhausted retry budget without changing ordinary camera retries", async () => {
   const f = makeController();
   f.capture.failWith = Object.assign(new Error("Camera images arriving too slowly"), { retryable: false });
@@ -1097,7 +1027,6 @@ it("keeps the original result deadline during suspension and retries only after 
   f.clock.nowS = 6; f.controller.tick(); expect(startRequestCount(f.transport)).toBe(0);
   f.controller.resume(); f.controller.tick(); expect(startRequestCount(f.transport)).toBe(1);
 });
-
 
 it("releases the runtime camera between bounded batches and backs off repeated misses", async () => {
   const f = makeController(false, { retryDelaysS: [2, 5, 10, 30], stopWhileAwaitingResult: true });

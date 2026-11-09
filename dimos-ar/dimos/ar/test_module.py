@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 
 from dimos.ar.localization.coordinator import LocalizationOutcome
-from dimos.ar.localization.policy import EpisodeWork, LocalizationPolicy
+from dimos.ar.localization.policy import EpisodeWork
 from dimos.ar.localization.pose_buffer import PoseBuffer
 from dimos.ar.localization.types import Intrinsics
 from dimos.ar.manipulation.protocol import ManipulationRequest
@@ -27,17 +27,14 @@ from dimos.ar.module import (
     LocalizationProviderConfig,
     profile_for_config,
 )
-from dimos.ar.navigation.preview_service import NavigationPreviewService
 from dimos.ar.navigation.tele_cmd_vel import TeleCmdVelPublisher
 from dimos.ar.navigation.types import NavGoalRequest, NavJoystickRequest, NavState
-from dimos.ar.replication.interaction import InteractionCoordinator, InteractionRequest
-from dimos.ar.robot.agent_service import ARAgentService, _textual_ai_message
-from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, CapabilityName, CapabilitySet
+from dimos.ar.replication.interaction import InteractionRequest
+from dimos.ar.robot.agent_service import _textual_ai_message
+from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, CapabilityName
 from dimos.ar.robot.odometry import RobotOdometry
 from dimos.ar.robot.profiles.profile import FiducialMarkerMount, RobotName, RobotProfile
 from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
-from dimos.ar.robot.safety import Safety
-from dimos.ar.sensors.lidar_settings import LidarSettings
 from dimos.ar.websocket.protocol import (
     LocalizationObservation,
     TimeSync,
@@ -46,33 +43,13 @@ from dimos.ar.websocket.protocol import (
 )
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.Path import Path
-
-
-class _FakeWs:
-    def __init__(self) -> None:
-        self.connection_count = 1
-        self.sent: list[tuple[str, str]] = []
-        self.broadcasts: list[str] = []
-        self.interaction_sent: list[tuple[str, str]] = []
-        self.state_sent: list[tuple[str, str]] = []
-        self.interaction_broadcasts: list[str] = []
-
-    async def prepare_outbound_async(self, value):
-        return value
-
-    def schedule_send_to_client(self, client_id: str, text: str) -> None:
-        if json.loads(text).get("type", "").startswith("interaction_"):
-            self.interaction_sent.append((client_id, text))
-        elif json.loads(text).get("type") == "state":
-            self.state_sent.append((client_id, text))
-        else:
-            self.sent.append((client_id, text))
-
-    def schedule_broadcast_text(self, text: str) -> None:
-        if json.loads(text).get("type", "").startswith("interaction_"):
-            self.interaction_broadcasts.append(text)
-        else:
-            self.broadcasts.append(text)
+from test_support.module import (
+    _arm_grab,
+    _arm_module_with_two_clients,
+    _FakeWs,
+    _module_with_policy,
+    _release_arm_grab,
+)
 
 
 def _anvil_openyam_profile() -> RobotProfile:
@@ -87,66 +64,6 @@ def _anvil_openyam_profile() -> RobotProfile:
         T_base_camera_optical=None,
         supported_capabilities=frozenset(),
     )
-
-
-def _module_with_policy(
-    providers: list[str],
-    *,
-    profile: RobotProfile = UNITREE_GO2_PROFILE,
-    agent_available: bool = False,
-) -> ARModule:
-    module = object.__new__(ARModule)
-    module.config = ARModuleConfig()
-    module._interaction = InteractionCoordinator()
-    module._lidar_subscriptions = {}
-    module._native_sequences = {}
-    module._allow_unfenced_navigation = True
-    module._pending_arm_motion = set()
-    module._arm_native_busy = False
-    module._arm_uncertain = False
-    module._arm_stop_pending = False
-    module._interaction_sent_revision = -1
-    module._map_localization = None
-    module._pairing_log_at = 0.0
-    module._pairing_rejected = 0
-    module._pairing_accepted = 0
-    module._odometry = RobotOdometry(factor=profile.odom_scale_correction_factor)
-    module._policy = LocalizationPolicy(providers, travel=module._odometry.travel)
-    module._replay_mode = False
-    module._ws_server = _FakeWs()  # type: ignore[assignment]
-    module._profile = profile
-    module.human_input = SimpleNamespace(transport=None, publish=lambda _text: None)
-    module._capabilities = CapabilitySet.from_supported(
-        profile.supported_capabilities,
-        localization_available=bool(providers),
-        agent_available=agent_available,
-        supported_navigation_inputs=profile.supported_navigation_inputs,
-    )
-    module._tele_cmd_vel_publisher = None
-    module._lidar_settings = LidarSettings(
-        enabled=False, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0
-    )
-    module._nav_goal_coordinator = SimpleNamespace(
-        nav_state=lambda: NavState("idle", None),
-        on_estop=lambda: False,
-    )
-    module.stop_movement = SimpleNamespace(transport=None, publish=lambda _msg: None)
-    module._safety = Safety(
-        estop_available=module._capabilities.supports(CapabilityName.ESTOP),
-        effects=(module._clear_navigation, module._publish_stop),
-    )
-    module._agent_service = ARAgentService(
-        factor=profile.odom_scale_correction_factor,
-        connection_count=lambda: module._ws_server.connection_count,
-        broadcast=module._ws_server.schedule_broadcast_text,
-    )
-    module._previews = NavigationPreviewService(
-        SimpleNamespace(plan=lambda *_args: None),
-        factor=profile.odom_scale_correction_factor,
-        odometry=module._odometry.latest,
-        send=module._ws_server.schedule_send_to_client,
-    )
-    return module
 
 
 def _authorized_request(module, message, client_id):
@@ -1056,9 +973,9 @@ async def test_robot_image_pairing_preserves_producer_time_and_encodes_off_loop(
 ) -> None:
     from dimos.ar.localization.pose_buffer import PoseBuffer
     from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
-    from dimos.ar.localization.vps.test_robot_observation_buffer import _camera_info
     from dimos.ar.localization.worker import LocalizationWorker
     import dimos.ar.module as ar_module
+    from test_support.localization import _camera_info
 
     module = _module_with_policy(["vps"])
     module._odometry.generation = 0
@@ -1144,53 +1061,6 @@ def test_unwired_goal_does_not_mutate_navigation() -> None:
     assert module._ws_server.broadcasts == []
 
 
-def _arm_module_with_two_clients() -> ARModule:
-    module = _module_with_policy([])
-    module._capabilities = CapabilitySet.from_supported(
-        frozenset(),
-        localization_available=False,
-        agent_available=False,
-        manipulation_available=True,
-    )
-    module._manipulation_service = Mock()
-    for client_id in ("a", "b"):
-        module._interaction.connect(client_id)
-    return module
-
-
-def _arm_grab(module: ARModule, client_id: str, *, planning: bool = False) -> None:
-    module._on_interaction_request(
-        InteractionRequest(
-            f"grab-{client_id}-{len(module._ws_server.interaction_sent)}",
-            "acquire",
-            module._interaction.epoch,
-            kind="manipulation_planning" if planning else "manipulation_following",
-            source_id="right-hand",
-            group_id="arm",
-            position=(0.1, 0.2, 0.3),
-            orientation=(0, 0, 0, 1),
-        ),
-        client_id,
-    )
-
-
-def _release_arm_grab(module: ARModule) -> None:
-    authority = module._interaction.authority
-    assert authority is not None
-    module._on_interaction_request(
-        InteractionRequest(
-            "release-a",
-            "release",
-            module._interaction.epoch,
-            lease_id=authority.lease_id,
-            sequence=0,
-            position=(0.1, 0.2, 0.3),
-            orientation=(0, 0, 0, 1),
-        ),
-        "a",
-    )
-
-
 def test_normal_arm_release_allows_takeover_before_native_handoff_poll() -> None:
     module = _arm_module_with_two_clients()
     _arm_grab(module, "a")
@@ -1236,7 +1106,7 @@ def test_accepted_arm_operation_blocks_takeover_after_editing_release(action: st
     _arm_grab(module, "b")
     assert module._interaction.authority is None
     assert module._interaction.motion_busy
-    assert "accepted-motion" in module._pending_arm_motion
+    assert module._interaction.manipulation_motion_pending("accepted-motion")
 
 
 @pytest.mark.parametrize("guard", ["_arm_uncertain", "_arm_stop_pending"])
@@ -1245,7 +1115,13 @@ def test_following_snapshot_does_not_clear_unknown_or_stopping_motion(
     guard: str, stopped: bool
 ) -> None:
     module = _arm_module_with_two_clients()
-    setattr(module, guard, True)
+    if guard == "_arm_stop_pending":
+        module._interaction.request_manipulation_stop()
+    else:
+        from dimos.ar.manipulation.protocol import ManipulationRequest
+        module._interaction.observe_manipulation_result(
+            ManipulationRequest("uncertain", "execute", "arm", {}), {"status": "uncertain"}
+        )
     module._on_manipulation_snapshot(
         {
             "available": True,
@@ -1259,3 +1135,71 @@ def test_following_snapshot_does_not_clear_unknown_or_stopping_motion(
     _arm_grab(module, "b")
     assert module._interaction.authority is None
     assert module._interaction.motion_busy
+
+
+def test_old_disconnect_does_not_stop_a_valid_suspended_successor():
+    from unittest.mock import Mock
+
+    class SuspendedWs(_FakeWs):
+        @property
+        def logical_session_count(self):
+            return 1
+
+    module = _module_with_policy([])
+    module._ws_server = SuspendedWs()
+    module._ws_server.connection_count = 0
+    service = Mock()
+    module._manipulation_service = service
+    module._interaction.connect("old")
+    module._interaction.connect("current")
+    request = InteractionRequest(
+        "grab", "acquire", epoch=module._interaction.epoch, acquisition_id="acq",
+        kind="manipulation_following", source_id="right", group_id="arm",
+        position=(0.2, 0, 0), orientation=(0, 0, 0, 1),
+    )
+    assert module._interaction.handle("current", request).status == "accepted"
+    module._on_client_suspend("current", time.monotonic() + 1)
+    module._on_client_disconnect(None, "old")
+    assert module._interaction.authority.client_id == "current"
+    service.emergency_stop.assert_not_called()
+
+
+def test_start_after_failed_build_preserves_the_build_error(monkeypatch):
+    from dimos.core.module import Module
+
+    module = ARModule(port=0, ip_relay_url=None)
+
+    def fail_build(_module):
+        raise ValueError("configured camera extrinsic missing")
+
+    monkeypatch.setattr(Module, "build", fail_build)
+    with pytest.raises(ValueError, match="camera extrinsic"):
+        module.build()
+    with pytest.raises(RuntimeError, match="camera extrinsic") as failed_start:
+        module.start()
+    assert isinstance(failed_start.value.__cause__, ValueError)
+    module.stop()
+
+
+@pytest.mark.asyncio
+async def test_new_clients_keep_hardware_capability_and_observe_fault_recovery():
+    from dimos.ar.navigation.control_service import NavigationControlService
+
+    module = _module_with_policy([])
+    native = Mock()
+    native.ar_navigation_recover.return_value = True
+    service = NavigationControlService(native, lambda: ("epoch", 1), Mock(),
+                                       on_recovered=module._broadcast_state)
+    service._fault = True
+    module._navigation_service = service
+    try:
+        hello = module._hello_body("new-client")
+        assert hello.capabilities[CapabilityName.NAVIGATION].available
+        assert module._state_snapshot().nav == NavState("resolved", "failed")
+        service.cancel()
+        await service._recovery
+        assert module._state_snapshot().nav == NavState("idle", None)
+        assert module._hello_body("same-client").capabilities[CapabilityName.NAVIGATION].available
+        assert json.loads(module._ws_server.broadcasts[-1])["nav"]["state"] == "idle"
+    finally:
+        await service.close()

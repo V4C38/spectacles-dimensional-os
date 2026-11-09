@@ -22,7 +22,8 @@ describe("compact panel geometry", () => {
   });
   it("packs entry and status with consistent gaps", () => {
     const r = SETUP_LAYOUTS.entry.rows;
-    expect(r.intro - 1.5 - (r.status + 2)).toBeCloseTo(2);
+    expect(r.intro).toBeUndefined();
+    expect(r.status + 2).toBeCloseTo(14.5);
     expect(r.status - 2 - (r.entry + 3.2)).toBeCloseTo(2);
   });
   it("eases both ends and clamps elapsed time", () => {

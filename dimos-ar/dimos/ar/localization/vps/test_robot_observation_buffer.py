@@ -13,16 +13,7 @@ from dimos.ar.localization.vps.robot_observation_buffer import (
 )
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
-
-
-def _camera_info() -> CameraInfo:
-    return CameraInfo(
-        width=640,
-        height=480,
-        distortion_model="none",
-        D=[],
-        K=[600.0, 0.0, 320.0, 0.0, 600.0, 240.0, 0.0, 0.0, 1.0],
-    )
+from test_support.localization import _camera_info, _image
 
 
 def _push_pose(
@@ -37,10 +28,6 @@ def _push_pose(
         ),
         ts_server=ts_server,
     )
-
-
-def _image(ts: float = 100.0) -> SimpleNamespace:
-    return SimpleNamespace(ts=ts, to_jpeg_bytes=lambda: b"jpeg-bytes")
 
 
 def _buffer() -> tuple[RobotObservationBuffer, PoseBuffer]:

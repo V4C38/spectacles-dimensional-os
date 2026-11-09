@@ -1,3 +1,4 @@
+import { immediateAuthority } from "../fixtures/ImmediateAuthority";
 import { expect, it, vi } from "vitest";
 import { NavigationInteraction, NAV_FEEDBACK_ANIMATION_S, NAV_FEEDBACK_TIMING } from "../../Assets/Scripts/DimOSARClient/navigation/NavigationInteraction";
 import { NavigationPreviewCoordinator } from "../../Assets/Scripts/DimOSARClient/navigation/NavigationPreviewCoordinator";
@@ -6,11 +7,22 @@ import type { ARModuleSessionState } from "../../Assets/Scripts/DimOSARClient/we
 function fixture() {
   const view = { connection: "ready", hasTrackingOrigin: true, capabilities: { navigation: { available: true, nav_goal: { available: true, preview: false } }, estop: { available: true } }, nav: null, nav_goal: null } as unknown as ARModuleSessionState;
   const commands = { sendGoal: vi.fn(), cancel: vi.fn() };
-  const core = new NavigationInteraction(commands, new NavigationPreviewCoordinator({ view: () => view, sendText: vi.fn() }));
   const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
+  let core: NavigationInteraction;
+  let newestGoal: ARModuleSessionState["nav_goal"] = null;
+  const authority = immediateAuthority({ onCommit: pose => commands.sendGoal({ position: pose.position, orientation: pose.orientation }),
+    onState: state => {
+      view.interaction = state;
+      if (state.active_goal !== newestGoal) {
+        newestGoal = state.active_goal; view.nav_goal = state.active_goal;
+        if (core) core.applyView(view, origin, null, 0);
+      }
+    } });
+  core = new NavigationInteraction(commands, new NavigationPreviewCoordinator({ view: () => view,
+    sendText: vi.fn(), collaboration: authority.collaboration }), 6, authority.collaboration);
   core.applyView(view, origin, { position: [0, 0, 0], orientation: [0, 0, 0, 1] }, 0);
   const point = (x = 2, y = 0) => ({ position: [x, y, 0] as [number, number, number], blocked: false });
-  return { core, commands, point, view, origin };
+  return { core, commands, point, view, origin, authority };
 }
 
 it("rejects unselected floor gestures and previews on the first click and sends once on the second", () => {
@@ -329,4 +341,10 @@ it("retires the navigation marker when the blueprint removes navigation despite 
   f.core.applyView(f.view, f.origin, null, 1);
   expect(f.core.snapshot().visible).toBe(false);
   expect(f.core.isRouteVisible()).toBe(false);
+});
+
+
+it("rejects a navigation composition without the required authority port", () => {
+  expect(() => new NavigationInteraction({ sendGoal: () => {}, cancel: () => {} },
+    {} as never, undefined, undefined as never)).toThrow("Navigation requires interaction authority");
 });

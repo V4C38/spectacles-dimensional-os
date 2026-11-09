@@ -3,15 +3,17 @@ import type { TestInfo } from "@playwright/test";
 /** Call only after the containing integration test has run all its assertions. */
 export async function saveCaseProof(
   info: TestInfo,
-  ids: string[],
-  images: string[] = [],
+  caseImages: Record<string, string> = {},
   assertions: Record<string, string[]> = {},
 ) {
   await mkdir(info.outputDir, { recursive: true });
-  if (!images.length)
-    images = (await readdir(info.outputDir))
-      .filter((file) => file.endsWith(".png"))
-      .sort();
+  const images = (await readdir(info.outputDir)).filter(file => file.endsWith(".png")).sort();
+  const ids = Object.keys(caseImages);
+  if (info.status === "passed") {
+    for (const [id, file] of Object.entries(caseImages)) {
+      if (!images.includes(file)) throw new Error(`Missing explicit image for ${id}: ${file}`);
+    }
+  }
   await writeFile(
     info.outputPath("case-results.json"),
     JSON.stringify(
@@ -22,17 +24,8 @@ export async function saveCaseProof(
           passed: info.status === "passed",
         }))),
         images: [
-          ...ids.flatMap((id) =>
-            images.length
-              ? [
-                  {
-                    id,
-                    file: images.find((file) => file.includes(id)) ?? images[0],
-                  },
-                ]
-              : [],
-          ),
-          ...images.map((file) => ({
+          ...ids.filter(id => images.includes(caseImages[id])).map(id => ({ id, file: caseImages[id] })),
+          ...images.filter(file => !Object.values(caseImages).includes(file)).map((file) => ({
             id: file.replace(/\.png$/, "").replace(/-/g, "_"),
             file,
           })),

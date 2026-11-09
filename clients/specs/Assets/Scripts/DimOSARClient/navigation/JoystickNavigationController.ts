@@ -1,3 +1,4 @@
+import type { InteractionAuthorityPort } from "../replication/CollaborationTypes";
 import type { ARModuleSession } from "../websocket/arModuleSession";
 import { requestNavJoystick } from "./navJoystickRequest";
 
@@ -23,7 +24,9 @@ export class JoystickNavigationController {
   private lastSentAt = Number.NEGATIVE_INFINITY;
   private held = false;
 
-  constructor(private readonly session: Pick<ARModuleSession, "view" | "sendText"> & Partial<Pick<ARModuleSession, "collaboration">>) {}
+  constructor(private readonly session: Pick<ARModuleSession, "view" | "sendText"> & { collaboration: InteractionAuthorityPort }) {
+    if (!session.collaboration) throw new Error("Navigation requires interaction authority");
+  }
 
   tick(now: number, axes: JoystickAxes | null): void {
     if (this.session.view().connection !== "ready" || this.session.view().capabilities?.navigation.nav_joystick.available !== true) {
@@ -41,11 +44,9 @@ export class JoystickNavigationController {
       }
       return;
     }
-    if (this.session.collaboration) {
-      if (!this.session.collaboration.begin("joystick", "joystick")) return;
-      this.held = true;
-      if (!this.session.collaboration.snapshot().ownsAuthority) return;
-    }
+    if (!this.session.collaboration.begin("joystick", "joystick")) return;
+    this.held = true;
+    if (!this.session.collaboration.snapshot().ownsAuthority) return;
     if (now - this.lastSentAt < JOYSTICK_SEND_INTERVAL_S) {
       this.held = true;
       return;
@@ -66,11 +67,6 @@ export class JoystickNavigationController {
   }
 
   private sendZero(): void {
-    if (this.session.collaboration) { this.session.collaboration.release(undefined, ["joystick"]); return; }
-    try {
-      requestNavJoystick(this.session, { linear: [0, 0, 0], angular: [0, 0, 0] });
-    } catch {
-      this.held = false;
-    }
+    this.session.collaboration.release(undefined, ["joystick"]);
   }
 }

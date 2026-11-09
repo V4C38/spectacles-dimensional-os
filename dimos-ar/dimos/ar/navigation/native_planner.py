@@ -164,6 +164,20 @@ class ARReplanningAStarPlanner(ReplanningAStarPlanner):  # type: ignore[misc]
         return self._ar_fence.heartbeat(epoch, revision, deadline)
 
     @rpc  # type: ignore[untyped-decorator]
+    def ar_navigation_recover(self, epoch: str, revision: int, deadline: float) -> bool:
+        if not self._ar_fence.heartbeat(epoch, revision, deadline):
+            return False
+        self._ar_fence.halt()
+        self._emit_stop_velocity()
+        if self._ar_stop_write_failed or not self._planner._lock.acquire(blocking=False):
+            return False
+        try:
+            self._planner.retire_goal_requests()
+            return self._planner._current_goal is None
+        finally:
+            self._planner._lock.release()
+
+    @rpc  # type: ignore[untyped-decorator]
     def ar_navigation_goal(
         self, goal: PoseStamped, epoch: str, revision: int, deadline: float
     ) -> bool:

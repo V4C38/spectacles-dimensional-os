@@ -1,4 +1,5 @@
 import type { BindableWebSocketTransport, ClientClock } from "./hostPorts";
+import { validateManipulationModel } from "../manipulation/ManipulationModelValidation";
 
 export const BULK_RECORD_BYTES = 16384;
 export const BULK_UPLOAD_BYTES = 4194304;
@@ -313,6 +314,7 @@ export class BulkTransfer {
       Object.freeze(entry.first); Object.freeze(entry.second);
       entry.value = entry.kind === "model" ? { ...entry.metadata, links: entry.first, joints: entry.second }
         : { ...entry.metadata, [entry.kind === "trajectory" ? "trajectory" : "path_poses"]: entry.first };
+      if (entry.kind === "model") validateManipulationModel(entry.value);
       Object.freeze(entry.value); validatedAssets.add(entry.value);
       validatedArrays.set(entry.first, { names: entry.kind === "trajectory" ? entry.metadata.joint_names as string[] : undefined, lastTime: entry.lastTime });
       this.wanted.delete(id); this.changed();

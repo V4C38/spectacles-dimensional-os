@@ -1,26 +1,12 @@
 from __future__ import annotations
 
 import threading
-import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
-from dimos.ar.manipulation.test_runtime import runtime
-
-
-def _request(action: str, revision: int = 1, target: int = 7, lease: str | None = "grab-a", **body):
-    return {
-        "action": action,
-        "group_id": "arm",
-        "authority_epoch": "robot-reference",
-        "authority_lease": lease,
-        "authority_revision": revision,
-        "target_revision": target,
-        "authority_deadline": time.monotonic() + 1,
-        **body,
-    }
+from test_support.manipulation import _request, runtime
 
 
 def _plan_request(**body):
@@ -56,18 +42,25 @@ def test_released_selected_plan_is_robot_owned_and_another_client_can_execute():
     assert module.operation.id is not None
 
 
-def test_busy_plan_rejection_preserves_accepted_plan_and_generation():
+@pytest.mark.parametrize("dispatch", [False, True])
+def test_busy_plan_rejection_preserves_accepted_plan_and_generation(dispatch):
     module = runtime()
+    if dispatch:
+        module.session.owner, module.session.group_id = "a", "arm"
+    owner = module.session.owner
     module.operation.plan = {"plan_id": "existing"}
     generation = module.session.generation
     module.planning.acquire()
     try:
-        with pytest.raises(ValueError, match="pending"):
-            module.command("a", _plan_request())
+        if dispatch:
+            assert module.dispatch("a", _plan_request())["code"] == "busy"
+        else:
+            with pytest.raises(ValueError, match="pending"):
+                module.command("a", _plan_request())
     finally:
         module.planning.release()
     assert module.operation.plan == {"plan_id": "existing"}
-    assert module.session.owner is None
+    assert module.session.owner == owner
     assert module.session.generation == generation
 
 
@@ -352,3 +345,21 @@ def test_slow_full_plan_does_not_block_fast_advisory_ik():
     finally:
         finish.set()
         worker.join(3)
+
+
+def test_late_old_release_cannot_retire_successor_execution():
+    module = runtime()
+    _planning_backend(module)
+    module.command("a", _plan_request())
+    module.revoke_authority("robot-reference", "grab-a", 2, "released")
+    result = module.command("b", _request("execute", revision=3, lease=None,
+                                           plan_id="checked-plan"))
+    assert result["status"] == "accepted"
+    operation = module.operation.id
+    generation = module.session.generation
+    module.revoke_authority("robot-reference", "grab-a", 2, "released")
+    assert module.operation.id == operation
+    assert module.session.generation == generation
+    assert not module.session.stopped
+    module.adapter.set_estop.assert_not_called()
+    module.adapter.cancel.assert_not_called()

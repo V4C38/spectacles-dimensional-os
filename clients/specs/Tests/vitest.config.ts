@@ -3,16 +3,13 @@ import { fileURLToPath } from "node:url";
 
 const uikitMock = fileURLToPath(new URL("./mocks/UIKit.ts", import.meta.url));
 const animateMock = fileURLToPath(new URL("./mocks/animate.ts", import.meta.url));
-const interactorLineRendererMock = fileURLToPath(
-  new URL("./mocks/InteractorLineRenderer.ts", import.meta.url),
-);
 const interactableMock = fileURLToPath(new URL("./mocks/Interactable.ts", import.meta.url));
 const roundButtonMock = fileURLToPath(new URL("./mocks/RoundButton.ts", import.meta.url));
 const handInputDataMock = fileURLToPath(new URL("./mocks/HandInputData.ts", import.meta.url));
 
 function isUIKitImport(source: string): boolean {
   const normalized = source.replace(/\\/g, "/");
-  return /(?:\.\/)?(?:App\/UI\/UIKit|DimOSSpecsClient\/presentation\/UIKit)(\.ts)?$/.test(
+  return /(?:\.\/)?DimOSSpecsClient\/presentation\/UIKit(\.ts)?$/.test(
     normalized,
   );
 }
@@ -20,13 +17,6 @@ function isUIKitImport(source: string): boolean {
 function isAnimateImport(source: string): boolean {
   const normalized = source.replace(/\\/g, "/");
   return /SpectaclesInteractionKit\.lspkg\/Utils\/animate$/.test(normalized);
-}
-
-function isInteractorLineRendererImport(source: string): boolean {
-  const normalized = source.replace(/\\/g, "/");
-  return /SpectaclesInteractionKit\.lspkg\/Components\/Interaction\/InteractorLineVisual\/InteractorLineRenderer$/.test(
-    normalized,
-  );
 }
 
 function isInteractableImport(source: string): boolean {
@@ -63,9 +53,6 @@ export default defineConfig({
         if (isAnimateImport(source)) {
           return animateMock;
         }
-        if (isInteractorLineRendererImport(source)) {
-          return interactorLineRendererMock;
-        }
         if (isInteractableImport(source)) {
           return interactableMock;
         }
@@ -78,12 +65,8 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      "./UI/UIKit": uikitMock,
+      "SpectaclesUIKit.lspkg/Scripts/Components/Frame/Frame": fileURLToPath(new URL("./mocks/Frame.ts", import.meta.url)),
       "./UIKit": uikitMock,
-      "../App/UI/UIKit": uikitMock,
-      "../../App/UI/UIKit": uikitMock,
-      "../UI/UIKit": uikitMock,
-      "../../UI/UIKit": uikitMock,
       "../DimOSSpecsClient/presentation/UIKit": uikitMock,
       "../../DimOSSpecsClient/presentation/UIKit": uikitMock,
       "../presentation/UIKit": uikitMock,
@@ -95,8 +78,6 @@ export default defineConfig({
       "SpectaclesInteractionKit.lspkg/Core/InteractionManager/InteractionManager": fileURLToPath(new URL("./mocks/InteractionManager.ts", import.meta.url)),
       "SpectaclesInteractionKit.lspkg/Core/Interactor/Interactor": fileURLToPath(new URL("./mocks/Interactor.ts", import.meta.url)),
       "SpectaclesInteractionKit.lspkg/Providers/CursorControllerProvider/CursorControllerProvider": fileURLToPath(new URL("./mocks/CursorControllerProvider.ts", import.meta.url)),
-      "SpectaclesInteractionKit.lspkg/Components/Interaction/InteractorLineVisual/InteractorLineRenderer":
-        interactorLineRendererMock,
       "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable":
         interactableMock,
       "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton": roundButtonMock,
@@ -108,10 +89,13 @@ export default defineConfig({
   test: {
     environment: "node",
     globals: true,
+    reporters: ["default", "json"],
+    outputFile: { json: fileURLToPath(new URL("../../../Review Data/unit/specs/results.json", import.meta.url)) },
     include: ["DimOSARClient/**/*.test.ts", "DimOSSpecsClient/**/*.test.ts", "naming.test.ts"],
     setupFiles: ["./setup/lens-globals.ts"],
     coverage: {
       provider: "v8",
+      reportsDirectory: fileURLToPath(new URL("../../../Review Data/coverage/specs", import.meta.url)),
       allowExternal: true,
       include: [
         "../Assets/Scripts/DimOSARClient/**/*.ts",

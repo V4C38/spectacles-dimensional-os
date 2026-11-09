@@ -27,6 +27,8 @@ ASSET_MAX_BYTES = 16_777_216
 CACHE_MAX_BYTES = 67_108_864
 CACHE_MAX_ASSETS = 32
 BULK_BYTES_PER_SECOND = 1_048_576
+MAX_BULK_RECORD_BYTES = 65_536
+CONTROL_PRIORITY_GRACE_S = 0.05
 
 
 def dumps(value: object) -> str:
@@ -222,7 +224,7 @@ class BulkPeer:
     ) -> None:
         self.websocket, self.epoch, self.budget = websocket, epoch, budget
         self._active, self._controls_pending = active, controls_pending
-        self._local = TokenBucket(BULK_BYTES_PER_SECOND, CHUNK_BYTES * 2)
+        self._local = TokenBucket(BULK_BYTES_PER_SECOND, MAX_BULK_RECORD_BYTES)
         self._assets: OrderedDict[tuple[str, str], BulkAsset] = OrderedDict()
         self._latest: OrderedDict[tuple[str, str], str] = OrderedDict()
         self._lidar: bytes | None = None
@@ -254,16 +256,21 @@ class BulkPeer:
         self._wake.set()
 
     def lidar(self, data: bytes) -> None:
-        if len(data) <= 65_536:
+        if len(data) <= MAX_BULK_RECORD_BYTES:
             self._lidar = data
             self._wake.set()
 
     async def consume(self, size: int) -> None:
+        if not 0 <= size <= min(MAX_BULK_RECORD_BYTES, self.budget.capacity):
+            raise ValueError("bulk record exceeds the available burst capacity")
+        priority_deadline = asyncio.get_running_loop().time() + CONTROL_PRIORITY_GRACE_S
         while True:
             self._local.rate = BULK_BYTES_PER_SECOND / max(1, self._active())
             self.budget.take(0)
             self._local.take(0)
-            if (not self._controls_pending() and self.budget.tokens >= size
+            if ((not self._controls_pending()
+                 or asyncio.get_running_loop().time() >= priority_deadline)
+                    and self.budget.tokens >= size
                     and self._local.tokens >= size):
                 self.budget.take(size)
                 self._local.take(size)

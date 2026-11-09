@@ -1,9 +1,11 @@
 import { readdir } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { finalize } from "../../../tools/integration-tests/finalize.mjs";
-const root = resolve("tests/integration-tests/test-results");
-const names = (await readdir(root, { withFileTypes: true })).filter(row => row.isDirectory() && /^\d{4}-/.test(row.name)).map(row => row.name).sort();
-const run = process.argv[2] ? resolve(process.argv[2]) : names.length ? join(root, names.at(-1)) : null;
+import { reviewDataRoot } from "../../../tools/integration-tests/artifacts.mjs";
+const root = join(reviewDataRoot, "webxr");
+const explicit = process.argv[2] ?? process.env.INTEGRATION_RESULTS_DIR;
+const names = explicit ? [] : (await readdir(root, { withFileTypes: true })).filter(row => row.isDirectory() && /^\d{4}-/.test(row.name)).map(row => row.name).sort();
+const run = explicit ? resolve(explicit) : names.length ? join(root, names.at(-1)) : null;
 if (!run) throw new Error("No integration run found; run npm run test:integration first");
 const result = await finalize(run, "webxr");
 process.stdout.write(`${result.passed ? "PASS" : "FAIL"}: ${run}\n`);

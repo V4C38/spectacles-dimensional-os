@@ -21,6 +21,7 @@ class OperationOutcome:
 class ManipulationOperation:
     plan: dict[str, Any] | None = None
     id: str | None = None
+    admitting: bool = False
     kind: Literal["executing", "resetting", "parking"] | None = None
     final_gripper: tuple[str, float, dict[str, float]] | None = None
     gripper_completion_at: float | None = None
@@ -46,6 +47,7 @@ class ManipulationOperation:
         self.last_measurement_ts = None
         self.plan = None
         self.id = None
+        self.admitting = False
         self.kind = None
         self.final_gripper = None
         self.gripper_completion_at = None
@@ -80,7 +82,7 @@ class ManipulationOperation:
     def advance(
         self, backend: ManipulationBackend, *, stopped: bool, feedback_max_age_s: float
     ) -> bool:
-        if self.id is None or self.kind in {"resetting", "parking"}:
+        if self.id is None or self.admitting or self.kind in {"resetting", "parking"}:
             return False
         state = backend.get_state()
         if state.execution_status.name in {"IDLE", "UNCERTAIN"}:

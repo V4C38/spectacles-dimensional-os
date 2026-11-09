@@ -4,7 +4,7 @@
 assets/** filter=lfs diff=lfs merge=lfs -text
 assets/**/*.py !filter !diff !merge text
 
-# Generated architecture reports are binary artifacts even when their PDF streams are ASCII.
-docs/**/*.pdf binary
-
 # Lens Studio LFS and merge rules live in clients/specs/.gitattributes
+
+# Native generator templates are binary tooling inputs, outside shipped Lens assets.
+clients/specs/tools/shaders/templates/*.ss_graph binary

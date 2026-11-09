@@ -8,7 +8,6 @@ import {
 import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
 import type { Vec3 } from "../../DimOSARClient/websocket/protocolTypes";
 import { clientTrackingToSpecsPoint } from "../utilities/SpecsCoordinates";
-import { findText } from "./UIKit";
 
 export interface ARMarkerPresenterDeps {
   parent: SceneObject;
@@ -44,11 +43,11 @@ export class ARMarkerPresenter {
     const existing = this._entries.get(args.id);
     if (existing) {
       existing.args = args;
-      applyVisual(existing.root, composed.position, composed.title);
+      placeMarker(existing.root, composed.position);
       return { ok: true };
     }
     const root = this._markerPrefab.instantiate(this._parent);
-    applyVisual(root, composed.position, composed.title);
+    placeMarker(root, composed.position);
     this._entries.set(args.id, { root, args, progress: 0 });
     return { ok: true };
   }
@@ -56,19 +55,13 @@ export class ARMarkerPresenter {
   public recompose(origin: ClientTrackingOrigin): void {
     for (const entry of this._entries.values()) {
       const composed = composePlaceArMarker(entry.args, origin);
-      applyVisual(entry.root, composed.position, composed.title);
+      placeMarker(entry.root, composed.position);
     }
   }
 
   public update(eye: vec3, deltaS: number): void {
     for (const entry of this._entries.values()) {
       if (!entry.visual) {
-        const hide = (root: SceneObject) => {
-          for (const visual of root.getComponents("Component.RenderMeshVisual")) visual.enabled = false;
-          const text = root.getComponent("Component.Text"); if (text) text.enabled = false;
-          for (let i = 0; i < root.getChildrenCount(); i++) hide(root.getChild(i));
-        };
-        hide(entry.root);
         const orb = new WorldMeshRenderer(entry.root, "WorldMarkerIndicator", requireAsset("../../../Materials/PoseIndicator.mat") as Material);
         const label = global.scene.createSceneObject("WorldMarkerLabel"); label.setParent(entry.root);
         label.getTransform().setLocalPosition(new vec3(0, 10, 0));
@@ -116,30 +109,12 @@ export class ARMarkerPresenter {
   }
 }
 
-function applyVisual(root: SceneObject, trackingPosition: Vec3, title: string): void {
+function placeMarker(root: SceneObject, trackingPosition: Vec3): void {
   const position = clientTrackingToSpecsPoint(trackingPosition);
   root.getTransform().setWorldPosition(toVec3(position));
-  const text = findText(root, "ObjectName") ?? findFirstTextFallback(root);
-  if (text) {
-    text.text = title;
-  }
   root.enabled = true;
 }
 
 function toVec3(value: Vec3): vec3 {
   return new vec3(value[0], value[1], value[2]);
-}
-
-function findFirstTextFallback(root: SceneObject): Text | null {
-  const direct = root.getComponent("Component.Text") as Text | null;
-  if (direct) {
-    return direct;
-  }
-  for (let i = 0; i < root.getChildrenCount(); i++) {
-    const nested = findFirstTextFallback(root.getChild(i));
-    if (nested) {
-      return nested;
-    }
-  }
-  return null;
 }

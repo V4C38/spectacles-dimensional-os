@@ -14,9 +14,9 @@ import pytest
 import websockets
 
 from dimos.ar.navigation.coordinator import NavGoalCoordinator
-from dimos.ar.test_module import _module_with_policy
 from dimos.ar.websocket.server import WebSocketServer
-from dimos.ar.websocket.test_server import ServerHarness, _sample_hello
+from test_support.module import _module_with_policy
+from test_support.websocket import ServerHarness, _sample_hello
 
 
 async def receive(ws, kind, request_id=None):

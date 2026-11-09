@@ -41,6 +41,7 @@ def describe_model(
     *,
     visual_profile: str | None = None,
     gripper_open_at_lower: list[str] | None = None,
+    gripper_joint_names: list[str] | None = None,
 ) -> dict[str, Any]:
     import trimesh
 
@@ -142,14 +143,15 @@ def describe_model(
         for j in joints
         if j["kind"] == "prismatic" and j["limits"] is not None and j["mimic"] is None
     }
-    if not reversed_joints.issubset(articulated):
+    selected = set(gripper_joint_names if gripper_joint_names is not None else reversed_joints)
+    if not selected.issubset(articulated) or not reversed_joints.issubset(selected):
         raise ValueError("Gripper articulation requires independent bounded prismatic joints")
     gripper_joints = {
         name: {
             "closed": joint["limits"]["upper" if name in reversed_joints else "lower"],
             "open": joint["limits"]["lower" if name in reversed_joints else "upper"],
         }
-        for name, joint in articulated.items()
+        for name, joint in articulated.items() if name in selected
     }
     return {
         "visual_signature": signature,

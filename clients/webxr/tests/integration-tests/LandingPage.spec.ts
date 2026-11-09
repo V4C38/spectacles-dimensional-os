@@ -61,4 +61,4 @@ test("prioritizes robot features with compact technical footnotes on desktop and
   await page.screenshot({ path: info.outputPath("landing-mobile.png"), fullPage: true });
 });
 
-test.afterEach(async ({}, info) => saveCaseProof(info, ["launcher_responsive"]));
+test.afterEach(async ({}, info) => saveCaseProof(info, { launcher_responsive: "landing-mobile.png" }));

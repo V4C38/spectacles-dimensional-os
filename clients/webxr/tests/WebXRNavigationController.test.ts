@@ -1,7 +1,8 @@
+import { immediateAuthority } from "../../specs/Tests/fixtures/ImmediateAuthority";
 import { describe, expect, it, vi } from "vitest";
 import { NAV_FEEDBACK_ANIMATION_S, NAV_FEEDBACK_TIMING } from "@dimos-ar-client/navigation/NavigationGoalLifecycle";
 import type { ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSession";
-import type { Capabilities, Hello } from "@dimos-ar-client/websocket/protocolTypes";
+import type { Capabilities, Hello, NavGoal, YawPose } from "@dimos-ar-client/websocket/protocolTypes";
 import {
   FLASH_DURATION_S,
   WebXRNavigationController,
@@ -55,6 +56,7 @@ describe("WebXRNavigationController", () => {
   it("starts a failed flash from nav facts and hides the route", () => {
     const sendText = vi.fn();
     const session = {
+      collaboration: immediateAuthority().collaboration,
       view: () => view(),
       sendText,
       requestEstop: vi.fn(),
@@ -85,6 +87,7 @@ describe("WebXRNavigationController", () => {
 
   it("gates hold without nav_goal capability", () => {
     const session = {
+      collaboration: immediateAuthority().collaboration,
       view: () =>
         view({
           capabilities: {
@@ -111,6 +114,7 @@ describe("WebXRNavigationController", () => {
   it("moves the marker along a floor ray hit while holding", () => {
     const sendText = vi.fn();
     const session = {
+      collaboration: immediateAuthority().collaboration,
       view: () => view(),
       sendText,
       requestEstop: vi.fn(),
@@ -140,7 +144,9 @@ describe("WebXRNavigationController", () => {
 
   it("previews a floor gesture and sends only after a second complete gesture", () => {
     const sendText = vi.fn();
-    const navigation = new WebXRNavigationController({ view: () => view(), sendText, requestEstop: vi.fn() } as never);
+    const commits = vi.fn();
+    const authority = immediateAuthority({ onCommit: commits });
+    const navigation = new WebXRNavigationController({ collaboration: authority.collaboration, view: () => view(), sendText, requestEstop: vi.fn() } as never);
     const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
     navigation.applyView(view(), origin, { position: [0, 0, 0], orientation: [0, 0, 0, 1] }, 1);
     navigation.setSelected(true);
@@ -149,23 +155,23 @@ describe("WebXRNavigationController", () => {
     expect(navigation.isAiming()).toBe(true);
     expect(navigation.draftMarker.object.visible).toBe(true);
     expect(navigation.marker.pose().position[2]).toBe(0);
-    expect(sendText).not.toHaveBeenCalled();
+    expect(commits).not.toHaveBeenCalled();
     navigation.release(4, [0, 1.5, 0], [0, -1, -1], hit(-4), null, 0);
-    expect(sendText).not.toHaveBeenCalled();
+    expect(commits).not.toHaveBeenCalled();
     expect(navigation.isAiming()).toBe(true);
     navigation.tick(4.01, 1);
     expect(navigation.draftMarker.circleBounds().radius).toBeCloseTo(navigation.marker.circleBounds().radius);
     expect(navigation.draftMarker.object.getObjectByName("Navigation draft circle")!.visible).toBe(true);
     navigation.hold(4.1, [0, 1.5, 0], [0, -1, -1], hit(-4), null, 0, false);
     navigation.release(4.2, [0, 1.5, 0], [0, -1, -1], hit(-4), null, 0);
-    expect(sendText).toHaveBeenCalledOnce();
-    expect(sendText.mock.calls[0][0]).toContain("nav_goal_request");
+    expect(commits).toHaveBeenCalledOnce();
+    expect(authority.commands.at(-1)).toMatchObject({ action: "confirm" });
     navigation.dispose();
   });
 
   it("smooths the dragged heading so it turns over several centimetres of travel", () => {
     const sendText = vi.fn();
-    const navigation = new WebXRNavigationController({ view: () => view(), sendText, requestEstop: vi.fn() } as never);
+    const navigation = new WebXRNavigationController({ collaboration: immediateAuthority().collaboration, view: () => view(), sendText, requestEstop: vi.fn() } as never);
     const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
     navigation.applyView(view(), origin, { position: [0, 0, 0], orientation: [0, 0, 0, 1] }, 1);
     const floorHit = (x: number) => [{ position: [x, 0, -0.5] as [number, number, number], normal: [0, 1, 0] as [number, number, number] }];
@@ -193,7 +199,9 @@ describe("WebXRNavigationController", () => {
 function fixture(previewSupported = false) {
   const current = view({ capabilities: { ...capabilities, navigation: { ...capabilities.navigation, nav_goal: { available: true, reason: null, preview: previewSupported } } } });
   const sendText = vi.fn();
-  const navigation = new WebXRNavigationController({ view: () => current, sendText, requestEstop: vi.fn() } as never);
+  const commits = vi.fn();
+  const authority = immediateAuthority({ onCommit: commits });
+  const navigation = new WebXRNavigationController({ collaboration: authority.collaboration, view: () => current, sendText, requestEstop: vi.fn() } as never);
   const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
   const floor = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number] };
   navigation.applyView(current, origin, floor, 0);
@@ -202,7 +210,7 @@ function fixture(previewSupported = false) {
   const hold = (now: number, x = 1, z = -2) => navigation.hold(now, [0, 1.5, 0], [0, -1, -1], hit(x, z), null, 0, false);
   const release = (now: number, x = 1, z = -2) => navigation.release(now, [0, 1.5, 0], [0, -1, -1], hit(x, z), null, 0);
   const preview = (now = 0, x = 1, z = -2) => { aim(now, x, z); hold(now, x, z); release(now, x, z); };
-  return { current, sendText, navigation, origin, floor, aim, hold, release, preview };
+  return { current, sendText, commits, authority, navigation, origin, floor, aim, hold, release, preview };
 }
 
 it("rejects unselected floor clicks and confirms a stationary selected click with its previous heading", () => {
@@ -216,9 +224,9 @@ it("rejects unselected floor clicks and confirms a stationary selected click wit
   expect(f.sendText).not.toHaveBeenCalled();
   expect(f.navigation.isAiming()).toBe(true);
   f.hold(0.5); f.release(0.6);
-  expect(f.sendText).toHaveBeenCalledOnce();
+  expect(f.commits).toHaveBeenCalledOnce();
   expect(f.navigation.marker.pose()).toEqual({ position: [1, 0, -2], orientation: heading });
-  expect(JSON.parse(f.sendText.mock.calls[0][0]).preview).toBeUndefined();
+  expect(f.authority.commands.at(-1)).toMatchObject({ action: "confirm" });
   f.navigation.dispose();
 });
 
@@ -232,7 +240,7 @@ it("turns during idle aim and freezes the displayed heading on press", () => {
   expect(f.navigation.draftMarker.pose().orientation[1]).toBeLessThan(-0.5);
   expect(f.sendText).not.toHaveBeenCalled();
   f.release(1.1, 3);
-  expect(f.sendText).toHaveBeenCalledOnce();
+  expect(f.commits).toHaveBeenCalledOnce();
   f.navigation.dispose();
 });
 
@@ -269,55 +277,57 @@ it("gates previews on advertised support and permits confirmation without a path
   expect(f.sendText).not.toHaveBeenCalled();
   f.hold(3); f.release(4);
   f.hold(5); f.release(6);
-  expect(f.sendText).toHaveBeenCalledOnce(); f.navigation.dispose();
+  expect(f.commits).toHaveBeenCalledOnce(); f.navigation.dispose();
 });
 
-it("serializes preview requests, retains the latest aim and rejects obsolete replies", () => {
-  const f = fixture(true); f.navigation.setSelected(true);
-  f.preview(0); f.aim(0.1, 2); f.aim(0.2, 3); f.navigation.tick(1);
-  expect(f.sendText).toHaveBeenCalledOnce();
-  expect(JSON.parse(f.sendText.mock.calls[0][0]).preview).toBe(true);
-  f.current.nav_preview = { type: "nav_goal", preview: true, preview_id: JSON.parse(f.sendText.mock.calls.at(-1)![0]).preview_id, pose: [1, 2, 0, 0], path_poses: [[0, 0, 0, 0], [1, 2, 0, 0]], ts: 1 };
-  f.navigation.applyView(f.current, f.origin, f.floor, 1);
-  expect(f.navigation.previewPath()).toBeNull();
-  f.navigation.tick(1.1);
-  expect(f.sendText).toHaveBeenCalledTimes(2);
-  f.current.nav_preview = { ...f.current.nav_preview, preview_id: JSON.parse(f.sendText.mock.calls.at(-1)![0]).preview_id, ts: 2 };
-  f.navigation.applyView(f.current, f.origin, f.floor, 1.2);
-  expect(f.navigation.previewPath()).toHaveLength(2);
+it("renders canonical server previews and rejects obsolete collaboration revisions", () => {
+  const f = fixture(true); f.navigation.setSelected(true); f.preview(0);
+  const path: YawPose[] = [[0, 0, 0, 0], [2, -1, 0, 0]];
+  const frame: NavGoal = { type: "nav_goal", preview: true,
+    preview_id: JSON.parse(f.sendText.mock.lastCall![0]).preview_id,
+    pose: [2, -1, 0, 0], path_poses: path, ts: 1 };
+  f.authority.state.preview = frame; f.authority.publish();
+  expect(f.navigation.previewPath()).toEqual(path);
+  const obsolete = { ...f.authority.state, preview: frame };
   f.navigation.clearAim();
+  f.authority.state.preview = null; f.authority.publish();
   expect(f.navigation.previewPath()).toBeNull();
+  expect(f.authority.collaboration.apply(obsolete)).toBe(false);
+  expect(f.navigation.previewPath()).toBeNull();
+  expect(f.commits).not.toHaveBeenCalled();
   f.navigation.dispose();
 });
 
-it("invalidates previews across aim episodes and refreshes on a new costmap", () => {
+it("refreshes canonical preview requests on a new costmap without confirming movement", () => {
   const f = fixture(true); f.navigation.setSelected(true); f.preview(0);
-  f.navigation.clearAim(); f.preview(0.5);
-  f.current.nav_preview = { type: "nav_goal", preview: true, preview_id: JSON.parse(f.sendText.mock.calls.at(-1)![0]).preview_id, pose: null, path_poses: [], ts: 1 };
-  f.navigation.applyView(f.current, f.origin, f.floor, 0.6);
-  expect(f.navigation.previewPath()).toBeNull();
-  f.navigation.tick(0.7);
-  expect(f.sendText).toHaveBeenCalledTimes(2);
-  f.current.nav_preview = { ...f.current.nav_preview, preview_id: JSON.parse(f.sendText.mock.calls.at(-1)![0]).preview_id, ts: 2 };
-  f.navigation.applyView(f.current, f.origin, f.floor, 0.8);
+  const frame: NavGoal = { type: "nav_goal", preview: true,
+    preview_id: JSON.parse(f.sendText.mock.lastCall![0]).preview_id,
+    pose: [2, -1, 0, 0], path_poses: [], ts: 1 };
+  f.current.nav_preview = frame; f.authority.state.preview = frame; f.authority.publish();
+  f.navigation.applyView(f.current, f.origin, f.floor, .1);
   expect(f.navigation.previewPath()).toEqual([]);
+  const before = f.sendText.mock.calls.length;
   f.current.state = { type: "state", nav_preview_costmap_ts: 10, server: { connected_clients: 1 }, lidar: { enabled: false, min_height_m: 0, max_height_m: 1, max_range_m: 5 }, nav: { state: "idle", outcome: null }, agent: { idle: true } };
   f.navigation.applyView(f.current, f.origin, f.floor, 1);
   f.navigation.tick(1.1);
-  expect(f.sendText).toHaveBeenCalledTimes(3);
+  expect(f.sendText).toHaveBeenCalledTimes(before + 1);
+  expect(JSON.parse(f.sendText.mock.lastCall![0]).preview).toBe(true);
+  expect(f.commits).not.toHaveBeenCalled();
   f.navigation.dispose();
 });
 
-
-it("throttles small aim drift and refreshes after a material heading change", () => {
+it("predicts local aim while retaining only the canonical route until the server changes it", () => {
   const f = fixture(true); f.navigation.setSelected(true); f.preview(0);
-  f.current.nav_preview = { type: "nav_goal", preview: true, preview_id: JSON.parse(f.sendText.mock.calls.at(-1)![0]).preview_id, pose: null, path_poses: [], ts: 1 };
-  f.navigation.applyView(f.current, f.origin, f.floor, 0.1);
-  f.aim(0.2, 1.01); f.navigation.tick(0.4);
-  expect(f.sendText).toHaveBeenCalledOnce();
-  f.aim(0.5, 1.1); f.aim(1, 1.15);
-  f.navigation.tick(1.1);
-  expect(f.sendText).toHaveBeenCalledTimes(2);
+  const path: YawPose[] = [[0, 0, 0, 0], [2, -1, 0, 0]];
+  const frame: NavGoal = { type: "nav_goal", preview: true,
+    preview_id: JSON.parse(f.sendText.mock.lastCall![0]).preview_id,
+    pose: [2, -1, 0, 0], path_poses: path, ts: 1 };
+  f.current.nav_preview = frame; f.authority.state.preview = frame; f.authority.publish();
+  f.navigation.applyView(f.current, f.origin, f.floor, .1);
+  f.aim(.2, 1.01); f.navigation.tick(.4);
+  expect(f.navigation.draftMarker.pose().position).toEqual([1.01, 0, -2]);
+  expect(f.navigation.previewPath()).toEqual(path);
+  expect(f.commits).not.toHaveBeenCalled();
   f.navigation.dispose();
 });
 
@@ -438,7 +448,7 @@ it("replays Cancel reveal when a selected floor draft replaces an existing goal,
   f.preview(2, 3);
   expect(buttonRoot.scale.x).toBeCloseTo(1); // Preview preserves the current goal's Cancel.
   f.hold(3, 3); f.release(3.1, 3);
-  expect(f.sendText).toHaveBeenCalledOnce();
+  expect(f.commits).toHaveBeenCalledOnce();
   expect(buttonRoot.scale.x).toBe(0);
   f.navigation.tick(3.24, 0.14);
   expect(buttonRoot.scale.x).toBeCloseTo(0.5);

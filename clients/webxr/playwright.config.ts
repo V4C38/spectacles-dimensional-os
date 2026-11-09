@@ -1,9 +1,10 @@
 import { defineConfig } from "@playwright/test";
+import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   testDir: "./tests/integration-tests",
   workers: 1,
-  outputDir: process.env.INTEGRATION_RESULTS_DIR ? `${process.env.INTEGRATION_RESULTS_DIR}/diagnostics/playwright` : "tests/integration-tests/test-results/playwright",
+  outputDir: process.env.INTEGRATION_RESULTS_DIR ? `${process.env.INTEGRATION_RESULTS_DIR}/diagnostics/playwright` : fileURLToPath(new URL("../../Review Data/webxr/playwright", import.meta.url)),
   timeout: 30000,
   expect: { timeout: 15000 },
   use: {
@@ -12,7 +13,7 @@ export default defineConfig({
     viewport: { width: 1280, height: 900 },
     launchOptions: { args: [process.platform === "darwin" ? "--use-angle=metal" : "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] },
     screenshot: "only-on-failure",
-    video: { mode: "on", size: { width: 1280, height: 900 } },
+    video: { mode: process.env.INTEGRATION_EXTRA_MEDIA === "1" ? "on" : "retain-on-failure", size: { width: 1280, height: 900 } },
   },
   webServer: {
     command: process.env.INTEGRATION_PRODUCTION === "1" ? "npm run preview -- --port 5175 --strictPort" : "npm run dev -- --port 5175 --strictPort",

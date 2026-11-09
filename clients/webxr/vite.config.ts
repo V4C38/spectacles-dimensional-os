@@ -111,6 +111,9 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    reporters: ["default", "json"],
+    outputFile: { json: fileURLToPath(new URL("../../Review Data/unit/webxr/results.json", import.meta.url)) },
+    coverage: { reportsDirectory: fileURLToPath(new URL("../../Review Data/coverage/webxr", import.meta.url)) },
     include: ["tests/**/*.test.ts"],
   },
 });

@@ -1,7 +1,7 @@
 import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/clientTrackingOrigin";
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
-import { deriveRobotMarkerApplyInput } from "../src/presentation/RobotMarkerState";
+import { deriveRobotMarkerApplyInput } from "@dimos-ar-client/robot/RobotMarkerState";
 import type { ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSession";
 import type { Capabilities, Capability } from "@dimos-ar-client/websocket/protocolTypes";
 import { WebXRRobotPresenter } from "../src/presentation/WebXRRobotPresenter";

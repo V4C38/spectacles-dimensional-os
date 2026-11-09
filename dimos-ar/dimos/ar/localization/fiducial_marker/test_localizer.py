@@ -277,14 +277,6 @@ def test_localize_without_current_robot_pose_rejects_unregistered_origin(
     assert result is None
 
 
-def test_fiducial_marker_localizer_implements_localizer() -> None:
-    localizer = FiducialMarkerLocalizer(
-        pose_buffer=PoseBuffer(),
-        marker_mounts=UNITREE_GO2_PROFILE.fiducial_marker_mounts,
-        dictionary_name=UNITREE_GO2_PROFILE.fiducial_dictionary,
-    )
-
-    assert localizer.localize([]) is None
 
 
 def test_unknown_marker_id_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:

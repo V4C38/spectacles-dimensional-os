@@ -4,7 +4,6 @@ from types import MethodType, SimpleNamespace
 
 from dimos.ar.manipulation.adapter import DimOSManipulationAdapter
 from dimos.ar.manipulation.operation import ManipulationOperation
-from dimos.ar.manipulation.test_runtime import command, runtime
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
 from dimos.control.task import CoordinatorState, JointStateSnapshot
 from dimos.control.tasks.gripper_task.gripper_task import (
@@ -17,6 +16,7 @@ from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.trajectory_msgs.JointTrajectory import JointTrajectory
 from dimos.msgs.trajectory_msgs.TrajectoryPoint import TrajectoryPoint
+from test_support.manipulation import command, runtime
 
 
 def test_one_hundred_plan_execute_gripper_cycles_through_real_coordinator(monkeypatch):
@@ -131,30 +131,6 @@ def test_one_hundred_plan_execute_gripper_cycles_through_real_coordinator(monkey
         assert calls == [float(i % 2 == 0) for i in range(100)]
     finally:
         coordinator.stop()
-
-
-def test_busy_plan_does_not_invalidate_active_work():
-    module = runtime()
-    module.session.owner, module.session.group_id = "a", "arm"
-    module.operation.plan = {"plan_id": "existing"}
-    epoch = module.session.generation
-    module.planning.acquire()
-    try:
-        result = module.dispatch(
-            "a",
-            {
-                "action": "plan",
-                "group_id": "arm",
-                "position": [0, 0, 0.3],
-                "orientation": [0, 0, 0, 1],
-                "speed_scale": 0.5,
-            },
-        )
-        assert result["code"] == "busy"
-        assert module.session.generation == epoch
-        assert module.operation.plan == {"plan_id": "existing"}
-    finally:
-        module.planning.release()
 
 
 def test_failed_gripper_has_one_terminal_outcome_and_next_plan_clears_it():

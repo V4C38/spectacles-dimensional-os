@@ -26,21 +26,15 @@ import time
 from typing import Any, Iterator
 
 from lens_studio import dismiss_welcome, resize_project_window
-from integration_catalog import applicable_cases, case_filename, load_catalog, write_lens_catalog
+from integration_catalog import applicable_cases, case_filename, load_catalog
+from native_project import prepare_harness
 
 SPECS_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = SPECS_ROOT.parents[1]
-DEFAULT_CLAD = Path("/Volumes/M2_EXT_1/CLAD")
+REVIEW_DATA_ROOT = REPO_ROOT / "Review Data"
+DEFAULT_CLAD = Path(os.environ.get("DIMOS_CLAD_ROOT", Path.home() / ".local/share/ls515-clad"))
 EVENT_PREFIX = "SPECS_REVIEW "
 PREVIEW_ID = "Snap.Plugin.Gui.PreviewPanel"
-DEFAULT_SCENES = (
-    "setup-connect", "setup-align", "setup-success", "runtime-manual", "robot-selected",
-    "agent-recording", "agent-draft", "agent-response", "sensors-full", "sensors-obstacles",
-    "settings", "diagnostics", "navigation-preview", "navigation-route", "navigation-stop",
-    "navigation-success", "navigation-cancelled",
-    "world-marker", "alignment-review", "disconnected", "setup-restart",
-)
-
 
 class ReviewError(RuntimeError):
     """A review could not produce trustworthy artifacts."""
@@ -55,11 +49,6 @@ def native_log_file() -> Path:
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-
-
-def complete_default_scenes(scenes: list[dict[str, Any]]) -> bool:
-    """A comparison-only subset cannot establish the production state/world review."""
-    return tuple(scene.get("name") for scene in scenes) == DEFAULT_SCENES
 
 
 def validate_video_duration(duration: float, scenes: list[dict[str, Any]], captured_duration: float | None = None) -> None:
@@ -198,22 +187,6 @@ def copy_project(source: Path, destination: Path, harness: Path) -> Path:
     return destination / projects[0].name
 
 
-def prepare_harness(destination: Path, harness: Path) -> None:
-    review_dir = destination / "Assets" / "Review"
-    review_dir.mkdir(exist_ok=True)
-    # The harness owns no domain code. Rebase its production imports to the
-    # location in the disposable Lens, keeping Vitest outside Assets.
-    code = harness.read_text(encoding="utf-8")
-    code = code.replace("../../Assets/Scripts/", "../Scripts/")
-    (review_dir / "ReviewScenario.ts").write_text(code, encoding="utf-8")
-    write_lens_catalog(review_dir)
-    for helper in harness.parent.glob("Integration*.ts"):
-        if helper != harness and helper.name != "IntegrationScenario.ts" and not helper.name.endswith("Probe.ts"):
-            shutil.copy2(helper, review_dir / helper.name)
-    for name in ("CameraFixture.png", "CameraFixture.png.meta"):
-        fixture = harness.with_name(name)
-        if fixture.is_file():
-            shutil.copy2(fixture, review_dir / name)
 
 
 class LensMcp:
@@ -270,7 +243,7 @@ class LensMcp:
         return await self.call("ExecuteEditorCode", {"code": code, "timeoutMs": 60000})
 
 
-def script_attach_code(workspace: Path, start_delay: float, profile: str = "legacy") -> str:
+def script_attach_code(workspace: Path, start_delay: float, profile: str = "probe") -> str:
     return f"""
 const model = pluginSystem.findInterface(Editor.Model.IModel);
 if (model.project.projectDirectory.toString() !== {json.dumps(str(workspace))}) {{
@@ -294,18 +267,12 @@ const component = host.addComponent("ScriptComponent") as Editor.Components.Scri
 component.scriptAsset = script as Editor.Assets.ScriptAsset;
 (component as any).startDelayS = {start_delay};
 if (component.inputNames.includes("profile")) (component as any).profile = {json.dumps(profile)};
-// Native asset metadata can retain an earlier imported default after TS recompiles.
-if (component.inputNames.includes("comparisonMode")) (component as any).comparisonMode = false;
-if (component.inputNames.includes("restartProbeOnly")) (component as any).restartProbeOnly = false;
-return {{ project: project.projectDirectory.toString(), host: host.id.toString(), inputs: component.inputNames,
-  comparisonMode: (component as any).comparisonMode }};
+return {{ project: project.projectDirectory.toString(), host: host.id.toString(), inputs: component.inputNames }};
 """
 
 
-async def attach_scenario(mcp: LensMcp, workspace: Path, start_delay: float, profile: str = "legacy") -> None:
-    attached = await mcp.editor(script_attach_code(workspace, start_delay, profile))
-    if attached.get("comparisonMode") is True:
-        raise ReviewError("Native harness retained comparisonMode; refusing an incomplete state/world review")
+async def attach_scenario(mcp: LensMcp, workspace: Path, start_delay: float, profile: str = "probe") -> None:
+    await mcp.editor(script_attach_code(workspace, start_delay, profile))
     # A newly copied texture can still be importing after TypeScript has compiled.
     # Retry only the documented transient save failure; never reattach the host.
     for attempt in range(60):
@@ -459,7 +426,7 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
         version = plistlib.load(stream).get("CFBundleShortVersionString", "")
     if not version.startswith("5.15."):
         raise ReviewError(f"Spectacles 2024 review requires Lens Studio 5.15.x, found {version}")
-    profile = getattr(args, "profile", "legacy")
+    profile = getattr(args, "profile", "probe")
     pid = app_pid(args.app)
     dismiss_welcome(pid)
     recording_dir = output / "diagnostics"
@@ -632,8 +599,7 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
     runtime_errors = runtime_error_lines("\n".join(native_lines))
     passed = bool(completion and completion.get("passed") is True and checks)
     passed = passed and all(event.get("passed") is True for event in checks) and not runtime_errors
-    default_harness = args.harness is not None and args.harness.resolve() == (SPECS_ROOT / "Tests/integration-tests/ReviewScenario.ts").resolve()
-    full_scenario = not default_harness or complete_default_scenes(manifest["scenes"])
+    full_scenario = True
     if profile == "golden":
         expected = [chapter["id"] for chapter in load_catalog()["golden"]["chapters"]]
         full_scenario = [scene["id"] for scene in manifest["scenes"]] == expected
@@ -675,7 +641,7 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
     if not manifest["scenes"]:
         raise ReviewError("Review scenario did not emit visual checkpoints")
     if not full_scenario:
-        raise ReviewError(f"Default review did not capture all {len(DEFAULT_SCENES)} state/world checkpoints in order")
+        raise ReviewError("Golden review did not capture the catalog checkpoints in order")
     return result
 
 
@@ -683,7 +649,7 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
 async def run_review(args: argparse.Namespace, output: Path, workspace: Path) -> dict[str, Any]:
     """Run uninterrupted golden footage separately from screenshot regressions."""
     if args.harness is not None:
-        args.profile = "legacy"
+        args.profile = "probe"
         return await run_pass(args, output, workspace)
     harnesses = SPECS_ROOT / "Tests/integration-tests"
     project = args.prepared_project or copy_project(args.source, workspace, harnesses / "IntegrationScenario.ts")
@@ -702,18 +668,19 @@ async def run_review(args: argparse.Namespace, output: Path, workspace: Path) ->
         write_json(directory / "results.json", result)
         passes.append(result)
     if args.suite == "all":
-        child = argparse.Namespace(**vars(args))
-        child.profile = "legacy"
-        child.harness = harnesses / "ManipulationProbe.ts"
-        child.prepared_project = project
-        directory = output / "manipulation"
-        directory.mkdir()
-        arm_result = await run_pass(child, directory, workspace)
-        write_json(directory / "results.json", arm_result)
-        passes.append(arm_result)
+        for name, harness in (("manipulation", "ManipulationProbe.ts"), ("overlap", "NavMarkerOverlapProbe.ts")):
+            child = argparse.Namespace(**vars(args))
+            child.profile = "probe"
+            child.harness = harnesses / harness
+            child.prepared_project = project
+            directory = output / name
+            directory.mkdir()
+            probe_result = await run_pass(child, directory, workspace)
+            write_json(directory / "results.json", probe_result)
+            passes.append(probe_result)
     command = ["node", str(REPO_ROOT / "tools/integration-tests/finalize.mjs"),
                "--client", "specs", "--run", str(output), "--scope", args.suite]
-    completed = subprocess.run(command, check=False)
+    completed = subprocess.run(command, check=False, env={**os.environ, "INTEGRATION_EXTRA_MEDIA": "1" if args.extra_media else "0", "INTEGRATION_DEFER_MEDIA_CLEANUP": "1"})
     result = json.loads((output / "results.json").read_text(encoding="utf-8"))
     result["passed"] = result["passed"] and completed.returncode == 0 and all(row["passed"] for row in passes)
     write_json(output / "results.json", result)
@@ -769,7 +736,7 @@ async def review_and_restore(args: argparse.Namespace, output: Path, workspace: 
     args.focus_budget = output / "focus-budget"
     try:
         result = await run_review(args, output, workspace)
-        if getattr(args, "suite", None) and getattr(args, "harness", None) is None and not args.keep_open:
+        if not args.keep_open:
             mark_source_pending(output, result)
         return result
     except BaseException as error:
@@ -860,6 +827,20 @@ def make_video(output: Path) -> None:
         shutil.move(result, output / result.name)
 
 
+def prune_success_recordings(output: Path) -> None:
+    """Preserve canonical golden footage; called only after complete successful handoff."""
+    for path in output.rglob("review-scenes.json"):
+        manifest = json.loads(path.read_text())
+        if manifest.get("profile") == "golden" or not manifest.get("recording"):
+            continue
+        recording = (path.parent / manifest["recording"]).resolve()
+        if not recording.is_relative_to(output.resolve()):
+            raise ReviewError("Recording cleanup escaped run directory")
+        recording.unlink(missing_ok=True)
+        manifest["recordingRetained"] = False
+        write_json(path, manifest)
+
+
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, default=SPECS_ROOT)
@@ -867,12 +848,13 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--suite", choices=("all", "golden", "regression"), default="all")
     parser.add_argument("--app", type=Path, default=DEFAULT_CLAD / "LS 5.15 CLAD.app")
     parser.add_argument("--mcp-config", type=Path, default=DEFAULT_CLAD / "ls515-clad/state/mcp.json")
-    parser.add_argument("--work-root", type=Path, default=Path(tempfile.gettempdir()) / "dimos-specs-review")
-    parser.add_argument("--output-root", type=Path, default=SPECS_ROOT / "Tests/integration-tests/test-results")
+    parser.add_argument("--work-root", type=Path, default=REVIEW_DATA_ROOT / "specs-work")
+    parser.add_argument("--output-root", type=Path, default=REVIEW_DATA_ROOT / "specs")
     parser.add_argument("--duration", type=float, default=600, help="Continuous recording duration in seconds")
     parser.add_argument("--start-delay", type=float, default=5)
     parser.add_argument("--recorder", type=Path, help="Use a precompiled ScreenCaptureKit recorder")
     parser.add_argument("--recorder-cache", type=Path, default=Path.home() / "Library/Caches/dimos-specs-review")
+    parser.add_argument("--extra-media", action="store_true", help="Also assemble edited diagnostic/probe videos; golden video is always produced")
     parser.add_argument("--prepare-only", action="store_true", help="Copy project/harness without using Lens Studio")
     parser.add_argument("--keep-open", action="store_true", help="Leave the disposable fixture project open for debugging")
     parser.add_argument("--prepared-project", type=Path, help="Retry an existing runner-created disposable .esproj")
@@ -895,6 +877,15 @@ def main() -> int:
     workspace = args.prepared_project.parent if args.prepared_project else args.work_root / run_id
     output = args.output_root / run_id
     output.mkdir(parents=True)
+    identity_script = (
+        f"import {{ sourceIdentity }} from {json.dumps((REPO_ROOT / 'tools/integration-tests/artifacts.mjs').as_uri())};"
+        "console.log(JSON.stringify(sourceIdentity(process.argv[1])));"
+    )
+    identity = json.loads(subprocess.check_output(
+        ["node", "--input-type=module", "-e", identity_script, str(REPO_ROOT)], text=True,
+    ))
+    write_json(output / "run.json", {"client": "specs", "source": identity,
+                                    "startedAt": time.time()})
     try:
         if args.prepare_only:
             project = copy_project(args.source, workspace, args.harness or SPECS_ROOT / "Tests/integration-tests/IntegrationScenario.ts")
@@ -911,10 +902,16 @@ def main() -> int:
             except BlockingIOError as error:
                 raise ReviewError("Another native review owns this MCP connection") from error
             result = asyncio.run(review_and_restore(args, output, workspace))
-            if args.harness is None and not args.keep_open:
+            if not args.keep_open:
                 result = asyncio.run(verify_source_handoff(args, output, result))
-        if args.harness is not None: make_video(output)
-        if result["passed"] and args.harness is None and args.suite == "all" and not args.keep_open:
+        if args.harness is not None and args.extra_media: make_video(output)
+        if result["passed"] and args.harness is None and args.suite in {"all", "golden"} and not args.keep_open:
+            subprocess.run(["node", str(REPO_ROOT / "tools/integration-tests/finalize.mjs"),
+                            "--client", "specs", "--run", str(output), "--publish-only", "1"], check=True)
+        if result["passed"] and not args.keep_open and not args.extra_media:
+            prune_success_recordings(output)
+        if (result["passed"] and args.harness is None and args.suite == "all"
+                and not args.keep_open and args.output_root == REVIEW_DATA_ROOT / "specs"):
             subprocess.run(["node", str(REPO_ROOT / "tools/integration-tests/cleanup.mjs"),
                             "--root", str(args.output_root), "--keep", output.name], check=True)
         print(f"{'PASS' if result['passed'] else 'FAIL'}: {output}")
