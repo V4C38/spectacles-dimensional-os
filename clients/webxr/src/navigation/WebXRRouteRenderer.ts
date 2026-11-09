@@ -27,6 +27,7 @@ export class WebXRRouteRenderer {
       transparent: true, depthWrite: false, toneMapped: false });
     this.object = new Line2(this.geometry, this.material);
     this.object.name = "WebXRRouteRenderer";
+    for (const root of [this.object, this.solid, this.dashed.object]) root.traverse(part => { part.userData.environmentDepth = true; });
     this.solid.name = "Executing route ribbon";
     this.solid.raycast = () => {};
     this.object.add(this.solid, this.dashed.object);

@@ -63,6 +63,35 @@ Do **not** edit `.scene` files by hand. Use the Lens Studio MCP tools for scene-
 | `AgentDraftSession` | Draft and dictation lifecycle |
 | `NavigationInteraction` | Navigation interaction intent |
 | `NavigationPreviewCoordinator` | Advisory request lifecycle and current preview |
+| `replication/CollaborationController` | Server authority, local target prediction and buffered observer interpolation |
+
+The `replication/` folders in ARModule, ClientCore and both hosts separate shared
+robot authority from navigation/manipulation behavior and platform presentation.
+ARModule grants one robot-wide lease and publishes canonical odometry-space
+targets. ClientCore predicts the active gesture immediately, sends fenced requests,
+and interpolates remote samples before each host applies its own tracking origin.
+Hosts render unavailable targets with a grey cross and exclude them from grabs.
+Selected navigation planning retains its reservation between placement gestures;
+ordinary release preserves the shared target and makes authority available again.
+Native arm execution remains robot-owned after the editing lease ends.
+
+Protocol v2 pairs the control session with a separate bulk WebSocket. Control carries
+small authority/target facts and revision references; models, routes, trajectories,
+LiDAR and localization images use the bulk channel. A bulk connection does not
+represent another client and never grants motion authority. ClientCore assembles
+revision-scoped assets incrementally; hosts retain their existing rendering ports.
+The owning target updates on the input frame, independently of publication cadence.
+
+Normal arm release retires the client's edit/native token and lets the server finish
+the last validated target. This finishing tail is takeoverable, unlike accepted
+Execute/reset/parking operations. New input supersedes its native generation; stale
+completion and old-owner disconnect callbacks cannot affect the successor. Native
+watchdogs and a control-plane liveness lease remain required during server-owned motion.
+
+Specs keeps the established pose-matching policy: interpolate bracketed captures;
+apply the 100 ms threshold only to nearest-sample fallback. Large bracket gaps are
+diagnostic data, not an additional capture rejection criterion. Tracking-reference
+resets still discard old pose samples and capture generations.
 
 **Specs logic** (tracked room)
 
@@ -82,8 +111,11 @@ Do **not** edit `.scene` files by hand. Use the Lens Studio MCP tools for scene-
 (`requestNavGoal`, `requestLidarSettings`, `requestUserMessage`,
 `session.requestEstop`, `session.requestState`, `episode.requestStart`).
 Specs setup retains PIN/IP connection entry followed by camera localization. A valid saved
-PIN is tried automatically when Connect opens without an established session, and when
-switching back to PIN mode. Editing the connection field cancels pending resolution/retries.
+PIN is tried automatically when Connect opens. Setup permits one initial attempt
+and up to three retries, one second after each failure. Only a PIN loaded from
+storage is removed and cleared after all four attempts fail. Newly entered PINs
+remain in the field and storage; successful loaded PINs remain saved. Editing the
+field or switching modes cancels the current attempt and its pending retry.
 Restart is queued until the next update, after native button dispatch, and invalidates
 panel scale animations before reopening Connect. Pending connection timers use
 `DelayedCallbackEvent.cancel()`; `reset(0)` schedules a callback instead of cancelling it.
@@ -637,7 +669,10 @@ server settings; point budgets and saved range preferences stay local.
 `SetupFlow` exposes read-only facts and command transitions using the canonical
 `SetupStep`. Both hosts consume Core activity derivation and `RobotSelection`
 eligibility. Coupled controls are applied from one snapshot per view.
-`SpecsConnectionController` owns PIN resolution, retry/poll events and invalidation;
+`SpecsConnectionController` owns bounded connection attempts, loaded-PIN expiry, retry/timeout/poll events and invalidation.
+It stops failed initial sessions before their reconnect loop can restart. Established
+Specs sessions reconnect to their resolved host; WebXR uses portable
+`ConnectionResolution` to fence discovery on subsequent reconnects.
 UI disposal retires those operations before the session stops. Native views remove
 their subscriptions and destroy their generated UI, retaining authored scene hosts.
 `WebXRSessionController` owns immersive events, stable reference spaces and tracking
@@ -683,3 +718,104 @@ reply for that same aim/origin. This prevents continuous costmap updates while d
 from starving the dotted preview route. Aim changes, origin changes, capability loss,
 and request deadlines retain their existing invalidation behavior; confirmed robot
 navigation is independent of preview requests.
+
+
+## Mixed-client PIN connections
+
+An ARModule PIN identifies a discoverable backend, not a client or an editing lease.
+Specs connects directly to the resolved backend. WebXR resolves the PIN through its
+optional LAN HTTPS service and uses the same service for secure control and bulk
+WebSocket proxying. Multiple clients may reuse one PIN; different PINs on the same
+WebXR service retain separate immutable routes. Protocol v2 and server authority
+remain unchanged.
+
+The WebXR service and ARModule have independent lifetimes. Starting or stopping the
+browser service must not restart a backend used by Specs. The launcher's global Stop
+still shuts down both services. A WebXR service can also connect browsers to another
+ARModule on the LAN; it need not run a local backend. Existing TLS certificate setup
+and LAN reachability requirements still apply.
+
+
+ClientCore owns retained validated target/joint snapshots, IK recovery, and motion
+completion after normal unselected release. Hosts own input capture and mesh picking.
+Selected meshes stay fully revealed independently of hover; idle unselected meshes reveal fully on hover.
+Root marker spheres also toggle selection. Navigation markers require navigation
+capability; the manipulation marker at the robot root requires manipulation
+capability. Both may coexist when both capabilities are available. Cached arm visuals
+must hide when a new blueprint lacks manipulation capability; temporary feedback
+loss while manipulation remains supported retains its normal recovery behavior,
+including the brief interval before capabilities return during a socket reconnect.
+An explicit capability change from a new blueprint ends that retained presentation.
+Normal manipulation speed defaults to 50%, while shutdown parking remains capped at 20%.
+
+
+Arm mesh visibility uses the shared `ArmMeshFade` opacity animation, independently
+of mesh picking and selection. Selected arm outlines remain present at zero target
+displacement. The small translucent measured EE sphere remains visible whenever
+feedback supplies a pose. Motion paths use full opacity while following, finishing,
+or executing; draft planning paths retain reduced opacity. The near-EE control is
+Execute in selected mode and Open/Close in unselected mode. Arm selection and this
+control require a fresh press; holding a pinch while changing hover targets cannot
+activate either.
+
+### Launcher robot sources and arm arrival
+
+The launcher groups connection information, dependencies (including selected CAN
+setup), blueprint/profile/source, localization, agent credentials, logging and client
+selection in that order. WebXR is the initial client. Profile calibration remains
+independent of the launcher's device/replay choice. Refresh lists Go2 multicast
+identities or CAN connections without enabling motors. An ambiguous Auto selection
+requires a launcher choice; no devices suggests Simulated and requires another
+Start click. Explicit source selections are resolved before starting the child.
+Go2 Simulated uses the default recording or a selected compatible local SQLite
+recording; OpenYAM Simulated offers Simulator and Recording. Replay selection validates
+the actual recorded payloads and requires a stream choice when multiple candidates exist.
+
+Arm surfaces use 35% full-reveal opacity and outlines use 100%, with spatial
+opacity based on each surface point's measured/proposed displacement. EE visuals
+are smaller independently of their hit targets. The measured sphere is half the
+new draggable visual radius. Live following omits the position-step low-pass
+filter while retaining bounded commands and increment smoothing. Executed arm
+arrival can settle within 30 mm / 8 degrees for 0.5 seconds after nominal duration;
+residual execution must be confirmed cancelled before completion is published.
+
+### Manipulation latency checks
+
+The live arm lease and raw feedback must not wait for advisory IK or path planning.
+AR manipulation runs those operations in a separate, hardware-free planning process;
+feedback FK has its own warmed context. Keep the 500 ms input/feedback safety deadlines.
+Late results are bound to the originating lease generation, token, and target sample.
+The diagnostics page includes recent capture termination reasons.
+
+With an explicitly simulated OpenYAM runtime on port 8799, run
+`python dimos-ar/tools/probe_held_ik.py` to hold an unreachable target and correct it
+without releasing, and `python dimos-ar/tools/benchmark_mock_arm.py` to compare three
+runs of drag and Execute at 25%, 50%, and 100%. Both probes refuse physical hardware.
+The benchmark checks median arrival times within 10%; it does not alter Execute limits.
+
+Recorded playback uses the dedicated AR-only replay compositions. It never constructs
+robot hardware or a control coordinator. Arm recordings require complete measured model
+joints; an optional Float32 gripper stream is normalized from 0 (closed) to 1 (open).
+
+Runtime arm controls reuse the main window chrome and gesture policy. Their badge
+remains anchored to the robot independently of the movable controls. Runtime robot
+settings live in Capabilities and are omitted when unavailable. Arm presentation
+interpolates new joint samples with velocity continuity over their preceding arrival interval (capped at 50 ms); raw measured
+feedback remains authoritative for commands, safety, and execution completion.
+PIN resolution belongs to connection establishment, outside the application message
+path. WebXR reconnects resolve again; Specs reconnects
+to the resolved host after successful setup. Bulk sockets retain their control connection's backend route.
+Specs reuses bulk transports and refuses to accumulate native CONNECTING sockets,
+which cannot safely be closed on the device. Cancelled connection attempts must never open late sockets or restore
+state from a previously selected backend.
+
+Specs arm presentation caches settled per-vertex opacity targets and unchanged outline
+geometry. Moving outlines use one rigid point-batch transform per link, rather than
+recomposing tracking origins per endpoint. Picking uses a separate immutable mesh,
+so visual opacity updates cannot invalidate its physics geometry. Arm menu surfaces
+and rows update when their size/layout changes; the end-effector marker keeps a
+single final color per frame. Device FPS still requires measurement on Spectacles.
+
+Browser integration tests use ANGLE Metal on macOS and SwiftShader on other platforms,
+including Linux CI. Software rendering on macOS can stall feedback delivery beyond
+the arm safety deadlines; keep those deadlines unchanged.

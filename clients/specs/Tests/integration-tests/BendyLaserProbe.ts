@@ -1,3 +1,4 @@
+import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 // Run with tools/review.py --harness Tests/integration-tests/BendyLaserProbe.ts.
 // Hardware poses are fixtures; production SIK cursor, beam presenter and shader are unchanged.
 import { DimOSSpecsClient } from "../Scripts/DimOSSpecsClient/DimOSSpecsClient";
@@ -24,6 +25,7 @@ export class ReviewScenario extends BaseScriptComponent {
   private mesh: RenderMesh | null = null;
 
   onAwake(): void {
+    if (!integrationTestsEnabled(this.getSceneObject())) return;
     this.createEvent("OnStartEvent").bind(() => this.createEvent("UpdateEvent").bind(() => this.tick()));
     this.createEvent("OnDestroyEvent").bind(() => this.input?.restore());
   }

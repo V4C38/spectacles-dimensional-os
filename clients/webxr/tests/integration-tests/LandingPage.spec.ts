@@ -1,3 +1,4 @@
+import { V2BulkPeer } from "./fixtures/V2BulkPeer";
 import { saveCaseProof } from "./fixtures/CaseProof";
 import { expect, test } from "@playwright/test";
 import { fileURLToPath } from "node:url";
@@ -15,6 +16,12 @@ test("prioritizes robot features with compact technical footnotes on desktop and
   let state: State = { type: "state", server: { connected_clients: 1 },
     lidar: { enabled: false, min_height_m: 0.1, max_height_m: 1.5, max_range_m: 5 },
     nav: { state: "idle", outcome: null }, agent: { idle: true } };
+  const bulk = new V2BulkPeer(); await bulk.install(page);
+  const lookups: unknown[] = [];
+  await page.route("**/api/connections", route => {
+    lookups.push(route.request().postDataJSON());
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify({ controlUrl: "/api/connections/landing/control", bulkUrl: "/api/connections/landing/bulk" }) });
+  });
   await page.routeWebSocket("**/ar", socket => {
     const sendState = () => socket.send(JSON.stringify(state) + "\n");
     socket.onMessage(raw => {
@@ -27,7 +34,7 @@ test("prioritizes robot features with compact technical footnotes on desktop and
         sendState();
       }
       if (request.type !== "hello_request") return;
-      socket.send(JSON.stringify({ type: "hello", client_id: "landing-review", time_sync: { ts_client: request.ts_client, ts_server: 1 },
+      socket.send(JSON.stringify({ type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "landing-review", time_sync: { ts_client: request.ts_client, ts_server: 1 },
         robot: { display_name: "Unitree Go2", body_bounds_m: [0.7, 0.5, 0.55], footprint_m: [0.7, 0.5], base_height_m: 0.33 },
         server_info: { robot_ip: "192.168.1.42", dimos_version: "0.4.0", armodule_version: "0.2.0" },
         capabilities: { navigation: { ...on, nav_goal: on, nav_joystick: on }, agent: on, lidar: on, localization: on, estop: on } }) + "\n");
@@ -35,7 +42,10 @@ test("prioritizes robot features with compact technical footnotes on desktop and
     });
   });
   await page.goto("/");
+  await expect(page.locator("#pin")).toHaveCount(0);
+  await expect(page.locator("#connect")).toHaveCount(0);
   await expect(page.locator("#enter")).toBeEnabled();
+  expect(lookups).toEqual([]);
   await expect(page.getByRole("heading", { name: "Unitree Go2" })).toBeVisible();
   await expect(page.locator(".feature-list li:visible")).toHaveCount(5);
   await expect(page.locator(".connection-footnote")).toContainText("192.168.1.42");

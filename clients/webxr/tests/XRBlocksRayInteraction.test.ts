@@ -311,3 +311,23 @@ it("preserves an opted-in selection hover only while its capture and live hit ma
   expect(interaction.hoverTargets(target)).toEqual([]);
   interaction.dispose();
 });
+
+it("anchors captured laser feedback to the speed thumb as its value changes", async () => {
+  const { SpeedSlider } = await import("../src/presentation/SpeedSlider");
+  const f = fixture(), interaction = new XRBlocksRayInteraction(f.input);
+  const slider = new SpeedSlider(0.14);
+  slider.position.z=-0.6; f.scene.add(slider);f.scene.updateMatrixWorld(true);
+  f.controller.inputSource={targetRayMode:"tracked-pointer"}; f.controller.userData.connected=true;
+  interaction.setEnabled(true);
+  interaction.setPolicy({eligible:()=>true,captured:()=>true,unobstructed:()=>true});
+  f.input.updateController(f.controller);interaction.update();
+  const thumb=slider.hit.userData.sliderThumb as THREE.Object3D;
+  interaction.capture(f.controller,thumb,thumb.getWorldPosition(new THREE.Vector3()));
+  for (const value of [0.05,0.55,1]) {
+    slider.setValue(value); interaction.updateCapturedEndpoints();
+    const expected=thumb.getWorldPosition(new THREE.Vector3());
+    expect(interaction.beams.get(f.controller)!.tip.distanceTo(expected)).toBeLessThan(1e-7);
+    expect(f.controller.reticle!.position.distanceTo(expected)).toBeLessThan(1e-7);
+  }
+  interaction.dispose();
+});

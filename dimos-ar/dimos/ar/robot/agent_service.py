@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import math
+import threading
 import time
 from typing import Any
 
@@ -28,33 +29,79 @@ class ARAgentService:
         self._connection_count = connection_count
         self._broadcast = broadcast
         self._clock = clock
-        self._pose: ClientPose | None = None
-        self._received_at: float | None = None
-        self._marker_ids: set[str] = set()
+        self._lock = threading.RLock()
+        self._poses: dict[str, tuple[ClientPose, float]] = {}
+        self._actor: str | None = None
+        self._pose_actor: str | None = None
+        self._turn_started = False
+        self._markers: dict[str, dict[str, Any]] = {}
         self._idle = True
 
     @property
     def idle(self) -> bool:
-        return self._idle
+        with self._lock:
+            return self._idle
 
     def update_idle(self, idle: bool) -> bool:
-        if idle == self._idle:
-            return False
-        self._idle = idle
-        return True
+        with self._lock:
+            if self._actor is not None:
+                if not idle:
+                    self._turn_started = True
+                elif not self._turn_started:
+                    # An idle fact queued before dispatch cannot finish the new turn.
+                    return False
+                else:
+                    self._actor = None
+                    self._turn_started = False
+            if idle == self._idle:
+                return False
+            self._idle = idle
+            return True
 
     @property
     def marker_ids(self) -> frozenset[str]:
-        return frozenset(self._marker_ids)
+        with self._lock:
+            return frozenset(self._markers)
 
-    def set_pose(self, pose: ClientPose) -> None:
-        self._pose = pose
-        self._received_at = self._clock()
+    def set_pose(self, pose: ClientPose, *, client_id: str = "legacy") -> None:
+        with self._lock:
+            self._poses[client_id] = (pose, self._clock())
+
+    def begin_turn(self, client_id: str) -> bool:
+        """Pin wearer context before publishing to the native shared agent."""
+        with self._lock:
+            if self._actor is not None or not self._idle:
+                return False
+            self._actor = client_id
+            self._pose_actor = client_id
+            self._turn_started = False
+            self._idle = False
+            return True
+
+    def cancel_turn(self, client_id: str) -> None:
+        """Undo a dispatch that failed before reaching the native agent."""
+        with self._lock:
+            if self._actor == client_id and not self._turn_started:
+                self._actor = None
+                self._idle = True
+
+    def disconnect(self, client_id: str) -> None:
+        # An active turn keeps its actor identity, never another wearer's pose.
+        # Native completion still owns its lifecycle; disconnect isn't cancellation.
+        with self._lock:
+            self._poses.pop(client_id, None)
+
+    def marker_snapshot(self) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(
+                encode_agent_skill(name="ar_place_marker", args=dict(args))
+                for args in self._markers.values()
+            )
 
     def reset(self) -> None:
-        self._pose = None
-        self._received_at = None
-        self._marker_ids.clear()
+        with self._lock:
+            self._poses.clear()
+            self._markers.clear()
 
     def forward(self, message: BaseMessage) -> None:
         text = _textual_ai_message(message)
@@ -62,9 +109,19 @@ class ARAgentService:
             self._broadcast(encode_agent_message(text))
 
     def _fresh_pose(self) -> ClientPose | None:
-        if self._pose is None or self._received_at is None:
-            return None
-        return self._pose if self._clock() - self._received_at <= CLIENT_POSE_STALE_S else None
+        with self._lock:
+            # Native background skills can enqueue another turn after LLM idle.
+            # Keep their initiating wearer context until an explicit new turn.
+            source = self._pose_actor
+            if source is None:
+                if len(self._poses) != 1:
+                    return None
+                source = next(iter(self._poses))
+            sample = self._poses.get(source)
+            if sample is None:
+                return None
+            pose, received_at = sample
+            return pose if 0 <= self._clock() - received_at <= CLIENT_POSE_STALE_S else None
 
     def place(self, id: str, x: float, y: float, z: float, title: str = "") -> str:
         marker_id, error = _validate_marker_id(id)
@@ -86,20 +143,23 @@ class ARAgentService:
         }
         if title:
             args["title"] = title
+        with self._lock:
+            self._markers[marker_id] = args
         self._broadcast(encode_agent_skill(name="ar_place_marker", args=args))
-        self._marker_ids.add(marker_id)
         return "ok"
 
     def remove(self, id: str) -> str:
         marker_id, error = _validate_marker_id(id)
         if error is not None:
             return error
-        if marker_id not in self._marker_ids:
-            return "unknown marker id"
+        with self._lock:
+            if marker_id not in self._markers:
+                return "unknown marker id"
         if self._connection_count() == 0:
             return "No AR client connected"
+        with self._lock:
+            self._markers.pop(marker_id, None)
         self._broadcast(encode_agent_skill(name="ar_remove_marker", args={"id": marker_id}))
-        self._marker_ids.discard(marker_id)
         return "ok"
 
     def client_pose(self) -> str:

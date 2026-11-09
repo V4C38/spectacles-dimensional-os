@@ -1,0 +1,82 @@
+- !<Material/e2b5ada4-ded6-4fdd-aea4-e61f98d04404>
+  PackagePath: ""
+  PassesInfo:
+    - !<own> 2ca4dffa-4c20-4c68-aa9b-ef3c0dbbf70a
+- !<PassInfo/2ca4dffa-4c20-4c68-aa9b-ef3c0dbbf70a>
+  CachedProperties:
+    []
+  DepthWrite: false
+  DepthTest: true
+  DepthFunction: LessEqual
+  TwoSided: false
+  ColorMask: {x: true, y: true, z: true, w: true}
+  CullMode: Back
+  PolygonOffset: {x: 0.000000, y: 0.000000}
+  FrustumCulling: Auto
+  FrustumCullPad: 0.000000
+  InstanceCount: 1
+  Defines:
+    []
+  BlendMode: Normal
+  Properties:
+    PreviewEnabled:
+      typeIdx: 0
+      value: 0
+    alphaTestThreshold:
+      typeIdx: 1
+      value: 0.500000
+    correctedIntensity:
+      typeIdx: 1
+      value: 0.000000
+    dashM:
+      typeIdx: 1
+      value: 0.000000
+    edgeOpacity:
+      typeIdx: 1
+      value: 0.920000
+    fill:
+      typeIdx: 1
+      value: 0.015000
+    gapM:
+      typeIdx: 1
+      value: 0.000000
+    intensityTexture:
+      typeIdx: 9
+      value:
+        id: 00000000-0000-0000-0000-000000000000
+        sampler:
+          filteringMode: Trilinear
+          wrapModeU: Repeat
+          wrapModeV: Repeat
+          wrapModeW: Repeat
+          borderColor: {x: 0.000000, y: 0.000000, z: 0.000000, w: 0.000000}
+          mipmaps: false
+        type: Texture2D
+    intensityTextureBorderColor:
+      typeIdx: 5
+      value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
+    intensityTextureTransform:
+      typeIdx: 7
+      value:
+        0: {x: 1.000000, y: 0.000000, z: 0.000000}
+        1: {x: 0.000000, y: 1.000000, z: 0.000000}
+        2: {x: 0.000000, y: 0.000000, z: 1.000000}
+    intensityTextureUvMinMax:
+      typeIdx: 5
+      value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
+    power:
+      typeIdx: 1
+      value: 5.000000
+    voxelization_params_0:
+      typeIdx: 5
+      value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
+    voxelization_params_camera_pos:
+      typeIdx: 4
+      value: {x: 1.000000, y: 1.000000, z: 1.000000}
+    voxelization_params_frustum_lrbt:
+      typeIdx: 5
+      value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
+    voxelization_params_frustum_nf:
+      typeIdx: 5
+      value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
+  Pass: !<reference> 7076c156-fa24-4180-8cfd-3b873ccf2c81

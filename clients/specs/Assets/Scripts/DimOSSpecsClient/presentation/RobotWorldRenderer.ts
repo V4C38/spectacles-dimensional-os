@@ -3,18 +3,14 @@ import { robotOutlineFrame, FLOOR_MARKER_STYLE, ROBOT_LINE_STYLE, ROBOT_LABEL_ST
 import type { StatusTone } from "../../DimOSARClient/websocket/sessionLinkStatus";
 import type { RobotDescription } from "../../DimOSARClient/websocket/protocolTypes";
 import { AdaptiveStrokeRenderer, WorldMeshRenderer, circleMesh, sphereMesh } from "./WorldMeshRenderer";
-import { createText, COLOR_WHITE } from "./UIKit";
+import { createRobotLabelText, COLOR_WHITE } from "./UIKit";
 
-const LABEL_REGULAR = requireAsset("../../../Fonts/Inter/Inter-Regular.ttf") as Font;
-const LABEL_SEMIBOLD = requireAsset("../../../Fonts/Inter/Inter-Semibold.ttf") as Font;
-// Native LS 5.15 Inter advance calibration (64/128 point repeated-M probe).
-const INTER_EM_PER_LINE = 0.8216;
-const INTER_LINE_HEIGHT = 2478 / 2048;
 const POSE_MATERIAL = requireAsset("../../../Materials/PoseIndicator.mat") as Material;
 
 /** Body picking stays fixed while the visible outline unfolds from the floor. */
 export class RobotWorldRenderer {
   private readonly root: SceneObject;
+  private readonly markerRoot: SceneObject;
   readonly colliderRoot: SceneObject;
   readonly interactable: Interactable;
   private readonly collider: ColliderComponent;
@@ -45,22 +41,20 @@ export class RobotWorldRenderer {
     this.collider.shape = Shape.createBoxShape();
     this.interactable = this.colliderRoot.createComponent(Interactable.getTypeName()) as Interactable;
     this.interactable.onTriggerStart.add(event => toggle(String(event.interactor.inputType)));
+    this.markerRoot = global.scene.createSceneObject("RobotMarkerSelectionCollider"); this.markerRoot.setParent(this.root);
+    const markerCollider = this.markerRoot.createComponent("Physics.ColliderComponent") as ColliderComponent;
+    markerCollider.shape = Shape.createSphereShape(); (markerCollider.shape as SphereShape).radius = 3;
+    const markerHit = this.markerRoot.createComponent(Interactable.getTypeName()) as Interactable;
+    markerHit.onTriggerStart.add(event => toggle(String(event.interactor.inputType)));
+
     this.outline = new AdaptiveStrokeRenderer(this.root, "RobotSelectionOutline");
     this.connector = new AdaptiveStrokeRenderer(this.root, "RobotFloorConnector");
     this.circle = new WorldMeshRenderer(this.root, "RobotFloorCircle");
     this.label = global.scene.createSceneObject("RobotWorldLabel"); this.label.setParent(this.root);
     const style = ROBOT_LABEL_STYLE;
-    const label = (name: string, emM: number, xM: number, yM: number, widthM: number, font: Font, color: vec4, order: number): Text => {
-      const text = createText({ parent: this.label, name, text: "", fontSize: emM * 100 * 32 / INTER_EM_PER_LINE,
-        color, position: new vec3(xM * 100, yM * 100, 0.1), horizontalAlignment: HorizontalAlignment.Center,
-        worldSpaceRect: Rect.create(-widthM * 50, widthM * 50, -20, 0) });
-      text.font = font; text.sizeToFit = false; text.lineSpacing = INTER_LINE_HEIGHT * INTER_EM_PER_LINE;
-      text.verticalAlignment = VerticalAlignment.Top; text.depthTest = true; text.setRenderOrder(order);
-      return text;
-    };
-    this.title = label("RobotTitle", style.title.emM, style.title.xM, style.title.yM, style.title.widthM, LABEL_SEMIBOLD, COLOR_WHITE, 21);
-    this.status = label("RobotActivity", style.activity.emM, 0, style.activity.yM, style.activity.widthM, LABEL_REGULAR, COLOR_WHITE, 22);
-    this.coordinates = label("RobotCoordinates", style.detail.emM, 0, style.detail.yM, style.detail.widthM, LABEL_REGULAR, new vec4(0.68, 0.68, 0.7, 1), 22);
+    this.title = createRobotLabelText(this.label, "RobotTitle", style.title.emM, style.title.xM, style.title.yM, style.title.widthM, true, COLOR_WHITE, 21);
+    this.status = createRobotLabelText(this.label, "RobotActivity", style.activity.emM, 0, style.activity.yM, style.activity.widthM, false, COLOR_WHITE, 22);
+    this.coordinates = createRobotLabelText(this.label, "RobotCoordinates", style.detail.emM, 0, style.detail.yM, style.detail.widthM, false, new vec4(0.68, 0.68, 0.7, 1), 22);
     this.dot = new WorldMeshRenderer(this.label, "RobotConnectionDot");
     this.dot.visual.setRenderOrder(20);
 
@@ -69,16 +63,16 @@ export class RobotWorldRenderer {
   dispose(): void { this.root.destroy(); }
   setRobot(robot: RobotDescription | null): void {
     this.robot = robot;
-    this.colliderRoot.enabled = robot !== null;
+    this.colliderRoot.enabled = this.markerRoot.enabled = robot !== null;
     if (!robot) { this.reset(); this.connector.hide(); return; }
     (this.collider.shape as BoxShape).size = new vec3(robot.body_bounds_m[1] * 100, robot.body_bounds_m[2] * 100, robot.body_bounds_m[0] * 100);
     this.colliderRoot.getTransform().setLocalPosition(new vec3(0, (robot.body_bounds_m[2] / 2 - robot.base_height_m) * 100, 0));
   }
-  setPickingEnabled(enabled: boolean): void { this.colliderRoot.enabled = enabled && this.robot !== null; }
+  setPickingEnabled(enabled: boolean): void { this.colliderRoot.enabled = this.markerRoot.enabled = enabled && this.robot !== null; }
   setSelected(selected: boolean): void { this.selected = selected; }
   setHovered(hovered: boolean): void { this.hovered = hovered; }
   ownsTarget(object: SceneObject): boolean {
-    for (let node: SceneObject | null = object; node; node = node.getParent()) if (node === this.colliderRoot) return true;
+    for (let node: SceneObject | null = object; node; node = node.getParent()) if (node === this.colliderRoot || node === this.markerRoot) return true;
     return false;
   }
   setFloorVisible(visible: boolean, opacity: number): void { this.floorShown = visible; this.opacity = opacity; }

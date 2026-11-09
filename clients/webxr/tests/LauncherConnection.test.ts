@@ -6,35 +6,48 @@ const html = readFileSync("../../launcher/app/static/index.html", "utf8");
 const script = readFileSync("../../launcher/app/static/app.js", "utf8");
 afterEach(() => { vi.unstubAllGlobals(); document.documentElement.innerHTML = ""; });
 
-it("shows the headset URL in WebXR mode and restores the PIN in Specs mode", async () => {
+function launcher() {
   document.documentElement.innerHTML = html;
   let events!: { onmessage: ((event: { data: string }) => void) | null };
   vi.stubGlobal("EventSource", class {
     onmessage = null;
     constructor() { events = this; }
   });
-  vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, json: async () => ({}) })));
+  const request = vi.fn(async () => ({ ok: false, json: async () => ({}) }));
+  vi.stubGlobal("fetch", request);
   window.eval(script);
   const update = (status: object) => events.onmessage!({ data: JSON.stringify({ type: "status", phase: "running", ...status }) });
-  update({ client: "webxr", host_ip: "192.168.1.2", pin: "123456", webxr_url: "https://192.168.1.2:5173", webxr_local_url: "https://localhost:5173" });
-  expect(document.getElementById("connectionSummaryLabel")!.textContent).toBe("URL");
-  expect(document.querySelector("#pinSummary a")!.getAttribute("href")).toBe("https://192.168.1.2:5173");
-  expect(document.getElementById("pinRow")!.classList.contains("hidden")).toBe(true);
-  expect(document.getElementById("hostIpSummary")!.classList.contains("hidden")).toBe(true);
-  expect(document.getElementById("hostIpRow")!.classList.contains("hidden")).toBe(true);
-  expect(document.getElementById("webxrLocalRow")).toBeNull();
-  expect(document.getElementById("webxrNetworkRow")!.classList.contains("hidden")).toBe(false);
-  update({ client: "specs", pin: "654321" });
-  expect(document.getElementById("connectionSummaryLabel")!.textContent).toBe("PIN");
-  expect(document.getElementById("pinSummary")!.textContent).toBe("654321");
-  expect(document.getElementById("pinRow")!.classList.contains("hidden")).toBe(false);
-  expect(document.getElementById("webxrNetworkRow")!.classList.contains("hidden")).toBe(true);
-  update({ phase: "idle", client: "specs", pin: "654321" });
-  (document.querySelector('[data-client="webxr"]') as HTMLButtonElement).click();
-  expect(document.getElementById("connectionSummaryLabel")!.textContent).toBe("URL");
-  expect(document.getElementById("hostIpRow")!.classList.contains("hidden")).toBe(true);
-  expect(document.getElementById("pinRow")!.classList.contains("hidden")).toBe(true);
-  (document.querySelector('[data-client="specs"]') as HTMLButtonElement).click();
-  expect(document.getElementById("hostIpRow")!.classList.contains("hidden")).toBe(false);
-  await Promise.resolve();
+  return { update, request };
+}
+const element = (id: string) => document.getElementById(id)!;
+const button = (id: string) => element(id) as HTMLButtonElement;
+
+it("shows WebXR URL or Specs PIN and keeps IP in expanded details", () => {
+  const { update } = launcher();
+  const status = { host_ip: "192.168.1.2", pin: "012345", webxr_url: "https://192.168.1.2:5173" };
+  update({ ...status, client: "webxr" });
+  expect(element("connectionSummaryLabel").textContent).toBe("PIN");
+  expect(document.querySelector("#urlSummary a")!.getAttribute("href")).toBe(status.webxr_url);
+  expect(element("pinRow").classList.contains("hidden")).toBe(true);
+  for (const client of ["specs", "webxr"]) {
+    update({ ...status, client });
+    expect(element("hostIpSummary").classList.contains("hidden")).toBe(true);
+    expect(element("hostIpRow").classList.contains("hidden")).toBe(false);
+    expect(element("hostIp").textContent).toBe(status.host_ip);
+    if (client === "specs") {
+      expect(element("connectionSummaryLabel").textContent).toBe("PIN");
+      expect(element("pinSummary").textContent).toBe(status.pin);
+    }
+  }
+});
+
+it("keeps unified actions and connects WebXR without PIN entry", () => {
+  launcher();
+  expect(button("startBtn")).toBeTruthy();
+  expect(button("stopBtn")).toBeTruthy();
+  for (const id of ["startWebxrBtn", "stopWebxrBtn", "stopBackendBtn"]) {
+    expect(document.getElementById(id)).toBeNull();
+  }
+  expect(readFileSync("index.html", "utf8")).not.toContain('id="pin"');
+  expect(readFileSync("src/main.ts", "utf8")).not.toContain("resolvePinConnection");
 });

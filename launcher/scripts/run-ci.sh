@@ -12,6 +12,7 @@
 #   CI_PYTHON   Python 3.12 interpreter (default: python3.12, python3)
 #   CI_VENV     Path to reuse/create for dimos-ar deps (default: /tmp/spectacles-dimensional-os-ci-venv)
 #   CI_WEBXR_BUILD_DIR  Optional build output directory, to preserve a running headset build
+#   CI_PLAYWRIGHT_SYSTEM_DEPS=preinstalled  Use installed OS libraries without sudo; all tests still run
 
 set -euo pipefail
 
@@ -70,7 +71,7 @@ run_dimos_ar_job() {
   python -m pip install --upgrade pip
   # GitHub starts with a fresh environment. Upgrade reused local environments so
   # an older installed DimOS cannot conceal an upstream API change.
-  pip install --upgrade websockets pytest pytest-asyncio ruff mypy numpy opencv-python-headless Pillow scipy dimos "aiohttp>=3.9,<4" "requests>=2.32,<3" langchain-core
+  pip install --upgrade websockets pytest pytest-asyncio ruff mypy numpy opencv-python-headless Pillow scipy dimos "aiohttp>=3.9,<4" "requests>=2.32,<3" langchain-core "trimesh>=4"
   pip install -e . --no-deps
 
   ruff check .
@@ -118,13 +119,15 @@ run_client_webxr_job() {
   npm ci
   npm test
   npm run build -- --outDir "${CI_WEBXR_BUILD_DIR:-dist}"
-  if [[ "$(uname -s)" == "Linux" ]]; then
+  if [[ "$(uname -s)" == "Linux" && "${CI_PLAYWRIGHT_SYSTEM_DEPS:-install}" != "preinstalled" ]]; then
     npx playwright install --with-deps chromium
   else
     npx playwright install chromium
   fi
   node --test "${ROOT}/tools/integration-tests/integration.test.mjs" "${ROOT}/tools/visual-review.test.mjs"
-  npm run test:integration
+  # The active environment belongs to the launcher job; use the backend environment
+  # for the real ARModule server spawned by the multi-client browser test.
+  DIMOS_PYTHON="${DIMOS_PYTHON:-${CI_VENV}/bin/python}" npm run test:integration
 }
 
 check_runtime_tools

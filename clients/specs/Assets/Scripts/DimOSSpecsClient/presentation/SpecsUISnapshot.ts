@@ -5,6 +5,10 @@ import type { OperatingMode } from "./AppState";
 
 /** Facts for native views; page selection and frame placement stay in the host. */
 export interface SpecsUISnapshot {
+  localizationAvailable?: boolean;
+  manipulationAvailable?: boolean;
+  manipulationSpeed?: number;
+  manipulationEnabled?: boolean;
   robotName: string;
   robotSelected: boolean;
   robotSelectable: boolean;

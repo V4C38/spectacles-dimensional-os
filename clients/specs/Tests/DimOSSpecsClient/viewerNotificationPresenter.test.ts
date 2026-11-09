@@ -9,7 +9,7 @@ it.each(["stop", "warning"] as const)("renders the shared %s glyph consistently 
   const triangles = vi.fn(), transform = { getWorldPosition: () => vec3.zero(), getWorldRotation: () => quat.quatIdentity(), setWorldPosition: vi.fn(), setWorldRotation: vi.fn() };
   const presenter = Object.assign(Object.create(ViewerNotificationPresenter.prototype), {
     center: { tick() {}, snapshot: () => ({ notification: { text: "Notification", glyph, tone: glyph === "warning" ? "warning" : "danger" }, elapsedS: 1 }) },
-    root: { enabled: false, getTransform: () => transform }, text: {}, icon: { triangles }, camera: { getTransform: () => transform },
+    root: { enabled: false, getTransform: () => transform }, text: { textFill: {} }, plate: {}, icon: { triangles }, camera: { getTransform: () => transform },
   }) as ViewerNotificationPresenter;
   for (let i = 0; i < 180; i++) presenter.tick(1 / 60);
   expect(notificationGlyph(glyph, 1)).toEqual(segments);
@@ -17,4 +17,13 @@ it.each(["stop", "warning"] as const)("renders the shared %s glyph consistently 
   expect(last[0]).toEqual(first[0]); expect(last[1]).toEqual(first[1]);
   expect(last[0]).toHaveLength(segments.length * 12); expect(last[1]).toHaveLength(segments.length * 6);
   expect(last[2]).toEqual(glyph === "warning" ? [1, 0.84, 0.04, 1] : [1, 0.27, 0.23, 1]);
+});
+
+it("preserves the viewer notification's neutral-tone color", () => {
+  const triangles = vi.fn();
+  const presenter = Object.assign(Object.create(ViewerNotificationPresenter.prototype), {
+    root: { enabled: false }, text: { textFill: {} }, plate: {}, icon: { triangles },
+  }) as ViewerNotificationPresenter;
+  presenter.draw({ text: "Notice", tone: "neutral", glyph: "stop" }, 1);
+  expect(triangles.mock.calls.at(-1)![2]).toEqual([1, 0.27, 0.23, 1]);
 });

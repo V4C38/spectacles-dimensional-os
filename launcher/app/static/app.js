@@ -29,7 +29,6 @@
   const startBtn = $("startBtn");
   const stopBtn = $("stopBtn");
   const robotIp = $("robotIp");
-  const robotIpAuto = $("robotIpAuto");
   const apiKey = $("apiKey");
   const revealKey = $("revealKey");
   const logEl = $("log");
@@ -61,11 +60,24 @@
   const multisetClientSecret = $("multisetClientSecret");
   const revealMultiset = $("revealMultiset");
 
-  let client = "specs";
+  let client = "webxr";
   let blueprint = "unitree_go2_ar";
+  let robotProfileId = null;
+  let robotProfiles = [];
+  let profileLoadGeneration = 0;
   let phase = "idle";
   let checkOk = null;
   let lastStatus = {};
+  let canStatus = { ready: false, state: "checking", message: "Checking can0…" };
+  let plannerStatus = { ready: false, state: "checking", message: "Checking manipulation dependencies…" };
+  let resolvedCan = "can0";
+  let discoveryGeneration = 0;
+  let discoveryPending = false;
+  let go2DiscoveryState = {text: "Not scanned", phase: ""};
+  let canCheckPending = false;
+  let plannerCheckPending = false;
+  let canSetupPending = false;
+  let plannerPython = null;
   let keyVisible = false;
   let multisetVisible = false;
   const MAX_LOG_LINES = 5000;
@@ -96,9 +108,11 @@
     { field: "up_m", label: "Up (m)", step: 0.01 },
     { field: "yaw_deg", label: "Yaw (°)", step: 1 },
     { field: "pitch_deg", label: "Pitch (°)", step: 1 },
+    { field: "roll_deg", label: "Roll (°)", step: 1 },
   ];
 
   const BLUEPRINTS = {
+    openyam_ar_planner: { info: "OpenYAM · manipulation: plan/review/execute or grab the end effector to follow." },
     unitree_go2_ar: {
       info: "Unitree Go2 with ARModule\nManual Mode: place navigation goals from the headset.",
     },
@@ -108,15 +122,140 @@
     },
   };
 
+  const savedBlueprint = localStorage.getItem("dimos.blueprint");
+  if (savedBlueprint && BLUEPRINTS[savedBlueprint]) blueprintSelect.value = savedBlueprint;
+
   const LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR"];
 
+  let playbackRobot = null;
+  const replayStreams = {};
+  let replayInspectionGeneration = 0;
+  let preferencesEdited = false;
+  let preferencesSave = Promise.resolve();
+  const discoveredRobots = {go2: [], openyam: []};
   function applyBlueprintInfo() {
     blueprint = blueprintSelect.value;
     const spec = BLUEPRINTS[blueprint] || {};
     blueprintInfo.textContent = spec.info || "";
+    const manipulation = blueprint === "openyam_ar_planner";
+
+
+
+    const robotKey = manipulation ? "openyam" : "go2";
+    const sourceSelect = $("robotSource");
+    sourceSelect.querySelectorAll('[value^="device:"], [value="manual"]').forEach(option => option.remove());
+    for (const device of discoveredRobots[robotKey]) {
+      const option = document.createElement("option"); option.value = `device:${device.id}`; option.textContent = device.label;
+      sourceSelect.insertBefore(option, sourceSelect.querySelector('[value="simulated"]'));
+    }
+    if (!manipulation && robotIp.value.trim()) {
+      const option = document.createElement("option"); option.value = "manual"; option.textContent = `${robotIp.value.trim()} (manual)`;
+      sourceSelect.insertBefore(option, sourceSelect.querySelector('[value="simulated"]'));
+    }
+    $("editConnection").disabled = configLocked || manipulation;
+    $("connectionEditor").classList.add("hidden");
+    const rememberedSource = localStorage.getItem(`dimos.source.${manipulation ? "openyam" : "go2"}`) || "auto";
+    if ((rememberedSource.startsWith("device:") || rememberedSource === "manual") && ![...$("robotSource").options].some(option => option.value === rememberedSource)) {
+      const option = document.createElement("option"); option.value = rememberedSource; option.textContent = option.value === "manual" ? `${robotIp.value.trim()} (manual)` : `${option.value.slice(7)} (saved)`; $("robotSource").insertBefore(option, $("robotSource").querySelector('[value="simulated"]'));
+    }
+    $("robotSource").value = rememberedSource;
+    syncSource();
+
+
+    document.querySelectorAll("[data-client=specs]").forEach(button => { button.disabled = false; });
+    if (settingsReady) {
+      void refreshRobotProfiles();
+      if (rememberedSource.startsWith("device:")) void refreshRobotDiscovery();
+    }
     agentConfig.classList.toggle("hidden", !spec.agent);
     syncConfigCards();
+    syncHardwareSetup();
+    if (manipulation) { void refreshCan(); void refreshPlanner(); }
   }
+
+  function manipulationSelected() { return blueprint === "openyam_ar_planner"; }
+  function canRequired() {
+    return manipulationSelected() && !($("robotSource").value === "simulated" && manipulationSelected()) && canStatus.state !== "not_required";
+  }
+  function hardwareNotSetup() {
+    return manipulationSelected() && (!plannerStatus.ready || (canRequired() && !canStatus.ready));
+  }
+  function syncHardwareSetup() {
+    const selected = manipulationSelected();
+    const mock = ($("robotSource").value === "simulated" && manipulationSelected());
+    const card = $("canCard");
+    card.classList.toggle("hidden", !selected);
+    $("webrtcCard").classList.toggle("hidden", selected);
+    const simulated = $("robotSource").value === "simulated";
+    $("webrtcSummary").textContent = simulated ? "Not required" : go2DiscoveryState.text;
+    $("webrtcSummary").dataset.phase = simulated ? "" : go2DiscoveryState.phase;
+    $("discoverWebrtc").disabled = configLocked || simulated || discoveryPending || checkOk !== true;
+    $("discoverWebrtc").textContent = discoveryPending ? "Scanning…" : "Discover";
+    const missing = canRequired() && !canStatus.ready;
+    card.classList.toggle("needs-setup", missing);
+    const canNotRequired = mock || canStatus.state === "not_required";
+    const canPhase = canNotRequired ? "" : canStatus.state === "error" ? "error" : canStatus.ready ? "ready" : canStatus.state === "checking" ? "checking" : "needs_setup";
+    $("canSummary").textContent = canNotRequired ? "Not required" : canStatus.ready ? "Ready · 1 Mbit/s" : canStatus.state === "checking" ? "Checking…" : canStatus.state === "error" ? "Error" : "Setup needed";
+    $("canSummary").dataset.phase = canPhase;
+    $("canStatus").dataset.phase = canPhase;
+    $("canStatus").classList.toggle("hidden", !canNotRequired && canStatus.ready);
+    $("canStatus").textContent = mock ? "Not required for simulated connection." : canStatus.message;
+    const settingUp = canSetupPending || lastStatus.can_setup_running || canStatus.setting_up;
+    $("canSetupBtn").textContent = settingUp ? "Setting up…" : "Set up CAN";
+    $("canSetupBtn").disabled = !selected || mock || configLocked || settingUp || canNotRequired || checkOk !== true || ["checking", "installing"].includes(phase);
+    $("plannerStatus").classList.toggle("hidden", !selected);
+    $("plannerStatus").textContent = plannerStatus.message || "Checking manipulation dependencies…";
+    $("plannerStatus").dataset.phase = plannerStatus.state === "error" ? "error" : plannerStatus.ready ? "ready" : "checking";
+    const deps = describeDeps(lastStatus);
+    depsSummary.textContent = deps.text;
+    depsSummary.dataset.phase = deps.phase;
+    syncInstallBanner();
+    applyHeader(lastStatus);
+    startBtn.disabled = configLocked || ["checking", "installing"].includes(phase) || checkOk !== true || settingUp || hardwareNotSetup();
+  }
+  async function refreshCan() {
+    if (!manipulationSelected() || canCheckPending || canSetupPending || document.hidden) return;
+    canCheckPending = true;
+    try {
+      const response = await fetch(`/api/can/status?interface=${encodeURIComponent($("robotSource").value.startsWith("device:") ? $("robotSource").value.slice(7) : resolvedCan)}`);
+      if (!response.ok) throw new Error("CAN status check failed");
+      canStatus = await response.json();
+    } catch (error) { canStatus = {ready: false, state: "error", message: String(error)}; }
+    finally { canCheckPending = false; syncHardwareSetup(); }
+  }
+  async function refreshPlanner() {
+    if (!manipulationSelected() || plannerCheckPending || document.hidden) return;
+    plannerCheckPending = true;
+    try {
+      const response = await fetch("/api/planner/status");
+      if (!response.ok) throw new Error("Planner dependency check failed");
+      plannerStatus = await response.json();
+    } catch (error) { plannerStatus = {ready: false, state: "error", message: String(error)}; }
+    finally { plannerCheckPending = false; syncHardwareSetup(); }
+  }
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) { void refreshCan(); void refreshPlanner(); } });
+  setInterval(() => { void refreshCan(); void refreshPlanner(); }, 5000);
+  $("canSetupBtn").addEventListener("click", async () => {
+    if (canSetupPending || configLocked) return;
+    const result = $("canSetupResult");
+    result.classList.remove("hidden");
+    result.textContent = "Checking CAN configuration…";
+    result.dataset.phase = "checking";
+    canSetupPending = true; syncHardwareSetup();
+    try {
+      const response = await fetch(`/api/can/setup?interface=${encodeURIComponent($("robotSource").value.startsWith("device:") ? $("robotSource").value.slice(7) : resolvedCan)}`, {method: "POST"});
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "CAN setup failed");
+      canStatus = data;
+      result.textContent = `Already set up on ${data.interface || resolvedCan}`;
+      result.dataset.phase = "ready";
+    } catch (error) {
+      result.textContent = `CAN setup failed: ${error}`;
+      result.dataset.phase = "error";
+      appendLog(`CAN setup: ${error}`);
+      canStatus = {ready: false, state: "error", message: String(error)};
+    } finally { canSetupPending = false; syncHardwareSetup(); }
+  });
 
   function fiducialConfigured() {
     return mounts.length > 0;
@@ -169,6 +308,7 @@
       up_m: Number(src.up_m) || 0,
       yaw_deg: Number(src.yaw_deg) || 0,
       pitch_deg: Number(src.pitch_deg) || 0,
+      roll_deg: Number(src.roll_deg) || 0,
     };
   }
 
@@ -190,6 +330,7 @@
 
   function settingsBody() {
     return {
+      profile_id: robotProfileId,
       ...Object.fromEntries(Object.entries(policyInputs).map(([key, input]) => [key, Number(input.value)])),
       openai_api_key: apiKey.value.trim() || null,
       multiset_client_id: multisetClientId.value.trim() || null,
@@ -204,7 +345,6 @@
   }
 
   async function saveSettings() {
-    if (Object.values(policyInputs).some(input => !input.reportValidity())) return;
     try {
       const res = await fetch("/api/settings", {
         method: "PUT",
@@ -214,25 +354,24 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         appendLog(`Settings save failed: ${data.detail || res.statusText}`);
-        return data;
+        return null;
       }
       if (data.phase) applyStatus(data);
+      const profile = robotProfiles.find(p => p.id === robotProfileId);
+      if (profile) profile.settings = { ...profile.settings, ...settingsBody() };
       return data;
     } catch (err) {
       appendLog(`Settings save failed: ${err}`);
-      return {};
+      return null;
     }
   }
 
   function applySettingsPayload(data) {
-    Object.entries(policyInputs).forEach(([key, input]) => {
-      if (document.activeElement !== input && key in data) input.value = data[key] ?? policyDefaults[key];
-    });
     if (data.defaults?.mounts?.[0]) {
       Object.assign(DEFAULT_MOUNT, cloneMount(data.defaults.mounts[0]));
     }
     if (Array.isArray(data.defaults?.preset_marker_ids) && data.defaults.preset_marker_ids.length) {
-      presetMarkerIds = data.defaults.preset_marker_ids.map(Number);
+      presetMarkerIds = [0, 1, 2];
     }
     const loaded = Array.isArray(data.mounts) && data.mounts.length ? data.mounts : [DEFAULT_MOUNT];
     mounts = loaded.map((item) => cloneMount(item));
@@ -255,6 +394,9 @@
     if (document.activeElement !== multisetClientSecret && "multiset_client_secret" in data) {
       multisetClientSecret.value = data.multiset_client_secret || "";
     }
+    Object.entries(policyInputs).forEach(([key, input]) => {
+      if (document.activeElement !== input) input.value = String(data[key] ?? policyDefaults[key]);
+    });
     settingsReady = true;
     syncLocalizationPanels();
     renderMountEditor();
@@ -269,10 +411,11 @@
       btn.disabled = locked;
     });
     blueprintSelect.disabled = locked;
+    for (const id of ["robotProfileSelect", "robotProfileName", "newRobotProfile", "deleteRobotProfile", "robotSource", "refreshRobots", "playbackSource", "editConnection", "saveRobotIp", "cancelRobotIp", "robotIp", "editReplay", "replayPath", "browseReplay", "defaultReplay", "profileEdit", "profileDone", "saveProfileName", "cancelProfileName", "confirmDeleteProfile"]) { const control = $(id); if (control) control.disabled = locked; }
+    document.querySelectorAll("[data-client=specs]").forEach(button => { button.disabled = locked; });
     apiKey.disabled = locked;
     revealKey.disabled = locked;
     robotIp.disabled = locked;
-    robotIpAuto.disabled = locked;
     fiducialEnabled.disabled = locked;
     vpsEnabled.disabled = locked;
     vpsVendor.disabled = locked;
@@ -283,9 +426,11 @@
     logLevel.disabled = locked;
     addTagBtn.disabled = locked;
     restoreTagsBtn.disabled = locked;
-    tagList.querySelectorAll("input, button, select, label").forEach((el) => {
+    tagList.querySelectorAll("input, button, label").forEach((el) => {
       el.disabled = locked;
     });
+    $("editConnection").disabled = locked || manipulationSelected();
+    $("editReplay").disabled = locked || $("playbackSource").value !== "recording";
   }
 
   function makeNumInput(meta, value, onChange) {
@@ -303,8 +448,9 @@
     input.step = String(meta.step);
     if (meta.min != null) input.min = String(meta.min);
     if (meta.max != null) input.max = String(meta.max);
-    input.value = String(value);
+    input.value = String(Number(Number(value).toFixed(6)));
     input.dataset.field = meta.field;
+    input.setAttribute("aria-label", meta.label);
     input.disabled = configLocked;
 
     const inc = document.createElement("button");
@@ -404,20 +550,12 @@
     }
     tagList.replaceChildren();
     mounts.forEach((mount, index) => {
-      const card = document.createElement("div");
+      const card = document.createElement("details");
       card.className = "tag-card";
+      if (index === mounts.length - 1) card.open = true;
 
-      const summary = document.createElement("div");
-      summary.className = "tag-header";
-
-      const thumb = document.createElement("a");
-      thumb.target = "_blank";
-      thumb.rel = "noopener";
-      thumb.title = "Open printable PDF";
-      thumb.addEventListener("click", (ev) => ev.stopPropagation());
-      const img = document.createElement("img");
-      img.className = "tag-thumb";
-      thumb.append(img);
+      const summary = document.createElement("summary");
+      summary.className = "tag-summary";
 
       const metaWrap = document.createElement("div");
       metaWrap.className = "tag-summary-meta";
@@ -427,80 +565,72 @@
       subtitle.className = "tag-subtitle";
       metaWrap.append(title, subtitle);
 
-      const syncThumb = () => {
+      const syncMarker = () => {
         const current = mounts[index];
         const id = current.marker_id;
-        const size = current.print_size_mm;
-        img.src = `/api/apriltag/${id}.png`;
-        thumb.href = `/api/apriltag/${id}.pdf?size_mm=${encodeURIComponent(size)}`;
-        img.alt = `Fiducial marker ${id}`;
+        const size = Number(current.print_size_mm.toFixed(6));
+        previewImg.src = `/api/apriltag/${id}.png`;
+        preview.href = `/api/apriltag/${id}.pdf?size_mm=${encodeURIComponent(size)}`;
+        previewImg.alt = `Fiducial marker ${id}`;
         title.textContent = isPresetId(id)
           ? `Fiducial marker ${id}`
-          : `Fiducial marker ${id} (uploaded)`;
+          : `Fiducial marker ${id} (custom)`;
         subtitle.textContent = `${size} mm total · ${(size * 0.8).toFixed(0)} mm black`;
       };
 
-      summary.append(thumb, metaWrap);
+      summary.append(metaWrap);
 
       const body = document.createElement("div");
       body.className = "tag-body";
 
-      const picker = document.createElement("select");
-      picker.className = "tag-selector";
-      picker.setAttribute("aria-label", `Select fiducial marker ${index + 1}`);
-      picker.disabled = configLocked;
+      const picker = document.createElement("div"); picker.className = "tag-picker";
+      const preview = document.createElement("a"); preview.className = "tag-preview";
+      preview.target = "_blank"; preview.rel = "noopener"; preview.title = "Open printable PDF";
+      const previewImg = document.createElement("img"); previewImg.width = previewImg.height = 64;
+      preview.append(previewImg);
+      const typeField = document.createElement("label"); typeField.className = "field tag-type-field";
+      const typeLabel = document.createElement("span"); typeLabel.textContent = "Marker type";
+      const typeSelect = document.createElement("select"); typeSelect.setAttribute("aria-label", "Marker type");
+      typeSelect.disabled = configLocked;
       const used = usedMarkerIds(index);
-      presetMarkerIds.forEach((presetId) => {
-        const option = document.createElement("option");
-        option.value = String(presetId);
-        option.textContent = `Fiducial marker ${presetId}`;
-        option.disabled = used.has(presetId) && mount.marker_id !== presetId;
-        picker.append(option);
-      });
-      if (!isPresetId(mount.marker_id)) {
-        const uploaded = document.createElement("option");
-        uploaded.value = String(mount.marker_id);
-        uploaded.textContent = `Fiducial marker ${mount.marker_id} (uploaded)`;
-        picker.append(uploaded);
+      const ids = [...presetMarkerIds];
+      if (!ids.includes(mount.marker_id)) ids.unshift(mount.marker_id);
+      for (const id of ids) {
+        const option = document.createElement("option"); option.value = String(id);
+        option.textContent = `ID ${id}${isPresetId(id) ? "" : " (saved)"}`;
+        option.disabled = used.has(id) && id !== mount.marker_id; typeSelect.append(option);
       }
-      const uploadOption = document.createElement("option");
-      uploadOption.value = "upload";
-      uploadOption.textContent = "Upload PNG…";
-      picker.append(uploadOption);
-      picker.value = String(mount.marker_id);
-      const uploadInput = makeFileInput(async (file) => {
-        const originalId = mounts[index]?.marker_id;
+      const uploadOption = document.createElement("option"); uploadOption.value = "upload";
+      uploadOption.textContent = "Upload PNG…"; typeSelect.append(uploadOption);
+      typeSelect.value = String(mount.marker_id);
+      const uploadInput = makeFileInput(async file => {
         const markerId = await decodeUploadedPng(file);
-        const currentIndex = mounts.findIndex(item => item.marker_id === originalId);
-        if (configLocked || currentIndex < 0 || !assignMarkerId(currentIndex, markerId)) return;
-        renderMountEditor();
-        schedulePersist();
+        if (!assignMarkerId(index, markerId)) return;
+        renderMountEditor(); schedulePersist();
       });
-      picker.addEventListener("change", () => {
-        if (configLocked) { picker.value = String(mounts[index].marker_id); return; }
-        if (picker.value === "upload") {
-          picker.value = String(mounts[index].marker_id);
-          uploadInput.click();
-          return;
+      typeSelect.addEventListener("change", () => {
+        if (configLocked) return;
+        if (typeSelect.value === "upload") {
+          typeSelect.value = String(mounts[index].marker_id); uploadInput.click(); return;
         }
-        if (!assignMarkerId(index, Number(picker.value))) {
-          picker.value = String(mounts[index].marker_id);
-          return;
-        }
-        renderMountEditor();
-        schedulePersist();
+        if (!assignMarkerId(index, Number(typeSelect.value))) return;
+        renderMountEditor(); schedulePersist();
       });
-      metaWrap.append(picker, uploadInput);
-
-      const configuration = document.createElement("details");
-      configuration.className = "tag-config";
-      const configurationSummary = document.createElement("summary");
-      configurationSummary.className = "tag-config-summary";
-      configurationSummary.textContent = "Print size & placement";
+      typeField.append(typeLabel, typeSelect);
+      picker.append(preview, typeField, uploadInput);
 
       const grid = document.createElement("div");
       grid.className = "tag-grid";
-      FIELD_META.forEach((meta) => {
+      const groups = [
+        {title: "Print size", fields: FIELD_META.slice(0, 1)},
+        {title: "Location (m)", fields: FIELD_META.slice(1, 4)},
+        {title: "Rotation (°)", fields: FIELD_META.slice(4, 7)},
+      ];
+      groups.forEach(group => {
+        const section = document.createElement("fieldset"); section.className = "tag-coordinate-group";
+        const legend = document.createElement("legend"); legend.textContent = group.title;
+        const row = document.createElement("div"); row.className = "tag-coordinate-row";
+        group.fields.forEach((meta) => {
         const field = document.createElement("label");
         field.className = "tag-field";
         if (meta.field === "print_size_mm") field.classList.add("span-2");
@@ -509,11 +639,17 @@
         const control = makeNumInput(meta, mount[meta.field], (next) => {
           if (configLocked) return;
           mounts[index] = { ...mounts[index], [meta.field]: next };
-          syncThumb();
+          syncMarker();
           schedulePersist();
         });
         field.append(label, control);
-        grid.append(field);
+        if (meta.field !== "print_size_mm") {
+          label.textContent = meta.label.replace(/ \(.*\)/, "");
+          control.classList.add("coordinate-input");
+        }
+        row.append(field);
+        });
+        section.append(legend, row); grid.append(section);
       });
 
       const footer = document.createElement("div");
@@ -533,17 +669,16 @@
       });
       footer.append(removeBtn);
 
-      body.append(grid, footer);
-      configuration.append(configurationSummary, body);
-      card.append(summary, configuration);
+      body.append(picker, grid, footer);
+      card.append(summary, body);
       tagList.append(card);
-      syncThumb();
+      syncMarker();
     });
   }
 
   function syncLocalizationPanels() {
-    $("markerPreferenceField").classList.toggle("hidden", !fiducialEnabled.checked);
     fiducialPanel.classList.toggle("hidden", !fiducialEnabled.checked);
+    $("markerPreferenceField").classList.toggle("hidden", !fiducialEnabled.checked);
     vpsPanel.classList.toggle("hidden", !vpsEnabled.checked);
   }
 
@@ -567,7 +702,7 @@
           phase: "error",
         };
       default: {
-        if (status.check_ok !== true || locNotSetup() || agentNotSetup()) {
+        if (status.check_ok !== true || locNotSetup() || agentNotSetup() || hardwareNotSetup()) {
           return { label: "Setup incomplete", detail: "", phase: "needs_setup" };
         }
         if (status.warning) {
@@ -598,7 +733,7 @@
     if (p === "checking") {
       return { text: "checking…", phase: "checking" };
     }
-    if (status.check_ok === true) {
+    if (status.check_ok === true && !hardwareNotSetup()) {
       return { text: "", phase: "" };
     }
     return { text: "incomplete", phase: "needs_setup" };
@@ -609,7 +744,7 @@
   }
 
   function syncInstallBanner() {
-    const ready = checkOk === true;
+    const ready = checkOk === true && (!manipulationSelected() || plannerStatus.ready);
     const busy =
       phase === "checking" ||
       phase === "installing" ||
@@ -626,8 +761,8 @@
     dimosRefField.classList.toggle("hidden", !cloning);
     installBtn.textContent = cloning ? "Download & install" : "Install";
     installBtn.classList.toggle("hidden", !showInstall);
-    installBtn.disabled = busy || phase === "installing" || phase === "checking";
-    installBanner.classList.toggle("needs-setup", needsInstall);
+    installBtn.disabled = busy || configLocked || canSetupPending || lastStatus.can_setup_running;
+    installBanner.classList.toggle("needs-setup", needsInstall || hardwareNotSetup());
 
     const versionBits = [];
     if (lastStatus.dimos_version) versionBits.push(`DimOS ${lastStatus.dimos_version}`);
@@ -839,24 +974,26 @@
     setText(hostIp, status.host_ip);
     setText(hostIpSummary, status.host_ip);
     const isWebxr = client === "webxr";
-    $("hostIpRow").classList.toggle("hidden", isWebxr);
-    $("hostIpSummaryLabel").classList.toggle("hidden", isWebxr);
-    hostIpSummary.classList.toggle("hidden", isWebxr);
+    $("hostIpSummaryLabel").classList.add("hidden");
+    hostIpSummary.classList.add("hidden");
+    $("hostIpRow").classList.remove("hidden");
     $("pinRow").classList.toggle("hidden", isWebxr);
     setText(pinValue, isWebxr ? null : status.pin);
-    $("connectionSummaryLabel").textContent = isWebxr ? "URL" : "PIN";
-    if (isWebxr) setHref(pinSummary, status.webxr_url, "Address available after Start");
-    else setText(pinSummary, status.pin);
+    $("connectionSummaryLabel").textContent = "PIN";
+    setText(pinSummary, status.pin);
+    setHref($("urlSummary"), status.webxr_url, "Address available after Start");
     setText(robotValue, displayRobotIp(status.robot_ip));
-
-    const showWebxr = isWebxr;
-    webxrNetworkRow.classList.toggle("hidden", !showWebxr);
-    webxrHint.classList.toggle("hidden", !showWebxr);
+    webxrNetworkRow.classList.toggle("hidden", !isWebxr);
+    webxrHint.classList.toggle("hidden", !isWebxr);
     setHref(webxrNetwork, status.webxr_url);
   }
 
   function applyStatus(status) {
     lastStatus = status || {};
+    if (status.planner) plannerStatus = status.planner;
+    const nextPython = status.dimos_python || null;
+    const environmentChanged = nextPython !== plannerPython;
+    plannerPython = nextPython;
     phase = status.phase || "idle";
     if ("check_ok" in status) checkOk = status.check_ok;
 
@@ -913,17 +1050,21 @@
     if (status.default_clone_dir && !cloneDir.value) {
       cloneDir.value = status.default_clone_dir;
     }
-    if (status.dimos_python && !dimosPython.value) {
-      dimosPython.value = status.dimos_python;
+    if ((status.dimos_install_dir || status.dimos_python) && !dimosPython.value) {
+      dimosPython.value = status.dimos_install_dir || status.dimos_python;
     }
 
     startBtn.disabled = busy || running || checkOk !== true;
     stopBtn.disabled = false;
+    stopBtn.textContent = phase === "stopping" ? "Force stop" : "Stop";
     stopBtn.classList.toggle(
       "danger",
       phase === "running" || phase === "starting" || phase === "stopping"
     );
     setConfigLocked(locked);
+    syncHardwareSetup();
+    if (environmentChanged || phase === "ready") { void refreshPlanner(); }
+
   }
 
   function syncSetupMode() {
@@ -1000,9 +1141,11 @@
     });
   });
 
-  blueprintSelect.addEventListener("change", () => {
+  blueprintSelect.addEventListener("change", async () => {
     if (configLocked) return;
+    if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; await saveSettings(); }
     blueprint = blueprintSelect.value;
+    localStorage.setItem("dimos.blueprint", blueprint);
     applyBlueprintInfo();
   });
 
@@ -1062,20 +1205,6 @@
     schedulePersist();
   });
 
-  function syncRobotIpOverride() {
-    const auto = robotIpAuto.checked;
-    robotValue.classList.toggle("hidden", !auto);
-    robotIp.classList.toggle("hidden", auto);
-    if (!auto) {
-      const shown = robotValue.textContent.trim();
-      if (!robotIp.value.trim() && shown && shown !== "—" && shown !== "simulated") {
-        robotIp.value = shown;
-      }
-      robotIp.focus();
-    }
-  }
-  robotIpAuto.addEventListener("change", syncRobotIpOverride);
-  syncRobotIpOverride();
 
   document.querySelectorAll('input[name="setupMode"]').forEach((el) => {
     el.addEventListener("change", syncSetupMode);
@@ -1102,6 +1231,29 @@
   logFilterLevel.addEventListener("change", applyLogFilter);
   logFilterSource.addEventListener("change", applyLogFilter);
 
+  let dimosPickerOpen = false;
+  dimosPython.addEventListener("click", async () => {
+    if (dimosPickerOpen) return;
+    dimosPickerOpen = true;
+    try {
+      const res = await fetch("/api/browse-dimos-install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: dimosPython.value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        appendLog(`File chooser error: ${data.detail || res.statusText}`);
+      } else if (data.path) {
+        dimosPython.value = data.path;
+      }
+    } catch (err) {
+      appendLog(`File chooser error: ${err}`);
+    } finally {
+      dimosPickerOpen = false;
+    }
+  });
+
   installBtn.addEventListener("click", async () => {
     const mode = setupMode();
     const body =
@@ -1115,6 +1267,7 @@
             clone_dir: cloneDir.value.trim(),
             dimos_ref: dimosRef.value.trim() || "main",
           };
+    body.manipulation = blueprint === "openyam_ar_planner";
     installBtn.disabled = true;
     try {
       const res = await fetch("/api/setup", {
@@ -1128,6 +1281,7 @@
         installBtn.disabled = false;
       }
       if (data.phase || "check_ok" in data) applyStatus(data);
+      void refreshCan(); void refreshPlanner();
     } catch (err) {
       appendLog(`Setup error: ${err}`);
       installBtn.disabled = false;
@@ -1141,11 +1295,16 @@
 
   startBtn.addEventListener("click", async () => {
     startBtn.disabled = true;
-    await saveSettings();
+    if (!(await saveSettings())) { startBtn.disabled = false; return; }
+    await saveLauncherPreferences().catch(error => appendLog(`Could not save launcher preferences: ${error}`));
     const body = {
       blueprint,
       client,
-      robot_ip: robotIpAuto.checked ? null : robotIp.value.trim() || null,
+      profile_id: robotProfileId,
+        source: { mode: $("robotSource").value.startsWith("device:") ? "device" : $("robotSource").value,
+        device_id: $("robotSource").value.replace(/^device:/, ""), address: robotIp.value.trim(),
+        replay: $("replayPath").value.trim() || null, playback: $("playbackSource").value,
+        streams: replayStreams[manipulationSelected() ? "openyam" : "go2"] || {} },
     };
     try {
       const res = await fetch("/api/armodule/start", {
@@ -1155,7 +1314,18 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        appendLog(`Start error: ${data.detail || res.statusText}`);
+        const detail = data.detail;
+        if (Array.isArray(detail?.devices)) {
+          for (const device of detail.devices) {
+            const value = `device:${device.id}`;
+            if (![...$("robotSource").options].some(option => option.value === value)) {
+              const option = document.createElement("option"); option.value = value; option.textContent = device.label || device.id; $("robotSource").insertBefore(option, $("robotSource").querySelector('[value="simulated"]'));
+            }
+          }
+        }
+        if (detail?.suggest_simulated) { $("robotSource").value = "simulated"; syncSource(); }
+        $("discoveryStatus").textContent = detail?.message || String(detail || res.statusText);
+        appendLog(`Start error: ${detail?.message || detail || res.statusText}`);
         startBtn.disabled = false;
       }
       if (data.phase) applyStatus(data);
@@ -1167,7 +1337,7 @@
 
   stopBtn.addEventListener("click", async () => {
     try {
-      const res = await fetch("/api/armodule/stop", { method: "POST" });
+      const res = await fetch(`/api/armodule/stop?force=${stopBtn.textContent === "Force stop"}`, { method: "POST" });
       const data = await res.json().catch(() => ({}));
       if (data.phase) applyStatus(data);
     } catch (err) {
@@ -1232,4 +1402,244 @@
     .then((r) => r.json())
     .then(applyStatus)
     .catch(() => {});
+
+  async function refreshRobotProfiles(preferredId = robotProfileId) {
+    const generation = ++profileLoadGeneration;
+    const response = await fetch("/api/robot-profiles");
+    if (!response.ok) { appendLog("Could not load robot profiles"); return; }
+    const data = await response.json();
+    if (generation !== profileLoadGeneration) return;
+    const robot = blueprint === "openyam_ar_planner" ? "openyam" : "unitree_go2";
+    robotProfiles = data.profiles.filter(profile => profile.robot === robot);
+    if (!robotProfiles.length) {
+      await fetch("/api/robot-profiles", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ robot }) });
+      return refreshRobotProfiles(null);
+    }
+    const select = $("robotProfileSelect"); select.replaceChildren();
+    for (const profile of robotProfiles) {
+      const option = document.createElement("option"); option.value = profile.id; option.textContent = profile.name; select.append(option);
+    }
+    const remembered = localStorage.getItem(`dimos.profile.${robot}`);
+    robotProfileId = robotProfiles.some(p => p.id === preferredId) ? preferredId : robotProfiles.some(p => p.id === remembered) ? remembered : robotProfiles[0].id;
+    localStorage.setItem(`dimos.profile.${robot}`, robotProfileId);
+    select.value = robotProfileId;
+    applyRobotProfile();
+  }
+  function applyRobotProfile() {
+    const profile = robotProfiles.find(p => p.id === robotProfileId);
+    if (!profile) return;
+    $("robotProfileName").value = profile.name;
+    const settings = profile.settings;
+    fiducialEnabled.checked = settings.fiducial_marker;
+    vpsEnabled.checked = settings.vps;
+    mapCode.value = settings.map_code || "";
+    mounts = settings.mounts.map(cloneMount);
+    Object.entries(policyInputs).forEach(([key, input]) => {
+      input.value = String(settings[key] ?? policyDefaults[key]);
+    });
+    syncLocalizationPanels(); renderMountEditor(); syncConfigCards();
+  }
+  $("robotProfileSelect").addEventListener("change", async () => {
+    if (configLocked) return;
+    if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; if (!(await saveSettings())) { $("robotProfileSelect").value = robotProfileId; return; } }
+    robotProfileId = $("robotProfileSelect").value;
+    localStorage.setItem(`dimos.profile.${blueprint === "openyam_ar_planner" ? "openyam" : "unitree_go2"}`, robotProfileId);
+    applyRobotProfile();
+  });
+  function syncSource() {
+    const simulated = $("robotSource").value === "simulated";
+
+    $("replayRow").classList.toggle("hidden", !simulated);
+    const robot = manipulationSelected() ? "openyam" : "go2";
+    if (robot !== playbackRobot) {
+      playbackRobot = robot;
+      $("replayPath").value = localStorage.getItem(`dimos.replay.${robot}`) || "";
+      $("playbackSource").value = robot === "openyam" ? localStorage.getItem("dimos.playback.openyam") || "simulator" : "recording";
+      $("replayStreams").replaceChildren();
+      $("replayStatus").textContent = "";
+    }
+    $("playbackSource").querySelector('[value="simulator"]').hidden = !manipulationSelected();
+    $("replayName").textContent = $("replayPath").value || (manipulationSelected() ? "Choose a recording" : "Default recording");
+    $("editReplay").disabled = configLocked || $("playbackSource").value !== "recording";
+
+
+    syncHardwareSetup();
+    if (manipulationSelected()) void refreshCan();
+  }
+  robotIp.addEventListener("change", () => { void saveLauncherPreferences(); });
+  $("robotSource").addEventListener("change", () => {
+    localStorage.setItem(`dimos.source.${manipulationSelected() ? "openyam" : "go2"}`, $("robotSource").value);
+    syncSource();
+    void saveLauncherPreferences();
+  });
+  async function refreshRobotDiscovery() {
+    if (configLocked || discoveryPending) return;
+    discoveryPending = true;
+    if (!manipulationSelected()) go2DiscoveryState = {text: "Scanning…", phase: "checking"};
+    syncHardwareSetup();
+    const generation = ++discoveryGeneration;
+    let selected = $("robotSource").value;
+    const requestedPython = plannerPython;
+    const requestedBlueprint = blueprint;
+    $("discoveryStatus").textContent = "Scanning…";
+    try {
+      const response = await fetch(`/api/discovery?robot=${manipulationSelected() ? "openyam" : "unitree_go2"}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Discovery failed");
+      if (blueprint !== requestedBlueprint || requestedPython !== plannerPython || generation !== discoveryGeneration) return;
+      selected = $("robotSource").value;
+      if (manipulationSelected() && selected === "auto" && data.devices.length === 1) {
+        resolvedCan = data.devices[0].address; void refreshCan();
+      }
+      discoveredRobots[manipulationSelected() ? "openyam" : "go2"] = data.devices;
+      if (!manipulationSelected()) go2DiscoveryState = {text: data.devices.length ? `${data.devices.length} found` : "None found", phase: data.devices.length ? "ready" : "needs_setup"};
+      const select = $("robotSource");
+      select.querySelectorAll('[value^="device:"]').forEach(option => option.remove());
+      for (const device of data.devices) { const option = document.createElement("option"); option.value = `device:${device.id}`; option.textContent = device.label; select.insertBefore(option, select.querySelector('[value="simulated"]')); }
+      if ([...select.options].some(option => option.value === selected)) select.value = selected;
+      else if (selected.startsWith("device:")) { const option = document.createElement("option"); option.value = selected; option.textContent = "Selected device unavailable"; select.insertBefore(option, select.querySelector('[value="simulated"]')); select.value = selected; }
+      $("discoveryStatus").textContent = data.devices.length ? `${data.devices.length} connection(s) found` : "No devices found. Check the connection and try Discover again.";
+    } catch (error) {
+      $("discoveryStatus").textContent = String(error);
+      if (blueprint === requestedBlueprint && !manipulationSelected()) go2DiscoveryState = {text: "Discovery failed", phase: "error"};
+    } finally { discoveryPending = false; syncHardwareSetup(); }
+  }
+  $("discoverWebrtc").addEventListener("click", refreshRobotDiscovery);
+  $("refreshRobots").addEventListener("click", refreshRobotDiscovery);
+  robotIp.addEventListener("keydown", event => {
+    if (event.key === "Enter") { event.preventDefault(); $("saveRobotIp").click(); }
+    if (event.key === "Escape") $("cancelRobotIp").click();
+  });
+  $("editConnection").addEventListener("click", () => { $("connectionEditor").classList.toggle("hidden"); robotIp.focus(); });
+  $("cancelRobotIp").addEventListener("click", () => $("connectionEditor").classList.add("hidden"));
+  $("saveRobotIp").addEventListener("click", () => {
+    if (!robotIp.value.trim() || manipulationSelected()) { $("discoveryStatus").textContent = "Enter a Go2 IP address."; return; }
+    let option = $("robotSource").querySelector('[value="manual"]');
+    if (!option) { option = document.createElement("option"); option.value = "manual"; $("robotSource").insertBefore(option, $("robotSource").querySelector('[value="simulated"]')); }
+    option.textContent = `${robotIp.value.trim()} (manual)`; $("robotSource").value = "manual";
+    $("connectionEditor").classList.add("hidden"); $("robotSource").dispatchEvent(new Event("change"));
+  });
+  $("editReplay").addEventListener("click", () => $("replayEditor").classList.toggle("hidden"));
+  $("playbackSource").addEventListener("change", () => {
+    if (manipulationSelected()) localStorage.setItem("dimos.playback.openyam", $("playbackSource").value);
+    syncSource(); void saveLauncherPreferences();
+  });
+  async function inspectReplay() {
+    const generation = ++replayInspectionGeneration;
+    const path = $("replayPath").value.trim();
+    if (!path) return;
+    const robot = manipulationSelected() ? "openyam" : "go2";
+    $("replayStatus").textContent = "Checking recording…";
+    try {
+      const response = await fetch("/api/replay/inspect", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({path, robot: robot === "go2" ? "unitree_go2" : robot, streams: replayStreams[robot] || {}})});
+      const data = await response.json();
+      if (generation !== replayInspectionGeneration || robot !== playbackRobot || path !== $("replayPath").value.trim()) return;
+      if (!response.ok) throw new Error(data.detail || "Invalid recording");
+      replayStreams[robot] = data.streams;
+      $("replayStreams").replaceChildren();
+      for (const [role, choices] of Object.entries(data.candidates)) {
+        if (choices.length < 2) continue;
+        const label = document.createElement("label"); label.className = "field"; label.textContent = `${role} stream`;
+        const select = document.createElement("select"); select.setAttribute("aria-label", `${role} stream`);
+        const empty = document.createElement("option"); empty.value = ""; empty.textContent = "Choose stream"; select.append(empty);
+        for (const name of choices) { const option = document.createElement("option"); option.value = name; option.textContent = name; select.append(option); }
+        select.value = data.streams[role] || "";
+        select.addEventListener("change", () => { if (select.value) replayStreams[robot][role] = select.value; else delete replayStreams[robot][role]; void inspectReplay(); });
+        label.append(select); $("replayStreams").append(label);
+      }
+      $("replayStatus").textContent = data.needs_selection ? "Choose streams before starting." : "Recording ready · read-only · 1×";
+      void saveLauncherPreferences();
+    } catch (error) { $("replayStatus").textContent = String(error); }
+  }
+  $("replayPath").addEventListener("change", () => {
+    const robot = manipulationSelected() ? "openyam" : "go2";
+    const path = $("replayPath").value.trim();
+    if (path === (localStorage.getItem(`dimos.replay.${robot}`) || "")) return;
+    replayStreams[robot] = {};
+    localStorage.setItem(`dimos.replay.${robot}`, path);
+    syncSource(); void saveLauncherPreferences(); void inspectReplay();
+  });
+  $("browseReplay").addEventListener("click", async () => {
+    if (configLocked) return;
+    try {
+      const response = await fetch("/api/browse-replay", { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Could not select recording");
+      if (data.path) { $("replayPath").value = data.path; $("replayPath").dispatchEvent(new Event("change")); }
+    } catch (error) { $("discoveryStatus").textContent = String(error); }
+  });
+  $("defaultReplay").addEventListener("click", () => {
+    $("replayPath").value = ""; localStorage.removeItem(`dimos.replay.${playbackRobot}`);
+    replayStreams[playbackRobot] = {}; replayInspectionGeneration++;
+    $("replayStreams").replaceChildren(); $("replayStatus").textContent = "";
+    syncSource(); void saveLauncherPreferences();
+  });
+  void fetch("/api/launcher-preferences").then(response => response.ok ? response.json() : {}).then(preferences => {
+    if (configLocked || preferencesEdited) return;
+    for (const [robot, key] of [["go2", "go2_source"], ["openyam", "openyam_source"]]) {
+      if (typeof preferences[key] === "string") localStorage.setItem(`dimos.source.${robot}`, preferences[key]);
+    }
+    if (typeof preferences.replay === "string") localStorage.setItem("dimos.replay.go2", preferences.replay);
+    if (typeof preferences.openyam_replay === "string") localStorage.setItem("dimos.replay.openyam", preferences.openyam_replay);
+    if (typeof preferences.openyam_playback === "string") localStorage.setItem("dimos.playback.openyam", preferences.openyam_playback);
+    Object.assign(replayStreams, preferences.replay_streams || {});
+    playbackRobot = null;
+    if (typeof preferences.manual_ip === "string") robotIp.value = preferences.manual_ip;
+    const value = localStorage.getItem(`dimos.source.${manipulationSelected() ? "openyam" : "go2"}`) || "auto";
+    if (![...$("robotSource").options].some(option => option.value === value) && (value.startsWith("device:") || value === "manual")) {
+      const option = document.createElement("option"); option.value = value; option.textContent = option.value === "manual" ? `${robotIp.value.trim()} (manual)` : `${option.value.slice(7)} (saved)`; $("robotSource").insertBefore(option, $("robotSource").querySelector('[value="simulated"]'));
+    }
+    $("robotSource").value = value; syncSource();
+    if (value.startsWith("device:")) void refreshRobotDiscovery();
+  }).catch(error => appendLog(`Could not load launcher preferences: ${error}`));
+  async function saveLauncherPreferences() {
+    preferencesEdited = true;
+    localStorage.setItem(`dimos.source.${manipulationSelected() ? "openyam" : "go2"}`, $("robotSource").value);
+    const body = JSON.stringify({
+      go2_source: localStorage.getItem("dimos.source.go2") || "auto", openyam_source: localStorage.getItem("dimos.source.openyam") || "auto",
+      replay: localStorage.getItem("dimos.replay.go2") || "", openyam_replay: localStorage.getItem("dimos.replay.openyam") || "",
+      openyam_playback: localStorage.getItem("dimos.playback.openyam") || "simulator", replay_streams: replayStreams, manual_ip: robotIp.value.trim() });
+    preferencesSave = preferencesSave.catch(() => {}).then(async () => {
+      const response = await fetch("/api/launcher-preferences", {method: "PUT", headers: {"Content-Type": "application/json"}, body});
+      if (!response.ok) throw new Error("Could not save launcher preferences");
+    });
+    return preferencesSave;
+  }
+  $("profileEdit").addEventListener("click", () => {
+    if (configLocked) return;
+    const editor = $("profileEditor");
+    editor.classList.toggle("hidden");
+    $("profileEdit").setAttribute("aria-expanded", String(!editor.classList.contains("hidden")));
+    if (!editor.classList.contains("hidden")) $("robotProfileName").focus();
+  });
+  const closeProfileEditor = () => { $("robotProfileName").value = robotProfiles.find(profile => profile.id === robotProfileId)?.name || ""; $("deleteProfileConfirm").classList.add("hidden"); $("profileEditor").classList.add("hidden"); $("profileEdit").setAttribute("aria-expanded", "false"); };
+  $("profileDone").addEventListener("click", closeProfileEditor);
+  document.addEventListener("click", event => {
+    if (!$("profileEditor").contains(event.target) && !$("profileEdit").contains(event.target)) closeProfileEditor();
+  });
+  document.addEventListener("keydown", event => { if (event.key === "Escape") closeProfileEditor(); });
+  $("cancelProfileName").addEventListener("click", () => { applyRobotProfile(); closeProfileEditor(); });
+  $("robotProfileName").addEventListener("keydown", event => { if (event.key === "Enter") $("saveProfileName").click(); });
+  $("saveProfileName").addEventListener("click", async () => {
+    if (configLocked || !robotProfileId) return;
+    const response = await fetch(`/api/robot-profiles/${robotProfileId}`, { method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name: $("robotProfileName").value}) });
+    if (!response.ok) { $("profileError").textContent = "Could not save profile name. Use 1–80 characters."; $("profileError").classList.remove("hidden"); return; }
+    $("profileError").classList.add("hidden");
+    await refreshRobotProfiles(); closeProfileEditor();
+  });
+  async function createRobotProfile() {
+    if (configLocked) return;
+    if (!(await saveSettings())) return;
+    const response = await fetch("/api/robot-profiles", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({robot: blueprint === "openyam_ar_planner" ? "openyam" : "unitree_go2",  source_id: null}) });
+    const created = await response.json();
+    if (!response.ok) { appendLog("Profile creation failed"); return; }
+    await refreshRobotProfiles(created.id);
+  }
+  $("newRobotProfile").addEventListener("click", () => createRobotProfile());
+  $("deleteRobotProfile").addEventListener("click", () => $("deleteProfileConfirm").classList.remove("hidden"));
+  $("confirmDeleteProfile").addEventListener("click", async () => {
+    if (configLocked || !robotProfileId) return;
+    const response = await fetch(`/api/robot-profiles/${robotProfileId}`, {method: "DELETE"});
+    if (response.ok) { $("deleteProfileConfirm").classList.add("hidden"); await refreshRobotProfiles(null); } else appendLog("Profile deletion failed");
+  });
 })();

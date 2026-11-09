@@ -21,7 +21,7 @@ import {
 import type { LocalizationObservation } from "../../Assets/Scripts/DimOSARClient/websocket/protocolTypes";
 
 const HELLO_FIXTURE = {
-  type: "hello",
+  type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
   client_id: "c3f1a9",
   time_sync: { ts_client: 1234.567, ts_server: 5678.901 },
   robot: {
@@ -128,10 +128,10 @@ describe("text framing", () => {
 });
 
 describe("encode inbound JSON", () => {
-  it("omits robot_id, protocol_version, and alignment", () => {
+  it("omits robot_id and alignment while advertising protocol v2", () => {
     const msg = JSON.parse(encodeHelloRequest({ ts_client: 1 }));
     expect(msg).not.toHaveProperty("robot_id");
-    expect(msg).not.toHaveProperty("protocol_version");
+    expect(msg.protocol_version).toBe(2);
     expect(msg).not.toHaveProperty("alignment");
   });
 
@@ -152,6 +152,11 @@ describe("encode inbound JSON", () => {
 });
 
 describe("decodeOutbound fixtures", () => {
+  it("negotiates independent advisory IK only when advertised by the server", () => {
+    expect(decodeOutbound(JSON.stringify({ ...HELLO_FIXTURE, independent_ik: true }))).toHaveProperty("independent_ik", true);
+    expect(decodeOutbound(JSON.stringify(HELLO_FIXTURE))).not.toHaveProperty("independent_ik");
+    expect(() => decodeOutbound(JSON.stringify({ ...HELLO_FIXTURE, independent_ik: "true" }))).toThrow(/independent_ik/);
+  });
   it("decodes hello from PROTOCOL.md", () => {
     const hello = decodeOutbound(JSON.stringify(HELLO_FIXTURE));
     expect(hello).toEqual({ ...HELLO_FIXTURE, capabilities: { ...HELLO_FIXTURE.capabilities, navigation: { ...HELLO_FIXTURE.capabilities.navigation, nav_goal: { ...HELLO_FIXTURE.capabilities.navigation.nav_goal, preview: false } } } });
@@ -206,13 +211,13 @@ describe("decodeOutbound fixtures", () => {
     expect(
       decodeOutbound(
         JSON.stringify({
-          type: "localization_observations_request",
+          type: "localization_observations_request", capture_id: "fixture-capture",
           capture_policy: "any_angle",
           observation_count: 1,
         }),
       ),
     ).toEqual({
-      type: "localization_observations_request",
+      type: "localization_observations_request", capture_id: "fixture-capture",
       capture_policy: "any_angle",
       observation_count: 1,
     });
@@ -220,13 +225,13 @@ describe("decodeOutbound fixtures", () => {
     expect(
       decodeOutbound(
         JSON.stringify({
-          type: "localization_observations_request",
+          type: "localization_observations_request", capture_id: "fixture-capture",
           capture_policy: "robot_los_required",
           observation_count: 3,
         }),
       ),
     ).toEqual({
-      type: "localization_observations_request",
+      type: "localization_observations_request", capture_id: "fixture-capture",
       capture_policy: "robot_los_required",
       observation_count: 3,
     });
@@ -234,14 +239,14 @@ describe("decodeOutbound fixtures", () => {
     expect(
       decodeOutbound(
         JSON.stringify({
-          type: "localization_observations_request",
+          type: "localization_observations_request", capture_id: "fixture-capture",
           capture_policy: "robot_los_preferred",
           observation_count: 3,
           wait_timeout_s: 2.0,
         }),
       ),
     ).toEqual({
-      type: "localization_observations_request",
+      type: "localization_observations_request", capture_id: "fixture-capture",
       capture_policy: "robot_los_preferred",
       observation_count: 3,
       wait_timeout_s: 2.0,
@@ -398,7 +403,7 @@ describe("decodeOutbound errors", () => {
     expect(() =>
       decodeOutbound(
         JSON.stringify({
-          type: "localization_observations_request",
+          type: "localization_observations_request", capture_id: "fixture-capture",
           capture_policy: "robot_los_preferred",
           observation_count: 3,
         }),
@@ -407,7 +412,7 @@ describe("decodeOutbound errors", () => {
     expect(() =>
       decodeOutbound(
         JSON.stringify({
-          type: "localization_observations_request",
+          type: "localization_observations_request", capture_id: "fixture-capture",
           capture_policy: "any_angle",
           observation_count: 3,
           wait_timeout_s: 1,
@@ -484,7 +489,7 @@ describe("decodeOutbound errors", () => {
     expect(() =>
       decodeOutbound(
         JSON.stringify({
-          type: "localization_observations_request",
+          type: "localization_observations_request", capture_id: "fixture-capture",
           capture_policy: "any_angle",
           observation_count: 0,
         }),
@@ -647,7 +652,7 @@ it("decodes optional server display metadata while retaining old hello defaults"
 });
 
 it("decodes optional localization result deadlines and rejects invalid values", () => {
-  const request = { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 };
+  const request = { type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: "any_angle", observation_count: 1 };
   expect(decodeOutbound(JSON.stringify(request))).toEqual(request);
   expect(decodeOutbound(JSON.stringify({ ...request, result_timeout_s: 15 }))).toEqual({ ...request, result_timeout_s: 15 });
   for (const invalid of [0, -1, null, true, "15"]) {
@@ -687,5 +692,44 @@ it("validates decoded calibration through the same positive-dimension and focal-
     expect(at).toBeGreaterThan(0);
     data.set(new TextEncoder().encode(replacement), at);
     expect(() => decodeLocalizationObservations(data)).toThrow(/positive/);
+  }
+});
+
+it("decodes recording source and rejects malformed read-only metadata", () => {
+  const source = {kind: "recording", read_only: true, name: "arm.db"};
+  expect((decodeOutbound(JSON.stringify({...HELLO_FIXTURE, source})) as any).source).toEqual(source);
+  expect(() => decodeOutbound(JSON.stringify({...HELLO_FIXTURE, source: {...source, read_only: "true"}}))).toThrow();
+});
+
+it("decodes bounded playback progress and rejects invalid progress", () => {
+  const playback = {state: "ended", elapsed_s: 2, duration_s: 2};
+  expect((decodeOutbound(JSON.stringify({...STATE_FIXTURE, playback})) as any).playback).toEqual(playback);
+  expect(() => decodeOutbound(JSON.stringify({...STATE_FIXTURE, playback: {...playback, elapsed_s: 3}}))).toThrow();
+
+});
+
+it("preserves the validated finishing tail in native and shared interaction snapshots", () => {
+  const tail = { generation: 4, group_id: "arm", target_revision: 3, status: "finishing",
+    position: [0.1, 0.2, 0.3], orientation: [0, 0, 0, 1], speed_scale: 0.5, joints: { joint: 0.2 } };
+  const native = { type: "manipulation_state", available: false, following_tail: tail };
+  const shared = { type: "interaction_state", epoch: "robot", revision: 5, mode: "manual",
+    authority: null, target: null, preview: null, active_goal: null, following_tail: tail };
+  for (const snapshot of [native, shared]) {
+    expect((decodeOutbound(JSON.stringify(snapshot)) as any).following_tail).toEqual(tail);
+    for (const invalid of [{generation: -1}, {group_id: ""}, {target_revision: 1.2},
+      {status: "completed"}, {orientation: [0,0,0,0]}, {speed_scale: 0}, {joints: {joint: null}}]) {
+      expect(() => decodeOutbound(JSON.stringify({...snapshot, following_tail: {...tail, ...invalid}}))).toThrow();
+    }
+  }
+});
+
+
+it("validates revision-bound observational arm evaluations", () => {
+  const evaluation = { group_id: "arm", target_revision: 2, joints: { slide: 0.3 }, pose: null };
+  const message = { type: "manipulation_state", available: false, evaluation };
+  expect((decodeOutbound(JSON.stringify(message)) as any).evaluation).toEqual(evaluation);
+  for (const invalid of [{ group_id: "" }, { target_revision: -1 }, { target_revision: 1.5 },
+    { joints: { slide: null } }, { joints: null }, { pose: { position: [0,0,0], orientation: [0,0,0,0] } }]) {
+    expect(() => decodeOutbound(JSON.stringify({ ...message, evaluation: { ...evaluation, ...invalid } }))).toThrow();
   }
 });

@@ -19,8 +19,8 @@ export class IntegrationInput {
   ][] = [];
   private readonly isActive: () => boolean;
   private readonly isTargeting: () => boolean;
-  constructor() {
-    this.actor = InteractionManager.getInstance().getInteractorsByType(InteractorInputType.Mouse)[0];
+  constructor(inputType = InteractorInputType.Mouse) {
+    this.actor = InteractionManager.getInstance().getInteractorsByType(inputType)[0];
     if (!this.actor)
       throw new Error("Native integration requires the registered editor Mouse interactor");
     this.isActive = this.actor.isActive;
@@ -79,7 +79,10 @@ export class IntegrationInput {
     interactable: Interactable;
     inactive?: boolean;
   }): void { if (button.inactive || button.interactable.enabled === false)
-    return; this.hover(button.interactable); this.start(); this.end(); this.unhover(); }
+    return;
+    if (!button.interactable.getSceneObject().isEnabledInHierarchy)
+      throw new Error(`Cannot press hidden native control: ${button.interactable.getSceneObject().name}`);
+    this.hover(button.interactable); this.start(); this.end(); this.unhover(); }
   cancel(): void {
     const target = this.target;
     this.held = false;

@@ -8,6 +8,8 @@ function fixture() {
   const setState = vi.fn(), text = () => ({ text: "", textFill: {} });
   const field = () => ({ setText: vi.fn(), text: text(), window: { interactable: {} }, dispose: vi.fn() });
   const view = Object.assign(Object.create(MainMenuView.prototype), {
+    localizationRoot: {}, lidarRoot: {}, capabilityKey: "false,false,true",
+    speedRoot: {}, speedSlider: {}, speedText: text(), speedValue: text(),
     disposed: false, page: "main", showPage: vi.fn(), robot: { labelText: text(), button: {} }, status: text(),
     modeButtons: [{}, {}], setOperatingMode: vi.fn(), manual: {}, chat: {}, reply: field(), draft: field(), send: {}, clear: {},
     lidarButtons: [{}, {}, {}], sensorControls: [], rangeLabel: text(), range: text(), points: text(), sensorStatus: text(),
@@ -36,4 +38,23 @@ it("disposes native registrations and generated fields once, ignoring later snap
   h.view.dispose(); h.view.dispose(); h.view.apply(h.snapshot);
   expect(unsubscribe).toHaveBeenCalledOnce(); expect(destroy).toHaveBeenCalledOnce(); expect(dispose).toHaveBeenCalledOnce();
   expect(h.setState).not.toHaveBeenCalled();
+});
+
+it("moves tab buttons and their hit targets as one layout row", () => {
+  const setLocalPosition = vi.fn(), parent = {};
+  const group = { setParent: vi.fn(), getTransform: () => ({ setLocalPosition }) };
+  vi.stubGlobal("vec3", class { constructor(public x: number, public y: number, public z: number) {} });
+  vi.stubGlobal("global", { scene: { createSceneObject: () => group } });
+  const button = vi.fn((..._args: unknown[]) => ({ button: {} }));
+  const view = Object.assign(Object.create(MainMenuView.prototype), {
+    rowNodes: [], surface: vi.fn(), button,
+  });
+  try {
+    view.tabs(parent, ["Off", "Obstacles", "Full"], 17, [vi.fn(), vi.fn(), vi.fn()]);
+    expect(view.rowNodes).toContainEqual({ parent, node: group, y: 17 });
+    expect(setLocalPosition).toHaveBeenCalledWith(expect.objectContaining({ y: 17 }));
+    for (const call of button.mock.calls) expect(call[4]).toBe(0);
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

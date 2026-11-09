@@ -1,0 +1,18 @@
+input_float OpacityScale;
+input_float ColorR;
+input_float ColorG;
+input_float ColorB;
+output_vec4 Result;
+void main() {
+    vec2 uv0 = system.getSurfaceUVCoord0();
+    float along = system.getSurfaceUVCoord2().y;
+    float dash = system.getSurfaceUVCoord3().y;
+    float period = max(0.001, dash + system.getSurfaceUVCoord4().x);
+    float phase = mod(along, period);
+    float aa = max(fwidth(along), 0.00001);
+    float coverage = 1.0 - smoothstep(dash - aa, dash + aa, phase);
+    float sideAA = max(fwidth(uv0.x), 0.0001);
+    coverage *= 1.0 - smoothstep(1.0 - sideAA, 1.0, abs(uv0.x));
+    if (coverage < 0.001) discard;
+    Result = vec4(vec3(ColorR, ColorG, ColorB), system.getSurfaceColor().a * coverage * OpacityScale);
+}

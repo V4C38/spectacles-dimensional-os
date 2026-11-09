@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>DimOS ARModule</title>
-    <link rel="stylesheet" href="/static/app.css?v=localization-layout-3" />
+    <link rel="stylesheet" href="/static/app.css?v=launcher-controls-6" />
   </head>
   <body>
     <div class="app">
@@ -33,17 +33,19 @@
       <aside class="panel" id="sidePanel">
 
         <div class="panel-scroll">
-          <details class="card ip-card" id="ipCard">
-            <summary class="ip-summary">
+          <details class="card config-card ip-card" id="ipCard">
+            <summary class="config-summary ip-summary">
               <span class="ip-summary-collapsed">
                 <span class="label" id="hostIpSummaryLabel">Host IP</span>
                 <span class="value mono" id="hostIpSummary">—</span>
                 <span class="label" id="connectionSummaryLabel">PIN</span>
                 <span class="value mono" id="pinSummary">—</span>
+                <span class="label">URL</span>
+                <span class="value mono" id="urlSummary">—</span>
               </span>
               <span class="ip-summary-expanded label">Connection</span>
             </summary>
-            <div class="ip-body">
+            <div class="config-body ip-body">
               <div class="status-row" id="hostIpRow">
                 <span class="label">Host IP</span>
                 <span class="value mono" id="hostIp">—</span>
@@ -59,35 +61,18 @@
               <p class="hint webxr-row hidden" id="webxrHint">
                 Open this URL in Quest Browser and accept the HTTPS certificate warning.
               </p>
-              <div class="status-row robot-ip-row">
-                <span class="label">Robot IP</span>
-                <div class="robot-ip-controls">
-                  <span class="value mono" id="robotValue">—</span>
-                  <input
-                    type="text"
-                    id="robotIp"
-                    class="robot-ip-input hidden"
-                    autocomplete="off"
-                    aria-label="Robot IP override"
-                  />
-                  <label class="check ip-auto">
-                    <input type="checkbox" id="robotIpAuto" checked />
-                    <span class="check-box" aria-hidden="true"></span>
-                    <span>auto</span>
-                  </label>
-                </div>
-              </div>
+
             </div>
           </details>
 
-          <details class="card deps-card" id="installBanner">
-            <summary class="deps-summary">
+          <details class="card config-card deps-card" id="installBanner">
+            <summary class="config-summary deps-summary">
               <span class="deps-summary-collapsed">
-                <span class="label">Dependencies</span>
+                <span class="label">dimOS install</span>
                 <span class="value" id="depsSummary"></span>
               </span>
             </summary>
-            <div class="deps-body">
+            <div class="config-body deps-body">
               <fieldset class="radio-group">
                 <label class="check">
                   <input type="radio" name="setupMode" value="existing" checked />
@@ -101,11 +86,11 @@
                 </label>
               </fieldset>
               <label class="field" id="dimosPythonField">
-                <span>Path to DimOS Python (…/.venv/bin/python3)</span>
+                <span>DimOS installation folder (click to browse)</span>
                 <input
                   type="text"
                   id="dimosPython"
-                  placeholder="/path/to/dimos/.venv/bin/python3"
+                  placeholder="Select the DimOS folder"
                   autocomplete="off"
                 />
               </label>
@@ -123,9 +108,11 @@
                 </select>
               </label>
               <p class="hint hidden" id="dimosVersionHint"></p>
+              <p class="hint hidden" id="plannerStatus" role="status"></p>
               <button type="button" class="btn primary hidden" id="installBtn">
                 Install
               </button>
+
             </div>
           </details>
 
@@ -135,24 +122,61 @@
               <select id="blueprintSelect" aria-label="Blueprint">
                 <option value="unitree_go2_ar" selected>unitree_go2_ar</option>
                 <option value="unitree_go2_ar_agentic">unitree_go2_ar_agentic</option>
+                <option value="openyam_ar_planner">openyam_ar_planner</option>
               </select>
               <p class="blueprint-info" id="blueprintInfo"></p>
-            </div>
-            <div class="selector-group">
-              <span class="selector-label">Client</span>
-              <div class="tabs" role="group" aria-label="Client">
-                <button type="button" class="tab active" data-client="specs">SPECS</button>
-                <button type="button" class="tab" data-client="webxr">WebXR</button>
+
+              <label class="selector-label" for="robotSource">Connected robot</label>
+              <div class="connection-selector"><select id="robotSource"><option value="auto">Auto (scan on startup)</option><option value="simulated">Simulated</option></select><button type="button" class="btn ghost" id="editConnection" aria-label="Edit connected robot">✎</button><button type="button" class="btn ghost" id="refreshRobots" aria-label="Refresh robots">↻</button></div>
+            <details class="card config-card hidden" id="canCard">
+              <summary class="config-summary">
+                <span class="deps-summary-collapsed">
+                  <span class="label">CAN setup</span>
+                  <span class="value" id="canSummary">checking…</span>
+                </span>
+              </summary>
+              <div class="config-body">
+                <p class="hint" id="canStatus" role="status">Checking can0…</p>
+                <button type="button" class="btn" id="canSetupBtn">Set up CAN</button>
+                <p class="hint hidden" id="canSetupResult" role="status" aria-live="polite"></p>
+              </div>
+            </details>
+            <details class="card config-card hidden" id="webrtcCard">
+              <summary class="config-summary"><span class="deps-summary-collapsed"><span class="label">WebRTC setup</span><span class="value" id="webrtcSummary" data-phase="">Not scanned</span></span></summary>
+              <div class="config-body"><p class="hint">Find Go2 robots on your local network, then select one under Connected robot.</p><button type="button" class="btn" id="discoverWebrtc">Discover</button></div>
+            </details>
+              <p class="hint" id="discoveryStatus" role="status"></p>
+              <div id="connectionEditor" class="profile-editor hidden"><label class="field">Robot IP address<input id="robotIp" autocomplete="off" placeholder="192.168.1.10" /></label><div class="actions"><button type="button" class="btn" id="saveRobotIp">Save address</button><button type="button" class="btn" id="cancelRobotIp">Cancel</button></div><span id="robotValue" class="hidden"></span></div>
+              <div id="replayRow" class="hidden">
+                <label class="selector-label" for="playbackSource">Simulation source</label>
+                <div class="connection-selector"><select id="playbackSource"><option value="simulator">Simulator</option><option value="recording">Recording</option></select><button type="button" class="btn ghost" id="editReplay" aria-label="Choose replay">✎</button></div>
+                <p class="hint" id="replayName">Default recording</p>
+                <div id="replayEditor" class="profile-editor hidden"><label class="field">Local recording (.db)<input id="replayPath" autocomplete="off" placeholder="Default recording" /></label><div id="replayStreams"></div><p class="hint" id="replayStatus" role="status"></p><div class="actions"><button type="button" class="btn" id="browseReplay">Browse…</button><button type="button" class="btn" id="defaultReplay">Restore default</button></div></div>
+              </div>
+              <label class="selector-label" for="robotProfileSelect">Robot profile</label>
+              <div class="profile-selector"><select id="robotProfileSelect" aria-label="Robot profile"></select>
+              <button type="button" class="btn ghost profile-pen" id="profileEdit" aria-label="Edit robot profile" aria-expanded="false">✎</button></div>
+              <div id="profileEditor" class="profile-editor hidden">
+                <div class="profile-edit-row">
+                  <input id="robotProfileName" aria-label="Profile name" maxlength="80" />
+                  <button type="button" class="btn" id="saveProfileName" aria-label="Save name" title="Save name">✓</button>
+                  <button type="button" class="btn" id="cancelProfileName" aria-label="Cancel rename" title="Cancel rename">↶</button>
+                  <button type="button" class="btn" id="newRobotProfile" aria-label="New profile" title="New profile">＋</button>
+                  <button type="button" class="btn" id="deleteRobotProfile" aria-label="Delete profile" title="Delete profile">⌫</button>
+                  <button type="button" class="btn" id="profileDone" aria-label="Close profile editor" title="Close">×</button>
+                </div>
+                <p class="error hidden" id="profileError" role="alert"></p>
+                <div id="deleteProfileConfirm" class="hidden"><span>Delete this profile?</span><button type="button" class="btn" id="confirmDeleteProfile">Delete profile</button></div>
               </div>
             </div>
 
-            <section class="card config-card" id="locCard" aria-label="Localization">
-              <div class="config-heading">
+            <details class="card config-card" id="locCard" aria-label="Localization">
+              <summary class="config-summary">
                 <span class="deps-summary-collapsed">
                   <span class="label">Localization</span>
                   <span class="value" id="locSummary"></span>
                 </span>
-              </div>
+              </summary>
               <div class="config-body">
                 <section class="localization-policy" aria-label="Localization policy">
                   <p class="policy-box" id="policyExplanation">
@@ -231,7 +255,7 @@
                   </div>
                 </div>
               </div>
-            </section>
+            </details>
 
             <details class="card config-card hidden" id="agentConfig">
               <summary class="config-summary">
@@ -282,6 +306,14 @@
                 </label>
               </div>
             </details>
+            <div class="selector-group">
+              <span class="selector-label">Client</span>
+              <div class="tabs" role="group" aria-label="Client">
+                <button type="button" class="tab active" data-client="webxr">WebXR</button>
+                <button type="button" class="tab" data-client="specs">Specs</button>
+              </div>
+            </div>
+
           </section>
         </div>
 
@@ -318,6 +350,6 @@
         <pre class="log" id="log" aria-live="polite"></pre>
       </main>
     </div>
-    <script src="/static/app.js?v=localization-layout-3"></script>
+    <script src="/static/app.js?v=launcher-controls-6"></script>
   </body>
 </html>

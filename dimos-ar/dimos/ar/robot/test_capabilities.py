@@ -63,3 +63,25 @@ def test_supports_navigation_rejects_unknown_key() -> None:
     )
     with pytest.raises(ValueError, match="unknown navigation input"):
         capabilities.supports_navigation("tele_cmd_vel")
+
+
+def test_detection_is_explicit_and_not_implied_by_agent():
+    from types import SimpleNamespace
+
+    from dimos.ar.robot.capabilities import blueprint_has_object_detection
+
+    def blueprint(module_name, class_name):
+        module = type(class_name, (), {"__module__": module_name})
+        return SimpleNamespace(active_blueprints=[SimpleNamespace(module=module)])
+
+    assert blueprint_has_object_detection(
+        blueprint("dimos.perception.detection.module3D", "Detection3DModule")
+    )
+    assert not blueprint_has_object_detection(blueprint("dimos.agents.mcp.mcp_client", "McpClient"))
+    assert not blueprint_has_object_detection(
+        blueprint("dimos.perception.fiducial.marker_detection", "MarkerDetectionStreamModule")
+    )
+    caps = CapabilitySet.from_supported(
+        frozenset(), localization_available=False, agent_available=True
+    )
+    assert not caps.supports(CapabilityName.OBJECT_DETECTION)

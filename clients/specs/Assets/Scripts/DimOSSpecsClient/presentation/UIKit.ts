@@ -483,18 +483,39 @@ export function uiMaterialLayer(visual: RenderMeshVisual, order: number): void {
   visual.mainPass.depthTest = false;
   visual.mainPass.depthWrite = false;
 }
-export function configureControlPanelFrame(frame: Frame): void {
+const scalableFrames = new WeakSet<Frame>();
+
+export function configureControlPanelFrame(frame: Frame, size: {width: number; height: number} = {width: CONTROL_PANEL_LAYOUT.width, height: CONTROL_PANEL_LAYOUT.height}, scalable = false): void {
   frame.autoShowHide = false;
   frame.autoScaleContent = false;
   frame.content.getTransform().setLocalScale(vec3.one());
   // SUK's innerSize excludes its border and padding; WebXR's dimensions include them.
-  frame.innerSize = new vec2(CONTROL_PANEL_LAYOUT.width * 100 - frame.border * 2 - frame.padding.x,
-    CONTROL_PANEL_LAYOUT.height * 100 - frame.border * 2 - frame.padding.y);
-  frame.allowScaling = false; frame.allowTranslation = true;
+  frame.innerSize = new vec2(size.width * 100 - frame.border * 2 - frame.padding.x,
+    size.height * 100 - frame.border * 2 - frame.padding.y);
+  frame.allowScaling = scalable; frame.allowTranslation = true;
   frame.onlyInteractOnBorder = true; frame.grabZoneOnly = false;
   frame.roundedRectangle.cornerRadius = CONTROL_PANEL_LAYOUT.cornerRadius * 100;
   frame.roundedRectangle.renderOrder = 10;
   uiMaterialLayer(frame.roundedRectangle.renderMeshVisual, 10);
+  frame.autoScaleContent = scalable;
+  if (scalable && !scalableFrames.has(frame)) {
+    scalableFrames.add(frame);
+    let clamping = false;
+    frame.onScalingUpdate.add(() => {
+      if (clamping) return;
+      const content = frame.content.getTransform(), scale = content.getLocalScale().x;
+      if (!(scale > 0)) return;
+      const target = Math.max(.75, Math.min(2, scale));
+      if (Math.abs(target-scale)<1e-6) return;
+      clamping = true;
+      const ratio = target/scale, inner = frame.innerSize;
+      frame.autoScaleContent = false;
+      frame.innerSize = new vec2(inner.x*ratio,inner.y*ratio);
+      content.setLocalScale(content.getLocalScale().uniformScale(ratio));
+      frame.autoScaleContent = true;
+      clamping = false;
+    });
+  }
   // Match WebXR's outer glass surface: later world labels must stay behind the panel.
   frame.roundedRectangle.renderMeshVisual.mainPass.depthTest = true;
   frame.roundedRectangle.renderMeshVisual.mainPass.depthWrite = true;
@@ -552,4 +573,16 @@ export function createPanelSurface(parent: SceneObject, name: string, width: num
   rectangle.borderType = "Gradient";
   rectangle.setBorderGradient(PrimaryNeutralGradients.defaultBorder);
   return rectangle;
+}
+
+/** Inter world-label calibration, shared by mobile robot and arm markers. */
+export function createRobotLabelText(parent: SceneObject, name: string, emM: number,
+  xM: number, yM: number, widthM: number, semibold: boolean, color: vec4, order: number): Text {
+  const text = createText({ parent, name, text: "", fontSize: emM * 100 * 32 / 0.8216,
+    color, position: new vec3(xM * 100, yM * 100, 0.1), horizontalAlignment: HorizontalAlignment.Center,
+    worldSpaceRect: Rect.create(-widthM * 50, widthM * 50, -20, 0) });
+  text.font = (semibold ? requireAsset("../../../Fonts/Inter/Inter-Semibold.ttf") : requireAsset("../../../Fonts/Inter/Inter-Regular.ttf")) as Font;
+  text.sizeToFit = false; text.lineSpacing = (2478 / 2048) * 0.8216;
+  text.verticalAlignment = VerticalAlignment.Top; text.depthTest = true; text.setRenderOrder(order);
+  return text;
 }

@@ -1,4 +1,11 @@
 :root {
+  --control-height: 44px;
+  --control-font-size: 14px;
+  --control-line-height: 20px;
+  --control-radius: 6px;
+  --control-padding: 12px;
+  --space: 8px;
+  --section-gap: 16px;
   --bg: #202022;
   --panel: #29292b;
   --card: #303032;
@@ -13,7 +20,7 @@
   --warn: #d29922;
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --panel-width: 420px;
+  --panel-width: 460px;
   --ansi-black: #484f58;
   --ansi-red: #ff7b72;
   --ansi-green: #3fb950;
@@ -266,44 +273,6 @@ body.resizing {
   background: color-mix(in srgb, var(--warn) 8%, var(--card));
 }
 
-.deps-summary,
-.config-summary {
-  list-style: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.85rem 1rem;
-  cursor: pointer;
-  font-size: 0.9rem;
-  font-weight: inherit;
-  user-select: none;
-}
-
-.deps-summary::-webkit-details-marker,
-.config-summary::-webkit-details-marker {
-  display: none;
-}
-
-.deps-summary::after,
-.config-summary::after {
-  content: "▸";
-  color: var(--muted);
-  font-size: 0.75rem;
-  transition: transform 0.15s ease;
-  flex-shrink: 0;
-}
-
-.deps-card[open] .deps-summary::after,
-.config-card[open] .config-summary::after {
-  transform: rotate(90deg);
-}
-
-.deps-card[open] .deps-summary,
-.config-card[open] .config-summary {
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-}
-
 .deps-body,
 .config-body {
   padding: 1rem 1rem 1.25rem;
@@ -348,22 +317,6 @@ body.resizing {
   flex-shrink: 0;
 }
 
-.ip-summary {
-  list-style: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.85rem 1rem;
-  cursor: pointer;
-  font-size: 0.9rem;
-  user-select: none;
-}
-
-.ip-summary::-webkit-details-marker {
-  display: none;
-}
-
 .ip-summary-collapsed,
 .deps-summary-collapsed {
   display: flex;
@@ -400,22 +353,6 @@ body.resizing {
 
 .ip-card[open] .ip-summary-expanded {
   display: inline;
-}
-
-.ip-summary::after {
-  content: "▸";
-  color: var(--muted);
-  font-size: 0.75rem;
-  transition: transform 0.15s ease;
-  flex-shrink: 0;
-}
-
-.ip-card[open] .ip-summary::after {
-  transform: rotate(90deg);
-}
-
-.ip-card[open] .ip-summary {
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .ip-body {
@@ -1101,7 +1038,6 @@ body.resizing {
 .app-toolbar .warning, .app-toolbar .error { margin: 4px 0 0; font-size: 12px; }
 .panel { background: #262628; }
 .panel-scroll { padding: 16px; gap: 18px; }
-.panel-scroll > .card { padding: 0 0 18px; border: 0; border-bottom: 1px solid #ffffff12; border-radius: 0; background: none; }
 .card h2 { font-size: 13px; font-weight: 650; color: #f5f5f7; }
 .panel .field > span, .panel .label, .panel .check { font-size: 12px; }
 .panel input[type="text"], .panel input[type="number"], .panel select { background: #353537; border-color: #ffffff16; border-radius: 5px; padding: 6px 8px; font-size: 12px; }
@@ -1120,6 +1056,181 @@ body.resizing {
   .log-panel { flex: none; }
 }
 
+.profile-editor { padding: 0.75rem; border: 1px solid var(--border); border-radius: 8px; background: var(--card); display: grid; gap: 0.6rem; }
+.profile-pen { justify-self: end; font-size: 1.2rem; }
+
+.profile-selector, .connection-selector { display: flex; gap: 8px; align-items: center; }
+.profile-selector select, .connection-selector select { flex: 1; min-width: 0; }
+.profile-selector button, .connection-selector button { width: var(--control-height); height: var(--control-height); flex: 0 0 var(--control-height); padding: 0; }
+
+/* Shared launcher controls. Variants change emphasis, never control metrics. */
+.app :is(button, summary, select, input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), .tag-upload) {
+  box-sizing: border-box;
+  height: var(--control-height);
+  min-height: var(--control-height);
+  padding: 0 var(--control-padding);
+  border-radius: var(--control-radius);
+  font-family: var(--sans);
+  font-size: var(--control-font-size);
+  font-weight: 400;
+  line-height: var(--control-line-height);
+  letter-spacing: normal;
+  text-transform: none;
+}
+.app :is(button, select, .tag-upload) {
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+}
+.app :is(button, summary, select, input, .tag-upload):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.app :is(button, summary, .tag-upload):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 8%, var(--card));
+}
+.app .btn.primary { background: var(--accent); color: var(--primary-text); border-color: var(--accent); }
+.app .btn.danger { background: var(--danger); border-color: var(--danger); }
+.app .tab.active, .app .tag-preset[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 22%, var(--card));
+  border-color: var(--accent);
+}
+.app details.card, .app .tag-card {
+  padding: 0;
+  margin: 0;
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--border);
+  border-radius: var(--control-radius);
+  background: var(--card);
+  overflow: hidden;
+}
+.app details.needs-setup { box-shadow: inset 0 0 0 1px var(--warn); }
+.app summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space);
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+.app summary:focus-visible { outline-offset: -2px; }
+.app summary::-webkit-details-marker { display: none; }
+.app summary::after {
+  content: "▸";
+  flex: 0 0 auto;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+.app details[open] > summary::after { transform: rotate(90deg); }
+.app details[open] > summary { border-bottom: 1px solid var(--border); border-radius: 0; }
+.app summary :is(.label, .value, .mono, .tag-title, .tag-subtitle) {
+  font: inherit;
+  white-space: nowrap;
+}
+.app summary .value { overflow: hidden; text-overflow: ellipsis; }
+.app :is(.config-body, .ip-body, .deps-body, .tag-body) {
+  padding: var(--section-gap);
+  gap: var(--section-gap);
+}
+.panel-scroll, .controls { gap: var(--section-gap); }
+.selector-group { margin-bottom: 0; }
+.selector-group > .selector-label:not(:first-child) { margin-top: var(--section-gap); }
+.app .profile-editor { border-radius: var(--control-radius); gap: var(--space); }
+.app .tag-summary-meta { flex: 1; display: flex; align-items: center; gap: var(--space); overflow: hidden; }
+.app .tag-subtitle { margin: 0; overflow: hidden; text-overflow: ellipsis; }
+.app .tag-thumb { width: 24px; height: 24px; padding: 1px; border-radius: 3px; }
+.app .tag-preset { flex-direction: row; justify-content: center; gap: var(--space); }
+.app .tag-preset img { width: 20px; height: 20px; padding: 1px; }
+.app .tag-upload { display: flex; align-items: center; justify-content: center; }
+.app .num-input { border: 0; grid-template-columns: var(--control-height) 1fr var(--control-height); }
+.app .num-input :is(button, input) { border-radius: 0; padding: 0; }
+.app .num-input input { border: 0; }
+.app .num-btn { width: var(--control-height); }
+.app select:not([multiple]) {
+  appearance: none;
+  padding-right: 32px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: right 16px center, right 11px center;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+.app .btn.primary:hover:not(:disabled) { background: var(--accent-dim); }
+.app :is(button, select, input):disabled { opacity: 0.45; cursor: not-allowed; }
+
+.app summary .label { font-weight: 600; }
+.app summary .value { font-size: 13px; font-weight: 400; }
+.app button { font-weight: 500; }
+.app .brand-title { font-size: 16px; font-weight: 650; }
+.app .tag-thumb { width:32px; height:32px; }
+.app .tag-picker { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.app .tag-preset { height:96px; min-height:96px; flex-direction:column; }
+.app .tag-preset img { width:64px; height:64px; }
+
+/* Marker editors must shrink with the sidebar, including numeric input tracks. */
+.app .tag-card, .app .tag-body, .app .tag-picker, .app .tag-grid,
+.app .tag-field, .app .num-input, .app .tag-preset { min-width: 0; max-width: 100%; }
+.app .tag-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.app .num-input input { min-width: 0; }
+.app .tag-summary > a { flex: 0 0 32px; }
+.app .tag-summary-meta { flex-direction: column; align-items: flex-start; gap: 0; }
+.app .tag-title, .app .tag-subtitle { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.app .tag-subtitle { font-size: 11px; line-height: 16px; }
+.app .tag-preset img { flex: 0 0 64px; max-width: 100%; object-fit: contain; }
+.app .tag-body { container-type: inline-size; }
+.app .tag-field.span-2 { grid-column: 1 / -1; }
+@container (max-width: 300px) {
+  .app .tag-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@container (max-width: 210px) {
+  .app .tag-picker { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Coordinates read left-to-right; compact number inputs retain keyboard stepping. */
+.app .tag-grid { display: flex; flex-direction: column; gap: 16px; }
+.app .tag-coordinate-group { margin: 0; padding: 0; border: 0; min-width: 0; }
+.app .tag-coordinate-group legend { margin-bottom: 8px; font-size: 14px; font-weight: 600; }
+.app .tag-coordinate-row { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; }
+.app .tag-coordinate-group:first-child .tag-coordinate-row { grid-template-columns: minmax(0,1fr); }
+.app .coordinate-input { display: block; }
+.app .coordinate-input .num-btn { display: none; }
+.app .coordinate-input input { width: 100%; padding: 0 4px; font-size: 13px; }
+.app .tag-field > span { font-size: 11px; text-transform: none; letter-spacing: normal; }
+/* Image options need room for the preview as well as their label. */
+.app .tag-body .tag-picker > button.tag-preset,
+.app .tag-body .tag-picker > label.tag-preset {
+  height: 96px;
+  min-height: 96px;
+  padding: 3px 8px;
+  gap: 4px;
+}
+
+/* A marker row and its expanded preview share the same 64px visual size. */
+.app .tag-list .tag-card > summary.tag-summary {
+  height: 64px;
+  min-height: 64px;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+.app .tag-summary > a { flex: 0 0 64px; }
+.app .tag-thumb { width: 64px; height: 64px; }
+.app .tag-body .tag-picker { display: grid; grid-template-columns: 64px minmax(0,1fr); align-items: center; gap: 12px; }
+.app .tag-preview, .app .tag-preview img { display: block; width: 64px; height: 64px; object-fit: contain; }
+.app .tag-type-field { min-width: 0; margin: 0; }
+.app .tag-type-field select { width: 100%; }
+
+/* Shared status palette for section summaries, details and runtime state. */
+.app [data-phase] { color: var(--text); }
+.app [data-phase="ready"], .app [data-phase="running"] { color: var(--ok); }
+.app [data-phase="checking"], .app [data-phase="installing"],
+.app [data-phase="starting"], .app [data-phase="stopping"],
+.app [data-phase="needs_setup"] { color: var(--warn); }
+.app [data-phase="error"] { color: var(--danger); }
+
+.app .profile-edit-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.app .profile-edit-row input { flex: 1; width: 0; min-width: 0; }
+.app .profile-edit-row .btn { flex: 0 0 var(--control-height); width: var(--control-height); padding: 0; }
 .config-heading {
   display: flex;
   align-items: center;

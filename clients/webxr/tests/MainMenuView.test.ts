@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { ManipulationPressEdges } from "@dimos-ar-client/manipulation/ManipulationInputCapture";
 import { MenuAnchorController } from "../src/input/MenuAnchorController";
 import { expect, it, vi } from "vitest";
 vi.hoisted(() => {
@@ -17,7 +18,7 @@ it("constructs real XR Blocks buttons and activates the supported trigger hook",
   const handlers = { onSetup: vi.fn(), onBack: vi.fn(), onRetry: vi.fn(), onRestart: vi.fn(), onMenu: vi.fn(), onMode: vi.fn(), onRobot: vi.fn(), onDebug: vi.fn(), onLidar: vi.fn(), onLocalize: vi.fn(), onRealign: vi.fn(), onEstop: vi.fn(), onDraft: vi.fn(), onAgentText: vi.fn(() => true) };
   const view = new MainMenuView(handlers);
   expect(view.panel.scale.x).toBeCloseTo(DIMOS_AR_DESIGN.panel.height * 0.432);
-  expect(view.panel.getObjectByName("Sensors camera icon")?.children).toHaveLength(2);
+  expect(view.panel.getObjectByName("Capabilities robot icon")?.children).toHaveLength(4);
   const buttons: xb.TextButton[] = [];
   view.panel.traverse(object => { if (object instanceof xb.TextButton) buttons.push(object); });
   const next = buttons.find(button => button.text === "Continue")!;
@@ -403,9 +404,9 @@ it("starts a panel grab from the accepted input ray while the visual laser is st
   const bar = new THREE.Object3D(), raw = { origin: [0, 0, 0], direction: [0, 0, -1] };
   const begin = vi.fn(() => true), pin = vi.fn(), detach = vi.fn();
   Object.assign(app, { trackingState: { tracking: () => true, session: () => ({ visibilityState: "visible" }) }, navigationSourceIds: new WeakMap(), nextNavigationSource: 0,
-    touches: { owns: () => false }, capture: { press: () => true }, setupPlacement: { pin }, menuAnchor: { detach },
+    pressEdges: new ManipulationPressEdges(), touches: { owns: () => false }, capture: { press: () => true }, setupPlacement: { pin }, menuAnchor: { detach },
     interaction: { capture: vi.fn(), hit: () => ({ object: bar, point: new THREE.Vector3(0, 0, -1) }), direct: { capture() {}, ray: () => null }, ray: () => raw, smoothedRay: () => ({ origin: [0, 0, 0], direction: [1, 0, 0] }) },
-    client: { navigation: { clearAim() {}, marker: { object: new THREE.Group() } }, joystick: { loseInput() {} } },
+    client: { manipulation: { owns: () => false }, navigation: { clearAim() {}, marker: { object: new THREE.Group() } }, joystick: { loseInput() {} } },
     mainMenu: { isEmergencyTarget: () => false, ownsTarget: () => true, canInteract: () => true, scrollView: () => null, isSpeechTarget: () => false, isControl: () => false, beginManipulation: begin } });
   app.onSelectStart({ target });
   expect(begin.mock.calls[0].slice(0, 2)).toEqual([raw.origin, raw.direction]);

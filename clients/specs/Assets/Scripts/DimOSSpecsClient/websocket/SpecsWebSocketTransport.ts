@@ -1,3 +1,4 @@
+import { ConnectionResolution, type ConnectionResolver } from "../../DimOSARClient/websocket/ConnectionResolution";
 import { AR_MODULE_CLIENT_CONFIG, type WebSocketTransport } from "../../DimOSARClient/websocket/hostPorts";
 
 const WS_CONNECTING = 0;
@@ -12,6 +13,7 @@ type BlobLike = { bytes(): Promise<Uint8Array> };
 export class SpecsWebSocketTransport implements WebSocketTransport {
   private readonly internetModule: InternetModule;
   private url: string;
+  private readonly resolution: ConnectionResolution;
   private readonly connectTimeoutS: number;
   private readonly connectTimeoutEvent: DelayedCallbackEvent;
   private readonly connectWatchdogEvent: DelayedCallbackEvent;
@@ -20,6 +22,8 @@ export class SpecsWebSocketTransport implements WebSocketTransport {
   private connecting = false;
   private hostClosing = false;
   private readonly retiredSockets = new Set<WebSocket>();
+  private bulkSibling: SpecsWebSocketTransport | null = null;
+  private readonly sibling: (path: string) => SpecsWebSocketTransport;
 
   constructor(deps: {
     internetModule: InternetModule;
@@ -28,6 +32,17 @@ export class SpecsWebSocketTransport implements WebSocketTransport {
     connectTimeoutS?: number;
   }) {
     this.internetModule = deps.internetModule;
+    this.resolution = new ConnectionResolution((seconds, callback) => {
+      const timer = deps.script.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
+      timer.bind(callback); timer.reset(seconds);
+      return () => { timer.cancel(); deps.script.removeEvent(timer); };
+    });
+    this.sibling = path => {
+      const url = /^wss?:\/\//.test(path) ? path : this.url.replace(/^(wss?:\/\/[^/]+).*$/, "$1") + path;
+      if (!this.bulkSibling) this.bulkSibling = new SpecsWebSocketTransport({ ...deps, url });
+      else { this.bulkSibling.close(); this.bulkSibling.setUrl(url); }
+      return this.bulkSibling;
+    };
     this.url = deps.url;
     this.connectTimeoutS = requirePositive(
       deps.connectTimeoutS ?? AR_MODULE_CLIENT_CONFIG.connectTimeoutS,
@@ -50,21 +65,39 @@ export class SpecsWebSocketTransport implements WebSocketTransport {
   getUrl(): string {
     return this.url;
   }
+  createSibling(path: string): SpecsWebSocketTransport { return this.sibling(path); }
+  bufferedAmount(): number { return (this.socket as unknown as { bufferedAmount?: number } | null)?.bufferedAmount ?? 0; }
+
+  setConnectionResolver(resolver: ConnectionResolver | undefined): void { this.resolution.setResolver(resolver); }
 
   setUrl(url: string): void {
     if (this.connecting || this.isSocketOpen()) {
       throw new Error("cannot change WebSocket url while active");
     }
+    this.resolution.setResolver(undefined);
     this.url = url;
   }
 
   connect(): void {
+    this.close();
+    this.resolution.run(endpoint => {
+      if (endpoint) this.url = endpoint.controlUrl;
+      this.openSocket();
+    }, () => this.emitClose());
+  }
+
+  private openSocket(): void {
     this.clearTimers();
     if (this.socket) {
       this.retire(this.socket);
       this.socket = null;
     }
     this.drainRetiredOpen();
+    // A timed-out native CONNECTING socket cannot safely be closed. Do not pile
+    // more native connections on top of it while it is still unresolved.
+    if (Array.from(this.retiredSockets).some(socket => socket.readyState === WS_CONNECTING)) {
+      this.emitClose(); return;
+    }
     this.connecting = true;
 
     let socket: WebSocket;
@@ -84,6 +117,7 @@ export class SpecsWebSocketTransport implements WebSocketTransport {
   }
 
   close(): void {
+    this.resolution.cancel();
     this.hostClosing = true;
     try {
       this.clearTimers();
@@ -222,6 +256,7 @@ export class SpecsWebSocketTransport implements WebSocketTransport {
       return;
     }
     this.detachHandlers(socket);
+    if (socket.readyState !== WS_CONNECTING && socket.readyState !== WS_OPEN) return;
     this.retiredSockets.add(socket);
     socket.onopen = () => {
       if (this.retiredSockets.has(socket) && socket.readyState === WS_OPEN) {

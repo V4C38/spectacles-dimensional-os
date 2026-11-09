@@ -15,7 +15,9 @@ from tag_config import DEFAULT_MOUNT, armodule_config_from_ui
 
 def _scripts(tmp_path: Path) -> None:
     (tmp_path / "launcher" / "scripts").mkdir(parents=True)
-    (tmp_path / "launcher" / "scripts" / "start.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (tmp_path / "launcher" / "scripts" / "start.sh").write_text(
+        "#!/bin/sh\n", encoding="utf-8"
+    )
     (tmp_path / "launcher" / "scripts" / "configure-system.sh").write_text(
         "#!/bin/sh\nexit 0\n", encoding="utf-8"
     )
@@ -151,6 +153,7 @@ async def test_start_webxr_composes_local_and_network_urls(
         patch.object(mgr, "port_in_use", return_value=False),
         patch.object(mgr, "_configure_system_if_needed", new=AsyncMock()),
         patch.object(mgr, "_ensure_webxr_deps", new=AsyncMock()),
+        patch.object(mgr, "_build_webxr", new=AsyncMock()),
         patch.object(mgr, "_spawn_webxr", new=AsyncMock()),
         patch.object(mgr, "_spawn", new=fake_spawn),
     ):
@@ -169,24 +172,24 @@ async def test_start_webxr_composes_local_and_network_urls(
 
 
 @pytest.mark.asyncio
-async def test_webxr_exit_stops_armodule(tmp_path: Path) -> None:
+async def test_backend_exit_retains_gateway(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
     mgr.status.phase = Phase.RUNNING
     mgr.status.check_ok = True
-    mgr._proc = object()  # type: ignore[assignment]
-    mgr._webxr_proc = object()  # type: ignore[assignment]
+    mgr._proc = Mock(pid=42424241, returncode=None)  # type: ignore[assignment]
+    mgr._webxr_proc = Mock(pid=42424242, returncode=None)  # type: ignore[assignment]
 
     with (
         patch.object(mgr, "_stop_one", new=AsyncMock(return_value=True)),
         patch.object(mgr, "_cancel_task", new=AsyncMock()),
     ):
-        await mgr._finalize_exit("WebXR Vite exited")
+        await mgr._finalize_exit("Backend exited")
 
     assert mgr.status.phase == Phase.ERROR
-    assert mgr.status.error == "WebXR Vite exited"
+    assert mgr.status.error == "Backend exited"
     assert mgr.status.webxr_url is None
     assert mgr._proc is None
-    assert mgr._webxr_proc is None
+    assert mgr._webxr_proc is not None
 
 
 @pytest.mark.asyncio
@@ -233,4 +236,4 @@ async def test_clear_before_start_kills_dimos_then_ports(tmp_path: Path) -> None
         await ProcessManager._clear_before_start(mgr, client="webxr")
 
     stop_pids.assert_awaited_once_with([111], "existing DimOS process(es)")
-    assert killed == [8787, 3030, 9877, 5173]
+    assert killed == [8787, 3030, 9877]

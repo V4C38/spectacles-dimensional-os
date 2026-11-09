@@ -74,3 +74,19 @@ describe("browser JPEG encoder", () => {
     encoder.dispose();
   });
 });
+
+it("recreates a failed worker for a fresh frame without selecting blocking encoding", async () => {
+  const { encoder, video } = fixture();
+  const failed = expect(encoder.encode(video)).rejects.toThrow("JPEG worker failed");
+  const old = FakeWorker.instances[0];
+  old.onerror?.();
+  await failed;
+  expect(old.terminate).toHaveBeenCalledOnce();
+  const next = encoder.encode(video);
+  const worker = FakeWorker.instances[1];
+  const [{ id }] = worker.postMessage.mock.calls[0];
+  old.reply({ id: id - 1, jpeg: new ArrayBuffer(1), width: 1, height: 1 });
+  worker.reply({ id, jpeg: new ArrayBuffer(2), width: 1280, height: 960 });
+  expect(await next).toMatchObject({ width: 1280, height: 960 });
+  encoder.dispose();
+});

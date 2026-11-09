@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import { deriveRobotMarkerApplyInput } from "../src/presentation/RobotMarkerState";
 import type { ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSession";
-import type { Capabilities } from "@dimos-ar-client/websocket/protocolTypes";
+import type { Capabilities, Capability } from "@dimos-ar-client/websocket/protocolTypes";
 import { WebXRRobotPresenter } from "../src/presentation/WebXRRobotPresenter";
 import { ROBOT_LINE_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
 
@@ -25,7 +25,7 @@ function view(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionSta
     connection: "ready",
     hasTrackingOrigin: false,
     hello: {
-      type: "hello",
+      type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
       client_id: "c",
       time_sync: { ts_client: 0, ts_server: 0 },
       robot: {
@@ -50,6 +50,25 @@ function view(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionSta
 }
 
 describe("robot presentation", () => {
+  it.each([[true, false], [false, true], [true, true], [false, false]])(
+    "shows its marker only with navigation (navigation=%s, manipulation=%s)", (navigation, manipulation) => {
+      const advertised = (available: boolean): Capability => available
+        ? { available: true, reason: null } : { available: false, reason: "not supported" };
+      const current = view({ capabilities: { ...capabilities,
+        navigation: { ...capabilities.navigation, ...advertised(navigation) },
+        manipulation: advertised(manipulation),
+      } });
+      const robot = new WebXRRobotPresenter();
+      robot.apply(current, null, true, [0, 0, -1]);
+      expect(robot.object.visible).toBe(navigation);
+      robot.dispose();
+    },
+  );
+
+  it("hides the marker without advertised navigation, including skipped connection", () => {
+    expect(deriveRobotMarkerApplyInput({ setupCompleted: true,
+      view: view({ hello: null, capabilities: null }), origin: null })).toEqual({ mode: "hidden" });
+  });
   it("keeps an unlocalized fallback after setup and uses base_height_m for the floor", () => {
     expect(deriveRobotMarkerApplyInput({ setupCompleted: false, view: view(), origin: null }).mode).toBe(
       "hidden",
@@ -252,4 +271,19 @@ it("plays the exact same box animation backward over the same duration", () => {
   expect(outline.scale.distanceTo(quarter)).toBeLessThan(1e-6);
   robot.tick(0.06); expect(outline.scale.length()).toBeCloseTo(0);
   robot.dispose();
+});
+
+it("picks the root sphere independently of the robot body", () => {
+  const robot = new WebXRRobotPresenter();
+  try {
+    robot.object.visible = true;
+    robot.object.updateMatrixWorld(true);
+    expect(robot.ownsTarget(robot.markerCollider)).toBe(true);
+    expect(robot.ownsTarget(robot.collider)).toBe(true);
+    expect(robot.markerCollider.geometry.type).toBe("SphereGeometry");
+    const ray = new THREE.Raycaster(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1));
+    expect(ray.intersectObject(robot.markerCollider).length).toBeGreaterThan(0);
+    ray.ray.origin.x = 0.05;
+    expect(ray.intersectObject(robot.markerCollider)).toHaveLength(0);
+  } finally { robot.dispose(); }
 });

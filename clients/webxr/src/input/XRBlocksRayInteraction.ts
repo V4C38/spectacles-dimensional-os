@@ -11,6 +11,8 @@ export const INTERACTION_LAYER = 1;
 export const EMPTY_RAY_LENGTH_M = 3;
 export const IDLE_LASER_OPACITY = 0.6;
 
+export const UI_CONTROL_RAY_PRIORITY = -1;
+
 /** Only explicit application surfaces participate in the SDK's one hit list. */
 export function registerRayTarget(mesh: THREE.Mesh): void {
   mesh.layers.enable(INTERACTION_LAYER);

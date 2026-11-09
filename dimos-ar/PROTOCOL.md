@@ -7,7 +7,7 @@ clients update their protocol module in the same change.
 
 ## Conventions
 
-- **24 message types** — 12 outbound, 12 inbound. Inventory is below.
+- **Version 2 interaction messages** supplement the robot telemetry and localization inventory below.
 - **Wire frame is `odom`** — the robot's drifting leg-odometry frame, in
   DimOS's right-handed Z-up axes. ARModule performs **no axis conversion**. Each
   client converts on receipt; clients do not share one scene convention.
@@ -26,8 +26,60 @@ clients update their protocol module in the same change.
   the client to act: `localization_observations_request` is that exception.
   Binary payloads use a bare noun (`localization_observations`, `lidar`).
 - **`hello.capabilities`** — keys `lidar`, `navigation`, `localization`,
-  `estop`, `agent`. Any key may be `available=false` with `reason`. Nested
+  `estop`, `agent`, plus optional `manipulation`. Any key may be `available=false` with `reason`. Nested
   `navigation.nav_goal` and `navigation.nav_joystick` are always present.
+
+## Protocol v2 control and bulk lanes
+
+The control WebSocket carries authority, small command results, target samples,
+mode, operation status, and references to immutable presentation assets. Hello
+includes `protocol_version:2`, `bulk_url`, `bulk_token`, and `bulk_epoch`. The same
+client opens the advertised bulk path and sends:
+
+```json
+{"type":"bulk_hello_request","protocol_version":2,"client_id":"from-hello","token":"from-hello"}
+```
+
+The bulk connection has no independent robot authority. It is bound to the live
+control session and acknowledged with `bulk_hello`. Images, LiDAR, model topology,
+checked trajectories, and route points use that lane. A control record is at most
+16 KiB; a batch is at most 64 KiB and 32 commands. Critical commands are never silently
+dropped; control overload retires the connection and its authority.
+
+Examples below show assembled model/plan/route domain values where useful;
+actual v2 control frames carry references in place of those arrays.
+
+Control `model_ref`, `plan_ref`, and `route_ref` values contain `{epoch,id,revision}`.
+A complete revision is reconstructed from ordered `bulk_record` values with the
+same reference, `kind` (`model`, `trajectory`, `route`), zero-based `part`, total
+`parts`, and typed `data`. Records are at most 16 KiB in UTF-8. Model data contains
+optional `metadata`, `links`, and `joints`; trajectory/route data contains optional
+`metadata` and `points`. ClientCore assembles these into the existing domain view;
+an incomplete or retired asset cannot authorize execution. Native arm snapshots
+also send compact revision metadata internally; model/plan assets are fetched
+only on revision change. A timed-out native snapshot, asset fetch, or command
+retains its actual admission slot until the native callback completes. Retries
+cannot accumulate blocked native work. Stop and control-plane heartbeat have
+independent lanes. Replaceable camera/costmap/LiDAR work does not queue one native
+CPU job per input frame.
+
+Localization binary uploads use a declared bounded bulk upload and incremental
+binary records; their existing observation payload is preserved. The bulk lane
+uses byte budgets and latest-value replacement, so a stalled image or large model
+does not sit ahead of Stop, lease renewals, or small authoritative snapshots on
+the control TCP connection. This is not a guarantee against operating-system or
+hardware failure; physical Emergency Stop remains necessary.
+
+The default aggregate 1 MiB/s token bucket and fair shares apply only to outgoing
+model/trajectory/route assets and LiDAR downloads. Incoming localization pixels
+do not wait on this optional-data budget: each client still has one upload of at
+most 4 MiB, each ARB2 record remains at most 16 KiB, and the server yields after
+every chunk so controls can run. Client upload pumping is bounded to 16 chunks
+per display tick, a 256 KiB socket high-water mark, and the same 2 ms work budget.
+Admitted JPEG chunks are pumped before optional asset-record parsing consumes
+that display tick's work budget.
+Existing image-age checks, localization timeouts, and pose acceptance rules are
+unchanged; transport must not deliberately make a fresh image stale.
 
 ## Transport
 
@@ -161,25 +213,105 @@ repeated marker/VPS localization handles alignment drift that one constant canno
 Changing the factor requires restarting ARModule and reconnecting clients so
 origins, paths, previews and points cannot mix old/new coordinate models.
 
-## Multiple clients
+## Multiple clients and replication
 
-Any number of clients may connect at once.
+The collaboration protocol is version **2**, advertised as `hello.protocol_version`.
+ARModule owns the robot's shared targets, authority, manual/agent mode, accepted
+preview and active goal. Headset tracking origins, input capture and interpolation
+remain local. The supported validation target is two to five simultaneous clients.
 
-- **Telemetry is broadcast.** Every client receives identical `pose`, active `nav_goal`,
-  `lidar` and `state`. Payloads are byte-identical, so there is no per-client
-  view to reconcile.
-- **Localization is per connection.** `localization_observations_request` and
-  `localization_result` are addressed to one connection, since each client has
-  its own tracking origin.
-- **Control is last-command-wins.** ARModule does not arbitrate. The most
-  recent `nav_goal_request`, `nav_joystick_request`, or `estop_request` takes
-  effect regardless of which client sent it. ARModule publishes joystick
-  commands on DimOS `tele_cmd_vel`; `MovementManager` muxes that stream against
-  planner `nav_cmd_vel`.
+`interaction_state` is a complete revisioned snapshot. It contains `epoch` (robot
+interaction reference), `revision`, `mode`, `motion_busy`, `authority`, `target` (last edited
+canonical target), `targets` (retained navigation and per-group manipulation targets),
+`preview`, and `active_goal`. Poses use odometry metres and XYZW quaternions.
+Targets contain `domain`, optional `group_id`, `position`, `orientation`, `revision`,
+`phase` (`draft`, `live`, `committed`), `sample_ts`, `sequence`, `speed_scale` and
+optional `gripper`. `sample_ts` is a server monotonic interpolation sample time,
+not a headset clock or exposure timestamp. Apply each headset's current origin
+when rendering canonical odometry poses. A target's `sequence` cumulatively
+acknowledges accepted input within its editing lease, including identical pose and
+settings updates. Identical content advances `sequence` without changing the
+content `revision` or interpolation `sample_ts`. Revision covers the complete draft:
+pose, speed and gripper. Clients retain predicted settings while a release settles
+and must compare the complete effective draft before adopting or executing a plan.
 
-`hello` assigns each connection a `client_id` for logging and future features.
-Navigation overlay uses `nav_goal` and `pose`. `state.nav` tracks planner
-navigation regardless of who issued the goal.
+Authority is robot-wide: `client_id`, `source_id`, `acquisition_id`, `lease_id`,
+`kind`, `held`, `expires_at`, `sequence`, and optional `group_id`. Kinds are `live`,
+`navigation_planning`, `joystick`, `manipulation_planning`, and
+`manipulation_following`. A lease lasts 500 ms; its client renews at 100 ms.
+Only the owning connection can edit or command while a lease is present.
+Other clients display grey targets with a cross and retain Emergency Stop.
+
+### Interaction commands
+
+`interaction_request` contains a nonempty `request_id` and `action`:
+
+| Action | Additional fields | Effect |
+|---|---|---|
+| `snapshot` | None | Return current state. |
+| `acquire` | `epoch`, `kind`, `source_id`, `acquisition_id`; optional pose and `group_id` | First accepted acquisition owns the robot. |
+| `renew` | `epoch`, `lease_id` | Extend the current lease. |
+| `update` | `epoch`, `lease_id`, increasing `sequence`, pose; optional speed/gripper | Accept an exact intended target. |
+| `release` | Same credentials, increasing sequence and final pose | Atomically retain final pose and release live authority; live navigation submits its final goal. |
+| `confirm` | Same credentials, increasing sequence and frozen final pose | Commit selected navigation and release planning authority. |
+| `cancel` | `epoch`, `lease_id` | Retire this interaction without confirming its draft. |
+| `cancel_acquire` | `epoch`, `acquisition_id` | Cancel pending acquisition; a late grant cannot restore it. |
+| `mode` | `epoch`, `mode` (`manual` or `agent`) | Change shared robot mode only while no interaction/agent turn owns it. |
+
+Selected navigation is a two-gesture planning session. **Its first release keeps
+the planning lease** (with `held: false`) until confirmation, cancellation,
+deselection, tracking loss, disconnect or expiry. Only that client requests an
+advisory path; every client sees the accepted shared draft and preview. An
+advisory navigation preview survives target jitter below 0.2 m and 15 degrees of
+yaw relative to the canonical aim captured for that preview (the native safe-goal
+endpoint can be offset from that aim). A worker result from an earlier target
+revision may be accepted only within those bounds and the same live epoch and
+planning lease. Larger changes invalidate the route; handover or reference reset
+always rejects the old result. Arm checked plans retain exact revision matching.
+Planning
+does not overwrite a previously executing goal/route. Selected arm planning
+releases editing authority when the hand opens; checked plans bind to the shared
+target revision rather than remaining owned by their creating client.
+
+Normal live arm release sends only `interaction_request.release`; clients stop
+sending native token updates immediately. ARModule frees the editing lease and
+hands the native process its last successfully validated pose and joint endpoint.
+That server-owned `following_tail` is takeoverable by any new grab. Its compact
+summary includes `generation`, `group_id`, `target_revision`, `status:"finishing"`,
+and optional pose/speed/joints. Newer admission fences delayed old release and
+cleanup messages. The former client's disconnect cannot cancel the detached tail
+or its replacement; losing the final client stops it. Finishing refreshes the
+native target at 10 Hz for at most 55 seconds and requires distinct fresh endpoint
+observations spanning 0.5 seconds to declare arrival. Stale feedback, IK failure,
+Stop, reference reset, or control-plane lease expiry aborts it. Execute/reset/park
+remain non-takeoverable accepted operations, distinct from a finishing tail.
+
+ARModule renews a native per-robot control-plane lease at 10 Hz with a 500 ms
+monotonic deadline. Native arm following, tails, and accepted operations stop when
+that lease expires, even if ARModule crashes. Repository-owned native navigation
+similarly gates AR-admitted base motion on its control-plane lease and rejects
+stale planning activation. These protections do not claim cancellation of every
+upstream native agent continuation or recovery from a hung physical controller.
+
+Every command receives `interaction_result` with `request_id`, `epoch`, `revision`,
+`status` (`accepted`, `busy`, `stale`, `rejected`), `code`, and optional `lease_id`.
+Request deduplication is bounded per connection. Ordinary target snapshots may
+coalesce; critical command results cannot be silently dropped on queue overflow.
+
+Navigation and joystick requests carry `epoch`, `lease_id`, and `sequence`.
+Preview work requires the selected planning owner. Bare legacy motion packets
+never reach native ports. The server validates authority separately from clients'
+optimistic prediction. Owner input renders immediately; accepted target updates
+replicate at up to 20 Hz independently from robot command throttling. Remote
+interpolation never changes authoritative target poses or native commands.
+
+Localization requests/results remain per connection. Shared robot telemetry and
+accepted targets are broadcast. Reconnection creates a fresh connection identity
+and receives current shared state; old leases cannot resume. A live owner loss
+stops that control even if observers remain, while observer loss does not stop
+another owner's interaction. Last-client disconnect retains stop handling.
+Agent context uses the sender of the active robot turn, not the most recent
+headset pose. Shared AR marker poses are replayed to late joiners.
 
 ## Handshake
 
@@ -213,6 +345,7 @@ connection, and replies with `hello`.
 ```json
 {
   "type": "hello",
+  "protocol_version": 2,
   "client_id": "c3f1a9",
   "time_sync": {
     "ts_client": 1234.567,
@@ -241,6 +374,7 @@ connection, and replies with `hello`.
 
 | Field | Type | Notes |
 |-------|------|-------|
+| `protocol_version` | integer | Required collaboration protocol version; current value is `2`. |
 | `client_id` | string | Server-assigned, unique per connection. |
 | `time_sync.ts_client` | float | Echo of `hello_request.ts_client`. |
 | `time_sync.ts_server` | float | Server time when `hello_request` arrived. |
@@ -249,14 +383,16 @@ connection, and replies with `hello`.
 | `robot.footprint_m` | `[L, W]` | Ground footprint for nav UI. |
 | `robot.base_height_m` | float | Height of the odometry pose origin above the ground, so a client can place a ground marker under a `pose`. |
 | `robot.odom_scale_correction_factor` | float | Optional finite positive native-to-AR XY heuristic, default 1 when absent. Points/poses are already corrected; use it only to recover native distances. |
-| `capabilities.*.available` | bool | Feature gate for client UI. Keys are `lidar`, `navigation`, `localization`, `estop`, and `agent`. |
+| `capabilities.*.available` | bool | Feature gate for client UI. Keys are `lidar`, `navigation`, `localization`, `estop`, `agent`, and optional `manipulation`. |
 | `capabilities.*.reason` | string \| null | Human-readable, non-null exactly when `available` is `false`. |
 | `capabilities.navigation.nav_goal` | `{ available, reason, preview? }` | Can send `nav_goal_request`. Always present. Optional boolean `preview` defaults to false. |
 | `capabilities.navigation.nav_joystick` | `{ available, reason }` | Can send `nav_joystick_request`. Always present. |
 
 `navigation.available` is true when any nested input is available. Clients that
 need a specific input check that nested key; Specs point-and-click checks
-`nav_goal`.
+`nav_goal`. `capabilities.manipulation` is present and available only when the
+optional native manipulation Spec is connected; an absent key means unavailable.
+Go2 deployments do not load arm runtime dependencies.
 
 ARModule keeps `ts_server - ts_client` as the per-connection offset. The client
 may use the same pair for its own UI timing; localization does not require the
@@ -391,6 +527,7 @@ the result timeout is only a fallback for a missing response.
 ```json
 {
   "type": "localization_observations_request",
+  "capture_id": "server-generated-generation",
   "capture_policy": "robot_los_required",
   "observation_count": 3
 }
@@ -398,6 +535,7 @@ the result timeout is only a fallback for a missing response.
 
 | Field | Type | Notes |
 |-------|------|-------|
+| `capture_id` | string | V3 server-generated capture generation, 1–128 characters. Echo in the matching `bulk_upload_begin`; it is scoped to this control connection. |
 | `capture_policy` | string | `robot_los_required` \| `robot_los_preferred` \| `any_angle`. Geometric gate only — not a provider name. |
 | `observation_count` | uint | Exact batch size. The client always sends this many frames. |
 | `wait_timeout_s` | float | Required when `capture_policy` is `robot_los_preferred`. Omitted otherwise. |
@@ -417,11 +555,34 @@ Example with timeout:
 ```json
 {
   "type": "localization_observations_request",
+  "capture_id": "server-generated-generation",
   "capture_policy": "robot_los_preferred",
   "observation_count": 3,
   "wait_timeout_s": 2.0
 }
 ```
+
+The server assigns a fresh `capture_id` when each capture request is enqueued for
+a particular control connection. The matching `bulk_upload_begin` must contain
+that ID in addition to its upload ID and declared byte count. The server checks
+the generation both before accepting the upload and after its final chunk, before
+dispatching any observations. A new manual localization start invalidates the
+previous generation before policy admission, so a delayed canceled upload cannot
+attach to the replacement episode across the separate sockets. Reconnect creates
+a new control identity; its previous capture IDs cannot be reused.
+
+An upload begins on the bulk socket with
+`{type:"bulk_upload_begin",kind:"localization",upload_id,total_bytes,capture_id}`.
+A client can stop that upload with `{type:"bulk_upload_cancel",upload_id}`; the
+server replies `bulk_upload_result` with that upload ID and `status:"cancelled"`.
+Cancellation of an old upload ID cannot cancel a replacement upload. The same
+capture generation may be reused for a replacement batch within the same prompt;
+a new prompt, manual start, or disconnect invalidates it.
+
+This envelope correlation changes neither LOCA bytes nor camera-pose acceptance,
+frame spacing, nearest-pose fallback, capture geometry, or result timeouts. The
+Python request type permits an omitted ID for internal construction; the v2
+transport supplies one on every delivered capture request.
 
 ### `localization_result`
 
@@ -783,7 +944,7 @@ DimOS `tele_cmd_vel: Out[Twist]`; `MovementManager` muxes with planner
 | `duration` | float | Optional. Seconds to republish this twist. Omit or `0` publishes once. `0 < duration <= 2.0` holds at 10 Hz on ARModule, then a release-edge zero. Negative, boolean, non-finite, or above `2.0` is rejected, not clamped. |
 
 A new `nav_joystick_request` replaces any in-flight duration. Zero twist is the
-release edge. `estop_request` and last-client disconnect cancel a hold. Callers
+release edge. `estop_request`, owner disconnect, interaction release, and lease expiry cancel a hold. Callers
 that omit `duration` must keep sending if drive should continue
 (`cmd_vel_timeout` is 0.2 s). Gated on `hello.capabilities.navigation.nav_joystick`.
 
@@ -816,6 +977,19 @@ issuing a new `nav_goal_request`.
 ARModule also stops the robot on its own when the last client disconnects, so
 losing the headset cannot leave the robot walking.
 
+The repository's Go2 blueprints use `ARReplanningAStarPlanner`, a subclass of
+the installed native planner. Its private DimOS `ar_navigation_status` topic
+captures the immutable submitted goal timestamp and accepted/succeeded/failed
+phase under the native planner lock. ARModule ignores uncorrelated native Bool
+terminal messages after an AR goal has been issued. A delayed old-goal terminal
+therefore cannot clear a newer shared goal. Native stop also installs a timestamp
+tombstone under that lock: a queued goal created before the stop cannot restart
+motion, and a later explicit goal can resume it. This changes no WebSocket message.
+The native planning algorithm still owns obstacle avoidance, arrival detection,
+and cancellation: the adapter cannot guarantee that an upstream monitoring
+thread never makes an incorrect decision from its own stale internal samples.
+Hardware validation remains necessary for that backend behavior.
+
 ### `lidar_settings_request`
 
 ```json
@@ -842,8 +1016,78 @@ All four fields are required on every `lidar_settings_request`. A non-finite or 
 (`min_height_m` above `max_height_m`) is an error and is rejected, not silently
 clamped.
 
-`state.lidar` reflects the result, and because telemetry is broadcast, one client
-changing the filter changes it for everyone.
+LiDAR settings belong to the requesting connection. `state.lidar` reflects that
+connection's settings; changing presets or disabling LiDAR does not affect other
+clients. ARModule downsamples a cloud once, groups identical subscriptions, and
+sends each filtered binary payload only to its subscribing connections. A new
+connection starts with LiDAR disabled.
+
+### `manipulation_request` (optional)
+
+Arm deployments expose `hello.capabilities.manipulation.available=true`.
+Every request contains `request_id`, `action`, `group_id`, and the current
+interaction `epoch`. Planning, execution, and gripper commands also contain the
+canonical `target_revision`. Following commands carry the owning `lease_id`.
+
+```json
+{
+  "type": "manipulation_request",
+  "request_id": "plan-42",
+  "action": "plan",
+  "group_id": "arm",
+  "epoch": "robot-interaction-reference",
+  "target_revision": 12,
+  "position": [0.4, 0.0, 0.3],
+  "orientation": [0.0, 0.0, 0.0, 1.0],
+  "speed_scale": 0.2,
+  "final_gripper": 0.5
+}
+```
+
+| Action | Additional fields | Behavior |
+|---|---|---|
+| `evaluate` | `position`, `orientation` | Advisory feasibility for the current target. |
+| `plan` | Pose, optional `speed_scale` and `final_gripper` | Return a checked plan bound to the canonical target revision. |
+| `execute` | `plan_id` | Execute the still-current checked plan. |
+| `acquire` | Owning following lease | Request the native following `token`. |
+| `update` | `token`, increasing `sequence`, `ts`, pose, optional `speed_scale` | Refresh native following while the robot-wide lease remains valid. |
+| `release` | `token` | Explicit native following cancellation. Ordinary hand release uses only `interaction_request.release` to start server finishing. |
+| `gripper` | `value` | Apply the replicated target's gripper setting. |
+| `cancel` | None | Cancel the current arm operation. |
+| `resume` | None | Resume only after native stop confirmation and valid authority. |
+| `reset_joints`, `prepare_shutdown` | Optional `speed_scale` | Native reset or parking; shutdown reports explicit `quiescent`. |
+
+Poses are odometry metres and unit XYZW quaternions. Speed is in `(0,1]`;
+gripper values are in `[0,1]`. Plan/evaluate/following poses and speed, plan final
+gripper, and discrete gripper values are taken from the matching server target;
+client echoes cannot change the geometry labeled with that revision. A gripper
+setting must first be accepted into the replicated target.
+
+`manipulation_result` includes `request_id`, `action`, `group_id`, `status`, and
+optional `code`/`message` plus action-specific fields. A `planned` result includes
+`plan_id`, `target_revision`, `joint_names`, `trajectory` (time/positions), and
+`duration`. The checked plan is robot-owned and replayed to late joiners. Editing
+release preserves a plan for an unchanged target; changing target settings
+retires it. Native execution remains robot-owned after editing release or client
+disconnect.
+
+`manipulation_state` is a compact native snapshot, normally sent at 10 Hz and
+replayed on connection. Model and checked trajectory data travel by revision on
+the bulk lane and are reconstructed by ClientCore. Available snapshots include the model descriptor,
+`root_pose`, planning `groups`, measured group `observations`, `execution`,
+`operation_id`, `plan`, `following`, `owner`, `stopped`, and `stop_confirmed`.
+The optional `following_tail` summary is independent of editing ownership and
+does not set `motion_busy`; a new grab supersedes it. An unavailable snapshot contains `available=false` and a message. Accepted,
+executing, uncertain, or faulted native motion blocks new robot interaction and
+mode changes through `interaction_state.motion_busy`. A transport failure after
+a motion command is uncertain; only positive native stop confirmation clears
+that uncertainty. Emergency Stop remains available to every client.
+
+ARModule injects a private native RPC envelope with epoch, monotonic deadline,
+authority revision, lease, and target revision. The native process rejects retired
+or expired envelopes. Emergency Stop installs its revision tombstone atomically
+with the native stop latch, preventing delayed old resume commands from undoing
+it. These private fields are not client-controlled WebSocket authority.
 
 ### `state_request`
 
@@ -903,6 +1147,8 @@ stale returns `No client pose`.
 |-----------------|-----------------|
 | `hello_request` | `hello` |
 | `state_request` | `state` |
+| `interaction_request` | `interaction_state`, `interaction_result` |
+| `manipulation_request` (optional) | `manipulation_state`, `manipulation_result` |
 | `localization_start_request` | `localization_observations_request` |
 | `localization_observations` (binary) | `localization_result` |
 | `nav_goal_request` | `nav_goal` |
@@ -1039,3 +1285,326 @@ acceptance remain separate device tests documented in `clients/webxr/CALIBRATION
 ### Odometry reference continuity
 
 `hello.odom_reference_id` is an optional opaque identifier for the current server odometry reference. It remains unchanged across client socket reconnects and changes when the server or robot odometry source restarts. Clients may restore a retained localization only when the new identifier matches the one used to localize, and the headset tracking space has not reset. Missing or changed identifiers require re-localization; navigation commands remain disabled during reconnect.
+
+## Manipulation (optional)
+
+`hello.capabilities.manipulation` is optional. Absence means unavailable; navigation,
+localization, LiDAR, and agent capabilities remain independent. No manipulation
+binary stream is added. All messages use the existing newline-delimited JSON framing.
+
+### Requests and correlation
+
+`manipulation_request` contains `request_id` (1–128 characters), `action`, and an
+explicit `group_id`. Supported actions:
+
+| Action | Additional fields | Meaning |
+|---|---|---|
+| `evaluate` | `position`, `orientation` | Nonmoving endpoint IK/collision evaluation; does not replace a plan |
+| `plan` | `position`, `orientation`, optional `speed_scale` (default 0.5) | Generate and retain a checked, timed plan |
+| `execute` | `plan_id` | Execute exactly the reviewed pending plan |
+| `cancel` | none | Retire owned planning/control and cancel execution |
+| `acquire` | none | Acquire following without commanding a new target |
+| `update` | `token`, `sequence`, `ts`, `position`, `orientation` | Latest absolute target for the acquired session |
+| `release` | `token` | Retire following and clear its task target |
+| `resume` | none | Explicitly clear a confirmed manipulation stop; restores no prior command |
+| `gripper` | `value` in [0,1] | Deliberate normalized opening, where supported |
+
+Poses use wire `odom`, Z-up meters, scalar-last unit quaternions. The optional
+integration converts to/from its configured planning world. Following `ts` is in
+client-clock seconds and uses the hello clock offset; sequences strictly increase
+within one token. Samples older than 500 ms or over 100 ms in the future reject.
+The controller task also has a local target watchdog. Following provides bounded
+Cartesian IK, not the planner's checked-path collision guarantee.
+
+`manipulation_result` echoes `request_id`, `action`, and `group_id`, with `status`
+and optional `message`. Acquire returns `token`; evaluation returns solved named
+`joints` and attained `pose` when available. Planning returns `plan_id`,
+`joint_names`, `trajectory` (`time`, `positions` per sample), and `duration`.
+Execution acceptance includes an `operation_id`; acceptance is not completion.
+Execution timeouts must reconcile state rather than retry motion.
+
+### Observed state
+
+`manipulation_state` is latest-wins and independent of base `pose`. `available:false`
+includes a diagnostic `message`. Available snapshots include:
+
+- `ts`, `execution`, `message`, `owner`, `following`, `stopped`, `operation_id`.
+- `groups`: IDs, canonical joint names, base/tip frames, gripper/following availability.
+- `observations`: per-group measured named joints, `measured_at`, measured tool `pose`,
+  and optional normalized `gripper`. Publication never refreshes measurement time.
+- `model`: revision, root link, link-local bounds, joint kinds/origins/axes/mimic
+  relationships, optional ghost `asset_url`, and `visual_signature`.
+- `root_pose`: model-root placement in wire `odom`; `plan`: retained reviewed plan,
+  or null. These are observed references, not permission to execute another owner's plan.
+
+Identifiers, finite numbers, unit quaternions, named-vector dimensions, and trajectory
+ordering are validated. Trajectory previews are limited to 8192 points and visual
+models to 256 links/joints. Visual FK is presentation-only. Bundled ghost assets must
+match the configured visual-model signature.
+
+Ownership is connection-bound. Owner loss retires control even while observers
+remain connected. Reconnect restores current state and previews; it never resumes
+following or repeats execution. Emergency Stop also retires manipulation plans and
+streaming targets, preserves the gripper setting, and requires explicit resume.
+Environment-depth data is host-local and is never part of this protocol.
+
+### Manipulation target execution and parking
+
+`manipulation_request` adds `reset_joints` and `prepare_shutdown`, both using the
+existing `request_id`, `group_id`, and optional `speed_scale` in (0, 1].
+Reset defaults to 0.5; shutdown parking defaults to 0.2. They plan a collision-checked joint-zero arm move, preserving the gripper,
+and reply only after fresh joint feedback confirms zero within the configured joint tolerance (0.02 radians by default, 0.05 for OpenYAM) for
+0.5 seconds, or report failure. They never clear emergency stop. Shutdown parking
+is capped at 20% and a 55-second operation budget inside the supervisor’s
+60-second response deadline; the launcher then proceeds with shutdown even
+if parking fails or times out. The supervisor keeps DimOS alive until the attempt
+finishes. Power loss and SIGKILL cannot provide orderly parking.
+
+Following `update` accepts `speed_scale` with the same range/default; the server
+applies it to the bounded Cartesian IK task's joint velocity envelope.
+`plan` retains its existing speed semantics and execute-by-plan-ID binding.
+Preview is a client label for `plan`; Execute can request and then execute a
+checked plan without a separate user Plan action. The immediate dotted target
+guide is advisory and does not represent a checked trajectory.
+
+Manipulation `plan` may include `final_gripper` in [0,1]. It is bound to that
+plan ID and issued only after successful execution and fresh feedback within
+0.02 rad of its endpoint. Cancel, E-stop, replacement, failure, and ownership
+retirement discard deferred gripper intent. Selected target edits do not send
+immediate gripper commands. In selected mode Open/Close only edits the draft;
+Execute explicitly starts the checked motion with `final_gripper`. A gripper-only
+draft also requires Execute. Unselected Open/Close remains immediate. Optional visual joint `limits` describe lower/upper
+positions for gripper-only articulation.
+
+
+### Capability summaries and live arm feedback
+
+`hello.capabilities.object_detection` is an optional capability with the existing
+`available`/`reason` shape. Missing means unadvertised for older servers. It describes
+an explicitly configured detector in the loaded blueprint; Agent mode and fiducial
+localization do not imply object detection. Navigation retains its nested input flags.
+
+Manipulation state optionally includes `operation: "resetting" | "parking" | null`,
+using the existing `operation_id` for correlation. `observations.*.measured_at` uses
+the accepted source joint-sample timestamp, not the time a snapshot is requested.
+
+Following update results may contain `sequence` (the original update sequence),
+`joints`, and a short machine-readable `code`. At most 20 times per second,
+validated targets return `status: "feasible"` and the IK joint configuration.
+`status: "infeasible"` with `code: "ik_failed"` or `"joint_limit"` holds motion while
+retaining the following lease. New reachable input can recover within the same grab.
+Lease/ownership loss remains `rejected`; stale samples never command motion.
+
+Selected advisory IK evaluations are serialized and coalesced at a minimum 50 ms interval.
+Full path planning runs on release, Preview, or Execute.
+The client retains the last valid preview while computing its replacement; an older
+preview is never executable for a newer target, speed, or final-gripper intent.
+
+Reset and parking first confirm whether fresh samples are already within 0.02 rad
+of zero for 0.5 seconds. That case does not start another trajectory. Otherwise,
+settling ends three seconds after the nominal trajectory duration, within the overall
+55-second budget. Failure reports the worst joint error and confirms stopping before
+releasing ownership. Parking quiesces new motion until process shutdown; it never
+clears emergency stop. Motion-related callbacks are drained before RPC teardown.
+
+### Manipulation lifecycle receipts and visual metadata
+
+`prepare_shutdown` results may include `quiescent: boolean`. Only an explicit
+`true` acknowledges that motion has been stopped and the runtime has completed
+its quiescence handshake. A completed parking attempt alone is not this receipt.
+A rejected parking attempt may still acknowledge quiescence after confirmed cleanup;
+missing/false receipts, exceptions, and timeouts retain the service teardown stop.
+The receipt never authorizes another motion or clears an emergency stop.
+
+Optional `model.visual_profile` identifies host visual corrections independently
+of `asset_url`. OpenYAM uses `openyam`. Optional `model.gripper_joints` maps joint
+names to finite `{closed, open}` positions for normalized visual articulation.
+The host applies only independent gripper joints within the selected tool subtree,
+never the group's controlled arm joints. Descriptors without this metadata retain
+the standard lower-to-upper articulation; URLs do not select articulation policy.
+Visual metadata does not change planning geometry or authorize motion.
+
+The following solver accepts the documented wire speed range `(0, 1]`; the WebXR
+slider retains its 5–100% range and 50% default. Parking remains capped at 20%.
+Runtime lease expiry and deferred gripper completion advance independently of
+WebSocket observation requests. Snapshot reads do not issue control commands.
+
+### Client decode error reports
+
+A ready client rejects invalid JSON application messages without closing its connection.
+It may send `client_error` containing string fields `message_type` (maximum 128
+characters), `detail` (1024), and `excerpt` (512). The server logs the report with
+client identity and its receipt timestamp, without replying or replaying messages.
+Reports include `ts` in the existing synchronized server clock, optional original
+`message_ts` and existing `request_id`. The first error is reported immediately;
+identical type/detail signatures are deduplicated for five seconds with an optional
+`suppressed_count` on the next report. History is bounded to 32 signatures. Binary
+decode errors use a short hexadecimal header excerpt. Message IDs are not introduced.
+Malformed manipulation content disables arm input until valid state and cancellation
+confirmation return; localization and unrelated session facts remain intact.
+
+
+### Mesh interaction and target recovery
+
+Arm selection uses the articulated mesh and root sphere, without displayed selection
+boxes. ClientCore owns the shared visibility and interaction policy for both hosts.
+`manipulation_result` optionally carries `failed_joints`, at most 256 nonempty joint
+identifiers. A missing list provides no joint attribution. Recoverable IK, joint-limit,
+and collision failures use `infeasible` for update, evaluation, and planning; they
+preserve capture and ownership rather than invalidate session health. An invalid
+mesh remains at its last validated configuration in yellow, with identified child-link
+segments red. Rendered/FK values never authorize motion.
+
+Normal unselected grab release retains the final target and keeps sending validated
+updates under the current lease. An invalid final target falls back to the last
+validated target. The arm finishes moving there independently of hand capture. Fresh
+feedback within 5 mm and 1.5 degrees for 0.5 seconds releases the lease; the marker
+retains its target. The client cancels after a 55-second completion deadline. Stop,
+tracking/session loss, selection changes, and reset interrupt completion; the existing
+500 ms lease expiry still applies if updates cease. Selected release never authorizes
+motion: Execute remains required. Both clients default normal motion to 50%.
+
+Recorded playback uses `hello.source = {kind: "recording", read_only: true,
+name: <filename>}`. `state.playback` reports `{state: "playing" | "ended",
+elapsed_s, duration_s}` in seconds at 1× speed, once. At EOF the final observation
+is held; restarting the launcher run restarts playback. Recording compositions
+have no hardware or control coordinator. Navigation and agent capabilities are
+unavailable. Arm recordings still publish the visual model and observations,
+with `manipulation_state.read_only: true`; every manipulation request is rejected
+with `code: "read_only"`. Both hosts disable arm interactions for that state.
+Recorded timestamps are rebased to server time for observation freshness.
+
+Arm manipulation state may include `protection`: `state` (normal, derated, paused, fault), `reason`, affected `joints`, `effective_speed_scale` (0–1), and `resumable`. This is additive; absence preserves legacy behavior. A hard motor fault never automatically re-enables motors.
+
+Launcher shutdown accepts `POST /api/armodule/stop?force=true` to bypass a pending graceful stop. Force stop omits parking and terminates the owned runtime tree. Server execution completion retains the matching `operation_id`; clients may retire the matching executed draft without a second arrival test.
+
+`manipulation_state.following_at_target` optionally reports a fresh measured arrival/hold from the live controller, correlated by `following_goal` (wire pose). It does not release the grab. Clients compare this goal to current intent before showing Idle or completing a normal release; older runtimes omit both fields.
+
+Execution arrival uses fresh measured feedback within 30 mm and 8 degrees for 0.5 seconds.
+The protected trajectory remains scheduled while holding its final endpoint; nominal
+trajectory completion alone is not measured arrival. After two seconds without
+meaningful progress during the final endpoint phase, confirmed cancellation emits
+`execution: "aborted"`, the corresponding `operation_id`, and `message: "Target not reached"`.
+Clients retain the planned target for retry. Deferred gripper changes run only after
+successful arrival, never after an aborted move. These use the existing wire fields.
+
+### Arm observation continuity and operation phases
+
+Optional observation fields `joint_velocities` (finite joint-name/value map in rad/s
+or m/s) and `gripper_target` (accepted normalized command, or null) accompany raw
+joint feedback. `gripper` remains measured opening: an object can prevent full
+closure without failing a successful command. Clients publish no hardware targets
+when feedback exceeds 500 ms. They retain the grab, draft, current model and paused
+Preview for up to one second of feedback or connection loss; the local target can
+continue following the hand. Recovery invalidates checked plans and following
+leases. Reconnection never clears motor Stop or resumes it automatically.
+
+`execution_phase` is optionally `motion`, `gripper`, or null. An executed plan has
+one operation ID and one terminal outcome, published after its deferred gripper
+command acknowledges. Motion can complete within 30 mm / 8 degrees after nominal
+trajectory duration, with 500 ms of fresh settled feedback and confirmed cancellation
+of residual motion. This tolerance never authorizes IK, planning, or joint limits.
+Deferred gripper actions run once; a rejected action fails the whole operation.
+
+Selected dragging requests nonmoving seeded IK at most 20 Hz, one in flight with
+newest intent coalesced. Release, Preview and Execute request a checked full path.
+Presentation uses update-timed Hermite interpolation with velocity continuity,
+an adaptive 150 ms measured-feedback cap and 250 ms advisory-preview cap, plus at
+most 30 ms of bounded visual prediction. Filtered positions never enter control
+or completion checks.
+
+### Replicated arm IK preview
+
+`manipulation_state.evaluation` optionally carries `{group_id, target_revision,
+joints, pose}` for the latest feasible nonmoving IK evaluation. `joints` maps
+model joint names to finite values; `pose` is the validated end-effector pose or
+null. The revision is a nonnegative integer identifying the canonical shared
+manipulation target. Observers use it only for that group and target revision.
+It is a visual preview, never an executable plan or measured robot feedback.
+Changed targets and retired requests cannot publish evaluations for newer revisions;
+Execute still requires the exact checked `plan_id` and target revision.
+
+### Bounded reconnect recovery and following transport
+
+Updated v2 clients request `resumable: true` and `server_follow_stream: true` in
+`hello_request`. Supporting servers return an opaque `resume_token` and
+`server_follow_stream: true` in `hello`. Resend the token only to the same backend
+when reconnecting. The token resumes the same logical client for strictly less
+than one second after socket loss; it is invalid after expiry or server restart.
+Bulk pairing always gets fresh credentials. Explicit stop, stale native feedback,
+and hardware faults bypass recovery. Existing input/feedback deadlines remain in
+force outside the bounded recovery window. Recovery can continue only the last
+validated native target; no missing input or discrete commands are replayed.
+Clients without these optional fields retain the legacy transport behavior.
+
+With server following enabled, manipulation uses the existing shared target update
+stream plus idle renewals. The server forwards accepted following targets using its
+native token. Clients do not send a second native update stream. Native advisory
+replies use `shared-follow-<token>-<sequence>` request IDs; feasible replies are visual
+feedback, never authorization to execute an unchecked target. A superseded advisory
+result may be returned to its initiating client for continuity, but cannot be
+published as validation of the new shared target. Full plans remain strictly fenced.
+Gripper set-value requests require the current manipulation lease but do not wait
+for a matching moving-pose revision. Selected gripper changes remain draft intent.
+
+OpenYAM reset allows 0.05 rad joint error with 0.5 s of fresh settled feedback.
+Released following completes within 10 mm / 3 degrees of its validated TCP pose
+after 0.5 s of distinct fresh measurements and joint speed below 0.05 rad/s.
+When TCP feedback is absent, the configured joint tolerance is the fallback.
+Two seconds without progress outside arrival tolerance fails the released target
+after native clearing confirms; it does not report success. Reset errors remain
+relative to the commanded safe-zero pose.
+Completed operation IDs identify outcomes and do not reserve robot authority.
+
+A retired native token in a shared following stream produces `rejected` with code
+`retired`. A still-held gesture may reacquire a native token only under its current
+shared lease; an expired, revoked, or stopped lease never grants automatic recovery.
+
+Explicit Cancel/Stop can be admitted without acquiring an editing lease when no
+editor owns the robot. Native operation ownership and epoch fences still apply.
+Confirmed cancellation clears that group's shared draft, without clearing a
+successor's target. A locally discarded draft cannot be restored by repeated
+snapshots of its old revision. Suspending an observer only retires local state;
+it must not issue a native cancellation for another client's shared draft.
+
+### Independent advisory IK and manual failed-target release
+
+`hello.independent_ik: true` advertises nonmoving IK that does not require a
+per-sample canonical acknowledgement. With this optional flag, an owning client
+evaluates its latest local pose under the current epoch, manipulation lease and
+group. Without it, clients retain the legacy canonical-target evaluation path.
+The server validates editing authority independently of the sample's revision;
+full Plan and Execute requests still require the exact canonical target revision.
+Only a sample matching the current canonical pose and revision can populate
+`manipulation_state.evaluation`. Older samples may update the initiating client's
+visual preview but never authorize motion or validate a newer target.
+
+`manipulation_result.sample_pose` optionally identifies the attempted source pose
+for feasible and infeasible `evaluate`/`update` outcomes. It has the usual finite
+position and unit-quaternion shape. `pose` remains the solved end-effector pose;
+`target_revision`, request ID, native token and sequence retain their existing
+correlation roles. No additional acknowledgement is required for every target
+update: regular authoritative snapshots acknowledge accumulated input sequences.
+Acquisition, release, execution, cancellation and gripper outcomes remain reliable.
+
+An IK failure preserves the user's grab. The latest validated model pose remains
+visible while the sphere follows held input. Only manual release restores a failed
+sphere to the latest validated pose, or its measured grab-start pose if no target
+was validated. This shared-draft reconciliation sends no native return movement.
+Late replies are scoped to their source episode, epoch and editing lease; they
+cannot restore an old target after another client has taken ownership.
+
+Reset retires the initiating client's local draft episode before requesting authority.
+After ownership, epoch and robot-busy checks succeed, `reset_joints` admission clears
+only that group's canonical manipulation draft. A rejected Reset leaves shared drafts
+intact. Its temporary authority ends without republishing a target pose; acquisition
+and completion must not restore the discarded draft. Pending acquisition counts as
+Reset busy work. Late results must match the request episode, epoch and lease before
+changing local intent or releasing authority.
+
+Advisory IK and full planning have independent single-request lanes. New input keeps
+only the latest intent; a new grab supersedes queued release planning. Obsolete full
+plans remain tracked until completion or timeout but never block advisory IK or
+authorize Execute. Native timeout quarantine remains in effect until actual work
+returns. Advisory evaluation uses the configured solver iteration budget in its
+separate worker, preserving collision checks and exact Plan/Execute validation.

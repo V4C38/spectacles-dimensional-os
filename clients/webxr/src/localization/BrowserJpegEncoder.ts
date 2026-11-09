@@ -62,10 +62,9 @@ export class BrowserJpegEncoder implements JpegEncoder {
   }
 
   private failWorker(error: Error): void {
-    this.workerFailed = true;
     this.rejectPending(error);
     this.worker?.terminate(); this.worker = null;
-    reportDiagnostic("jpeg-worker-fallback", { message: error.message }, "warn");
+    reportDiagnostic("jpeg-worker-failed", { message: error.message }, "warn");
   }
 
   private rejectPending(error: Error): void {

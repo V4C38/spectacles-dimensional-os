@@ -227,24 +227,43 @@ final class PreviewFrames: NSObject, SCStreamOutput, @unchecked Sendable {
         let deadline = Date().addingTimeInterval(max(1, duration))
         let roiURL = outputURL.deletingPathExtension().appendingPathExtension("viewport.json")
         var nextLayout = Date.distantPast
+        var viewportMissingSince: Date?
         var previousSource = configuration.sourceRect
         frames.noteLayout(source: configuration.sourceRect, destination: configuration.destinationRect, viewport: viewport)
         var lostFocusAt: Date?
         var focusFailed = false
+        let focusBudgetURL = arguments.count > 5 ? URL(fileURLWithPath: arguments[5])
+            : outputURL.deletingPathExtension().appendingPathExtension("focus-budget")
+        let focusAbortURL = focusBudgetURL.appendingPathExtension("aborted")
+        var focusRestoreAttempts = Int((try? String(contentsOf: focusBudgetURL, encoding: .utf8)) ?? "0") ?? 0
+        var nextFocusRestore = Date.distantPast
         while Date() < deadline {
             if FileManager.default.fileExists(atPath: stopURL.path) { break }
             if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
-                if lostFocusAt == nil { lostFocusAt = Date(); frames.noteFocusRestore() }
-                application.unhide(); application.activate(options: [])
+                if lostFocusAt == nil { lostFocusAt = Date() }
+                if Date() >= nextFocusRestore {
+                    if focusRestoreAttempts >= 3 { focusFailed = true; break }
+                    focusRestoreAttempts += 1
+                    try String(focusRestoreAttempts).write(to: focusBudgetURL, atomically: true, encoding: .utf8)
+                    frames.noteFocusRestore()
+                    application.unhide(); application.activate(options: [])
+                    nextFocusRestore = Date().addingTimeInterval(1)
+                }
                 if Date().timeIntervalSince(lostFocusAt!) > 2 { focusFailed = true; break }
             } else { lostFocusAt = nil }
             if Date() >= nextLayout {
                 nextLayout = Date().addingTimeInterval(0.25)
-                guard let measured = previewViewport(pid: pid, window: window.frame, title: window.title ?? "") else {
-                    throw NSError(domain: "SpecsReview", code: 8,
-                        userInfo: [NSLocalizedDescriptionKey: "Preview viewport disappeared during capture"])
+                if let measured = previewViewport(pid: pid, window: window.frame, title: window.title ?? "") {
+                    viewport = measured
+                    viewportMissingSince = nil
+                } else {
+                    // Native screenshot export can temporarily hide the AX viewport.
+                    if viewportMissingSince == nil { viewportMissingSince = Date() }
+                    if Date().timeIntervalSince(viewportMissingSince!) > 5 {
+                        throw NSError(domain: "SpecsReview", code: 8,
+                            userInfo: [NSLocalizedDescriptionKey: "Preview viewport unavailable for five seconds during capture"])
+                    }
                 }
-                viewport = measured
                 var source = viewport
                 if let data = try? Data(contentsOf: roiURL),
                    let roi = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
@@ -269,12 +288,16 @@ final class PreviewFrames: NSObject, SCStreamOutput, @unchecked Sendable {
             }
             try await Task.sleep(nanoseconds: 100_000_000)
         }
+        if focusFailed {
+            try "Focus restoration stopped; explicit user authorization required to resume.".write(
+                to: focusAbortURL, atomically: true, encoding: .utf8)
+        }
         try await stream.stopCapture()
         try await frames.finish()
         withExtendedLifetime(background) {}
         if focusFailed {
             throw NSError(domain: "SpecsReview", code: 7,
-                userInfo: [NSLocalizedDescriptionKey: "Lens Studio lost foreground capture focus and could not be restored"])
+                userInfo: [NSLocalizedDescriptionKey: "Native integration test aborted: Lens Studio focus could not be restored within the three-attempt limit. Do not retry until the user explicitly authorizes resuming."])
         }
     }
 }

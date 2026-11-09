@@ -23,6 +23,8 @@ import type { ClientTrackingOriginStore } from "./clientTrackingOrigin";
 import { odomToClientTrackingPose } from "./clientTrackingTransforms";
 import { passesGeometricGate } from "./geometricGate";
 
+const DELIBERATE_RECOVERY_CAPTURE_S = 10;
+
 export type LocalizationCapturePhase =
   | "idle"
   | "waiting_for_geometric_gate"
@@ -47,7 +49,7 @@ export interface LocalizationCaptureState {
 
 export type LocalizationTrace = { stage: string; atS: number; phase: LocalizationCapturePhase; captured: number; detail?: string };
 
-export type LocalizationSessionPort = Pick<ARModuleSession, "view" | "sendText" | "submitLocalizationObservations" | "cancelLocalizationSubmission" | "subscribeLocalizationObservationsRequest" | "subscribeOutbound" | "subscribeView">;
+export type LocalizationSessionPort = Pick<ARModuleSession, "view" | "sendText" | "submitLocalizationObservations" | "cancelLocalizationSubmission" | "subscribeLocalizationObservationsRequest" | "subscribeOutbound" | "subscribeView"> & Partial<Pick<ARModuleSession, "localizationResultDeadline">>;
 
 export interface LocalizationCaptureDependencies {
   session: LocalizationSessionPort;
@@ -77,6 +79,8 @@ export class LocalizationCaptureEpisode {
   private runtimeRetryAt: number | null = null;
   private phase: LocalizationCapturePhase = "idle";
   private request: LocalizationObservationsRequest | null = null;
+  private recoveryRequestedUntil: number | null = null;
+  private recoveryUntil: number | null = null;
   private observations: LocalizationObservation[] = [];
   private geometricGateWaitStartedAt: number | null = null;
   private nextCaptureAt: number | null = null;
@@ -239,6 +243,11 @@ export class LocalizationCaptureEpisode {
       throw new Error("localization capture already active");
     }
     this.runtimeMisses = 0; this.runtimeRetryAt = null;
+    // An explicit realign may be recovering from an incorrect retained origin.
+    // Bypass only its geometric hint, for one bounded batch; server detection,
+    // exposure/pose validation and result correlation remain authoritative.
+    this.recoveryRequestedUntil = this.clientTrackingOriginStore.hasTrackingOrigin
+      ? this.clock.now() + DELIBERATE_RECOVERY_CAPTURE_S : null;
     this.captureEnabled = true;
     if ((this.phase === "idle" || this.phase === "waiting_for_retry") && this.request !== null) {
       this.onRequest(this.request);
@@ -254,6 +263,8 @@ export class LocalizationCaptureEpisode {
   tick(): void {
     this.publishTracking();
     const now = this.clock.now();
+    const submissionDeadline = this.session.localizationResultDeadline?.();
+    if (this.phase === "awaiting_result" && submissionDeadline != null) this.resultDeadline = submissionDeadline;
     if (this.suspended) {
       if (this.phase === "awaiting_result" && this.resultDeadline !== null && now >= this.resultDeadline) this.enterFailed("result timeout");
       return;
@@ -311,6 +322,8 @@ export class LocalizationCaptureEpisode {
     hardwareStarted: this.hardwareStarted, captureInFlight: this.inflight !== null }; }
 
   private onRequest(request: LocalizationObservationsRequest): void {
+    this.recoveryUntil = this.recoveryRequestedUntil;
+    this.recoveryRequestedUntil = null;
     if (this.phase === "awaiting_result" && !request.episode_id) this.scheduleRuntimeRetry();
     if (request.episode_id) { this.runtimeRetryAt = null; this.runtimeMisses = 0; }
     this.session.cancelLocalizationSubmission();
@@ -363,6 +376,7 @@ export class LocalizationCaptureEpisode {
   }
 
   private shouldWaitForGeometricGate(): boolean {
+    if (this.recoveryUntil !== null && this.clock.now() < this.recoveryUntil) return false;
     if (!this.clientTrackingOriginStore.hasTrackingOrigin) {
       return false;
     }
@@ -471,6 +485,7 @@ export class LocalizationCaptureEpisode {
   }
 
   private sendBatch(now: number): void {
+    this.recoveryUntil = null;
     const timeoutS = this.request?.result_timeout_s ?? this.resultTimeoutS;
     this.phase = "awaiting_result";
     this.resultDeadline = now + timeoutS;
@@ -512,6 +527,7 @@ export class LocalizationCaptureEpisode {
   }
 
   private enterFailed(reason: string): void {
+    this.recoveryUntil = this.recoveryRequestedUntil = null;
     if (this.request?.episode_id) { this.captureProgress("unavailable"); this.resetIdle(); return; }
     if (reason === "result timeout") this.scheduleRuntimeRetry();
     this.session.cancelLocalizationSubmission();
@@ -526,6 +542,7 @@ export class LocalizationCaptureEpisode {
   }
 
   private resetIdle(): void {
+    this.recoveryUntil = this.recoveryRequestedUntil = null;
     this.runtimeMisses = 0; this.runtimeRetryAt = null;
     this.session.cancelLocalizationSubmission();
     this.captureGeneration += 1;

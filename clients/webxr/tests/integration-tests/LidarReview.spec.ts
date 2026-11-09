@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 test("renders height dots and distance obstacles in one bounded draw call", async ({ page }, info) => {
   await page.routeWebSocket("**/ar", () => {});
-  await page.goto("/");
+  await page.goto("/?connection=local");
   const metrics = await page.evaluate(async () => {
     const fixture = await import("/tests/integration-tests/fixtures/LidarReview.ts");
     const review = fixture.createLidarReview(); (window as any).lidarReview = review; return review.metrics;

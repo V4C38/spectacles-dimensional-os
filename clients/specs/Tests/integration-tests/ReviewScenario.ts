@@ -1,3 +1,4 @@
+import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 import { RUNTIME_LAYOUTS, RUNTIME_PANEL_SCALE, SETUP_LAYOUTS, panelContentOffset } from "../Scripts/DimOSSpecsClient/presentation/PanelLayout";
 // Copied into disposable Assets/Review by tools/review.py; never shipped to hardware.
 import { DimOSSpecsClient } from "../Scripts/DimOSSpecsClient/DimOSSpecsClient";
@@ -29,6 +30,7 @@ export class ReviewScenario extends BaseScriptComponent {
   private goal: Vec3 = [2.5, 0.5, -0.63];
 
   onAwake(): void {
+    if (!integrationTestsEnabled(this.getSceneObject())) return;
     this.createEvent("OnStartEvent").bind(() => {
       const delay = this.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
       delay.bind(() => this.start()); delay.reset(this.startDelayS);
@@ -169,7 +171,7 @@ export class ReviewScenario extends BaseScriptComponent {
       { name: "setup-align", run: () => {
         root.session.start(); root.session.onTransportOpen();
         const available = { available: true, reason: null };
-        this.wire({ type: "hello", client_id: "specs-review", time_sync: { ts_client: getTime(), ts_server: getTime() },
+        this.wire({ type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "specs-review", time_sync: { ts_client: getTime(), ts_server: getTime() },
           robot: { display_name: "Unitree Go2", body_bounds_m: [0.7, 0.5, 0.55], footprint_m: [0.7, 0.5], base_height_m: 0.33 },
           capabilities: { lidar: available, localization: available, estop: available, agent: available,
             navigation: { ...available, nav_goal: available, nav_joystick: { available: false, reason: "Hands only" } } } });

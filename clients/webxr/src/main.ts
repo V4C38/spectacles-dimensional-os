@@ -1,3 +1,4 @@
+import { EnvironmentDepthRenderer } from "./presentation/EnvironmentDepthRenderer";
 import { BrowserJpegEncoder } from "./localization/BrowserJpegEncoder";
 import { LandingInfoPresenter } from "./presentation/LandingInfoPresenter";
 import { applyDOMDesign } from "./presentation/DimOSARDesign";
@@ -91,7 +92,7 @@ function startImmersiveSession(onError: (error: unknown) => void): void {
   };
   xr.requestSession = ((mode, options) => {
     restore();
-    return requestSession(mode, options).catch((error: unknown) => {
+    return requestSession(mode, mode === "immersive-ar" ? EnvironmentDepthRenderer.sessionOptions(options) : options).catch((error: unknown) => {
       onError(error);
       throw error;
     });

@@ -211,7 +211,7 @@ it("rejects direct drag intersections outside the queried 20 metre ray segment",
 
 it("keeps an edge grab anchored instead of dragging the circle center to the pinch ray", () => {
   const view: any = { connection: "ready", hasTrackingOrigin: true, nav: null, nav_goal: null,
-    capabilities: { estop: { available: true }, navigation: { nav_goal: { available: true } } } };
+    capabilities: { estop: { available: true }, navigation: { available: true, nav_goal: { available: true } } } };
   const controller = new NavigationController({ session: { view: () => view, sendText: vi.fn() } as any,
     deviceTracking: { worldOptions: {}, raycastWorldMesh: () => [] } as any,
     robotPresenter: { floorPose: () => ({ position: new vec3(0, 0, -100), rotation: quat.quatIdentity() }) } as any,
@@ -229,7 +229,7 @@ it("keeps an edge grab anchored instead of dragging the circle center to the pin
 it("does not place an attached marker at world zero while the robot floor is still unknown", () => {
   let floor: { position: vec3; rotation: quat } | null = null;
   const view: any = { connection: "ready", hasTrackingOrigin: true, nav: null, nav_goal: null,
-    capabilities: { navigation: { nav_goal: { available: true } } } };
+    capabilities: { navigation: { available: true, nav_goal: { available: true } } } };
   const controller = new NavigationController({ session: { view: () => view } as any,
     deviceTracking: { worldOptions: {}, raycastWorldMesh: () => [] } as any,
     robotPresenter: { floorPose: () => floor, floorWorldY: () => floor?.position.y ?? null } as any,

@@ -1,15 +1,17 @@
-import * as THREE from "three";
 import { Text } from "troika-three-text";
+import { NotificationPill } from "./NotificationPill";
+import * as THREE from "three";
 import { VIEWER_NOTIFICATION_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
 import { NotificationCenter, notificationGlyph, type ClientNotification } from "@dimos-ar-client/presentation/NotificationCenter";
 import { GlassSurface } from "./GlassSurface";
-import { syncText, UI_FONT_REGULAR } from "./UIFonts";
+import { UI_FONT_REGULAR } from "./UIFonts";
 import { disposeTextResources } from "./TextResources";
 export type ViewerNotification = ClientNotification;
 
 /** Viewer-relative drawing only. Lifetime and preemption belong to ClientCore. */
 export class ViewerNotificationPresenter {
-  readonly object = new THREE.Group();
+  private readonly pill = new NotificationPill();
+  readonly object = this.pill.object;
   readonly center = new NotificationCenter();
   private readonly plate = new GlassSurface({ width: 0.30, height: 0.065, radius: 0.0325, tint: "#202022", alpha: 0.94 });
   private readonly text = new Text();
@@ -40,30 +42,40 @@ export class ViewerNotificationPresenter {
   clear(key: string): void { this.center.clear(key); }
   tick(position: readonly number[], orientation: readonly number[], projectionY: number, deltaS: number): void {
     this.center.tick(deltaS);
-    const state = this.center.snapshot(), current = state.notification;
+    const state = this.center.snapshot(),
+      current = state.notification;
     this.object.visible = current !== null;
     if (!current) return;
     this.rotation.fromArray(orientation);
     this.angles.setFromQuaternion(this.rotation, "YXZ");
     this.angles.z = 0;
     this.rotation.setFromEuler(this.angles);
-    this.target.set(0, -0.9 * 0.45 / Math.max(0.1, projectionY), -0.9).applyQuaternion(this.rotation).add(new THREE.Vector3().fromArray(position));
+    this.target
+      .set(0, (-0.9 * 0.45) / Math.max(0.1, projectionY), -0.9)
+      .applyQuaternion(this.rotation)
+      .add(new THREE.Vector3().fromArray(position));
     // Tilt the surface toward the viewer without moving its lower-view anchor.
     this.angles.x -= VIEWER_NOTIFICATION_STYLE.upwardTiltRad;
     this.rotation.setFromEuler(this.angles);
     if (state.revision !== this.revision) {
-      this.revision = state.revision; this.text.text = current.text; syncText(this.text);
-      this.object.position.copy(this.target); this.object.quaternion.copy(this.rotation);
+      this.revision = state.revision;
+      this.object.position.copy(this.target);
+      this.object.quaternion.copy(this.rotation);
     }
-    const alpha = 1 - Math.exp(-12 * deltaS), elapsed = state.elapsedS;
-    this.object.position.lerp(this.target, alpha); this.object.quaternion.slerp(this.rotation, alpha);
+    const alpha = 1 - Math.exp(-12 * deltaS),
+      elapsed = state.elapsedS;
+    this.object.position.lerp(this.target, alpha);
+    this.object.quaternion.slerp(this.rotation, alpha);
     // Interpolating different yaw/pitch poses can introduce roll between level endpoints.
     this.angles.setFromQuaternion(this.object.quaternion, "YXZ");
     this.angles.z = 0;
     this.object.quaternion.setFromEuler(this.angles);
-    const opacity = Math.min(1, elapsed / 0.12, ((current.durationS ?? 2.5) - elapsed) / 0.18);
-    this.plate.setOpacity(opacity);
-    for (const material of Array.isArray(this.text.material) ? this.text.material : [this.text.material]) material.opacity = opacity;
+    const opacity = Math.min(
+      1,
+      elapsed / 0.12,
+      ((current.durationS ?? 2.5) - elapsed) / 0.18,
+    );
+    this.pill.draw(current, elapsed, opacity);
     this.object.scale.setScalar(0.9 + 0.1 * opacity);
     const color = current.tone === "warning" ? 0xffd60a : current.tone === "success" ? 0x30d158 : current.tone === "danger" ? 0xff453a : 0xffffff;
     let offset = 0;

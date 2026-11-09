@@ -1,3 +1,4 @@
+import { ConnectionResolution, type ConnectionResolver } from "@dimos-ar-client/websocket/ConnectionResolution";
 import { AR_MODULE_CLIENT_CONFIG, type WebSocketTransport } from "@dimos-ar-client/websocket/hostPorts";
 
 const WS_CONNECTING = 0;
@@ -8,6 +9,10 @@ import type { WebSocketTransportHandlers as BrowserWebSocketTransportHandlers } 
 
 export class BrowserWebSocketTransport implements WebSocketTransport {
   private url: string;
+  private bulkUrl: string | undefined;
+  private readonly resolution = new ConnectionResolution((seconds, callback) => {
+    const timer = setTimeout(callback, seconds * 1000); return () => clearTimeout(timer);
+  });
   private readonly connectTimeoutS: number;
   private readonly socketFactory: (url: string) => WebSocket;
   private handlers: BrowserWebSocketTransportHandlers | null = null;
@@ -35,15 +40,31 @@ export class BrowserWebSocketTransport implements WebSocketTransport {
   getUrl(): string {
     return this.url;
   }
+  createSibling(path: string): BrowserWebSocketTransport {
+    return new BrowserWebSocketTransport({ url: this.bulkUrl ?? new URL(path, this.url).toString(), connectTimeoutS: this.connectTimeoutS, socketFactory: this.socketFactory });
+  }
+  bufferedAmount(): number { return this.socket?.bufferedAmount ?? 0; }
+
+  setConnectionResolver(resolver: ConnectionResolver | undefined): void { this.resolution.setResolver(resolver); }
 
   setUrl(url: string): void {
     if (this.socket) {
       throw new Error("cannot change WebSocket url while active");
     }
+    this.resolution.setResolver(undefined);
+    this.bulkUrl = undefined;
     this.url = url;
   }
 
   connect(): void {
+    this.close();
+    this.resolution.run(endpoint => {
+      if (endpoint) { this.url = endpoint.controlUrl; this.bulkUrl = endpoint.bulkUrl; }
+      this.openSocket();
+    }, () => this.handlers?.onTransportClose());
+  }
+
+  private openSocket(): void {
     this.clearTimeout();
     if (this.socket) {
       this.retire(this.socket);
@@ -110,6 +131,7 @@ export class BrowserWebSocketTransport implements WebSocketTransport {
   }
 
   close(): void {
+    this.resolution.cancel();
     this.hostClosing = true;
     try {
       this.clearTimeout();

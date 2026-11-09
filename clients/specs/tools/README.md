@@ -32,8 +32,8 @@ Results default to `clients/specs/Tests/integration-tests/test-results/<runId>/`
 
 The raw recording contains only Preview content, including aspect-preserving
 padding when needed. Chapter framing uses camera-projected UI/world bounds.
-The recorder uses the display compositor, prevents idle sleep and keeps Lens
-Studio foreground. It finds the Preview viewport through macOS Accessibility,
+The recorder uses the display compositor, prevents idle sleep and allows bounded attempts to keep Lens
+Studio foreground under the focus limit below. It finds the Preview viewport through macOS Accessibility,
 refreshes its bounds during window resizing, and reframes chapters without
 changing UI scale. Its metadata records windows, viewport bounds and actual
 ScreenCaptureKit timestamps. Video duration must match the capture clock; visual
@@ -155,3 +155,59 @@ and cooldown periods, encode/send counts must not advance; native encodes must n
 overlap, and camera listener counts must return to zero between runtime batches.
 Compare FPS/worst-frame time and a Spectacles Monitor trace; desktop virtual-time
 budget tests cannot establish headset thermal, memory or stereo behavior.
+
+## Lens Studio integration-test focus limit
+
+Lens Studio may take focus to start a native integration recording. During the test,
+allow at most **three focus-restoration attempts in total**, spaced at least one
+second apart. The budget does not reset when focus is briefly restored, between
+chapters/suites, or when a process restarts. Never continuously reactivate Lens
+Studio while the user is using another application.
+
+After the budget is exhausted and focus is lost again, abort the integration run,
+stop its recorder and scripted interactions, retain diagnostic evidence, and notify
+the user that testing stopped because of the focus limit. Do not retry, restart,
+open/raise another Lens window for cleanup, or continue another native suite until
+the user explicitly authorizes resuming. Time passing is not authorization.
+An earlier inability to restore focus may also abort the run. Any resumed run gets
+a new budget only after that explicit user authorization.
+
+## Integration Test Harness
+
+The production scene contains a scene object named **Integration Test Harness**
+with the **Integration Test Harness** script component. Its **Auto Run** (`autoRun`)
+boolean defaults to **false** and must remain false for normal use and device builds.
+The component also forces Auto Run off on Spectacles. Every test scenario checks
+both this switch and `global.deviceInfoSystem.isEditor()` before registering events
+or replacing dependencies: tests cannot run on the device even if the switch was
+saved on accidentally.
+
+Integration tests run only when explicitly requested. The native test runner copies
+the project, attaches the optional scenario to **Integration Test Harness**, and uses
+Lens Studio MCP to set **Auto Run = true** in that disposable editor project. It
+switches Auto Run off on exit, including failure and focus-limit abort, without
+raising the editor. The normal production project retains Auto Run off and contains
+no `Assets/Review` fixtures. Never deploy a disposable test copy.
+
+Before handing the lens back for device testing, verify the production project is
+open, Auto Run is false, no Review scenario assets/hosts are present, and the native
+compiler cache matches production scripts. A test abort must be reported; it must
+never be described as a production build ready for device testing without this check.
+
+## Specs arm rendering
+
+Arm links retain the canonical model geometry. ArmStroke stores link-local endpoints
+and fixed local-length dashes; rigid motion updates pose uniforms, not vertex buffers.
+Only the vertex shader projects outlines. Its fragment shader performs dash masking
+and simple antialiasing without projection or distance-dependent dash merging.
+ArmSurface provides flat color/opacity; end-effector indicators retain Fresnel.
+Per-point displacement opacity samples the latest state at 10 Hz with no catch-up
+queue. Global fades, poses and warning colors remain at display rate.
+
+SpecsArmPanelPresenter owns the native Frame, attached/pinned state and placement.
+Controls live under Frame.content; the frame's top center attaches 13 cm below the
+localized base-label origin in the viewing plane. Grabbing/resizing pins it; Pin
+returns it to the current base. Missing arm root poses hide the frame rather than
+placing it at odometry zero. The full native command now includes ManipulationProbe,
+which checks Frame ancestry, anchor geometry and outline upload budgets. These
+checks remain opt-in through Integration Test Harness and cannot run on device.

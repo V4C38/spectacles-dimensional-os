@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 import struct
 
@@ -85,13 +86,13 @@ def test_encode_text_ends_with_newline() -> None:
     assert encode_text({"type": "state_request"}) == '{"type":"state_request"}\n'
 
 
-def test_encode_hello_has_no_protocol_version() -> None:
+def test_encode_hello_advertises_interaction_protocol_version() -> None:
     msg = _parse_json_line(encode_hello(_sample_hello()))
     assert msg["type"] == "hello"
     assert msg["client_id"] == "abc123"
     assert msg["time_sync"]["ts_client"] == 1000.0
     assert msg["time_sync"]["ts_server"] == 2000.0
-    assert "protocol_version" not in msg
+    assert msg["protocol_version"] == 2
     assert "alignment" not in msg
     assert msg["capabilities"]["estop"]["available"] is True
     assert msg["capabilities"]["navigation"]["nav_goal"]["available"] is True
@@ -102,6 +103,12 @@ def test_encode_hello_has_no_protocol_version() -> None:
 def test_decode_hello_request() -> None:
     req = decode_hello_request(json.dumps({"type": "hello_request", "ts_client": 99.5}))
     assert req.ts_client == 99.5
+
+
+def test_independent_ik_support_is_an_optional_server_advertisement() -> None:
+    assert "independent_ik" not in _parse_json_line(encode_hello(_sample_hello()))
+    hello = replace(_sample_hello(), independent_ik=True)
+    assert _parse_json_line(encode_hello(hello))["independent_ik"] is True
 
 
 def test_decode_inbound_rejects_hello_request() -> None:
@@ -725,3 +732,19 @@ def test_binary_localization_rejects_invalid_calibration(changes):
                   "distortion_model": "none", "distortion": [], **changes}
     with pytest.raises((TypeError, ValueError)):
         decode_localization_observations(_encode_localization_observations_frame(b"jpeg", json.dumps(intrinsics).encode()))
+
+
+def test_client_decode_error_is_a_bounded_diagnostic():
+    from dimos.ar.websocket.protocol import ClientError
+
+    body = {"type": "client_error", "message_type": "manipulation_state", "detail": "bad pose",
+            "excerpt": '{"orientation":[0,0,0,0]}', "ts": 10.0, "message_ts": 9.9,
+            "request_id": "plan-1", "suppressed_count": 2}
+    report = decode_inbound(json.dumps(body))
+    assert isinstance(report, ClientError)
+    assert report.message_ts == 9.9
+    assert report.suppressed_count == 2
+    for key, value in (("excerpt", "x" * 513), ("detail", "x" * 1025), ("ts", True),
+                       ("suppressed_count", -1), ("request_id", "")):
+        with pytest.raises((ValueError, TypeError)):
+            decode_inbound(json.dumps({**body, key: value}))

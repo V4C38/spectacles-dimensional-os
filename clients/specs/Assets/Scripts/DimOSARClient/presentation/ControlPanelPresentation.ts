@@ -1,7 +1,10 @@
+import { CAPABILITY_LABELS } from "./CapabilityPresentation";
 import type { ARModuleSessionState } from "../websocket/arModuleSession";
 
 /** Copy and proportions shared by host-native control panels. */
 export const CONTROL_PANEL_LAYOUT = { width: 0.9, height: 0.76, margin: 0.05, cornerRadius: 0.05, titleY: 0.306 } as const;
+/** Every settings/sensors section uses this one heading style. */
+export const CONTROL_PANEL_SECTION = { left: -0.4, width: 0.8, height: 0.03, fontDp: 19, color: "#aeaeb2", depthM: 0.006 } as const;
 /** Metre-space design coordinates, before the calibrated host scale. */
 export const CONTROL_PANEL_CONTROLS = { height: 0.064, iconSize: 0.072, gap: 0.02 } as const;
 export const CONTROL_PANEL_MESSAGE = { height: 0.12, padding: 0.028, captionHeight: 0.02, captionY: 0.033, textY: -0.016, textHeight: 0.057 } as const;
@@ -15,7 +18,7 @@ export function controlPanelTab(count: number, index: number): { x: number; widt
 export const CONTROL_PANEL_COPY = {
   appName: "dimOS AR", setupTitle: "Setup Wizard", manual: "Manual", agent: "Agent", yourMessage: "Your message",
   send: "Send to agent", clear: "Clear", hold: "Hold to record", microphoneUnavailable: "Microphone unavailable",
-  stop: "EMERGENCY STOP", settings: "Settings", sensors: "Sensors", diagnostics: "Diagnostics",
+  stop: "EMERGENCY STOP", settings: "Settings", sensors: "Capabilities", diagnostics: "Diagnostics",
   robot: "Robot", headset: "Headset", relocalize: "Re-localize", localizeRobot: "Localize robot", setup: "Setup",
   done: "Done", back: "Back", connect: "01 Connect", connected: "✓ Connected", localization: "02 Localization",
   continue: "Continue", skip: "Skip", reconnect: "Reconnect", tryAgain: "Try again", dismiss: "Dismiss",
@@ -36,7 +39,7 @@ export function localizationProviderLabel(kind: LocalizationKind): string {
     kind === "marker" ? "AprilTag" : kind === "unavailable" ? "No localization provider" : "Waiting for localization…";
 }
 export function availableFeatures(capabilities: ARModuleSessionState["capabilities"]): string {
-  const labels = { navigation: "Navigation", agent: "Agent", lidar: "LiDAR", localization: "Localization", estop: "Emergency Stop" } as const;
+  const labels = CAPABILITY_LABELS;
   const features = (Object.keys(labels) as (keyof typeof labels)[]).filter(key => capabilities?.[key]?.available).map(key => labels[key]);
   return features.length ? `Available: ${features.join(", ")}` : "No features available";
 }
@@ -46,4 +49,28 @@ export function robotBadgeText(name: string, connection: string, selected: boole
 }
 export function sensorStatusText(available: boolean, received: number, camera = "Not capturing", tracking = "Not tracking", surfaces: number | string = 0): string {
   return `${available ? `Received: ${received} points · Range shared with clients` : "LiDAR unavailable"}\nCamera: ${camera}\n${tracking} · Surfaces: ${surfaces}`;
+}
+
+export interface PanelProfile { height: number; rows: Record<string, number>; }
+export type LayoutRow = readonly [name: string, height: number, gapBefore?: number];
+
+/** Unit-independent row placement; hosts supply their calibrated geometry. */
+export function layoutPanelRows(startY: number, rows: readonly LayoutRow[], geometry: {
+  top: number; gap: number; bottom: number; action: number; maximumHeight: number; quantum: number;
+}, footer: boolean, footerGap = geometry.gap): PanelProfile {
+  let cursor = startY;
+  const positions: Record<string, number> = {};
+  rows.forEach(([name, height, gapBefore], index) => {
+    if (index) cursor -= gapBefore ?? geometry.gap;
+    positions[name] = cursor - height / 2;
+    cursor -= height;
+  });
+  if (footer) {
+    cursor -= footerGap;
+    positions.footer = cursor - geometry.action / 2;
+    cursor -= geometry.action;
+  }
+  const height = Math.ceil((geometry.top - cursor + geometry.bottom) / geometry.quantum - 1e-8) * geometry.quantum;
+  if (height > geometry.maximumHeight) throw new Error(`Panel profile exceeds calibrated height: ${height}`);
+  return { height, rows: positions };
 }

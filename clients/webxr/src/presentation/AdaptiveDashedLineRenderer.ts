@@ -7,19 +7,20 @@ export class AdaptiveDashedLineRenderer {
   readonly object: THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>;
   private readonly viewport = new THREE.Vector4();
 
-  constructor(widthM: number = WORLD_DASH_STYLE.widthM, dashM: number = WORLD_DASH_STYLE.dashM, gapM: number = WORLD_DASH_STYLE.gapM) {
+  constructor(widthM: number = WORLD_DASH_STYLE.widthM, dashM: number = WORLD_DASH_STYLE.dashM, gapM: number = WORLD_DASH_STYLE.gapM, minimumPixelWidth = 2) {
     const geometry = new THREE.InstancedBufferGeometry();
     geometry.setAttribute("position", new THREE.Float32BufferAttribute([-1, 0, 0, 1, 0, 0, -1, 1, 0, 1, 1, 0], 3));
     geometry.setIndex([0, 1, 2, 2, 1, 3]);
     geometry.instanceCount = 0;
     const material = new THREE.ShaderMaterial({
-      uniforms: { uViewport: { value: new THREE.Vector2(1, 1) }, uWidth: { value: widthM }, uDash: { value: dashM }, uGap: { value: gapM }, uOpacity: { value: 0.7 } },
+      uniforms: { uStartDistance: { value: 0 }, uNearWidthScale: { value: WORLD_DASH_STYLE.nearWidthScale }, uMinimumPixels: { value: minimumPixelWidth }, uColor: { value: new THREE.Color(0xffffff) }, uViewport: { value: new THREE.Vector2(1, 1) }, uWidth: { value: widthM }, uDash: { value: dashM }, uGap: { value: gapM }, uOpacity: { value: 0.7 } },
       transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false,
       vertexShader: `
-        attribute vec3 instanceStart; attribute vec3 instanceEnd; attribute float instanceDistance;
-        uniform vec2 uViewport; uniform float uWidth;
+        attribute vec2 instanceOpacity; varying float vOpacity; attribute vec3 instanceStart; attribute vec3 instanceEnd; attribute float instanceDistance;
+        uniform vec2 uViewport; uniform float uWidth; uniform float uMinimumPixels; uniform float uDash; uniform float uGap; uniform float uNearWidthScale;
         varying float vAcross; varying float vDistance; varying float vPixelM; varying float vHalfWidth;
         void main() {
+          vOpacity = mix(instanceOpacity.x, instanceOpacity.y, position.y);
           vec3 a = (modelViewMatrix * vec4(instanceStart, 1.0)).xyz;
           vec3 b = (modelViewMatrix * vec4(instanceEnd, 1.0)).xyz;
           vec4 ca = projectionMatrix * vec4(a, 1.0), cb = projectionMatrix * vec4(b, 1.0);
@@ -27,7 +28,9 @@ export class AdaptiveDashedLineRenderer {
           vec2 normal = vec2(-direction.y, direction.x) / max(length(direction), 0.0001);
           vec3 p = mix(a, b, position.y);
           float pixelM = 2.0 * mix(1.0, max(0.001, -p.z), abs(projectionMatrix[2][3])) / max(0.0001, abs(projectionMatrix[1][1]) * uViewport.y);
-          float halfWidth = max(uWidth, 2.0 * pixelM) * 0.5;
+          float resolutionBlend = 1.0 - smoothstep(6.0, 10.0, (uDash + uGap) / max(pixelM, 0.00001));
+          float widthScale = mix(uNearWidthScale, 1.0, resolutionBlend);
+          float halfWidth = max(uWidth, uMinimumPixels * pixelM) * widthScale * 0.5;
           vec4 clip = projectionMatrix * vec4(p, 1.0);
           clip.xy += normal * position.x * (halfWidth / pixelM + 1.0) * 2.0 / uViewport * clip.w;
           gl_Position = clip;
@@ -36,9 +39,10 @@ export class AdaptiveDashedLineRenderer {
           vPixelM = pixelM; vHalfWidth = halfWidth;
         }`,
       fragmentShader: `
-        uniform float uDash; uniform float uGap; uniform float uOpacity;
+        varying float vOpacity; uniform float uStartDistance; uniform vec3 uColor; uniform float uDash; uniform float uGap; uniform float uOpacity;
         varying float vAcross; varying float vDistance; varying float vPixelM; varying float vHalfWidth;
         void main() {
+          if (vDistance < uStartDistance) discard;
           float period = max(0.0001, uDash + uGap);
           float phase = mod(vDistance, period);
           float along = min(phase, period - phase);
@@ -49,7 +53,7 @@ export class AdaptiveDashedLineRenderer {
           float blend = 1.0 - smoothstep(6.0, 10.0, period / max(vPixelM, 0.00001));
           float coverage = mix(dash, solid, blend);
           if (coverage < 0.001) discard;
-          gl_FragColor = vec4(vec3(1.0), uOpacity * coverage);
+          gl_FragColor = vec4(uColor, clamp(uOpacity * coverage * vOpacity, 0.0, 1.0));
           #include <colorspace_fragment>
         }`,
     });
@@ -62,6 +66,8 @@ export class AdaptiveDashedLineRenderer {
       material.uniforms.uViewport.value.set(Math.max(1, this.viewport.z), Math.max(1, this.viewport.w));
     };
   }
+
+  setStartDistance(distance: number): void { this.object.material.uniforms.uStartDistance.value = Math.max(0, distance); }
 
   setStyle(widthM: number, opacity: number): void {
     this.object.material.uniforms.uWidth.value = widthM;
@@ -83,6 +89,7 @@ export class AdaptiveDashedLineRenderer {
     if (geometry.instanceCount !== count || !geometry.getAttribute("instanceStart")) {
       geometry.setAttribute("instanceStart", new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3));
       geometry.setAttribute("instanceEnd", new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3));
+      geometry.setAttribute("instanceOpacity", new THREE.InstancedBufferAttribute(new Float32Array(count * 2).fill(1), 2));
       geometry.setAttribute("instanceDistance", new THREE.InstancedBufferAttribute(new Float32Array(count), 1));
       geometry.instanceCount = count;
     }

@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { bootstrap, snapshot, shared } from "./fixtures/Runtime";
+import { bootstrap, snapshot, shared, isNavigationCommit } from "./fixtures/Runtime";
 import {
   activateButton,
   activateRuntimeButton,
@@ -16,7 +16,7 @@ const value = (page: Page, expression: string) =>
   page.evaluate((expression) => {
     const w = window as any,
       app = w.xb.core.scene.children.find(
-        (o: any) => o.constructor.name === "WebXRApp",
+        (o: any) => o.client?.manipulation,
       );
     return new Function("app", "w", `return (${expression})`)(app, w);
   }, expression);
@@ -63,7 +63,7 @@ for (const id of ids)
         const before = runtime.commands.length;
         await page.evaluate(() => {
           const app = (window as any).xb.core.scene.children.find(
-            (o: any) => o.constructor.name === "WebXRApp",
+            (o: any) => o.client?.manipulation,
           );
           app.client.emergencyStop();
           app.client.ui.sensors.setMode("full");
@@ -83,7 +83,7 @@ for (const id of ids)
           ["robot_los_preferred", "mixed"],
         ]) {
           runtime.send({
-            type: "localization_observations_request",
+            type: "localization_observations_request", capture_id: "fixture-capture",
             capture_policy: policy,
             observation_count: 1,
             ...(policy === "robot_los_preferred"
@@ -109,14 +109,14 @@ for (const id of ids)
         expect((await snapshot(page)).setupCompleted).toBe(false);
         await page.evaluate(() => {
           const app = (window as any).xb.core.scene.children.find(
-            (o: any) => o.constructor.name === "WebXRApp",
+            (o: any) => o.client?.manipulation,
           );
           app.client.camera.jpeg.encode = async () => {
             throw new Error("Fixture camera unavailable");
           };
         });
         runtime.send({
-          type: "localization_observations_request",
+          type: "localization_observations_request", capture_id: "fixture-capture",
           capture_policy: "any_angle",
           observation_count: 1,
         });
@@ -165,7 +165,7 @@ for (const id of ids)
           expect((await snapshot(page)).hasTrackingOrigin).toBe(true);
         } else if (id === "interaction_safety") {
           const before = runtime.commands.filter(
-            (c) => c.type === "nav_goal_request" && !c.preview,
+            isNavigationCommit,
           ).length;
           await pointRuntimeButton(page, "Manual");
           await setSelection(page, 1);
@@ -173,7 +173,7 @@ for (const id of ids)
           await setSelection(page, 0);
           expect(
             runtime.commands.filter(
-              (c) => c.type === "nav_goal_request" && !c.preview,
+              isNavigationCommit,
             ),
           ).toHaveLength(before);
           expect(
@@ -240,7 +240,7 @@ for (const id of ids)
           ).toHaveLength(0);
           await page.evaluate(() => {
             const app = (window as any).xb.core.scene.children.find(
-              (o: any) => o.constructor.name === "WebXRApp",
+              (o: any) => o.client?.manipulation,
             );
             app.client.speech.setDraft("A retained message. ".repeat(80));
           });
@@ -296,7 +296,7 @@ for (const id of ids)
             "",
           );
         } else if (id === "sensor_limits") {
-          await activateRuntimeButton(page, "Sensors button");
+          await activateRuntimeButton(page, "Capabilities button");
           await activateRuntimeButton(page, "Full");
           runtime.lidar();
           expect((await snapshot(page)).lidarPreferences.pointLimit).toBe(
@@ -304,7 +304,7 @@ for (const id of ids)
           );
           await page.evaluate(() => {
             const app = (window as any).xb.core.scene.children.find(
-              (o: any) => o.constructor.name === "WebXRApp",
+              (o: any) => o.client?.manipulation,
             );
             for (let i = 0; i < 30; i++) {
               app.client.ui.sensors.adjustRange(-1);
@@ -317,7 +317,7 @@ for (const id of ids)
           });
           await page.evaluate(() => {
             const app = (window as any).xb.core.scene.children.find(
-              (o: any) => o.constructor.name === "WebXRApp",
+              (o: any) => o.client?.manipulation,
             );
             for (let i = 0; i < 30; i++) {
               app.client.ui.sensors.adjustRange(1);

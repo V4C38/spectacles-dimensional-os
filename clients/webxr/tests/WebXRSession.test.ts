@@ -1,3 +1,7 @@
+import * as THREE from "three";
+import { pairedBulkSocket } from "./fixtures/pairedBulkSocket";
+// @vitest-environment jsdom
+import "./fixtures/browserAudio";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RecognitionPort, SynthesisPort } from "@dimos-ar-client/agent/AgentDraftSession";
 import { DimOSWebXRClient } from "../src/DimOSWebXRClient";
@@ -5,6 +9,7 @@ import { BrowserWebSocketTransport } from "../src/websocket/BrowserWebSocketTran
 import { cameraFixture } from "./fixtures/camera";
 import { LIDAR_FOURCC, decodeLocalizationObservations } from "@dimos-ar-client/websocket/protocol";
 import type { Hello, State } from "@dimos-ar-client/websocket/protocolTypes";
+import type { InteractionState } from "@dimos-ar-client/replication/CollaborationTypes";
 
 class Socket {
   binaryType = "";
@@ -14,15 +19,59 @@ class Socket {
   onerror: ((event: Event) => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
   sent: (string | Uint8Array)[] = [];
-  send(value: string | Uint8Array) { this.sent.push(value); }
+  uploaded: Uint8Array[] = [];
+  bulk: ReturnType<typeof pairedBulkSocket> | null = null;
+  nativeJoystick: { linear: number[]; angular: number[] }[] = [];
+  private interaction: InteractionState = { type: "interaction_state", epoch: "fixture-robot", revision: 0,
+    mode: "manual", authority: null, target: null, preview: null, active_goal: null };
+  send(value: string | Uint8Array) {
+    this.sent.push(value);
+    if (typeof value !== "string") return;
+    const command = JSON.parse(value);
+    if (command.type === "nav_joystick_request") this.nativeJoystick.push(command);
+    if (command.type !== "interaction_request") return;
+    const shared = this.interaction;
+    let status = "accepted", code = command.action;
+    if (command.action === "acquire") {
+      if (shared.authority || shared.mode !== "manual") { status = "busy"; code = "robot_busy"; }
+      else shared.authority = { client_id: "webxr", source_id: command.source_id, acquisition_id: command.acquisition_id,
+        lease_id: command.acquisition_id, kind: command.kind, held: true, sequence: -1, expires_at: 1000 };
+    } else if (command.action === "mode") {
+      if (shared.authority) { status = "busy"; code = "robot_busy"; }
+      else shared.mode = command.mode;
+    } else if (command.action !== "snapshot" && command.action !== "cancel_acquire" && shared.authority?.lease_id !== command.lease_id) {
+      status = "stale"; code = "lease_retired";
+    }
+    if (status === "accepted") {
+      if (command.position && command.orientation) shared.target = { position: command.position, orientation: command.orientation,
+        revision: (shared.target?.revision ?? 0) + 1, phase: command.kind === "live" || shared.authority?.kind === "live" ? "live" : "draft",
+        sequence: command.sequence ?? -1, sample_ts: 10 };
+      if (shared.authority && command.sequence !== undefined) shared.authority.sequence = command.sequence;
+      if (["cancel", "cancel_acquire", "confirm", "release"].includes(command.action)) {
+        if (command.action === "release" && shared.authority?.kind === "navigation_planning") shared.authority.held = false;
+        else {
+          if (shared.authority?.kind === "joystick") this.nativeJoystick.push({ linear: [0,0,0], angular: [0,0,0] });
+          shared.authority = null;
+          if (shared.target && ["confirm", "release"].includes(command.action)) shared.target.phase = "committed";
+        }
+      }
+      shared.revision++;
+    }
+    this.receive({ type: "interaction_result", request_id: command.request_id, epoch: shared.epoch,
+      revision: shared.revision, status, code, ...(shared.authority ? { lease_id: shared.authority.lease_id } : {}) });
+    this.receive(shared);
+  }
   result(position = [0, 0, 0]) {
-    const packet = this.sent.filter((value): value is Uint8Array => value instanceof Uint8Array).at(-1)!;
+    const packet = this.uploaded.at(-1)!;
     const ts = Math.max(...decodeLocalizationObservations(packet).observations.map(observation => observation.ts_capture));
     this.receive({ ...alignment, position, ts });
   }
   close() { this.readyState = 3; }
   open() { this.readyState = 1; this.onopen?.(new Event("open")); }
-  receive(message: object) { this.onmessage?.({ data: JSON.stringify(message) + "\n" } as MessageEvent); }
+  receive(message: object) {
+    this.onmessage?.({ data: JSON.stringify(message) + "\n" } as MessageEvent);
+    if ((message as { type?: string }).type === "hello") this.receive(this.interaction);
+  }
   acknowledgeLidar() {
     const { type: _type, ...lidar } = this.commands("lidar_settings_request").at(-1);
     this.receive({ ...state, lidar });
@@ -30,7 +79,7 @@ class Socket {
   commands(type: string) { return this.sent.filter((value): value is string => typeof value === "string").map(value => JSON.parse(value)).filter(value => value.type === type); }
 }
 const hello: Hello = {
-  type: "hello", client_id: "webxr", time_sync: { ts_client: 10, ts_server: 10 },
+  type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "webxr", time_sync: { ts_client: 10, ts_server: 10 },
   robot: { display_name: "Go2", body_bounds_m: [0.7, 0.5, 0.55], footprint_m: [0.7, 0.3], base_height_m: 0.33 },
   capabilities: {
     lidar: { available: true, reason: null }, localization: { available: true, reason: null },
@@ -45,34 +94,39 @@ const state: State = {
 };
 const pose = { position: [0, 0.5, 0], orientation: [0, 0, 0, 1] } as const;
 const alignment = { type: "localization_result", position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 10 };
-const request = { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 };
+const request = { type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: "any_angle", observation_count: 1 };
 const cleanup: (() => void)[] = [];
 afterEach(() => { cleanup.splice(0).forEach(dispose => dispose()); });
 function fixture(recognition: RecognitionPort | null = null, odomScale = 1, synthesis: SynthesisPort | null = null) {
+  localStorage.clear();
   let now = 10;
   const sockets: Socket[] = [];
   const camera = cameraFixture(undefined, { now: () => now });
   const client = new DimOSWebXRClient({
     recognition, synthesis, camera: camera.source, clock: { now: () => now },
-    transport: new BrowserWebSocketTransport({ url: "wss://pc.test/ar", socketFactory: () => {
+    transport: new BrowserWebSocketTransport({ url: "wss://pc.test/ar", socketFactory: url => {
+      if (url.endsWith("/bulk")) {
+        const control = sockets.at(-1)!; control.bulk = pairedBulkSocket(data => control.uploaded.push(data)); return control.bulk;
+      }
       const socket = new Socket(); sockets.push(socket); return socket as unknown as WebSocket;
     } }),
   });
   cleanup.push(() => client.dispose());
   client.start();
   const tick = (axes: { x: number; y: number } | null = null) => client.tick({ position: [...pose.position], orientation: [...pose.orientation] }, axes);
-  function connect() {
+  function connect(capabilities = hello.capabilities) {
     client.resumeTracking();
     const socket = sockets[sockets.length - 1];
     socket.open();
     expect(client.ui.snapshot().connectionText).toBe("Connecting…");
-    socket.receive({ ...hello, robot: { ...hello.robot, odom_scale_correction_factor: odomScale } }); socket.receive(state);
+    socket.receive({ ...hello, capabilities, robot: { ...hello.robot, odom_scale_correction_factor: odomScale } }); socket.receive(state);
     socket.receive({ type: "pose", position: [2, 0, 0.33], orientation: [0, 0, 0, 1], ts: 10 });
     return socket;
   }
   return { client, camera, sockets, tick, connect, advance: (delta: number) => { now += delta; } };
 }
 function submitAlignment(client: DimOSWebXRClient, timestamp: number) {
+  client.session.onTransportText(JSON.stringify({ ...request, capture_id: `fixture-${timestamp}` }) + "\n");
   client.session.submitLocalizationObservations([{
     ts_capture: timestamp, jpeg: new Uint8Array([1]),
     intrinsics: { fx: 1, fy: 1, cx: 0, cy: 0, width: 1, height: 1, distortion_model: "none", distortion: [] },
@@ -96,7 +150,7 @@ describe("WebXR complete ARModule session", () => {
     await f.camera.source.waitUntilOpen();
     f.tick(); await settle(); f.camera.emit(); await settle();
     expect(f.client.episode.view().phase).toBe("awaiting_result");
-    expect(socket.sent.filter(value => value instanceof Uint8Array)).toHaveLength(1);
+    expect(socket.uploaded).toHaveLength(1);
     f.client.suspend();
     expect(f.client.episode.view().phase).toBe("awaiting_result");
     expect(f.client.session.view().connection).toBe("ready");
@@ -121,7 +175,7 @@ describe("WebXR complete ARModule session", () => {
     const lidar = new DataView(cloud);
     lidar.setUint32(0, LIDAR_FOURCC, true); lidar.setFloat64(4, 10, true); lidar.setUint32(12, 1, true);
     lidar.setFloat32(16, 3, true); lidar.setFloat32(20, 0, true); lidar.setFloat32(24, 0.5, true);
-    socket.onmessage?.({ data: cloud } as MessageEvent);
+    socket.bulk!.lidar(new Uint8Array(cloud)); f.tick();
     expect(f.client.lidar.object.visible).toBe(true);
     expect(f.client.markers.object.children[0].position.z).toBeCloseTo(-3);
     const before = f.client.robot.object.position.clone();
@@ -159,7 +213,7 @@ describe("WebXR complete ARModule session", () => {
         f.camera.emit(); await settle();
       }
       expect(f.client.episode.view().phase).toBe("awaiting_result");
-      expect(socket.sent.filter(value => value instanceof Uint8Array)).toHaveLength(batch + 1);
+      expect(socket.uploaded).toHaveLength(batch + 1);
       expect(f.client.ui.setupCompleted).toBe(false);
       if (batch < 2) {
         // ARModule sends another observations request when no marker was detected.
@@ -223,7 +277,7 @@ describe("WebXR complete ARModule session", () => {
     f.tick({ x: 0, y: -1 });
     expect(socket.commands("nav_joystick_request").at(-1)?.linear[0]).toBeGreaterThan(0);
     f.client.ui.setOperatingMode("agent"); f.tick({ x: 0, y: -1 });
-    expect(socket.commands("nav_joystick_request").at(-1)?.linear).toEqual([0, 0, 0]);
+    expect(socket.nativeJoystick.at(-1)?.linear).toEqual([0, 0, 0]);
     const count = socket.commands("nav_joystick_request").length;
     f.client.holdNavigation([0, 1, 0], [0, -1, -1], []);
     expect(socket.commands("nav_goal_request")).toHaveLength(0);
@@ -231,7 +285,7 @@ describe("WebXR complete ARModule session", () => {
     f.client.ui.menuOpen = true; f.tick({ x: 0, y: -1 });
     expect(socket.commands("nav_joystick_request")).toHaveLength(count + 1);
     f.client.ui.menuOpen = false; f.advance(1); f.tick({ x: 0, y: -1 }); f.client.loseInput();
-    expect(socket.commands("nav_joystick_request").at(-1)?.linear).toEqual([0, 0, 0]);
+    expect(socket.nativeJoystick.at(-1)?.linear).toEqual([0, 0, 0]);
     f.client.invalidateTracking();
     expect(f.client.originStore.hasTrackingOrigin).toBe(false);
     expect(f.client.ui.setupCompleted).toBe(false);
@@ -341,7 +395,7 @@ it("uses the advertised XY heuristic only for native sensor clearance", () => {
   const data = new ArrayBuffer(28), wire = new DataView(data);
   wire.setUint32(0, LIDAR_FOURCC, true); wire.setFloat64(4, 10, true); wire.setUint32(12, 1, true);
   wire.setFloat32(16, 6, true); wire.setFloat32(20, -2.5, true); wire.setFloat32(24, 0.4, true);
-  socket.onmessage?.({ data } as MessageEvent); f.tick();
+  socket.bulk!.lidar(new Uint8Array(data)); f.tick();
   expect(f.client.lidar.object.geometry.getAttribute("color").getW(0)).toBeCloseTo(0.15625);
   expect(f.client.lidar.object.geometry.getAttribute("position").getZ(0)).toBeCloseTo(-6);
 });
@@ -402,4 +456,30 @@ it("gates selection and manual commands during alignment review and restores eli
   f.client.ui.dismissAlignmentReview(); f.tick();
   expect(f.client.controlsEnabled()).toBe(true);
   expect(f.client.ui.snapshot()).toMatchObject({ robotSelected: false, robotSelectable: true });
+});
+
+
+it("excludes the arm handle from ray picking while another client owns control", () => {
+  const f = fixture();
+  const socket = f.connect({ ...hello.capabilities, manipulation: { available: true, reason: null } });
+  const shared: InteractionState = {
+    type: "interaction_state", epoch: "fixture-robot", revision: 100, mode: "manual",
+    authority: { client_id: "other", source_id: "hand", acquisition_id: "other-grab",
+      lease_id: "other-lease", kind: "manipulation_following", group_id: "arm",
+      held: true, expires_at: 1000, sequence: 0 },
+    target: null, preview: null, active_goal: null,
+  };
+  const collider = f.client.manipulation.renderer.handle.collider;
+  const intersections = () => {
+    collider.visible = true;
+    collider.traverseAncestors(node => { node.visible = true; });
+    collider.updateWorldMatrix(true, false);
+    const center = collider.getWorldPosition(new THREE.Vector3());
+    const ray = new THREE.Raycaster(center.clone().add(new THREE.Vector3(0, 0, 1)), new THREE.Vector3(0, 0, -1));
+    return ray.intersectObject(collider, false);
+  };
+  socket.receive(shared); f.tick();
+  expect(intersections()).toHaveLength(0);
+  socket.receive({ ...shared, revision: 101, authority: null }); f.tick();
+  expect(intersections().length).toBeGreaterThan(0);
 });

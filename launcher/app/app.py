@@ -5,6 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import shutil
+import subprocess
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,11 +23,13 @@ from apriltag_assets import decode_marker_id, ensure_pdf, ensure_png
 from armodule import ProcessManager
 from config import env_path, merge_env, normalize_log_level, read_env, repo_root
 from dimos_config import merge_armodule_config, read_armodule_config
+from discovery import discover_devices, validate_replay
+from robot_profiles import RobotProfiles
 from tag_config import (
     DEFAULT_MOUNT,
     LOCALIZATION_POLICY_DEFAULTS,
     PRESET_MARKER_IDS,
-    armodule_config_from_ui,
+    merge_armodule_settings,
     normalize_ui_mounts,
     ui_from_armodule_config,
 )
@@ -32,6 +38,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 DIMOS_REMOTE = "https://github.com/dimensionalOS/dimos"
 logger = logging.getLogger(__name__)
 manager = ProcessManager()
+robot_profiles = RobotProfiles()
 
 
 def require_local_launcher(request: Request) -> None:
@@ -64,15 +71,28 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 class SetupBody(BaseModel):
+    manipulation: bool = False
     mode: Literal["existing", "clone"] = "clone"
     dimos_python: str | None = None
     clone_dir: str | None = None
     dimos_ref: str | None = None
 
 
+class SourceBody(BaseModel):
+    mode: Literal["auto", "device", "manual", "simulated"]
+    device_id: str | None = None
+    address: str | None = None
+    replay: str | None = None
+    playback: Literal["simulator", "recording"] = "simulator"
+    streams: dict[str, str] = Field(default_factory=dict)
+
+
 class StartBody(BaseModel):
-    blueprint: Literal["unitree_go2_ar", "unitree_go2_ar_agentic"]
-    client: Literal["specs", "webxr"]
+    source: SourceBody | None = None
+    profile_id: str | None = None
+    simulation: bool = False
+    blueprint: Literal["unitree_go2_ar", "unitree_go2_ar_agentic", "openyam_ar_planner"]
+    client: Literal["specs", "webxr"] = "specs"
     robot_ip: str | None = None
 
 
@@ -84,15 +104,15 @@ class MountBody(BaseModel):
     up_m: float = 0.06
     yaw_deg: float = -90.0
     pitch_deg: float = -15.0
+    roll_deg: float = 0.0
 
 
 class SettingsBody(BaseModel):
     travel_threshold_m: float = Field(default=0.75, gt=0, allow_inf_nan=False)
-    heading_threshold_deg: float = Field(
-        default=30.0, gt=0, le=180, allow_inf_nan=False
-    )
+    heading_threshold_deg: float = Field(default=30, gt=0, le=180, allow_inf_nan=False)
     marker_preference_s: float = Field(default=1.5, ge=0, allow_inf_nan=False)
-    headset_travel_threshold_m: float = Field(default=10.0, gt=0, allow_inf_nan=False)
+    headset_travel_threshold_m: float = Field(default=10, gt=0, allow_inf_nan=False)
+    profile_id: str | None = None
     openai_api_key: str | None = None
     multiset_client_id: str | None = None
     multiset_client_secret: str | None = None
@@ -194,19 +214,133 @@ async def api_dimos_refs() -> dict[str, Any]:
     return {"refs": refs, "default": "main"}
 
 
+@app.post("/api/browse-dimos-install", dependencies=[Depends(require_local_launcher)])
+async def api_browse_dimos_install(request: Request) -> dict[str, str | None]:
+    """Open a native folder chooser for an existing DimOS installation."""
+    if not await asyncio.to_thread(_has_display):
+        raise HTTPException(
+            status_code=409, detail="A desktop file chooser is unavailable"
+        )
+
+    body = await request.json()
+    current = str(body.get("path", "")).strip()
+    start_dir = Path(current).expanduser() if current else Path.home()
+    if start_dir.is_file():
+        start_dir = start_dir.parent
+    if start_dir.name == ".venv":
+        start_dir = start_dir.parent
+    start_dir = start_dir if start_dir.is_dir() else Path.home()
+    try:
+        if sys.platform == "darwin":
+            proc = await asyncio.create_subprocess_exec(
+                "osascript",
+                "-e",
+                'POSIX path of (choose folder with prompt "Select DimOS installation")',
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        else:
+            chooser = shutil.which("zenity")
+            if not chooser:
+                raise HTTPException(
+                    status_code=501, detail="Install zenity to use the folder chooser"
+                )
+            proc = await asyncio.create_subprocess_exec(
+                chooser,
+                "--file-selection",
+                "--directory",
+                "--title=Select DimOS installation folder",
+                f"--filename={start_dir}/",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=501, detail="A native folder chooser is unavailable"
+        ) from exc
+    out, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return {"path": None}
+    return {"path": out.decode("utf-8", errors="replace").strip() or None}
+
+
+def _has_display() -> bool:
+    return sys.platform == "darwin" or bool(
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    )
+
+
+def _resolve_dimos_python(path: str) -> str:
+    """Accept either a DimOS checkout folder or its Python executable."""
+    selected = Path(path).expanduser()
+    if selected.is_dir():
+        roots = [selected]
+        if selected.name == ".venv" or selected.name == "venv":
+            candidates = [
+                selected / "bin" / executable for executable in ("python3", "python")
+            ]
+            roots = [selected.parent]
+        else:
+            candidates = []
+        candidates.extend(
+            [
+                root / env_dir / "bin" / executable
+                for root in roots
+                for env_dir in (".venv", "venv")
+                for executable in ("python3", "python")
+            ]
+        )
+        candidates.extend(
+            root / "bin" / executable
+            for root in roots
+            for executable in ("python3", "python")
+        )
+    else:
+        candidates = [selected]
+    for candidate in candidates:
+        if not candidate.is_file() or not os.access(candidate, os.X_OK):
+            continue
+        try:
+            subprocess.run(
+                [str(candidate), "-c", "import dimos"],
+                check=True,
+                capture_output=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            continue
+        else:
+            # Keep the venv path itself; its Python executable is commonly a symlink
+            # to a shared interpreter, and the venv location carries the environment.
+            return str(candidate.absolute())
+    raise ValueError(
+        "Choose a DimOS install folder containing a .venv or venv, or its Python executable"
+    )
+
+
 @app.post("/api/setup", dependencies=[Depends(require_local_launcher)])
 async def api_setup(body: SetupBody) -> dict[str, Any]:
     try:
         if body.mode == "existing":
             if not body.dimos_python or not body.dimos_python.strip():
                 raise HTTPException(status_code=400, detail="dimos_python is required")
-            await manager.run_setup(dimos_python=body.dimos_python.strip())
+            dimos_python = await asyncio.to_thread(
+                _resolve_dimos_python, body.dimos_python.strip()
+            )
+            await manager.run_setup(
+                dimos_python=dimos_python,
+                **({"manipulation": True} if body.manipulation else {}),
+            )
         else:
             clone_dir = (body.clone_dir or "").strip() or str(
                 (repo_root().parent / "dimos").resolve()
             )
             dimos_ref = (body.dimos_ref or "").strip() or "main"
-            await manager.run_setup(clone_dir=clone_dir, dimos_ref=dimos_ref)
+            await manager.run_setup(
+                clone_dir=clone_dir,
+                dimos_ref=dimos_ref,
+                **({"manipulation": True} if body.manipulation else {}),
+            )
     except HTTPException:
         raise
     except RuntimeError as exc:
@@ -229,6 +363,26 @@ async def api_settings_get() -> dict[str, Any]:
     return settings_payload()
 
 
+@app.get("/api/can/status", dependencies=[Depends(require_local_launcher)])
+async def api_can_status(interface: str = "can0") -> dict[str, Any]:
+    return await manager.can_status(interface) if interface != "can0" else await manager.can_status()
+
+
+@app.post("/api/can/setup", dependencies=[Depends(require_local_launcher)])
+async def api_can_setup(interface: str = "can0") -> dict[str, Any]:
+    try:
+        return await manager.setup_can(interface) if interface != "can0" else await manager.setup_can()
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/planner/status", dependencies=[Depends(require_local_launcher)])
+async def api_planner_status() -> dict[str, Any]:
+    return await manager.planner_status()
+
+
 @app.put("/api/settings", dependencies=[Depends(require_local_launcher)])
 async def api_settings_put(body: SettingsBody) -> dict[str, Any]:
     phase = manager.status.phase.value
@@ -242,21 +396,15 @@ async def api_settings_put(body: SettingsBody) -> dict[str, Any]:
             if body.mounts is not None
             else None
         )
-        patch = armodule_config_from_ui(
-            fiducial_marker=body.fiducial_marker,
-            vps=body.vps,
-            map_code=body.map_code,
-            mounts=mounts,
-        )
-        existing = read_armodule_config()
-        localization = dict(existing.get("localization") or {})
-        localization.update(patch.pop("localization"))
-        for key in LOCALIZATION_POLICY_DEFAULTS:
-            if key in body.model_fields_set:
-                localization[key] = getattr(body, key)
-        existing.update(patch)
-        existing["localization"] = localization
-        merge_armodule_config(existing)
+        settings = body.model_dump(exclude_unset=True)
+        if "mounts" in settings:
+            settings["mounts"] = mounts
+        if body.profile_id:
+            robot_profiles.update(body.profile_id, settings=settings)
+        else:
+            merge_armodule_config(
+                merge_armodule_settings(read_armodule_config(), settings)
+            )
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     env_updates = {
@@ -312,14 +460,81 @@ async def api_apriltag_decode(file: Annotated[UploadFile, File()]) -> dict[str, 
 
 @app.post("/api/armodule/start", dependencies=[Depends(require_local_launcher)])
 async def api_armodule_start(body: StartBody) -> dict[str, Any]:
+    if body.blueprint == "openyam_ar_planner" and (not body.profile_id):
+        raise HTTPException(
+            status_code=400,
+            detail="OpenYAM requires an explicit robot profile",
+        )
     robot_ip = (
         body.robot_ip.strip() if body.robot_ip and body.robot_ip.strip() else None
     )
+    can_port = None
+    replay = None
+    simulation = body.simulation
+    if body.source:
+        if body.simulation and body.source.mode != "simulated":
+            raise HTTPException(status_code=400, detail="Conflicting simulation and hardware selections")
+        source = body.source
+        robot = "openyam" if body.blueprint == "openyam_ar_planner" else "unitree_go2"
+        if source.mode in {"auto", "device"}:
+            devices = await api_discovery(robot)
+            choices = devices["devices"]
+            if source.mode == "device":
+                choices = [d for d in choices if d["id"] == source.device_id]
+            if len(choices) != 1:
+                raise HTTPException(status_code=409, detail={"message": "Choose a robot" if choices else ("No devices found; confirm Simulated with another Start click" if source.mode == "auto" else "Selected device unavailable; refresh or choose another connection"), "suggest_simulated": not choices and source.mode == "auto", "devices": choices})
+            address = choices[0]["address"]
+            if robot == "openyam":
+                can_port = address
+            else:
+                robot_ip = address
+        elif source.mode == "manual":
+            if robot != "unitree_go2" or not source.address:
+                raise HTTPException(status_code=400, detail="Manual IP requires a Go2 address")
+            import ipaddress
+            try:
+                robot_ip = str(ipaddress.IPv4Address(source.address.strip()))
+            except ipaddress.AddressValueError as exc:
+                raise HTTPException(status_code=400, detail="Enter a valid Go2 IPv4 address") from exc
+        else:
+            simulation = robot == "openyam"
+            robot_ip = "simulated" if robot == "unitree_go2" else None
+            replay = source.replay
+            if robot == "openyam" and source.playback == "recording" and not replay:
+                raise HTTPException(status_code=400, detail="Choose an OpenYAM recording")
+            if robot == "openyam" and source.playback == "simulator":
+                replay = None
+            if replay:
+                path = Path(replay).expanduser()
+                if path.suffix != ".db" or not path.is_file():
+                    raise HTTPException(status_code=400, detail="Choose an existing .db replay")
+                replay = str(path.resolve())
+                if not manager.status.dimos_python:
+                    raise HTTPException(status_code=409, detail="Select a DimOS environment first")
+                try:
+                    info = await validate_replay(manager.status.dimos_python, replay, robot, source.streams)
+                    if info["needs_selection"]:
+                        raise ValueError("Select recording streams before starting")
+                    source.streams = info["streams"]
+                except (ValueError, OSError, TimeoutError) as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         await manager.start_armodule(
             blueprint=body.blueprint,
             client=body.client,
             robot_ip=robot_ip,
+            **(
+                {
+                    "armodule_config": robot_profiles.snapshot(
+                        body.profile_id, body.blueprint
+                    )
+                }
+                if body.profile_id
+                else {}
+            ),
+            **({"simulation": True} if simulation else {}),
+            **({"can_port": can_port} if can_port else {}),
+            **({"replay": replay, "replay_streams": body.source.streams if body.source else {}} if replay else {}),
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -329,8 +544,32 @@ async def api_armodule_start(body: StartBody) -> dict[str, Any]:
 
 
 @app.post("/api/armodule/stop", dependencies=[Depends(require_local_launcher)])
-async def api_armodule_stop() -> dict[str, Any]:
-    await manager.stop_armodule()
+async def api_armodule_stop(force: bool = False) -> dict[str, Any]:
+    if force:
+        await manager.stop_armodule(force=True)
+    else:
+        await manager.stop_armodule()
+    return manager.snapshot()
+
+
+@app.post("/api/webxr/start", dependencies=[Depends(require_local_launcher)])
+async def api_webxr_start() -> dict[str, Any]:
+    try:
+        await manager.start_webxr()
+    except (RuntimeError, OSError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return manager.snapshot()
+
+
+@app.post("/api/webxr/stop", dependencies=[Depends(require_local_launcher)])
+async def api_webxr_stop() -> dict[str, Any]:
+    await manager.stop_webxr()
+    return manager.snapshot()
+
+
+@app.post("/api/backend/stop", dependencies=[Depends(require_local_launcher)])
+async def api_backend_stop() -> dict[str, Any]:
+    await manager.stop_backend()
     return manager.snapshot()
 
 
@@ -349,3 +588,137 @@ async def api_events() -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
+
+
+class RobotProfileBody(BaseModel):
+    name: str | None = None
+    robot: Literal["unitree_go2", "openyam"] = "unitree_go2"
+    source_id: str | None = None
+
+
+@app.get("/api/robot-profiles")
+async def api_robot_profiles() -> dict[str, Any]:
+    return {
+        "profiles": [
+            {
+                **profile,
+                "settings": ui_from_armodule_config(
+                    profile["armodule"],
+                    default_mount={"marker_id": 0, "print_size_mm": 70}
+                    if profile["robot"] == "openyam"
+                    else None,
+                ),
+            }
+            for profile in robot_profiles.all()
+        ]
+    }
+
+
+@app.post("/api/robot-profiles", dependencies=[Depends(require_local_launcher)])
+async def api_create_robot_profile(body: RobotProfileBody) -> dict[str, Any]:
+    _require_profile_editable()
+    try:
+        return robot_profiles.create(body.robot, body.name, body.source_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put(
+    "/api/robot-profiles/{profile_id}", dependencies=[Depends(require_local_launcher)]
+)
+async def api_rename_robot_profile(
+    profile_id: str, body: RobotProfileBody
+) -> dict[str, Any]:
+    _require_profile_editable()
+    try:
+        if body.name is None:
+            raise ValueError("A profile name is required")
+        return robot_profiles.update(profile_id, name=body.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete(
+    "/api/robot-profiles/{profile_id}", dependencies=[Depends(require_local_launcher)]
+)
+async def api_delete_robot_profile(profile_id: str) -> dict[str, bool]:
+    _require_profile_editable()
+    try:
+        robot_profiles.delete(profile_id)
+        return {"deleted": True}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/discovery", dependencies=[Depends(require_local_launcher)])
+async def api_discovery(robot: Literal["unitree_go2", "openyam"]) -> dict[str, Any]:
+    python = manager.status.dimos_python
+    if not python:
+        raise HTTPException(status_code=409, detail="Select a DimOS environment first")
+    try:
+        return {"devices": await discover_devices(python, robot)}
+    except (ValueError, OSError, TimeoutError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _require_profile_editable() -> None:
+    if manager.status.phase.value in {"starting", "running", "stopping"}:
+        raise HTTPException(status_code=409, detail="Stop ARModule before editing profiles")
+
+
+class ReplayBody(BaseModel):
+    path: str
+    robot: Literal["unitree_go2", "openyam"]
+    streams: dict[str, str] = Field(default_factory=dict)
+
+
+@app.post("/api/replay/inspect", dependencies=[Depends(require_local_launcher)])
+async def api_inspect_replay(body: ReplayBody) -> dict[str, Any]:
+    if not manager.status.dimos_python:
+        raise HTTPException(status_code=409, detail="Select a DimOS environment first")
+    try:
+        return await validate_replay(manager.status.dimos_python, body.path, body.robot, body.streams)
+    except (ValueError, OSError, TimeoutError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/browse-replay", dependencies=[Depends(require_local_launcher)])
+async def api_browse_replay() -> dict[str, str | None]:
+    if not await asyncio.to_thread(_has_display):
+        raise HTTPException(status_code=409, detail="Enter the local recording path; no desktop chooser is available")
+    if sys.platform == "darwin":
+        command = ["osascript", "-e", 'POSIX path of (choose file with prompt "Select replay database")']
+    else:
+        chooser = shutil.which("zenity")
+        if not chooser:
+            raise HTTPException(status_code=501, detail="Enter a local path or install zenity")
+        command = [chooser, "--file-selection", "--title=Select replay database", "--file-filter=Replay databases | *.db"]
+    proc = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    out, _ = await proc.communicate()
+    return {"path": out.decode(errors="replace").strip() if proc.returncode == 0 else None}
+
+
+class PreferencesBody(BaseModel):
+    go2_source: str = "auto"
+    openyam_source: str = "auto"
+    replay: str = ""
+    openyam_replay: str = ""
+    openyam_playback: str = "simulator"
+    replay_streams: dict[str, dict[str, str]] = Field(default_factory=dict)
+    manual_ip: str = ""
+
+
+@app.get("/api/launcher-preferences", dependencies=[Depends(require_local_launcher)])
+async def api_preferences_get() -> dict[str, Any]:
+    import preferences
+
+    return preferences.read()
+
+
+@app.put("/api/launcher-preferences", dependencies=[Depends(require_local_launcher)])
+async def api_preferences_put(body: PreferencesBody) -> dict[str, Any]:
+    import preferences
+
+    _require_profile_editable()
+    preferences.save(body.model_dump())
+    return body.model_dump()

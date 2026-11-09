@@ -1,3 +1,4 @@
+import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 // Actual native physics hits feed SIK's own target chooser before driving the registered input.
 import { DimOSSpecsClient } from "../Scripts/DimOSSpecsClient/DimOSSpecsClient";
 import { createIconButton } from "../Scripts/DimOSSpecsClient/presentation/UIKit";
@@ -34,6 +35,7 @@ export class ReviewScenario extends BaseScriptComponent {
   private pendingGoal: any = null;
 
   onAwake(): void {
+    if (!integrationTestsEnabled(this.getSceneObject())) return;
     this.createEvent("OnStartEvent").bind(() => this.createEvent("UpdateEvent").bind(() => this.tick()));
     this.createEvent("OnDestroyEvent").bind(() => this.input?.restore());
   }
@@ -73,7 +75,7 @@ export class ReviewScenario extends BaseScriptComponent {
     root.session.stop(); root.session.start(); root.session.onTransportOpen();
     const request = this.sent.find(row => row.type === "hello_request");
     const available = { available: true, reason: null };
-    this.wire({ type: "hello", client_id: "native-overlap", odom_reference_id: "native-overlap-odom",
+    this.wire({ type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "native-overlap", odom_reference_id: "native-overlap-odom",
       time_sync: { ts_client: request.ts_client, ts_server: getTime() }, robot: CATALOG.fixtures.robot,
       capabilities: { lidar: available, localization: available, estop: available, agent: available,
         navigation: { ...available, nav_goal: { ...available, preview: true }, nav_joystick: { available: false, reason: "Hands" } } } });

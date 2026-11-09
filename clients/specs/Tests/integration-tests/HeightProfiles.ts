@@ -1,3 +1,4 @@
+import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 // Optional native harness: tools/review.py --harness Tests/integration-tests/HeightProfiles.ts.
 // Exercises real setup views and Frame geometry; connection attempts stay disabled.
 import { DimOSSpecsClient } from "../Scripts/DimOSSpecsClient/DimOSSpecsClient";
@@ -26,6 +27,7 @@ export class ReviewScenario extends BaseScriptComponent {
   }
 
   onAwake(): void {
+    if (!integrationTestsEnabled(this.getSceneObject())) return;
     this.createEvent("OnStartEvent").bind(() => {
       this.createEvent("UpdateEvent").bind(() => this.tick());
     });

@@ -4,10 +4,10 @@ import { ButtonFootprint } from "./ButtonFootprint";
 import { glassMaterial } from "./GlassSurface";
 import { buttonSurfaceBacking, tintButtonBacking } from "./RoundedSurfaceGeometry";
 import { DIMOS_AR_DESIGN } from "./DimOSARDesign";
-import { registerRayTarget } from "../input/XRBlocksRayInteraction";
+import { registerRayTarget, UI_CONTROL_RAY_PRIORITY } from "../input/XRBlocksRayInteraction";
 const C = DIMOS_AR_DESIGN.colors;
 const HEIGHT = DIMOS_AR_DESIGN.panel.height;
-export type ButtonVariant = "default" | "primary" | "danger" | "field" | "tab";
+export type ButtonVariant = "default" | "primary" | "danger" | "resume" | "field" | "tab";
 
 export class SurfaceButton extends xb.TextButton {
   private disposed = false;
@@ -52,6 +52,7 @@ export class SurfaceButton extends xb.TextButton {
     mesh.material.depthWrite = false;
     mesh.renderOrder = this.renderOrder;
     mesh.name = `Button: ${this.text}`;
+    mesh.userData.rayPriority = UI_CONTROL_RAY_PRIORITY;
     registerRayTarget(mesh);
     mesh.userData.touchButton = true;
     this.disposeBacking();
@@ -102,9 +103,9 @@ export class SurfaceButton extends xb.TextButton {
   }
 
   private positionSurface(lift: number): void {
-    const restingDepth = this.variant === "primary" ? DIMOS_AR_DESIGN.depth.primary : DIMOS_AR_DESIGN.depth.secondary;
+    const restingDepth = this.userData.fixedSurfaceDepth ?? (this.variant === "primary" ? DIMOS_AR_DESIGN.depth.primary : DIMOS_AR_DESIGN.depth.secondary);
     const thickness = (restingDepth + DIMOS_AR_DESIGN.depth.controlOverlap) * DIMOS_AR_DESIGN.depth.controlThicknessScale;
-    const activeLift = this.active && this.variant !== "field" && this.variant !== "primary" ? DIMOS_AR_DESIGN.depth.primary - DIMOS_AR_DESIGN.depth.secondary : 0;
+    const activeLift = this.userData.fixedSurfaceDepth == null && this.active && this.variant !== "field" && this.variant !== "primary" ? DIMOS_AR_DESIGN.depth.primary - DIMOS_AR_DESIGN.depth.secondary : 0;
     const parentScale = Math.max(1e-6, this.parent?.getWorldScale(new THREE.Vector3()).z ?? 1);
     const worldScale = this.getWorldScale(new THREE.Vector3());
     const scale = Math.max(1e-6, worldScale.z);
@@ -152,8 +153,8 @@ export class SurfaceButton extends xb.TextButton {
 
   private restyle(): void {
     const uniforms = (this.mesh?.material as THREE.ShaderMaterial | undefined)?.uniforms;
-    const primary = this.variant === "primary" || this.active && this.variant !== "field";
-    const surface = !this.enabled ? C.fill : this.variant === "danger" ? C.danger :
+    const primary = this.variant === "primary" || this.variant === "resume" || this.active && this.variant !== "field";
+    const surface = !this.enabled ? C.fill : this.variant === "danger" ? C.danger : this.variant === "resume" ? "#ffcc00" :
       this.variant === "field" ? C.field : primary ? C.primary : C.secondary;
     if (uniforms?.uTint) {
       this.targetTint.set(surface);

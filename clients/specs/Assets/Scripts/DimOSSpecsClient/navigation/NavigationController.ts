@@ -39,7 +39,7 @@ export class NavigationController {
   }) {
     deps.deviceTracking.worldOptions.enableWorldMeshesTracking = false;
     this.interaction = new NavigationInteraction({ sendGoal: pose => requestNavGoal(deps.session, pose),
-      cancel: () => deps.session.requestEstop() }, new NavigationPreviewCoordinator(deps.session), 1 / 0.08);
+      cancel: () => deps.session.requestEstop() }, new NavigationPreviewCoordinator(deps.session), 1 / 0.08, deps.session.collaboration);
   }
 
   isArmed(): boolean {
@@ -225,9 +225,9 @@ export class NavigationController {
     const pose = trackingToSpecs(state.dragging ? state : state.activeGoal.pose ?? state);
     this.marker.setPose(pose.position, pose.rotation);
     if (!state.draft || state.activeGoal.active || state.flash) this.marker.show(); else this.marker.hide();
-    this.marker.setDragEnabled(this.inputEnabled && !flash);
+    this.marker.setDragEnabled(this.inputEnabled && !flash && !state.blocked);
     this.marker.setCancelVisible(state.cancelVisible, true, state.activeGoal.confirmationId);
-    this.marker.applyWorldStyle({ selected: state.selected, hovered: this.hovered, dragging: state.dragging,
+    this.marker.applyWorldStyle({ selected: state.selected, blocked: state.blocked, hovered: this.hovered, dragging: state.dragging,
       following: state.followingPath, aiming: false, cancelVisible: state.cancelVisible, flash, feedbackProgress: state.feedbackProgress }, deltaS, this.viewportHeight);
     this.marker.orientViewer(this.deps.cameraObject.getTransform().getWorldPosition());
     const opacity = this.marker.circleOpacity();
@@ -237,7 +237,7 @@ export class NavigationController {
       this.draftMarker.setPose(draft.position, draft.rotation); this.draftMarker.show();
       this.draftMarker.setDragEnabled(false); this.draftMarker.setCancelVisible(false);
       this.draftMarker.applyWorldStyle({ selected: true, dragging: state.draft.held, following: false,
-        aiming: true, flash: null, feedbackProgress: 0, opacity }, deltaS, this.viewportHeight);
+        aiming: true, blocked: state.blocked, flash: null, feedbackProgress: 0, opacity }, deltaS, this.viewportHeight);
     } else this.draftMarker?.hide();
     const ids = new Set(state.probes.map(p => p.sourceId));
     for (const [id, probe] of this.probes) if (!ids.has(id)) { probe.destroy(); this.probes.delete(id); }

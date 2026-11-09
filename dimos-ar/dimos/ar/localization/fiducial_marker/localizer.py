@@ -218,7 +218,7 @@ class FiducialMarkerLocalizer(SnapshotLocalizer):
         best: _FiducialCandidate | None = None
         saw_mount = False
         for corners, marker_id_arr in zip(corners_list, ids, strict=True):
-            marker_id = int(marker_id_arr[0])
+            marker_id = int(np.asarray(marker_id_arr).reshape(-1)[0])
             mount = self._mounts.get(marker_id)
             if mount is None:
                 misses.append(f"unknown_id={marker_id}")
@@ -304,6 +304,15 @@ class FiducialMarkerLocalizer(SnapshotLocalizer):
         odom_marker = T_odom_base @ mount.T_base_marker
         client_marker = T_client_camopt @ T_camopt_marker
         leveled[:3, 3] = odom_marker[:3, 3] - leveled[:3, :3] @ client_marker[:3, 3]
+        logger.debug(
+            "Fiducial transform chain",
+            marker_id=mount.marker_id,
+            base_position=T_odom_base[:3, 3].tolist(),
+            mount_position=mount.T_base_marker[:3, 3].tolist(),
+            client_camera_position=T_client_camopt[:3, 3].tolist(),
+            camera_marker_position=T_camopt_marker[:3, 3].tolist(),
+            odom_client_position=leveled[:3, 3].tolist(),
+        )
         return _FiducialCandidate(transform=leveled, reprojection_error_px=reproj)
 
 

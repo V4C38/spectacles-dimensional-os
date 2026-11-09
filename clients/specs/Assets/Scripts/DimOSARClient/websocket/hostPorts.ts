@@ -5,7 +5,7 @@ export const AR_MODULE_CLIENT_CONFIG = {
   connectTimeoutS: 8,
   session: {
     helloTimeoutS: 5,
-    reconnectDelayS: 1,
+    reconnectDelayS: 0.1,
   },
   capture: {
     geometry: {
@@ -26,6 +26,8 @@ export interface WebSocketTransport {
   close(): void;
   sendText(text: string): void;
   sendBinary(data: Uint8Array): void;
+  bufferedAmount?(): number;
+  createSibling?(path: string): BindableWebSocketTransport;
 }
 
 export interface WebSocketTransportHandlers {

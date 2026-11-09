@@ -12,7 +12,7 @@ import * as xb from "xrblocks";
 import { WebXRInputController } from "../src/input/WebXRInputController";
 
 function fixture() {
-  const client = { loseInput: vi.fn(), emergencyStop: vi.fn() };
+  const client = { manipulation: { end: vi.fn(), interrupt: vi.fn(), action: vi.fn() }, loseInput: vi.fn(), emergencyStop: vi.fn() };
   const controller = new WebXRInputController(client as never, new THREE.Group(), {
     tracking: () => true, session: () => ({ visibilityState: "visible" }) as XRSession,
   });
@@ -60,4 +60,43 @@ it("preserves native touch release ordering and retires authorization before a c
     f.internal.dispatchTouch(source, contact, false, true);
     expect(f.client.loseInput).toHaveBeenCalled();
   } finally { start.mockRestore(); end.mockRestore(); f.controller.dispose(); }
+});
+
+
+it("lets Stop interrupt a different hand capture before dispatching the stop action", () => {
+  const f = fixture();
+  const left = new THREE.Group(), right = new THREE.Group();
+  f.internal.capture.press(left, {});
+  f.internal.mainMenu.isEmergencyTarget = () => false;
+  f.internal.canInteract = () => true;
+  const stop = new THREE.Mesh(); stop.userData.manipulationAction = "stop";
+  f.internal.interaction.hit.mockReturnValue({object: stop, point: new THREE.Vector3()});
+  f.controller.onSelectStart({target: right});
+  expect(f.internal.capture.owner).toBeNull();
+  expect(f.client.manipulation.interrupt).not.toHaveBeenCalled();
+  expect(f.client.manipulation.action).toHaveBeenCalledWith("stop");
+  expect(f.client.emergencyStop).not.toHaveBeenCalled();
+  f.controller.dispose();
+});
+
+it("lets the other hand toggle the gripper without ending the owner's drag", () => {
+  const f = fixture();
+  f.internal.mainMenu.isEmergencyTarget = () => false;
+  const owner = new THREE.Group(), other = new THREE.Group();
+  owner.userData.id = 1; other.userData.id = 2;
+  (other as any).inputSource = { hand: {}, handedness: "left" };
+  f.internal.capture.press(owner, {}); f.internal.manipulationHold = owner;
+  f.internal.canInteract = () => true;
+  const button = new THREE.Mesh(); button.userData.manipulationAction = "gripper";
+  f.internal.interaction.hit.mockReturnValue({ object: button, point: new THREE.Vector3() });
+  (f.client.manipulation as any).action = vi.fn();
+  f.controller.onSelectStart({ target: other });
+  f.controller.onSelectStart({ target: other });
+  expect((f.client.manipulation as any).action).toHaveBeenCalledOnce();
+  expect((f.client.manipulation as any).action).toHaveBeenCalledWith("gripper");
+  f.controller.onSelectEnd({ target: other });
+  expect(f.internal.capture.owner).toBe(owner);
+  expect(f.internal.manipulationHold).toBe(owner);
+  expect(f.client.manipulation.end).not.toHaveBeenCalled();
+  f.controller.dispose();
 });

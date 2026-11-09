@@ -38,7 +38,7 @@ function baseView(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessio
     pose: null,
     nav_goal: null,
     lidar: null,
-    capabilities: null,
+    capabilities: overrides.hello?.capabilities ?? null,
     nav: null,
     agentMessage: null,
     lastError: null,
@@ -48,7 +48,7 @@ function baseView(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessio
 
 function helloView(): Hello {
   return {
-    type: "hello",
+    type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
     client_id: "test-client",
     time_sync: { ts_client: 0, ts_server: 0 },
     robot: GO2,
@@ -68,6 +68,19 @@ function helloView(): Hello {
 }
 
 describe("deriveRobotMarkerApplyInput", () => {
+  it.each([[true, false], [false, true], [true, true], [false, false]])(
+    "uses only navigation capability for marker visibility (navigation=%s, manipulation=%s)",
+    (navigation, manipulation) => {
+      const hello = helloView();
+      hello.capabilities.navigation.available = navigation;
+      hello.capabilities.manipulation = { available: manipulation, reason: null };
+      const view = baseView({ hello, hasTrackingOrigin: true, pose: POSE });
+      expect(deriveRobotMarkerApplyInput({ setupCompleted: true, view, origin: ORIGIN }).mode)
+        .toBe(navigation ? "localizedOdom" : "hidden");
+    },
+  );
+
+
   it("returns hidden before setup is completed", () => {
     expect(
       deriveRobotMarkerApplyInput({
@@ -78,7 +91,7 @@ describe("deriveRobotMarkerApplyInput", () => {
     ).toEqual({ mode: "hidden" });
   });
 
-  it("returns unlocalizedFallbackPosition after skip-connect with no hello", () => {
+  it("hides the marker after skip-connect without advertised capabilities", () => {
     const view = baseView({ hello: null });
     expect(
       deriveRobotMarkerApplyInput({
@@ -86,11 +99,7 @@ describe("deriveRobotMarkerApplyInput", () => {
         view,
         origin: null,
       }),
-    ).toEqual({
-      mode: "unlocalizedFallbackPosition",
-      robot: null,
-      view,
-    });
+    ).toEqual({ mode: "hidden" });
   });
 
   it("returns unlocalizedFallbackPosition with hello robot when not localized", () => {

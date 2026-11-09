@@ -1,4 +1,9 @@
-"""WebSocket protocol codec — keep in sync with PROTOCOL.md."""
+"""WebSocket protocol codec — keep in sync with PROTOCOL.md.
+
+Interaction target sequence acknowledges cumulative accepted input, even when
+pose/settings content and its revision are unchanged. Reset clears its group draft
+only after ownership and busy admission; it introduces no additional wire fields.
+"""
 
 from __future__ import annotations
 
@@ -6,10 +11,13 @@ from dataclasses import dataclass
 import json
 import math
 import struct
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 from dimos.ar.localization.types import CapturePolicy, Intrinsics, LocalizationResult, Observation
+from dimos.ar.manipulation.protocol import ManipulationRequest, decode_request
 from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavJoystickRequest, NavState
+from dimos.ar.replication.interaction import InteractionRequest
+from dimos.ar.replication.protocol import decode_interaction_request, identifier, sequence
 from dimos.ar.robot.capabilities import (
     NAVIGATION_INPUT_NAMES,
     Capability,
@@ -23,6 +31,25 @@ LIDAR_FOURCC = 0x4C444152
 LOCALIZATION_OBSERVATIONS_FOURCC = 0x4C4F4341
 HUMAN_INPUT_MAX_CHARS = 4000
 NAV_JOYSTICK_MAX_DURATION_S = 2.0
+
+
+class ManipulationProtectionState(TypedDict, total=False):
+    """Additive, read-only motor protection facts in manipulation_state."""
+
+    state: Literal["normal", "derated", "paused", "fault"]
+    reason: str
+    joints: list[str]
+    effective_speed_scale: float
+    resumable: bool
+
+
+class ManipulationEvaluation(TypedDict):
+    """Non-authorizing IK preview, bound to a canonical shared arm target."""
+
+    group_id: str
+    target_revision: int
+    joints: dict[str, float]
+    pose: dict[str, Any] | None
 
 
 def _dumps(payload: dict[str, Any]) -> str:
@@ -99,6 +126,9 @@ def _finite_quat(data: dict[str, Any], key: str) -> tuple[float, float, float, f
 @dataclass(frozen=True)
 class HelloRequest:
     ts_client: float
+    resumable: bool = False
+    server_follow_stream: bool = False
+    resume_token: str | None = None
 
 
 @dataclass(frozen=True)
@@ -149,8 +179,22 @@ class ClientPose:
     ts: float
 
 
+@dataclass(frozen=True)
+class ClientError:
+    message_type: str
+    detail: str
+    excerpt: str
+    ts: float | None = None
+    message_ts: float | None = None
+    request_id: str | None = None
+    suppressed_count: int = 0
+
+
 Inbound = (
-    NavGoalRequest
+    InteractionRequest
+    | ClientError
+    | ManipulationRequest
+    | NavGoalRequest
     | NavJoystickRequest
     | EstopRequest
     | LidarSettingsRequest
@@ -171,7 +215,13 @@ def decode_hello_request(text: str) -> HelloRequest:
     msg_type = _require_type(data, "type", str)
     if msg_type != "hello_request":
         raise ValueError(f"Expected hello_request, got {msg_type!r}")
-    return HelloRequest(ts_client=_finite_float(data, "ts_client"))
+    token = data.get("resume_token")
+    if token is not None and (not isinstance(token, str) or len(token) != 64):
+        raise ValueError("invalid resume token")
+    resumable = data.get("resumable", False)
+    if not isinstance(resumable, bool):
+        raise TypeError("resumable must be boolean")
+    return HelloRequest(_finite_float(data, "ts_client"), resumable, data.get("server_follow_stream") is True, token)
 
 
 def decode_inbound(text: str) -> Inbound:
@@ -181,8 +231,41 @@ def decode_inbound(text: str) -> Inbound:
         raise TypeError("Frame must be a JSON object")
     msg_type = _require_type(data, "type", str)
 
+    if msg_type == "client_error":
+        values = {}
+        for key, limit in (("message_type", 128), ("detail", 1024), ("excerpt", 512)):
+            value = _require_type(data, key, str)
+            if len(value) > limit:
+                raise ValueError(f"{key} exceeds {limit} characters")
+            values[key] = value
+        ts = _finite_float(data, "ts") if "ts" in data else None
+        message_ts = _finite_float(data, "message_ts") if "message_ts" in data else None
+        request_id = data.get("request_id")
+        if request_id is not None and (
+            not isinstance(request_id, str) or not 1 <= len(request_id) <= 128
+        ):
+            raise ValueError("request_id must contain 1 to 128 characters")
+        suppressed = data.get("suppressed_count", 0)
+        if isinstance(suppressed, bool) or not isinstance(suppressed, int) or suppressed < 0:
+            raise ValueError("suppressed_count must be a nonnegative integer")
+        return ClientError(
+            message_type=values["message_type"],
+            detail=values["detail"],
+            excerpt=values["excerpt"],
+            ts=ts,
+            message_ts=message_ts,
+            request_id=request_id,
+            suppressed_count=suppressed,
+        )
+
     if msg_type == "hello_request":
         raise ValueError("hello_request is handled during handshake, not in the message loop")
+
+    if msg_type == "manipulation_request":
+        return decode_request(data)
+
+    if msg_type == "interaction_request":
+        return decode_interaction_request(data)
 
     if msg_type == "nav_goal_request":
         preview_id = _require_type(data, "preview_id", str) if "preview_id" in data else None
@@ -195,6 +278,10 @@ def decode_inbound(text: str) -> Inbound:
             orientation=_finite_quat(data, "orientation"),
             preview=_require_type(data, "preview", bool) if "preview" in data else False,
             preview_id=preview_id,
+            epoch=identifier(data, "epoch"),
+            lease_id=identifier(data, "lease_id"),
+            sequence=sequence(data),
+            target_revision=sequence(data, "target_revision"),
         )
 
     if msg_type == "estop_request":
@@ -294,7 +381,14 @@ def _decode_nav_joystick_request(data: dict[str, Any]) -> NavJoystickRequest:
             )
         if duration == 0.0:
             duration = None
-    return NavJoystickRequest(linear=linear, angular=angular, duration=duration)
+    return NavJoystickRequest(
+        linear=linear,
+        angular=angular,
+        duration=duration,
+        epoch=identifier(data, "epoch"),
+        lease_id=identifier(data, "lease_id"),
+        sequence=sequence(data),
+    )
 
 
 @dataclass(frozen=True)
@@ -313,8 +407,8 @@ def decode_localization_observations(data: bytes) -> tuple[LocalizationObservati
     fourcc, observation_count = struct.unpack_from("<IH", data, 0)
     if fourcc != LOCALIZATION_OBSERVATIONS_FOURCC:
         raise ValueError(f"bad localization_observations fourcc: {fourcc:#010x}")
-    if observation_count < 1:
-        raise ValueError("localization_observations requires at least one observation")
+    if not 1 <= observation_count <= 3:
+        raise ValueError("localization_observations requires one to three requested observations")
 
     offset = 6
     observations: list[LocalizationObservation] = []
@@ -343,6 +437,8 @@ def _decode_localization_observation(
         raise ValueError("localization observation header truncated")
 
     ts_capture, jpeg_len, intrinsics_len = struct.unpack_from("<dII", data, record_start)
+    if intrinsics_len > 4096:
+        raise ValueError("localization intrinsics exceed metadata budget")
     if not math.isfinite(ts_capture):
         raise ValueError("ts_capture must be finite")
     if struct.unpack_from("<I", data, record_start + 16)[0] != 0:
@@ -449,6 +545,7 @@ class HelloBody:
     nav_goal_preview: bool = False
     server_info: dict[str, str] | None = None
     odom_reference_id: str | None = None
+    source: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -461,6 +558,13 @@ class Hello:
     nav_goal_preview: bool = False
     server_info: dict[str, str] | None = None
     odom_reference_id: str | None = None
+    source: dict[str, Any] | None = None
+    bulk_url: str | None = None
+    bulk_token: str | None = None
+    bulk_epoch: str | None = None
+    resume_token: str | None = None
+    server_follow_stream: bool = False
+    independent_ik: bool = False
 
 
 def _capability_wire(cap: Capability) -> dict[str, Any]:
@@ -483,7 +587,15 @@ def encode_hello(hello: Hello) -> str:
     return encode_text(
         {
             "type": "hello",
+            "protocol_version": 2,
+            "bulk_url": hello.bulk_url,
+            "bulk_token": hello.bulk_token,
+            "bulk_epoch": hello.bulk_epoch,
             "client_id": hello.client_id,
+            **({"server_follow_stream": True} if hello.server_follow_stream else {}),
+            **({"independent_ik": True} if hello.independent_ik else {}),
+            **({"resume_token": hello.resume_token} if hello.resume_token else {}),
+            **({"source": hello.source} if hello.source else {}),
             **({"odom_reference_id": hello.odom_reference_id} if hello.odom_reference_id else {}),
             "time_sync": {
                 "ts_client": hello.time_sync.ts_client,
@@ -514,8 +626,15 @@ class LocalizationObservationsRequest:
     observation_count: int
     wait_timeout_s: float | None = None
     result_timeout_s: float | None = None
+    capture_id: str | None = None
 
     def __post_init__(self) -> None:
+        if self.capture_id is not None and (
+            not isinstance(self.capture_id, str)
+            or not self.capture_id.strip()
+            or len(self.capture_id) > 128
+        ):
+            raise ValueError("capture_id must contain 1 to 128 characters")
         if self.result_timeout_s is not None and (
             not math.isfinite(self.result_timeout_s) or self.result_timeout_s <= 0
         ):
@@ -541,6 +660,8 @@ def encode_localization_observations_request(request: LocalizationObservationsRe
         "capture_policy": str(request.capture_policy),
         "observation_count": request.observation_count,
     }
+    if request.capture_id is not None:
+        body["capture_id"] = request.capture_id
     if request.wait_timeout_s is not None:
         body["wait_timeout_s"] = request.wait_timeout_s
     if request.result_timeout_s is not None:
@@ -560,12 +681,14 @@ class StateSnapshot:
     nav: NavState
     agent: AgentState
     nav_preview_costmap_ts: float | None = None
+    playback: dict[str, Any] | None = None
 
 
 def encode_state(snapshot: StateSnapshot) -> str:
     return encode_text(
         {
             "type": "state",
+            **({"playback": snapshot.playback} if snapshot.playback else {}),
             **(
                 {"nav_preview_costmap_ts": snapshot.nav_preview_costmap_ts}
                 if snapshot.nav_preview_costmap_ts is not None
@@ -685,3 +808,20 @@ def encode_lidar_binary(
     )
     body = b"".join(struct.pack("<3f", *point) for point in points)
     return header + body
+
+
+# Manipulation commands use the shared codec. Shutdown quiescence receipts and
+# explicit model visual metadata are encoded by the service; see PROTOCOL.md.
+
+# Manipulation results may carry optional failed_joints identifiers for segment feedback.
+
+# Optional manipulation_state.protection reports normal/derated/paused/fault,
+# reason, joints, effective_speed_scale (0..1), and resumable; see PROTOCOL.md.
+
+# Optional manipulation_state following_at_target (bool) and following_goal (pose)
+# correlate measured live holding with the client target; see PROTOCOL.md.
+
+# Optional manipulation observations include joint_velocities (finite rad/s or m/s
+# keyed by joint) and gripper_target (accepted normalized command, distinct from
+# measured opening). execution_phase is motion/gripper; terminal execution is
+# published only after the whole operation resolves. See PROTOCOL.md.

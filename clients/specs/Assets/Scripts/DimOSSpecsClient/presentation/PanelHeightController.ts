@@ -44,9 +44,9 @@ export class PanelHeightController {
     if (!this.frame) return;
     const transform = this.frame.transform;
     const up = transform.getWorldRotation().multiplyVec3(vec3.up());
-    transform.setWorldPosition(transform.getWorldPosition().add(up.uniformScale((76 - this.height) * this.scale / 2)));
+    transform.setWorldPosition(transform.getWorldPosition().add(up.uniformScale((76 - this.height) * this.scale * this.contentScale() / 2)));
     this.anchor = null;
-    this.frame.smoothFollow?.resize(90 * this.scale);
+    this.frame.smoothFollow?.resize(90 * this.scale * this.contentScale());
   }
   tick(deltaS: number): void {
     if (this.disposed || !this.visible || this.dragging || this.height === this.target) return;
@@ -58,13 +58,14 @@ export class PanelHeightController {
       this.restoreFollowing = false; this.anchor = null;
     }
   }
+  private contentScale(): number { return this.frame?.content?.getTransform().getLocalScale().x ?? 1; }
   private begin(): void {
     this.start = this.height; this.elapsed = 0;
     if (!this.frame) return;
     this.restoreFollowing ||= this.frame.following;
     this.frame.setFollowing(false);
     const transform = this.frame.transform;
-    this.anchor = transform.getWorldPosition().add(transform.getWorldRotation().multiplyVec3(new vec3(0, this.height * this.scale / 2, 0)));
+    this.anchor = transform.getWorldPosition().add(transform.getWorldRotation().multiplyVec3(new vec3(0, this.height * this.scale * this.contentScale() / 2, 0)));
   }
   private apply(height: number): void {
     const previous = this.height;
@@ -72,10 +73,13 @@ export class PanelHeightController {
     this.root.getTransform().setLocalPosition(new vec3(0, panelContentOffset(height), 0));
     if (!this.frame) return;
     const transform = this.frame.transform, up = transform.getWorldRotation().multiplyVec3(vec3.up());
-    if (this.anchor) transform.setWorldPosition(this.anchor.sub(up.uniformScale(height * this.scale / 2)));
-    else if (this.visible) transform.setWorldPosition(transform.getWorldPosition().add(up.uniformScale((previous - height) * this.scale / 2)));
-    this.frame.innerSize = new vec2(90 - this.frame.border * 2 - this.frame.padding.x, height - this.frame.border * 2 - this.frame.padding.y);
-    this.frame.smoothFollow?.resize(90 * this.scale);
+    if (this.anchor) transform.setWorldPosition(this.anchor.sub(up.uniformScale(height * this.scale * this.contentScale() / 2)));
+    else if (this.visible) transform.setWorldPosition(transform.getWorldPosition().add(up.uniformScale((previous - height) * this.scale * this.contentScale() / 2)));
+    const ratio = this.contentScale(), autoScale = this.frame.autoScaleContent;
+    this.frame.autoScaleContent = false;
+    this.frame.innerSize = new vec2(90*ratio - this.frame.border*2 - this.frame.padding.x, height*ratio - this.frame.border*2 - this.frame.padding.y);
+    this.frame.autoScaleContent = autoScale;
+    this.frame.smoothFollow?.resize(90 * this.scale * this.contentScale());
     this.sizeFollowButton();
   }
   private sizeFollowButton(): void {

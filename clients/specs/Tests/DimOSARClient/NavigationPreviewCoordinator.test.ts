@@ -5,7 +5,8 @@ import type { ARModuleSessionState } from "../../Assets/Scripts/DimOSARClient/we
 function fixture() {
   const view = { connection: "ready", capabilities: { navigation: { available: true, nav_goal: { available: true, preview: true } } }, state: null, nav_preview: null } as unknown as ARModuleSessionState;
   const sendText = vi.fn();
-  const coordinator = new NavigationPreviewCoordinator({ view: () => view, sendText });
+  const assets = new Map<string, number>();
+  const coordinator = new NavigationPreviewCoordinator({ view: () => view, sendText, assetTransferDeadline: id => assets.get(id) ?? null });
   const origin = { position: [1, 2, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 1 };
   coordinator.apply(origin);
   const aim = (x = 2) => coordinator.aim([x, 0, 0], [0, 0, 0, 1]);
@@ -14,7 +15,7 @@ function fixture() {
     view.nav_preview = { type: "nav_goal", preview: true, preview_id, pose: [3, 2, 0, 0], path_poses: [[3, 2, 0, 0]], ts: 1 };
     coordinator.apply(origin);
   };
-  return { view, sendText, coordinator, origin, aim, id, reply };
+  return { view, sendText, coordinator, origin, aim, id, reply, assets };
 }
 
 it("retires timeouts, rejects late replies and only accepts the newest correlated aim", () => {
@@ -86,4 +87,22 @@ it("continues displaying replies while costmaps change on every update", () => {
     f.reply(f.id());
     expect(f.coordinator.previewPath()).toBe(f.view.nav_preview!.path_poses);
   }
+});
+
+
+it("accepts a correlated preview after five seconds while its bulk asset deadline remains valid", () => {
+  const f = fixture(); f.aim(); f.coordinator.tick(0); const pending = f.id();
+  f.assets.set(pending, 15);
+  f.coordinator.tick(6);
+  expect(f.sendText).toHaveBeenCalledOnce();
+  f.reply(pending);
+  expect(f.coordinator.previewPath()).toEqual([[3, 2, 0, 0]]);
+});
+
+it("still retires a preview after its bounded bulk deadline and rejects the old asset reply", () => {
+  const f = fixture(); f.aim(); f.coordinator.tick(0); const pending = f.id();
+  f.assets.set(pending, 15); f.coordinator.tick(15);
+  expect(f.id()).not.toBe(pending);
+  f.reply(pending);
+  expect(f.coordinator.previewPath()).toBeNull();
 });

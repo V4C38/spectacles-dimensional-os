@@ -1,3 +1,9 @@
+// Target sequence cumulatively acknowledges accepted pose/settings input; identical
+// content preserves revision. Reset clears the group draft only after authorized,
+// non-busy admission. These semantics require no extra wire fields (PROTOCOL.md).
+import { utf8Bytes, validatedBulkArray } from "./BulkTransfer";
+import { decodeManipulation, decodeFollowingTail } from "../manipulation/ManipulationProtocol";
+import type { InteractionState, InteractionResult, InteractionAuthority, InteractionTarget, InteractionCredentials } from "../replication/CollaborationTypes";
 import {
   CAPABILITY_NAMES,
   type Capabilities,
@@ -53,16 +59,22 @@ export class TextFramer {
   private buffer = "";
 
   push(chunk: string): string[] {
+    if (utf8Bytes(chunk) + utf8Bytes(this.buffer) > 32768) throw new Error("Control frame buffer exceeds budget");
     this.buffer += chunk;
     const lines = this.buffer.split("\n");
     this.buffer = lines.pop() ?? "";
+    if (utf8Bytes(this.buffer) > 16384 || lines.some(line => utf8Bytes(line) > 16384)) throw new Error("Control frame exceeds 16KiB");
     return lines.filter((line) => line.trim().length > 0);
   }
 }
 
-export function encodeHelloRequest(request: { ts_client: number }): string {
+export function encodeHelloRequest(request: { ts_client: number; resume_token?: string }): string {
   return encodeText({
     type: "hello_request",
+    resumable: true,
+    server_follow_stream: true,
+    ...(request.resume_token ? { resume_token: request.resume_token } : {}),
+    protocol_version: 2,
     ts_client: finiteNumber(request.ts_client, "ts_client"),
   });
 }
@@ -84,11 +96,13 @@ export function encodeNavGoalRequest(request: {
   preview_id?: string;
   position: Vec3;
   orientation: Quat;
+  epoch?: string; lease_id?: string; sequence?: number;
 }): string {
   if (request.preview !== undefined && typeof request.preview !== "boolean") throw new Error("Field 'preview' must be boolean");
   if (request.preview_id !== undefined && request.preview !== true) throw new Error("preview_id requires preview: true");
   return encodeText({
     type: "nav_goal_request",
+    ...interactionCredentials(request),
     ...(request.preview === true ? { preview: true, ...previewIdentity(request.preview_id) } : {}),
     position: requireVec3Value(request.position, "position"),
     orientation: requireQuatValue(request.orientation, "orientation"),
@@ -99,6 +113,7 @@ export function encodeNavJoystickRequest(command: {
   linear: Vec3;
   angular: Vec3;
   duration?: number;
+  epoch?: string; lease_id?: string; sequence?: number;
 }): string {
   const linear = requireVec3Value(command.linear, "linear");
   const angular = requireVec3Value(command.angular, "angular");
@@ -110,6 +125,7 @@ export function encodeNavJoystickRequest(command: {
   }
   const body: Record<string, unknown> = {
     type: "nav_joystick_request",
+    ...interactionCredentials(command),
     linear,
     angular,
   };
@@ -192,6 +208,14 @@ export function encodeLocalizationObservations(
   return out;
 }
 
+export interface DecodeContext { message_type: string; message_ts?: number; request_id?: string }
+export class ProtocolDecodeError extends Error {
+  constructor(readonly context: DecodeContext, detail: string, readonly excerpt?: string) { super(detail); this.name = "ProtocolDecodeError"; }
+}
+export function encodeClientError(report: import("./protocolTypes").ClientError): string {
+  return encodeText(report);
+}
+
 export function decodeOutbound(text: string): Exclude<Outbound, Lidar> {
   let parsed: unknown;
   try {
@@ -199,10 +223,18 @@ export function decodeOutbound(text: string): Exclude<Outbound, Lidar> {
   } catch {
     throw new Error("Frame must be a JSON object");
   }
-  const data = asObject(parsed, "Frame");
+  return decodeOutboundObject(asObject(parsed, "Frame"));
+}
+
+export function decodeOutboundObject(data: Record<string, unknown>): Exclude<Outbound, Lidar> {
   const msgType = requireString(data, "type");
 
+  try {
   switch (msgType) {
+    case "manipulation_state":
+    case "manipulation_result": return decodeManipulation(data);
+    case "interaction_state": return decodeInteractionState(data);
+    case "interaction_result": return decodeInteractionResult(data);
     case "hello":
       return decodeHello(data);
     case "state":
@@ -221,13 +253,27 @@ export function decodeOutbound(text: string): Exclude<Outbound, Lidar> {
     case "pose":
       return decodePose(data);
     case "nav_goal":
-      return decodeNavGoal(data);
+      return decodeNavGoal(data, data.route_ref !== undefined);
     case "agent_message":
       return decodeAgentMessage(data);
     case "agent_skill":
       return decodeAgentSkill(data);
     default:
       throw new Error(`Unknown outbound frame type: '${msgType}'`);
+  }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const field = detail.split(":")[0];
+    let section: string | undefined;
+    if (/^[a-zA-Z_][\w]*(?:\.[\w]+)+$/.test(field)) {
+      let value: unknown = data;
+      for (const part of field.split(".")) value = value && typeof value === "object" ? (value as Record<string, unknown>)[part] : undefined;
+      if (value !== undefined) section = JSON.stringify({ field, value });
+    }
+    throw new ProtocolDecodeError({ message_type: msgType,
+      ...(typeof data.ts === "number" && Number.isFinite(data.ts) ? { message_ts: data.ts } : {}),
+      ...(typeof data.request_id === "string" ? { request_id: data.request_id.slice(0, 128) } : {}) },
+      detail, section);
   }
 }
 
@@ -442,15 +488,39 @@ function decodeIntrinsics(data: Record<string, unknown>): Intrinsics {
   });
 }
 
+function decodeSource(data: Record<string, unknown>): NonNullable<Hello["source"]> {
+  if (data.kind !== "recording") throw new Error("Invalid source kind");
+  return { kind: "recording", read_only: requireBoolean(data, "read_only"), name: requireString(data, "name") };
+}
+function decodePlayback(data: Record<string, unknown>): NonNullable<State["playback"]> {
+  if (data.state !== "playing" && data.state !== "ended") throw new Error("Invalid playback state");
+  const elapsed_s = finiteField(data, "elapsed_s"), duration_s = finiteField(data, "duration_s");
+  if (elapsed_s < 0 || duration_s < elapsed_s) throw new Error("Invalid playback progress");
+  return { state: data.state, elapsed_s, duration_s };
+}
+
 function decodeHello(data: Record<string, unknown>): Hello {
+  if (data.independent_ik !== undefined && typeof data.independent_ik !== "boolean")
+    throw new Error("independent_ik must be boolean");
   const timeSyncRaw = asObject(requireKey(data, "time_sync"), "time_sync");
   const time_sync: TimeSync = {
     ts_client: finiteField(timeSyncRaw, "ts_client"),
     ts_server: finiteField(timeSyncRaw, "ts_server"),
   };
+  if (data.protocol_version !== 2) {
+    throw new Error(`Incompatible ARModule protocol: expected version 2, received ${data.protocol_version ?? "missing"}. Update ARModule and the client together.`);
+  }
   return {
     type: "hello",
+    ...(data.source === undefined ? {} : { source: decodeSource(asObject(data.source, "source")) }),
+    protocol_version: 2,
+    bulk_url: requireString(data, "bulk_url"),
+    bulk_token: requireString(data, "bulk_token"),
+    bulk_epoch: requireString(data, "bulk_epoch"),
     client_id: requireString(data, "client_id"),
+    ...(data.server_follow_stream === true ? { server_follow_stream: true } : {}),
+    ...(data.independent_ik === true ? { independent_ik: true } : {}),
+    ...(data.resume_token === undefined ? {} : { resume_token: requireString(data, "resume_token") }),
     ...(data.odom_reference_id === undefined ? {} : { odom_reference_id: requireString(data, "odom_reference_id") }),
     ...(data.server_info === undefined ? {} : { server_info: decodeServerInfo(asObject(data.server_info, "server_info")) }),
     time_sync,
@@ -486,6 +556,7 @@ function decodeRobot(data: Record<string, unknown>): RobotDescription {
 function decodeCapabilities(data: Record<string, unknown>): Capabilities {
   const capabilities = {} as Capabilities;
   for (const name of CAPABILITY_NAMES) {
+    if ((name === "manipulation" || name === "object_detection") && !(name in data)) continue;
     if (!(name in data)) {
       throw new Error(`Missing required field: capabilities.${name}`);
     }
@@ -536,6 +607,7 @@ function decodeState(data: Record<string, unknown>): State {
   }
   return {
     type: "state",
+    ...(data.playback === undefined ? {} : { playback: decodePlayback(asObject(data.playback, "playback")) }),
     server: { connected_clients: connectedClients },
     ...(data.nav_preview_costmap_ts === undefined ? {} : { nav_preview_costmap_ts: finiteField(data, "nav_preview_costmap_ts") }),
     lidar: requireLidarSettings(
@@ -618,7 +690,10 @@ function decodeLocalizationObservationsRequest(
     purpose: requireString(data, "purpose") as "robot" | "headset",
   };
   if ("purpose" in episode && episode.purpose !== "robot" && episode.purpose !== "headset") throw new Error("invalid capture purpose");
-  const resultTimeout = { ...episode, ...(resultTimeoutS === undefined ? {} : { result_timeout_s: resultTimeoutS }) };
+  const captureId = data.capture_id === undefined ? undefined : boundedString(data, "capture_id");
+  if (captureId !== undefined && !captureId.trim()) throw new Error("invalid capture_id");
+  const capture = captureId === undefined ? {} : { capture_id: captureId };
+  const resultTimeout = { ...episode, ...capture, ...(resultTimeoutS === undefined ? {} : { result_timeout_s: resultTimeoutS }) };
   const hasTimeout = Object.prototype.hasOwnProperty.call(data, "wait_timeout_s");
   if (capturePolicy === "robot_los_preferred") {
     if (!hasTimeout) {
@@ -726,7 +801,7 @@ function previewIdentity(value: unknown): { preview_id?: string } {
   return { preview_id: value };
 }
 
-function decodeNavGoal(data: Record<string, unknown>): NavGoal {
+function decodeNavGoal(data: Record<string, unknown>, acceptedEndpoint = false): NavGoal {
   const preview = optionalBoolean(data, "preview");
   const identity = previewIdentity(data.preview_id);
   if (data.preview_id !== undefined && !preview) throw new Error("preview_id requires preview: true");
@@ -734,9 +809,12 @@ function decodeNavGoal(data: Record<string, unknown>): NavGoal {
   if (!Array.isArray(pathRaw)) {
     throw new Error("Field 'path_poses' must be array");
   }
-  const path_poses = pathRaw.map((entry, i) => requireYawPoseValue(entry, `path_poses[${i}]`));
+  const path_poses = validatedBulkArray(pathRaw) ? pathRaw as YawPose[] : pathRaw.map((entry, i) => requireYawPoseValue(entry, `path_poses[${i}]`));
   const hasPose = Object.prototype.hasOwnProperty.call(data, "pose");
   if (path_poses.length === 0) {
+    if (hasPose && acceptedEndpoint && !preview) {
+      return { type: "nav_goal", pose: requireYawPoseValue(data.pose, "pose"), path_poses, ts: finiteField(data, "ts") };
+    }
     if (hasPose) {
       throw new Error("nav_goal.pose must be omitted when path_poses is empty");
     }
@@ -908,4 +986,70 @@ function asciiBytes(text: string): Uint8Array {
     out[i] = code;
   }
   return out;
+}
+
+function interactionCredentials(value: Partial<InteractionCredentials>): Partial<InteractionCredentials> {
+  if (value.epoch === undefined && value.lease_id === undefined && value.sequence === undefined) return {};
+  if (!value.epoch || !value.lease_id || !Number.isInteger(value.sequence) || value.sequence! < 0) throw new Error("Invalid interaction authority credentials");
+  return { epoch: value.epoch, lease_id: value.lease_id, sequence: value.sequence };
+}
+function nonnegativeInteger(data: Record<string, unknown>, key: string): number {
+  const n = requireInteger(data, key); if (n < 0) throw new Error(`${key} must be nonnegative`); return n;
+}
+function decodeInteractionState(data: Record<string, unknown>): InteractionState {
+  const mode = requireString(data, "mode");
+  if (mode !== "manual" && mode !== "agent") throw new Error("Invalid interaction mode");
+  let authority: InteractionAuthority | null = null;
+  if (data.authority !== null) {
+    const a = asObject(data.authority, "authority"), kind = requireString(a, "kind");
+    if (!["live", "navigation_planning", "joystick", "manipulation_planning", "manipulation_following"].includes(kind)) throw new Error("Invalid interaction kind");
+    authority = { client_id: requireString(a, "client_id"), source_id: requireString(a, "source_id"),
+      acquisition_id: requireString(a, "acquisition_id"), lease_id: requireString(a, "lease_id"),
+      kind: kind as InteractionAuthority["kind"], held: requireBoolean(a, "held"),
+      expires_at: finiteField(a, "expires_at"), sequence: interactionSequence(a),
+      ...(a.group_id == null ? {} : { group_id: requireString(a, "group_id") }) };
+  }
+  const target = data.target === null ? null : decodeInteractionTarget(asObject(data.target, "target"));
+  const targets = data.targets === undefined ? undefined : (() => {
+    if (!Array.isArray(data.targets)) throw new Error("targets must be an array");
+    return data.targets.map(t => decodeInteractionTarget(asObject(t, "target")));
+  })();
+  return { type: "interaction_state", epoch: requireString(data, "epoch"), revision: nonnegativeInteger(data, "revision"),
+    mode, authority, target, ...(targets ? { targets } : {}), preview: data.preview == null ? null : decodeNavGoal(asObject(data.preview, "preview")),
+    ...(data.motion_busy === undefined ? {} : { motion_busy: requireBoolean(data, "motion_busy") }),
+    ...(data.following_tail === undefined ? {} : { following_tail: decodeFollowingTail(data.following_tail) }),
+    active_goal: data.active_goal == null ? null : decodeNavGoal(asObject(data.active_goal, "active_goal"), true) };
+}
+function decodeInteractionResult(data: Record<string, unknown>): InteractionResult {
+  const status = requireString(data, "status");
+  if (!["accepted", "busy", "stale", "rejected"].includes(status)) throw new Error("Invalid interaction result");
+  return { type: "interaction_result", request_id: requireString(data, "request_id"),
+    epoch: requireString(data, "epoch"), revision: nonnegativeInteger(data, "revision"),
+    status: status as InteractionResult["status"], code: requireString(data, "code"),
+    ...(data.lease_id === undefined ? {} : { lease_id: requireString(data, "lease_id") }) };
+}
+
+// Manipulation results may carry optional failed_joints identifiers for segment feedback.
+
+// Revision-bound manipulation_state.evaluation supplies observational IK previews;
+// only a checked plan can authorize execution.
+// Manipulation observations optionally carry joint_velocities and gripper_target;
+// execution_phase (motion/gripper) resolves before the single terminal outcome.
+// See dimos-ar/PROTOCOL.md and ManipulationProtocol.ts for validation.
+function interactionSequence(data: Record<string, unknown>): number { const n = requireInteger(data, "sequence"); if (n < -1) throw new Error("Invalid interaction sequence"); return n; }
+
+function decodeInteractionTarget(a: Record<string, unknown>): InteractionTarget {
+  const phase = requireString(a, "phase");
+  if (!["draft", "live", "committed"].includes(phase)) throw new Error("Invalid target phase");
+  const domain = a.domain === undefined ? undefined : requireString(a, "domain");
+  if (domain !== undefined && domain !== "navigation" && domain !== "manipulation") throw new Error("Invalid target domain");
+  const speed = a.speed_scale === undefined ? undefined : finiteField(a, "speed_scale");
+  const gripper = a.gripper === undefined ? undefined : finiteField(a, "gripper");
+  if (speed !== undefined && (speed <= 0 || speed > 1) || gripper !== undefined && (gripper < 0 || gripper > 1)) throw new Error("Invalid target settings");
+  return { position: requireVec3(a, "position"), orientation: requireQuat(a, "orientation"),
+    revision: nonnegativeInteger(a, "revision"), phase: phase as InteractionTarget["phase"],
+    sample_ts: finiteField(a, "sample_ts"), sequence: interactionSequence(a),
+    ...(domain ? { domain: domain as InteractionTarget["domain"] } : {}),
+    ...(a.group_id === undefined ? {} : { group_id: requireString(a, "group_id") }),
+    ...(speed === undefined ? {} : { speed_scale: speed }), ...(gripper === undefined ? {} : { gripper }) };
 }

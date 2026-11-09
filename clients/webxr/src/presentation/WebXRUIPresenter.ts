@@ -38,6 +38,8 @@ export interface WebXRUISnapshot {
   wizardCardTitle: string;
   wizardCardBody: string;
   localizationIssue: string | null;
+  localizationAvailable?: boolean;
+  manipulationAvailable?: boolean;
   robotName: string;
   robotSelected: boolean;
   robotConnectionText: string;
@@ -77,6 +79,7 @@ export class WebXRUIPresenter {
   readonly sensors: LidarDisplayController;
   get wizardStep(): WizardStep { return this.flow.step; }
   debugEnabled = false;
+  manipulationDiagnostics: () => string = () => "—";
   private get openedFromRuntime(): boolean { return this.flow.openedFromRuntime; }
   private localizationError: string | null = null;
   operatingMode: OperatingMode = "manual";
@@ -146,6 +149,7 @@ export class WebXRUIPresenter {
   }
 
   tick(now: number): void {
+    if (this.session.view().interaction) this.operatingMode = this.session.view().interaction!.mode;
     const visibleDeltaS = this.lastVisibleTickAt === null ? 0 : Math.min(0.1, Math.max(0, now - this.lastVisibleTickAt));
     this.lastVisibleTickAt = now;
     if (this.successElapsedS !== null) this.successElapsedS += visibleDeltaS;
@@ -170,7 +174,8 @@ export class WebXRUIPresenter {
     const view = this.session.view();
     const selection = this.robotSelection();
     const link = sessionLinkStatus(view, view.hello?.robot.display_name);
-    const capture = localizationCaptureStatus(view, this.episode.view(), this.nowS);
+    const episode = this.episode.view();
+    const capture = localizationCaptureStatus(view, episode, this.nowS);
     const policy = this.episode.view().capturePolicy;
     const kind = view.capabilities?.localization.available !== true ? "unavailable" :
       policy === "robot_los_required" ? "marker" : policy === "any_angle" ? "vps" :
@@ -179,11 +184,11 @@ export class WebXRUIPresenter {
       connect: "",
       localization: localizationProviderLabel(kind),
     };
-    const issue = kind === "unavailable" ? null : this.localizationError ?? this.cameraError();
+    const issue = kind === "unavailable" ? null : this.localizationError ?? this.cameraError() ?? (episode.phase === "failed" ? episode.lastError : null);
     const guidance = localizationGuidance(kind);
     const card = this.wizardStep === "connect"
       ? { title: view.connection === "ready" ? "Connected to dimOS ARModule" : "Connecting", body: view.connection === "ready" ? `WebSocket connected\nRobot: ${view.hello?.robot.display_name ?? "Unavailable"}\n${availableFeatures(view.capabilities)}` : "Waiting for the launcher." }
-      : issue ? { title: "Camera unavailable", body: issue }
+      : issue ? { title: episode.phase === "failed" ? "Capture failed" : "Camera unavailable", body: issue }
         : { title: kind === "unavailable" ? "Localization unavailable" : capture.text.split("\n")[0] || "Preparing camera…", body: guidance };
     return {
       connectComplete: view.connection === "ready",
@@ -204,7 +209,7 @@ export class WebXRUIPresenter {
       wizardDescription: descriptions[this.wizardStep],
       nextLabel: this.wizardStep === "connect" && view.connection === "ready" ? "Continue" : "Skip",
       backVisible: this.wizardStep === "localization" || this.openedFromRuntime,
-      debugText: `Localization timings: ${JSON.stringify(this.episode.timing?.() ?? {})}\nConnection: ${view.connection}\nAligned: ${view.hasTrackingOrigin ? "Yes" : "No"}\nCapture: ${capture.text}\n${issue ?? ""}`,
+      debugText: `Arm capture: ${this.manipulationDiagnostics()}\nPlayback: ${JSON.stringify(view.state?.playback ?? null)}\nLocalization timings: ${JSON.stringify(this.episode.timing?.() ?? {})}\nConnection: ${view.connection}\nAligned: ${view.hasTrackingOrigin ? "Yes" : "No"}\nCapture: ${capture.text}\n${issue ?? ""}`,
       activity: getRobotActivityState(view, this.activityVoice()),
       setupCompleted: this.setupCompleted,
       connectionText: view.connection === "awaiting_hello" ? "Connecting…" : view.connection === "failed" ? "Reconnecting…" : link.text.trim(),
@@ -217,6 +222,8 @@ export class WebXRUIPresenter {
       lidarReceived: this.lidarMode === "off" ? 0 : view.lidar?.points.length ?? 0,
       cameraStatus: this.cameraStatus, trackingStatus: this.trackingStatus, surfaceCount: this.surfaceCount,
       estopPressed: this.estopPressed, alignmentReview: this.alignmentReview,
+      localizationAvailable: view.capabilities?.localization.available === true,
+      manipulationAvailable: view.capabilities?.manipulation?.available === true,
       lidarAvailable: view.capabilities?.lidar.available === true,
       agentAvailable: view.capabilities?.agent.available === true,
       estopAvailable: view.capabilities?.estop.available === true,
@@ -293,7 +300,8 @@ export class WebXRUIPresenter {
     if (mode === "agent" && this.session.view().capabilities?.agent.available !== true) {
       throw new Error("hello.capabilities.agent is not available");
     }
-    this.operatingMode = mode;
+    if (this.session.view().interaction) this.session.collaboration.setMode(mode);
+    else this.operatingMode = mode;
   }
 
   cycleLidar(): LidarDisplayMode { return this.sensors.cycle(); }

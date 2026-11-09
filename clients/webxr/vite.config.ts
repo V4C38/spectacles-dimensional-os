@@ -1,6 +1,10 @@
 import { validDiagnosticEntry } from "./src/diagnostics/DiagnosticReporter";
 import { defineConfig, type Plugin } from "vitest/config";
+import { pinGatewayPlugin } from "./server/PinGateway";
 import basicSsl from "@vitejs/plugin-basic-ssl";
+import { createHash } from "node:crypto";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { AR_MODULE_CLIENT_CONFIG } from "../specs/Assets/Scripts/DimOSARClient/websocket/hostPorts";
@@ -40,6 +44,8 @@ function stubOptionalModules(): Plugin {
 }
 
 const arModuleProxy = {
+  "/bulk": { target: `ws://127.0.0.1:${AR_MODULE_CLIENT_CONFIG.port}`, ws: true },
+  "/ws/bulk": { target: `ws://127.0.0.1:${AR_MODULE_CLIENT_CONFIG.port}`, ws: true },
   "/ar": {
     target: `ws://127.0.0.1:${AR_MODULE_CLIENT_CONFIG.port}`,
     ws: true,
@@ -65,13 +71,23 @@ function buildRevision(): string {
     const cwd = fileURLToPath(new URL("../..", import.meta.url));
     const revision = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd, encoding: "utf8" }).trim();
     const dirty = execFileSync("git", ["status", "--porcelain"], { cwd, encoding: "utf8" }).trim();
-    return revision + (dirty ? " · dev" : "");
+    const digest = createHash("sha256");
+    const hashTree = (directory: string) => {
+      for (const entry of readdirSync(directory, {withFileTypes: true}).sort((a,b) => a.name.localeCompare(b.name))) {
+        const path = join(directory, entry.name);
+        if (entry.isDirectory()) hashTree(path);
+        else if (entry.isFile() && entry.name.endsWith(".ts")) digest.update(entry.name).update(readFileSync(path));
+      }
+    };
+    hashTree(fileURLToPath(new URL("./src", import.meta.url)));
+    hashTree(clientCore);
+    return revision + (dirty ? " · dev" : "") + " · " + digest.digest("hex").slice(0,8);
   } catch { return "Unavailable"; }
 }
 
 export default defineConfig({
   define: { __DIMOS_BUILD__: JSON.stringify(buildRevision()) },
-  plugins: [stubOptionalModules(), basicSsl(), browserDiagnostics()],
+  plugins: [stubOptionalModules(), basicSsl(), pinGatewayPlugin(), browserDiagnostics()],
   resolve: {
     alias: {
       "@dimos-ar-client": clientCore,
@@ -89,6 +105,7 @@ export default defineConfig({
     proxy: arModuleProxy,
   },
   preview: {
+    headers: { "Cache-Control": "no-cache" },
     host: true,
     proxy: arModuleProxy,
   },

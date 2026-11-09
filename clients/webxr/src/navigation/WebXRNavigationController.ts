@@ -20,7 +20,7 @@ export class WebXRNavigationController {
   private wasInsideDeadzone = false;
 
   constructor(session: ARModuleSession) {
-    this.interaction = new NavigationInteraction({ sendGoal: pose => requestNavGoal(session, pose), cancel: () => session.requestEstop() }, new NavigationPreviewCoordinator(session));
+    this.interaction = new NavigationInteraction({ sendGoal: pose => requestNavGoal(session, pose), cancel: () => session.requestEstop() }, new NavigationPreviewCoordinator(session), undefined, session.collaboration);
   }
 
   applyView(view: ARModuleSessionState, origin: ClientTrackingOrigin | null, robotFloor: { position: Vec3; orientation: Quat } | null, now: number): void {
@@ -70,6 +70,8 @@ export class WebXRNavigationController {
     const pose = clientTrackingToWebxrPose(mainPose);
     this.marker.setPose(pose.position, pose.orientation);
     if (state.visible && (!state.draft || state.activeGoal.active || state.flash)) this.marker.show(); else this.marker.hide();
+    this.marker.setBlocked(state.blocked === true);
+    this.draftMarker.setBlocked(state.blocked === true);
     this.marker.setSelected(state.selected);
     this.marker.setAiming(false);
     this.marker.setGoalActive(state.goalActive);

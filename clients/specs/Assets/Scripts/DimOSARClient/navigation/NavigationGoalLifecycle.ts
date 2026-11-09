@@ -30,6 +30,8 @@ export class NavigationGoalLifecycle {
   private lastNav: ARModuleSessionState["nav"] = null;
   private submissionBaseline: ARModuleSessionState["nav"] = null;
   private awaitingFreshFacts = false;
+  private postAcceptanceIdle = false;
+  private sharedCancellation = false;
   private lastSent: Vec3 | null = null;
   private lastSentAt = -Infinity;
   private flash: NavFlash | null = null;
@@ -47,6 +49,8 @@ export class NavigationGoalLifecycle {
     this.origin = origin;
     const frame = view.nav_goal;
     const freshGoal = frame !== null && frame !== this.lastFrame && frame !== this.suppressed && frame.ts >= this.newestTs && frame.ts > this.retiredTs && !!frame.pose && (view.nav?.state !== "resolved" || this.awaitingFreshFacts);
+    const newAcceptedGoal = freshGoal && (frame.ts > this.newestTs || JSON.stringify(frame.pose) !== this.routeGoalKey);
+    if (newAcceptedGoal) { this.postAcceptanceIdle = false; this.sharedCancellation = false; }
     if (freshGoal) {
       this.newestTs = frame.ts; this.resolved = false; this.active = true;
       this.flash = null; this.elapsed = 0; this.awaitingFreshFacts = false;
@@ -54,11 +58,15 @@ export class NavigationGoalLifecycle {
     const navChanged = view.nav !== this.lastNav;
     // Rendering/ticking a cached resolved fact after send is not a new outcome.
     const freshState = navChanged && view.nav !== this.submissionBaseline;
+    if (this.active && !newAcceptedGoal && freshState && view.nav?.state === "idle") this.postAcceptanceIdle = true;
     const awaitingAtArrival = this.awaitingFreshFacts;
     if (this.awaitingFreshFacts && freshState && view.nav?.state !== "resolved") this.awaitingFreshFacts = false;
     const terminal = freshState && view.nav?.state === "resolved" && (!this.awaitingFreshFacts || this.submissionBaseline?.state !== "resolved" || view.nav.outcome !== this.submissionBaseline.outcome);
-    const cancelled = freshState && !awaitingAtArrival && this.lastNav?.state === "following_path" && view.nav?.state === "idle";
-    if (!this.resolved && (this.active || freshGoal || view.nav?.state === "following_path") && (terminal || cancelled)) {
+    const cancelled = !awaitingAtArrival && view.nav?.state === "idle" &&
+      (freshState && this.lastNav?.state === "following_path" || this.active && this.postAcceptanceIdle && view.interaction?.active_goal === null);
+    const correctedTerminal = terminal && this.sharedCancellation && this.flash === "cancelled";
+    if ((!this.resolved || correctedTerminal) && (this.active || freshGoal || view.nav?.state === "following_path" || correctedTerminal) && (terminal || cancelled)) {
+      this.sharedCancellation = !terminal && this.postAcceptanceIdle && view.interaction?.active_goal === null;
       this.finish(terminal ? view.nav?.outcome === "succeeded" ? "succeeded" : "failed" : "cancelled");
     }
     if (!this.resolved && !this.awaitingFreshFacts && view.nav?.state === "following_path") this.active = true;
@@ -84,6 +92,7 @@ export class NavigationGoalLifecycle {
     try { this.commands.sendGoal(clientTrackingToOdomPose(pose, this.origin)); } catch { return false; }
     if (force) this.confirmationId++;
     this.submissionBaseline = this.view?.nav ?? null;
+    this.postAcceptanceIdle = this.sharedCancellation = false;
     this.awaitingFreshFacts = true;
     this.suppressed = this.view?.nav_goal ?? null;
     this.active = true; this.resolved = false; this.flash = null; this.elapsed = 0;
@@ -95,7 +104,7 @@ export class NavigationGoalLifecycle {
   cancel(): boolean {
     if (!this.active || this.view?.capabilities?.estop.available !== true) return false;
     try { this.commands.cancel(); } catch { return false; }
-    this.finish("cancelled"); return true;
+    this.sharedCancellation = false; this.finish("cancelled"); return true;
   }
 
   tick(deltaS: number): void {
@@ -117,12 +126,13 @@ export class NavigationGoalLifecycle {
     this.route = null; this.routeGoalKey = ""; this.flash = null; this.elapsed = 0; this.lastSent = null; this.lastSentAt = -Infinity;
     this.newestTs = this.retiredTs = -Infinity; this.lastFrame = this.suppressed = null;
     this.lastNav = this.submissionBaseline = null; this.awaitingFreshFacts = false;
+    this.postAcceptanceIdle = this.sharedCancellation = false;
   }
 
   private finish(flash: NavFlash): void {
     this.flash = flash; this.elapsed = 0; this.feedbackId++;
     this.active = false; this.resolved = true; this.route = null;
-    this.retiredTs = Math.max(this.retiredTs, this.view?.nav_goal?.ts ?? -Infinity);
+    this.retiredTs = Math.max(this.retiredTs, this.newestTs, this.view?.nav_goal?.ts ?? -Infinity);
     this.suppressed = this.view?.nav_goal ?? null;
     this.lastSent = null; this.lastSentAt = -Infinity;
   }

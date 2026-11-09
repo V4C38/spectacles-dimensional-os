@@ -1,3 +1,5 @@
+import type { ManipulationOutbound } from "../manipulation/ManipulationTypes";
+import type { InteractionState, InteractionResult } from "../replication/CollaborationTypes";
 export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number];
 export type YawPose = [number, number, number, number];
@@ -15,6 +17,8 @@ export const CAPABILITY_NAMES = [
   "localization",
   "estop",
   "agent",
+  "manipulation",
+  "object_detection",
 ] as const;
 export type CapabilityName = (typeof CAPABILITY_NAMES)[number];
 
@@ -34,8 +38,8 @@ export type NavigationCapability = Capability & {
 };
 
 export type Capabilities = {
-  [K in Exclude<CapabilityName, "navigation">]: Capability;
-} & { navigation: NavigationCapability };
+  [K in Exclude<CapabilityName, "navigation" | "manipulation" | "object_detection">]: Capability;
+} & { navigation: NavigationCapability; manipulation?: Capability; object_detection?: Capability };
 
 export interface TimeSync {
   ts_client: number;
@@ -58,6 +62,14 @@ export interface ServerInfo {
 }
 
 export interface Hello {
+  resume_token?: string;
+  server_follow_stream?: boolean;
+  independent_ik?: boolean;
+  source?: { kind: "recording"; read_only: boolean; name: string };
+  protocol_version: 2;
+  bulk_url: string;
+  bulk_token: string;
+  bulk_epoch: string;
   /** Stable for the server odometry reference, including across socket reconnects. */
   odom_reference_id?: string;
   server_info?: ServerInfo;
@@ -84,6 +96,7 @@ export interface AgentState {
 }
 
 export interface State {
+  playback?: { state: "playing" | "ended"; elapsed_s: number; duration_s: number };
   nav_preview_costmap_ts?: number;
   type: "state";
   server: { connected_clients: number };
@@ -138,6 +151,7 @@ export interface LocalizationStatus extends MapContext {
   ts?: number;
 }
 export interface CaptureEpisodeIdentity {
+  capture_id?: string;
   episode_id?: string;
   purpose?: "robot" | "headset";
 }
@@ -189,6 +203,9 @@ export interface Lidar {
 }
 
 export type Outbound =
+  | ManipulationOutbound
+  | InteractionState
+  | InteractionResult
   | Hello
   | State
   | LocalizationObservationsRequest
@@ -202,8 +219,22 @@ export type Outbound =
   | AgentMessage
   | AgentSkill;
 
+export interface ClientError {
+  type: "client_error";
+  message_type: string;
+  detail: string;
+  excerpt: string;
+  ts: number;
+  message_ts?: number;
+  request_id?: string;
+  suppressed_count?: number;
+}
+
 export interface HelloRequest {
   type: "hello_request";
+  resumable?: boolean;
+  resume_token?: string;
+  server_follow_stream?: boolean;
   ts_client: number;
 }
 
@@ -231,6 +262,7 @@ export interface LocalizationStartRequest {
 }
 
 export interface NavGoalRequest {
+  epoch?: string; lease_id?: string; sequence?: number;
   preview?: boolean;
   preview_id?: string;
   type: "nav_goal_request";
@@ -259,6 +291,7 @@ export interface ClientPose {
 }
 
 export interface NavJoystickRequest {
+  epoch?: string; lease_id?: string; sequence?: number;
   type: "nav_joystick_request";
   linear: Vec3;
   angular: Vec3;
@@ -290,6 +323,7 @@ export interface LocalizationObservations {
 }
 
 export type Inbound =
+  | ClientError
   | HelloRequest
   | StateRequest
   | LocalizationStartRequest

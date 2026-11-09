@@ -5,7 +5,7 @@ import { activateRuntimeButton, frameMenu, setSelection } from "./fixtures/Input
 async function markerState(page: Page, advance = 0) {
   return page.evaluate(advance => {
     const w = window as any;
-    const app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+    const app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
     if (advance) w.advanceCancel(advance);
     const marker = app.client.navigation.marker;
     const button = marker.object.getObjectByName("Navigation cancel button");
@@ -18,7 +18,7 @@ async function markerState(page: Page, advance = 0) {
 async function frameWorld(page: Page, probe = false) {
   await page.evaluate(probe => {
     const w = window as any;
-    const app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+    const app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
     const marker = probe ? [...app.client.navigation.probes.values()][0].probe : app.client.navigation.marker.object;
     const target = marker.getWorldPosition(marker.position.clone()); target.y += 0.15;
     const eye = target.clone().add(target.clone().set(0, 0.6, 1.1));
@@ -44,14 +44,14 @@ test("dismiss closes review; probes meet the ray; Cancel rises and grows with it
     await runtime.localized();
     await page.evaluate(() => {
       const w = window as any;
-      w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp").client.ui.requestAlignmentReview("Tracking resumed");
+      w.xb.core.scene.children.find((o: any) => o.client?.manipulation).client.ui.requestAlignmentReview("Tracking resumed");
     });
     await frameMenu(page);
     await activateRuntimeButton(page, "Dismiss");
     await expect.poll(() => snapshot(page).then(s => s.menuOpen || s.alignmentReview?.pending)).toBe(false);
     await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
       app.client.setRobotSelected(true);
       const p = app.client.robot.worldPosition();
       w.questDevice.controllers.right.position.set(p[0] + 0.65, app.client.robot.floorWorldY() + 0.5, p[2]);
@@ -60,7 +60,7 @@ test("dismiss closes review; probes meet the ray; Cancel rises and grows with it
     });
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
       const probe = [...app.client.navigation.probes.values()][0] as any;
       if (!probe) return false;
       const circle = probe.probe.getObjectByName("Navigation probe circle");
@@ -72,12 +72,12 @@ test("dismiss closes review; probes meet the ray; Cancel rises and grows with it
     await setSelection(page, 1); await setSelection(page, 0);
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
       return app.client.navigation.isAiming();
     })).toBe(true);
     const previewArrow = await page.evaluate(() => {
       const w = window as any;
-      const view = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp").client.navigation.draftMarker;
+      const view = w.xb.core.scene.children.find((o: any) => o.client?.manipulation).client.navigation.draftMarker;
       const arrow = view.object.getObjectByName("NavigationHeading");
       return { widthRatio: arrow.scale.x / arrow.scale.y, opacityRatio: arrow.material.opacity / view.circleOpacity() };
     });
@@ -85,7 +85,7 @@ test("dismiss closes review; probes meet the ray; Cancel rises and grows with it
     await capture("thinner-preview-arrow");
     await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
       app.client.setRobotSelected(false);
       const marker = app.client.navigation.marker;
       w.advanceCancel = marker.tick.bind(marker); marker.tick = () => {};

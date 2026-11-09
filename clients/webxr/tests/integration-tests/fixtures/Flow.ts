@@ -62,13 +62,17 @@ export class Flow {
         .evaluate(() => {
           const w = window as any,
             app = w.xb?.core.scene.children.find(
-              (o: any) => o.constructor.name === "WebXRApp",
+              (o: any) => o.client?.manipulation,
             );
           return {
             ui: app?.client.ui.snapshot(),
             elapsed: app?.client.ui.successElapsedS,
             tracking: app?.tracking,
             source: app?.menuAnchor.source?.handedness,
+            navigation: app?.client.navigation.interaction.snapshot(),
+            interaction: app?.client.session.collaboration.raw(),
+            preview: app?.client.session.view().nav_preview,
+            previewVisible: app?.client.previewRoute.object.visible,
           };
         })
         .catch(() => null);
