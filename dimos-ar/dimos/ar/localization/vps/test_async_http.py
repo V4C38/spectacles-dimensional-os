@@ -8,6 +8,7 @@ from aiohttp import web
 import pytest
 import pytest_asyncio
 
+from dimos.ar.localization.vps.admission import QueryDeferredError, VpsAdmission
 from dimos.ar.localization.vps.multiset_client import MultisetVpsClient, MultisetVpsClientConfig
 from test_support.localization import _intrinsics
 
@@ -65,18 +66,20 @@ async def vendor():
         await runner.cleanup()
 
 
-def _client(vendor, timeout=1.0):
+def _client(vendor, timeout=1.0, admit=None):
     return MultisetVpsClient(
         config=MultisetVpsClientConfig(
             map_code="MAP_TEST", api_base=vendor.base, timeout_s=timeout
         ),
         client_id="test-id",
         client_secret="test-secret",
+        admit=admit,
     )
 
 
 async def test_real_multipart_preserves_api_prefix_intrinsics_and_auth_refresh(vendor) -> None:
-    client = _client(vendor)
+    admission = VpsAdmission()
+    client = _client(vendor, admit=admission.admit)
     vendor.options.unauthorized = True
     try:
         assert await client.query(jpeg=b"jpeg-bytes", intrinsics=_intrinsics()) is None
@@ -97,6 +100,10 @@ async def test_real_multipart_preserves_api_prefix_intrinsics_and_auth_refresh(v
                 assert authorization.startswith("Basic ")
         await client.query(jpeg=b"jpeg-bytes", intrinsics=_intrinsics())
         assert len(vendor.requests) == 5  # Token reuse after refresh.
+        assert admission.delay() > 0  # Three camera POSTs; auth consumes no slots.
+        with pytest.raises(QueryDeferredError):
+            await client.query(jpeg=b"jpeg-bytes", intrinsics=_intrinsics())
+        assert len(vendor.requests) == 5
     finally:
         await client.close()
     assert client._session is None
@@ -104,13 +111,17 @@ async def test_real_multipart_preserves_api_prefix_intrinsics_and_auth_refresh(v
 
 async def test_cancellation_aborts_inflight_http_and_closes_session(vendor) -> None:
     vendor.options.block = True
-    client = _client(vendor)
+    admission = VpsAdmission()
+    client = _client(vendor, admit=admission.admit)
     task = asyncio.create_task(client.query(jpeg=b"jpeg-bytes", intrinsics=_intrinsics()))
     try:
         await asyncio.wait_for(vendor.entered.wait(), 1)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+        admission.admit()
+        admission.admit()
+        assert admission.delay() > 0  # Cancelling a dispatched POST does not refund it.
     finally:
         await client.close()
         vendor.release.set()

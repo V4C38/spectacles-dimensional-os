@@ -9,6 +9,7 @@ from typing import Protocol
 from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest
 from dimos.ar.robot.odometry import AcceptedOdometry
 from dimos.ar.robot.odometry_correction import correct_odom_xy, uncorrect_odom_xy
+from dimos.ar.worker import BoundedWorker
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.utils.logging_config import setup_logger
@@ -38,8 +39,7 @@ class NavigationPreviewService:
         self._factor = factor
         self._odometry = odometry
         self._on_preview = on_preview
-        self._executor: ThreadPoolExecutor | None = None
-        self._permit = asyncio.Semaphore(1)
+        self._worker = BoundedWorker("ar-preview")
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._busy_replies: dict[str, asyncio.Task[None]] = {}
         self._costmap_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ar-costmap")
@@ -109,24 +109,13 @@ class NavigationPreviewService:
             self._costmap_task.cancel()
         self._costmap_executor.shutdown(wait=False, cancel_futures=True)
         await asyncio.gather(*tasks, return_exceptions=True)
-        if self._executor is not None:
-            self._executor.shutdown(wait=False, cancel_futures=True)
+        self._worker.close()
 
     async def _run(
         self, request: NavGoalRequest, client_id: str, pose: AcceptedOdometry | None
     ) -> None:
         try:
-            await self._permit.acquire()
-            if self._closed:
-                self._permit.release()
-                return
-            if self._executor is None:
-                self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ar-preview")
-            loop = asyncio.get_running_loop()
-            future = loop.run_in_executor(self._executor, self.compute, request, pose)
-            future.add_done_callback(lambda _future: self._permit.release())
-            future.add_done_callback(lambda done: None if done.cancelled() else done.exception())
-            frame = await asyncio.shield(future)
+            frame = await self._worker.run(lambda: self.compute(request, pose))
             busy = self._busy_replies.get(client_id)
             if busy is not None:
                 busy.cancel()

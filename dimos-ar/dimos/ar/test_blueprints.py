@@ -15,7 +15,7 @@ def test_unitree_go2_ar_selects_robot_explicitly() -> None:
     assert atoms[0].kwargs["robot"] is RobotName.UNITREE_GO2
     assert atoms[0].kwargs.get("agent", False) is False
     ports = {stream.name for stream in atoms[0].streams}
-    assert {"odom", "lidar", "path", "goal_reached", "goal_request", "stop_movement"} <= ports
+    assert {"odom", "lidar", "path", "ar_navigation_status", "goal_request", "stop_movement"} <= ports
     assert {"human_input", "agent", "agent_idle", "tele_cmd_vel"} <= ports
 
 

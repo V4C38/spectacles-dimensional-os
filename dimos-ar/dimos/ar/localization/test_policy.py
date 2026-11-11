@@ -78,13 +78,13 @@ def test_travel_prompts_at_075m_without_waiting_for_goal_reached() -> None:
     _advance(policy, 0.0, 0.0)
     _advance(policy, 0.4, 0.0)
     assert policy.on_goal_reached(succeeded=True) == []
-    assert _advance(policy, 0.749, 0.0) == ([], [])
-    assert _advance(policy, 0.75, 0.0) == (["c1"], [])
+    assert _advance(policy, 0.749, 0.0) == []
+    assert _advance(policy, 0.75, 0.0) == ["c1"]
     assert policy.on_goal_reached(succeeded=True) == []
-    assert _advance(policy, 1.5, 0.0) == ([], [])  # Already pending.
+    assert _advance(policy, 1.5, 0.0) == []  # Already pending.
     policy.on_success("c1")
-    assert _advance(policy, 2.249, 0.0) == ([], [])
-    assert _advance(policy, 2.25, 0.0) == (["c1"], [])
+    assert _advance(policy, 2.249, 0.0) == []
+    assert _advance(policy, 2.25, 0.0) == ["c1"]
 
 
 def test_travel_is_cumulative_and_disconnected_clients_are_not_prompted() -> None:
@@ -95,8 +95,8 @@ def test_travel_is_cumulative_and_disconnected_clients_are_not_prompted() -> Non
     policy.on_success("gone")
     policy.on_disconnect("gone")
     _advance(policy, 0.0, 0.0)
-    assert _advance(policy, 0.5, 0.0) == ([], [])
-    assert _advance(policy, 0.5, 0.25) == (["c1"], [])
+    assert _advance(policy, 0.5, 0.0) == []
+    assert _advance(policy, 0.5, 0.25) == ["c1"]
 
 
 def test_start_retry_reissues_pending_prompt() -> None:

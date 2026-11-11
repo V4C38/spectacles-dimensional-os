@@ -142,3 +142,25 @@ it("speaks identical replies as distinct events while repeated ticks consume eac
   f.speech.reset(); f.speech.tick(6, true, "Done", true, 3);
   expect(f.synthesis.speak).toHaveBeenCalledTimes(3);
 });
+
+it("ignores completion from a replaced utterance and retires synthesis on stop", () => {
+  const completions: Array<() => void> = [];
+  const speech = new AgentDraftSession({ recognition: null,
+    synthesis: { speak: (_text, done) => { completions.push(done); }, stop: () => {} },
+    send: () => {}, estop: () => {}, isSelected: () => true, select: () => {} });
+  speech.tick(1, true, "A", true, 1);
+  speech.tick(2, true, "B", true, 2);
+  completions[0]();
+  expect(speech.snapshot().status).toBe("Responding");
+  completions[1]();
+  expect(speech.snapshot().status).toBe("Type a message");
+  speech.tick(3, true, "C", true, 3); speech.stop(); completions[2]();
+  expect(speech.snapshot().status).toBe("Off");
+});
+
+it("issues emergency stop only when an explicit submitted draft contains stop", () => {
+  const f = fixture(); f.setSelected(true); f.speech.setDraft("please stop");
+  expect(f.estop).not.toHaveBeenCalled();
+  expect(f.speech.submitTyped("please stop")).toBe(true);
+  expect(f.estop).toHaveBeenCalledOnce();
+});

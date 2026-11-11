@@ -44,6 +44,7 @@ async def test_spawn_failure_cleans_owned_config(runtime, monkeypatch):
     from unittest.mock import AsyncMock
 
     manager, _, _ = runtime
+    original_spawn = manager._spawn
     target = None
     async def fail(*args, **kwargs):
         nonlocal target
@@ -54,3 +55,11 @@ async def test_spawn_failure_cleans_owned_config(runtime, monkeypatch):
         await manager.start_armodule(blueprint="unitree_go2_ar", client="specs")
     assert target is not None and not target.exists()
     assert manager._run_config_path is None
+    from armodule import Phase
+    assert manager.status.phase is Phase.ERROR
+    assert manager.status.error == "spawn failed"
+    assert manager._proc is None
+    monkeypatch.setattr(manager, "_spawn", original_spawn)
+    await manager.start_armodule(blueprint="unitree_go2_ar", client="specs")
+    assert manager.status.phase is Phase.STARTING
+    assert manager._proc is not None

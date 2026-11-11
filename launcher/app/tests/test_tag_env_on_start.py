@@ -38,7 +38,7 @@ async def test_start_armodule_injects_secret_env(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
     captured: dict[str, str] = {}
 
-    async def fake_spawn(argv, *, env, parse_armodule):  # type: ignore[no-untyped-def]
+    async def fake_spawn(argv, *, env):  # type: ignore[no-untyped-def]
         captured.update(env)
 
     with (
@@ -64,7 +64,7 @@ async def test_start_armodule_pins_checked_dimos_python(tmp_path: Path) -> None:
     mgr.status.dimos_python = "/tmp/dimos/.venv/bin/python3"
     captured: dict[str, str] = {}
 
-    async def fake_spawn(argv, *, env, parse_armodule):  # type: ignore[no-untyped-def]
+    async def fake_spawn(argv, *, env):  # type: ignore[no-untyped-def]
         captured.update(env)
 
     with (
@@ -89,7 +89,7 @@ async def test_start_armodule_drops_inherited_dimos_python(
     mgr = ProcessManager(root=tmp_path)
     captured: dict[str, str] = {}
 
-    async def fake_spawn(argv, *, env, parse_armodule):  # type: ignore[no-untyped-def]
+    async def fake_spawn(argv, *, env):  # type: ignore[no-untyped-def]
         captured.update(env)
 
     with (
@@ -108,7 +108,7 @@ async def test_start_armodule_defaults_log_level_to_info(tmp_path: Path) -> None
     mgr = ProcessManager(root=tmp_path)
     captured: dict[str, str] = {}
 
-    async def fake_spawn(argv, *, env, parse_armodule):  # type: ignore[no-untyped-def]
+    async def fake_spawn(argv, *, env):  # type: ignore[no-untyped-def]
         captured.update(env)
 
     with (

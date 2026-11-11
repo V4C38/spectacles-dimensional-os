@@ -186,13 +186,13 @@
                   </p>
                   <div class="policy-fields">
                     <label class="field"><span>Robot · Min relocalization distance (m)</span>
-                      <input id="travel_threshold_m" type="number" required min="0.001" step="any" value="0.75" /></label>
+                      <input id="travel_threshold_m" type="number" required min="0.001" step="any" data-localization-policy /></label>
                     <label class="field"><span>Robot · Min relocalization angle (°)</span>
-                      <input id="heading_threshold_deg" type="number" required min="0.001" max="180" step="any" value="30" /></label>
+                      <input id="heading_threshold_deg" type="number" required min="0.001" max="180" step="any" data-localization-policy /></label>
                     <label class="field" id="markerPreferenceField"><span>Robot · Prefer fiducial marker for (s)</span>
-                      <input id="marker_preference_s" type="number" required min="0" step="any" value="1.5" /></label>
+                      <input id="marker_preference_s" type="number" required min="0" step="any" data-localization-policy /></label>
                     <label class="field"><span>Headset · Min relocalization distance (m)</span>
-                      <input id="headset_travel_threshold_m" type="number" required min="0.001" step="any" value="10" /></label>
+                      <input id="headset_travel_threshold_m" type="number" required min="0.001" step="any" data-localization-policy /></label>
                   </div>
                 </section>
                 <div class="provider">
@@ -350,6 +350,6 @@
         <pre class="log" id="log" aria-live="polite"></pre>
       </main>
     </div>
-    <script src="/static/app.js?v=launcher-controls-6"></script>
+    <script type="module" src="/static/app.js?v=launcher-controls-6"></script>
   </body>
 </html>

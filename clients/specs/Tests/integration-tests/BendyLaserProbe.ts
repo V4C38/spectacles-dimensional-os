@@ -1,7 +1,7 @@
 import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 // Run with tools/review.py --harness Tests/integration-tests/BendyLaserProbe.ts.
 // Hardware poses are fixtures; production SIK cursor, beam presenter and shader are unchanged.
-import { DimOSSpecsClient } from "../Scripts/DimOSSpecsClient/DimOSSpecsClient";
+import { emitReviewEvent, findProductionRoot } from "./IntegrationHost";
 import { createIconButton } from "../Scripts/DimOSSpecsClient/presentation/UIKit";
 import { CursorControllerProvider } from "SpectaclesInteractionKit.lspkg/Providers/CursorControllerProvider/CursorControllerProvider";
 import { TargetingMode } from "SpectaclesInteractionKit.lspkg/Core/Interactor/Interactor";
@@ -30,7 +30,7 @@ export class ReviewScenario extends BaseScriptComponent {
     this.createEvent("OnDestroyEvent").bind(() => this.input?.restore());
   }
   private emit(value: Record<string, unknown>): void {
-    print(`SPECS_REVIEW ${JSON.stringify({ ...value, unixMs: Date.now() })}`);
+    emitReviewEvent(value);
   }
   private check(name: string, passed: boolean): void {
     this.failed ||= !passed; this.emit({ type: "result", name, passed });
@@ -46,15 +46,7 @@ export class ReviewScenario extends BaseScriptComponent {
     return endpoint.distance(cursor.cursorParameters.worldPosition) < 0.02;
   }
   private prepare(): void {
-    const find = (object: SceneObject): any => {
-      const root = object.getComponent(DimOSSpecsClient.getTypeName());
-      if (root) return root;
-      for (let i = 0; i < object.getChildrenCount(); i++) { const root = find(object.getChild(i)); if (root) return root; }
-      return null;
-    };
-    for (let i = 0; i < global.scene.getRootObjectsCount(); i++) {
-      this.root = find(global.scene.getRootObject(i)); if (this.root) break;
-    }
+    this.root = findProductionRoot();
     if (!this.root) throw new Error("Production composition root missing");
     this.root.uiPresenter.setupWizardController.invalidatePending();
     this.root.updateEvent.enabled = false;

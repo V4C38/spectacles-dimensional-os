@@ -4,12 +4,6 @@ import type { LidarSettings } from "../websocket/protocolTypes";
 
 export type LidarDisplayMode = "off" | "obstacles" | "full";
 
-export const LIDAR_MODE_LABELS: Record<LidarDisplayMode, string> = {
-  off: "LiDAR: Off",
-  obstacles: "LiDAR: Obstacles",
-  full: "LiDAR: Full",
-};
-
 export const LIDAR_PRESETS: Record<LidarDisplayMode, LidarSettings> = {
   off: {
     enabled: false,

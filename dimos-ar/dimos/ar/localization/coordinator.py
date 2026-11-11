@@ -11,7 +11,7 @@ from dimos.ar.localization.types import (
     Observation,
     SnapshotLocalizer,
 )
-from dimos.ar.localization.worker import LocalizationWorker
+from dimos.ar.worker import BoundedWorker
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -35,17 +35,19 @@ class LocalizationCoordinator:
         self,
         *,
         marker: SnapshotLocalizer | None,
-        worker: LocalizationWorker | None = None,
+        worker: BoundedWorker | None = None,
         clock: Callable[[], float] = time.time,
         source_generation: Callable[[], int] = lambda: 0,
     ) -> None:
         self._marker = marker
-        self._worker = worker or LocalizationWorker()
+        self._owns_worker = worker is None
+        self._worker = worker or BoundedWorker()
         self._clock = clock
         self._source_generation = source_generation
 
     async def close(self) -> None:
-        self._worker.close()
+        if self._owns_worker:
+            self._worker.close()
 
     async def run(
         self, observations: Sequence[Observation], *, client_id: str | None = None

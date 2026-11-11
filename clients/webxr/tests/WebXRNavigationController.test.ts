@@ -40,7 +40,8 @@ const hello: Hello = {
   capabilities,
 };
 
-function view(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionState {
+type MutableFacts<T> = T extends readonly unknown[] ? T : T extends object ? { -readonly [K in keyof T]: MutableFacts<T[K]> } : T;
+function view(overrides: Partial<ARModuleSessionState> = {}): MutableFacts<ARModuleSessionState> {
   return {
     connection: "ready",
     hasTrackingOrigin: true,
@@ -80,7 +81,7 @@ describe("WebXRNavigationController", () => {
     };
     navigation.applyView(view(), origin, floor, 1);
     const hit = { position: [0, 0, -2] as [number, number, number], normal: [0, 1, 0] as [number, number, number] };
-    navigation.hold(1, [0, 1.5, 0], [0, -1, -1], [hit], null, 0);
+    navigation.hold(1, [0, 1.5, 0], [0, -1, -1], [hit], 0);
     navigation.applyView(view({ nav: { state: "following_path", outcome: null } }), origin, floor, 2);
     navigation.applyView(view({ nav: { state: "resolved", outcome: "failed" } }), origin, floor, 3);
     expect(navigation.flash()).toBe("failed");
@@ -112,7 +113,7 @@ describe("WebXRNavigationController", () => {
     const navigation = new WebXRNavigationController(session as never);
     navigation.applyView(session.view(), null, null, 0);
     expect(
-      navigation.hold(1, [0, 1.5, 0], [0, -1, 0], [{ position: [0, 0, -1], normal: [0, 1, 0] }], null, 0),
+      navigation.hold(1, [0, 1.5, 0], [0, -1, 0], [{ position: [0, 0, -1], normal: [0, 1, 0] }], 0),
     ).toBe(false);
     navigation.dispose();
   });
@@ -139,10 +140,10 @@ describe("WebXRNavigationController", () => {
       1,
     );
     const hit = { position: [0, 0, -2] as [number, number, number], normal: [0, 1, 0] as [number, number, number] };
-    navigation.hold(1, [0, 1.5, 0], [0, -1, -1], [hit], null, 0);
-    navigation.hold(2, [0, 1.5, 0], [0, -1, -1], [hit], null, 0);
+    navigation.hold(1, [0, 1.5, 0], [0, -1, -1], [hit], 0);
+    navigation.hold(2, [0, 1.5, 0], [0, -1, -1], [hit], 0);
     expect(navigation.isDragging()).toBe(true);
-    navigation.release(2.5, [0, 1.5, 0], [0, -1, -1], [hit], null, 0);
+    navigation.release(2.5, [0, 1.5, 0], [0, -1, -1], [hit], 0);
     expect(navigation.isDragging()).toBe(false);
     expect(sendText).toHaveBeenCalled();
     navigation.dispose();
@@ -157,19 +158,19 @@ describe("WebXRNavigationController", () => {
     navigation.applyView(view(), origin, { position: [0, 0, 0], orientation: [0, 0, 0, 1] }, 1);
     navigation.setSelected(true);
     const hit = (z: number) => [{ position: [0, 0, z] as [number, number, number], normal: [0, 1, 0] as [number, number, number] }];
-    for (let i = 0; i < 30; i++) navigation.hold(1 + i * 0.1, [0, 1.5, 0], [0, -1, -1], hit(-1 - i * 0.1), null, 0, false);
+    for (let i = 0; i < 30; i++) navigation.hold(1 + i * 0.1, [0, 1.5, 0], [0, -1, -1], hit(-1 - i * 0.1), 0, false);
     expect(navigation.isAiming()).toBe(true);
     expect(navigation.draftMarker.object.visible).toBe(true);
     expect(navigation.marker.pose().position[2]).toBe(0);
     expect(commits).not.toHaveBeenCalled();
-    navigation.release(4, [0, 1.5, 0], [0, -1, -1], hit(-4), null, 0);
+    navigation.release(4, [0, 1.5, 0], [0, -1, -1], hit(-4), 0);
     expect(commits).not.toHaveBeenCalled();
     expect(navigation.isAiming()).toBe(true);
     navigation.tick(4.01, 1);
     expect(navigation.draftMarker.circleBounds().radius).toBeCloseTo(navigation.marker.circleBounds().radius);
     expect(navigation.draftMarker.object.getObjectByName("Navigation draft circle")!.visible).toBe(true);
-    navigation.hold(4.1, [0, 1.5, 0], [0, -1, -1], hit(-4), null, 0, false);
-    navigation.release(4.2, [0, 1.5, 0], [0, -1, -1], hit(-4), null, 0);
+    navigation.hold(4.1, [0, 1.5, 0], [0, -1, -1], hit(-4), 0, false);
+    navigation.release(4.2, [0, 1.5, 0], [0, -1, -1], hit(-4), 0);
     expect(commits).toHaveBeenCalledOnce();
     expect(authority.commands.at(-1)).toMatchObject({ action: "confirm" });
     navigation.dispose();
@@ -185,16 +186,16 @@ describe("WebXRNavigationController", () => {
       const [, y, , w] = navigation.marker.pose().orientation;
       return 2 * Math.atan2(y, w);
     };
-    navigation.hold(1, [0, 1.5, 0], [0, -1, -1], floorHit(0), null, 0);
+    navigation.hold(1, [0, 1.5, 0], [0, -1, -1], floorHit(0), 0);
     expect(navigation.isDragging()).toBe(true);
     expect(yaw()).toBeCloseTo(0);
-    navigation.hold(1 + 1 / 60, [0, 1.5, 0], [0, -1, -1], floorHit(0.05), null, 0);
+    navigation.hold(1 + 1 / 60, [0, 1.5, 0], [0, -1, -1], floorHit(0.05), 0);
     expect(yaw()).toBeLessThan(0);
     expect(yaw()).toBeGreaterThan(-Math.PI / 4);
     for (let i = 2; i < 60; i++) {
       // The host reapplies this unchanged selection state every XR frame.
       navigation.setSelected(false);
-      navigation.hold(1 + i / 60, [0, 1.5, 0], [0, -1, -1], floorHit(0.05 * i), null, 0);
+      navigation.hold(1 + i / 60, [0, 1.5, 0], [0, -1, -1], floorHit(0.05 * i), 0);
       expect(navigation.isDragging()).toBe(true);
     }
     expect(yaw()).toBeCloseTo(-Math.PI / 2, 2);
@@ -212,9 +213,9 @@ function fixture(previewSupported = false) {
   const floor = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number] };
   navigation.applyView(current, origin, floor, 0);
   const hit = (x = 1, z = -2) => [{ position: [x, 0, z] as [number, number, number], normal: [0, 1, 0] as [number, number, number] }];
-  const aim = (now: number, x = 1, z = -2) => navigation.aim(now, [0, 1.5, 0], [0, -1, -1], hit(x, z), null, 0);
-  const hold = (now: number, x = 1, z = -2) => navigation.hold(now, [0, 1.5, 0], [0, -1, -1], hit(x, z), null, 0, false);
-  const release = (now: number, x = 1, z = -2) => navigation.release(now, [0, 1.5, 0], [0, -1, -1], hit(x, z), null, 0);
+  const aim = (now: number, x = 1, z = -2) => navigation.aim(now, [0, 1.5, 0], [0, -1, -1], hit(x, z), 0);
+  const hold = (now: number, x = 1, z = -2) => navigation.hold(now, [0, 1.5, 0], [0, -1, -1], hit(x, z), 0, false);
+  const release = (now: number, x = 1, z = -2) => navigation.release(now, [0, 1.5, 0], [0, -1, -1], hit(x, z), 0);
   const preview = (now = 0, x = 1, z = -2) => { aim(now, x, z); hold(now, x, z); release(now, x, z); };
   return { current, sendText, commits, authority, navigation, origin, floor, aim, hold, release, preview };
 }
@@ -342,13 +343,13 @@ it("limits selected floor aiming and confirmation to five ray meters without lim
   const from: [number, number, number] = [0, 1, 0];
   const dir: [number, number, number] = [0, -1, -1];
   const hits = (distance: number) => [{ position: [0, 0, -Math.sqrt(distance * distance - 1)] as [number, number, number], normal: [0, 1, 0] as [number, number, number] }];
-  f.navigation.aim(0, from, dir, hits(4.99), null, 0); expect((f.navigation.probes.get("default")?.probe.visible ?? false)).toBe(true);
-  f.navigation.aim(1, from, dir, hits(5.01), null, 0); expect(f.navigation.isAiming()).toBe(false);
-  expect(f.navigation.hold(2, from, dir, hits(5.01), null, 0, false)).toBe(false);
-  f.navigation.release(2.1, from, dir, hits(5.01), null, 0); expect(f.sendText).not.toHaveBeenCalled();
+  f.navigation.aim(0, from, dir, hits(4.99), 0); expect((f.navigation.probes.get("default")?.probe.visible ?? false)).toBe(true);
+  f.navigation.aim(1, from, dir, hits(5.01), 0); expect(f.navigation.isAiming()).toBe(false);
+  expect(f.navigation.hold(2, from, dir, hits(5.01), 0, false)).toBe(false);
+  f.navigation.release(2.1, from, dir, hits(5.01), 0); expect(f.sendText).not.toHaveBeenCalled();
   f.navigation.setSelected(false);
-  f.navigation.hold(3, from, dir, hits(6), null, 0, true);
-  f.navigation.hold(4, from, dir, hits(7), null, 0, true);
+  f.navigation.hold(3, from, dir, hits(6), 0, true);
+  f.navigation.hold(4, from, dir, hits(7), 0, true);
   expect(f.sendText).toHaveBeenCalled(); f.navigation.dispose();
 });
 
@@ -376,13 +377,13 @@ it("keeps cancel visible on a following goal while selected floor aim shows only
 
 it("renders two independent probes and separate active and draft markers at identical opacity", () => {
   const f = fixture(); f.navigation.setSelected(true);
-  const aim = (id: string, x: number) => f.navigation.aim(1, [0, 1, 0], [0, -1, -1], [{ position: [x, 0, -2], normal: [0, 1, 0] }], null, 0, id);
+  const aim = (id: string, x: number) => f.navigation.aim(1, [0, 1, 0], [0, -1, -1], [{ position: [x, 0, -2], normal: [0, 1, 0] }], 0, id);
   aim("left", 1); aim("right", 2);
   expect(f.navigation.probes.size).toBe(2);
   f.current.nav_goal = { type: "nav_goal", ts: 1, pose: [3, 0, 0, 0], path_poses: [[0, 0, 0, 0], [3, 0, 0, 0]] };
   f.current.nav = { state: "following_path", outcome: null }; f.navigation.applyView(f.current, f.origin, f.floor, 1);
-  f.navigation.hold(2, [0, 1, 0], [0, -1, -1], [{ position: [1, 0, -2], normal: [0, 1, 0] }], null, 0, false, "left");
-  f.navigation.release(2.1, [0, 1, 0], [0, -1, -1], [{ position: [1, 0, -2], normal: [0, 1, 0] }], null, 0, "left");
+  f.navigation.hold(2, [0, 1, 0], [0, -1, -1], [{ position: [1, 0, -2], normal: [0, 1, 0] }], 0, false, "left");
+  f.navigation.release(2.1, [0, 1, 0], [0, -1, -1], [{ position: [1, 0, -2], normal: [0, 1, 0] }], 0, "left");
   f.navigation.tick(2.2, 1);
   expect(f.navigation.marker.pose().position).toEqual([0, 0, -3]);
   expect(f.navigation.draftMarker.pose().position).toEqual([1, 0, -2]);
@@ -399,13 +400,13 @@ it("drags a committed selected marker live beyond the floor aim range", () => {
   const from: [number, number, number] = [0, 1, 0];
   const dir: [number, number, number] = [0, -1, -1];
   const hits = (x: number) => [{ position: [x, 0, -6] as [number, number, number], normal: [0, 1, 0] as [number, number, number] }];
-  f.navigation.hold(1, from, dir, hits(1), null, 0, true);
-  f.navigation.hold(2, from, dir, hits(2), null, 0, true);
+  f.navigation.hold(1, from, dir, hits(1), 0, true);
+  f.navigation.hold(2, from, dir, hits(2), 0, true);
   expect(f.navigation.isDragging()).toBe(true);
   expect(f.navigation.marker.pose().position).toEqual([2, 0, -6]);
   expect(f.navigation.draftMarker.object.visible).toBe(false);
   expect(f.sendText).toHaveBeenCalled();
-  f.navigation.release(3, from, dir, hits(3), null, 0);
+  f.navigation.release(3, from, dir, hits(3), 0);
   expect(f.navigation.isDragging()).toBe(false);
   expect(f.navigation.marker.pose().position).toEqual([3, 0, -6]);
   expect(JSON.parse(f.sendText.mock.lastCall![0]).preview).toBeUndefined();

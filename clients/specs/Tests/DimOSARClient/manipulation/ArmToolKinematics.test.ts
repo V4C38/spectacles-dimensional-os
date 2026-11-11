@@ -6,7 +6,6 @@ import {
   composePose,
   linkPoses,
 } from "../../../Assets/Scripts/DimOSARClient/manipulation/ModelKinematics";
-import { OPENYAM_FOREARM_BOXES } from "../../../Assets/Scripts/DimOSARClient/manipulation/ManipulationVisuals";
 
 const fixture = ARM_FIXTURE;
 const model = fixture.model as ManipulationModel;
@@ -52,16 +51,6 @@ it("opens OpenYAM fingers toward the lower limits and preserves arm joints", () 
   expect(widths[0]).toBeLessThan(widths[1]);
   expect(widths[1]).toBeLessThan(widths[2]);
 });
-it("makes the forearm envelope substantially smaller with two simple boxes", () => {
-  const bounds = model.links.find((l: any) => l.name === "link3").bounds;
-  const volume = (s: number[]) => s.reduce((a, b) => a * b, 1);
-  const compound = OPENYAM_FOREARM_BOXES.reduce(
-    (n, b) => n + volume(b.size),
-    0,
-  );
-  expect(compound).toBeLessThan(volume(bounds.size) * 0.55);
-});
-
 it("keeps articulation unchanged when the model asset moves", () => {
   const moved = { ...model, asset_url: "/cdn/renamed-arm.glb" };
   expect(gripperJointValues(moved, group, 0.7)).toEqual(

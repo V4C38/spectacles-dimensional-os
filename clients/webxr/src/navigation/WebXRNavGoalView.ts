@@ -1,4 +1,4 @@
-import { WebXRReplicationPresenter } from "../replication/WebXRReplicationPresenter";
+import { ARM_VISUAL_STYLE } from "@dimos-ar-client/manipulation/ManipulationVisuals";
 import { NAVIGATION_OUTCOME_STYLE, strokeJoints2D, STROKE_JOIN_SEGMENTS, WORLD_DASH_STYLE, circleStrokeSegments, NAVIGATION_CANCEL_STYLE, navigationCancelReveal, NAVIGATION_PREVIEW_ARROW_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
 import * as THREE from "three";
 import { AdaptiveDashedLineRenderer } from "../presentation/AdaptiveDashedLineRenderer";
@@ -63,7 +63,6 @@ export class WebXRNavGoalView {
   private aiming = false;
   private flash: NavFlash | null = null;
   private blocked = false;
-  private readonly replication = new WebXRReplicationPresenter();
 
   constructor(private readonly radiusM: number = GOAL_RADIUS_M) {
     this.object = new THREE.Group();
@@ -147,7 +146,6 @@ export class WebXRNavGoalView {
     this.probe.traverse(node => { node.raycast = () => {}; });
     this.probe.visible = false;
     this.object.add(this.disc, this.visuals, this.cancelRoot, this.connector, this.draftCircleRenderer.object);
-    this.object.add(this.replication.object);
     this.object.visible = false;
     // Proximity uses the circular hit surface, not the decorative arrow/ring bounding boxes.
     this.arrow.userData.proximityTarget = this.ring.userData.proximityTarget = false;
@@ -189,11 +187,10 @@ export class WebXRNavGoalView {
     this.setCancelVisible(false);
   }
 
-  setGoalActive(_active: boolean): void { /* Goal existence is independent of following state. */ }
   setInteraction(dragging: boolean, following: boolean): void { this.dragging = dragging; this.following = following; }
   setBlocked(blocked: boolean): void {
     this.blocked = blocked;
-    this.replication.apply(blocked, [this.disc, this.arrow, this.ring], this.aiming);
+    for (const target of [this.disc, this.arrow, this.ring]) target.userData.rayDisabled = blocked || this.aiming;
     this.applyStyle(0);
   }
   setHovered(hovered: boolean): void { this.hovered = hovered; }
@@ -209,7 +206,7 @@ export class WebXRNavGoalView {
   }
 
   circleOpacity(): number { return this.opacity; }
-  setSharedOpacity(opacity: number): void { this.opacity = opacity; this.probeCircleRenderer.setStyle(WORLD_DASH_STYLE.widthM, opacity); this.setMarkerStyle(MARKER_COLOR, opacity); }
+  setSharedOpacity(opacity: number): void { this.opacity = opacity; this.probeCircleRenderer.setStyle(WORLD_DASH_STYLE.widthM, opacity); this.setMarkerStyle(this.blocked ? ARM_VISUAL_STYLE.warningColor : MARKER_COLOR, opacity); }
 
   tick(deltaS: number): void {
     deltaS = Math.max(0, deltaS);
@@ -250,9 +247,8 @@ export class WebXRNavGoalView {
       this.draftCircleRenderer.object.position.y = 0.015 * this.visualScale;
       this.draftCircleRenderer.setSegments(circleStrokeSegments(radius * strokeScale - WORLD_DASH_STYLE.widthM / 2), true);
     }
-    this.setMarkerStyle(this.blocked ? WebXRReplicationPresenter.blockedColor : MARKER_COLOR, this.opacity);
+    this.setMarkerStyle(this.blocked ? ARM_VISUAL_STYLE.warningColor : MARKER_COLOR, this.opacity);
     this.applyFeedback();
-    if (this.blocked) this.arrow.visible = false;
   }
 
   setCancelVisible(visible: boolean, confirmationId = 0): void {
@@ -354,7 +350,6 @@ export class WebXRNavGoalView {
     for (const mesh of [this.outcomeRing, this.outcomeJoin, ...this.outcomeStrokes]) { mesh.geometry.dispose(); mesh.material.dispose(); }
     this.connectorRenderer.dispose();
     this.draftCircleRenderer.dispose();
-    this.replication.dispose();
     this.disc.geometry.dispose();
     this.arrow.geometry.dispose();
     this.ring.geometry.dispose();
@@ -371,6 +366,7 @@ export class WebXRNavGoalView {
 
   private setMarkerStyle(color: number, opacity: number): void {
     this.draftCircleRenderer.setStyle(WORLD_DASH_STYLE.widthM, opacity);
+    this.draftCircleRenderer.object.material.uniforms.uColor.value.setHex(color);
     for (const material of [this.arrowMaterial, this.ringMaterial]) {
       material.color.setHex(color);
       material.opacity = opacity;

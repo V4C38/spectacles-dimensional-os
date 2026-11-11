@@ -7,7 +7,6 @@ import {
   odomToClientTrackingYawPose,
   clientTrackingToOdomPoint,
   clientTrackingToOdomPose,
-  clientTrackingToOdomYawPose,
 } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingTransforms";
 import {
   LocalizationCaptureEpisode,
@@ -109,9 +108,10 @@ describe("client tracking transforms", () => {
 
     const yawPose: YawPose = [3, 4, 0, Math.PI / 2];
     const trackedYaw = odomToClientTrackingYawPose(yawPose, origin);
-    const yawBack = clientTrackingToOdomYawPose(trackedYaw, origin);
-    expectVec3([yawBack[0], yawBack[1], yawBack[2]], [3, 4, 0]);
-    expect(yawBack[3]).toBeCloseTo(Math.PI / 2, 6);
+    const yawBack = clientTrackingToOdomPose({ position: [trackedYaw[0], trackedYaw[1], trackedYaw[2]],
+      orientation: [0, 0, Math.sin(trackedYaw[3] / 2), Math.cos(trackedYaw[3] / 2)] }, origin);
+    expectVec3(yawBack.position, [3, 4, 0]);
+    expectQuat(yawBack.orientation, yawAboutZ);
   });
 
   it("does not let callers invent a second composition: yaw is T inverse then yaw", () => {
@@ -338,6 +338,45 @@ function setOriginLookingAtRobot(session: ARModuleSession): void {
   seedOrigin(session);
   deliverPose(session, [0, 0, 1]);
 }
+
+it("keeps one mixed-mode gate deadline when LOS loss discards a partial batch", async () => {
+  const f = makeController();
+  setOriginLookingAtRobot(f.session);
+  f.originStore.setMapContext({ map_code: "office", odom_reference_id: "odom" });
+  deliverPose(f.session, [0, 0, -1]);
+  deliverRequest(f.session, { type: "localization_observations_request", capture_id: "tag",
+    episode_id: "episode", purpose: "robot", capture_policy: "robot_los_preferred",
+    observation_count: 3, wait_timeout_s: 3, result_timeout_s: 15 });
+  expect(f.controller.view().phase).toBe("waiting_for_geometric_gate");
+  f.clock.nowS = 1;
+  deliverPose(f.session, [0, 0, 1]);
+  f.controller.tick(); await settleCapture();
+  expect(f.controller.view().capturedCount).toBe(1);
+  f.clock.nowS = 2;
+  deliverPose(f.session, [0, 0, -1]);
+  f.controller.tick();
+  expect(f.controller.view()).toMatchObject({ phase: "waiting_for_geometric_gate", capturedCount: 0 });
+  f.clock.nowS = 3.1;
+  f.controller.tick();
+  expect(f.controller.view().phase).toBe("idle");
+  expect(f.transport.texts.some(text => text.includes('"phase":"unavailable"'))).toBe(true);
+  expect(f.transport.binaries).toHaveLength(0);
+  f.controller.dispose();
+});
+
+it("enforces the mixed-mode gate during deliberate re-localization", () => {
+  const f = makeController();
+  setOriginLookingAtRobot(f.session);
+  f.originStore.setMapContext({ map_code: "office", odom_reference_id: "odom" });
+  deliverPose(f.session, [0, 0, -1]);
+  f.controller.requestCorrection();
+  deliverRequest(f.session, { type: "localization_observations_request", capture_id: "tag",
+    episode_id: "episode", purpose: "robot", capture_policy: "robot_los_preferred",
+    observation_count: 3, wait_timeout_s: 3, result_timeout_s: 15 });
+  expect(f.controller.view().phase).toBe("waiting_for_geometric_gate");
+  expect(f.capture.calls).toBe(0);
+  f.controller.dispose();
+});
 
 describe("geometric gate", () => {
   const camera = { position: [0, 0, 0] as Vec3, orientation: IDENTITY_Q };
@@ -1071,4 +1110,19 @@ it("does no capture work throughout a twenty-minute closed-gate runtime interval
   for (let seconds = 0; seconds < 1200; seconds++) { f.clock.nowS += 1; f.controller.tick(); }
   expect(f.capture.calls).toBe(0); expect(f.capture.startCount).toBe(0);
   expect(f.transport.binaries).toHaveLength(0); expect(f.controller.view().phase).toBe("waiting_for_geometric_gate");
+});
+
+it("keeps the request gate deadline through suspension but grants a replacement request its own window", () => {
+  const f = makeController(); setOriginLookingAtRobot(f.session);
+  f.originStore.setMapContext({ map_code: "office", odom_reference_id: "fixture-odom" });
+  deliverPose(f.session, [0, 0, -1]);
+  const request: LocalizationObservationsRequest = { type: "localization_observations_request", capture_id: "old",
+    episode_id: "old", purpose: "robot", capture_policy: "robot_los_preferred", observation_count: 3,
+    wait_timeout_s: 3, result_timeout_s: 15 };
+  deliverRequest(f.session, request); f.clock.nowS = 2; f.controller.suspend(); f.controller.resume();
+  f.clock.nowS = 3.1; f.controller.tick(); expect(f.controller.view().phase).toBe("idle");
+  deliverRequest(f.session, { ...request, capture_id: "new", episode_id: "new" });
+  f.clock.nowS = 5; f.controller.tick(); expect(f.controller.view().phase).toBe("waiting_for_geometric_gate");
+  f.clock.nowS = 6.2; f.controller.tick(); expect(f.controller.view().phase).toBe("idle");
+  expect(f.transport.binaries).toHaveLength(0); f.controller.dispose();
 });

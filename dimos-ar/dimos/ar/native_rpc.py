@@ -4,6 +4,9 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
+CONTROL_LEASE_S = 0.5
+HEARTBEAT_TIMEOUT_S = 0.3
+HEARTBEAT_INTERVAL_S = 0.1
 
 class NativeRPCQuarantinedError(TimeoutError):
     """The previous actual native operation has not returned."""

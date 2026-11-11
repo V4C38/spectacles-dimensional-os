@@ -3,6 +3,7 @@ import math
 import time
 from typing import Any, Literal
 
+from dimos.ar.manipulation.frames import pose_error
 from dimos.ar.manipulation.ports import ManipulationBackend
 from dimos.utils.logging_config import setup_logger
 
@@ -53,6 +54,10 @@ class ManipulationOperation:
         self.gripper_completion_at = None
 
     @property
+    def published_phase(self) -> str | None:
+        return self.phase if self.id is not None else self.outcome.phase if self.outcome else None
+
+    @property
     def completed_id(self) -> str | None:
         return self.outcome.id if self.outcome and self.outcome.status == "completed" else None
 
@@ -69,7 +74,6 @@ class ManipulationOperation:
         outcome = OperationOutcome(self.id, status, self.phase, message)
         self.clear()
         self.outcome = outcome
-        self.phase = outcome.phase
         logger.info(
             "Arm operation finished",
             operation_id=outcome.id,
@@ -101,19 +105,7 @@ class ManipulationOperation:
             and observed.joints is not None
             and 0 <= time.time() - observed.joints.ts <= feedback_max_age_s
         ):
-            distance = math.sqrt(
-                sum(
-                    (getattr(pose.position, axis) - getattr(target.position, axis)) ** 2
-                    for axis in ("x", "y", "z")
-                )
-            )
-            dot = abs(
-                sum(
-                    getattr(pose.orientation, axis) * getattr(target.orientation, axis)
-                    for axis in ("x", "y", "z", "w")
-                )
-            )
-            angle = 2 * math.acos(min(1, dot))
+            distance, angle = pose_error(pose, target)
             near = distance <= 0.030 and angle <= math.radians(8)
         eligible = (
             near
@@ -142,7 +134,7 @@ class ManipulationOperation:
             )
 
         final_phase = (
-            getattr(backend, "endpoint_holding", False)
+            backend.endpoint_holding
             or state.execution_status.name == "COMPLETED"
         )
         if (
@@ -213,7 +205,7 @@ class ManipulationOperation:
                 # cannot require measured opening to reach zero. Retire before calling
                 # the bridge so repeated polling cannot send the action twice.
                 self.final_gripper = None
-                accepted = getattr(backend, "gripper_target", None)
+                accepted = backend.gripper_target
                 current = (
                     accepted
                     if isinstance(accepted, (int, float))
@@ -222,7 +214,7 @@ class ManipulationOperation:
                 if not isinstance(current, (int, float)) or abs(current - value) > 0.02:
                     try:
                         command = backend.set_gripper_position(value, planning_group=group)
-                    except Exception as exc:  # noqa: BLE001 — retire uncertain RPCs without retry
+                    except Exception as exc:  # noqa: BLE001 — uncertain hardware RPCs must not be retried
                         return self.finish("failed", f"Gripper acknowledgement failed: {exc}")
                     if command.status.name != "SUCCEEDED":
                         return self.finish("failed", command.message or "Gripper command rejected")

@@ -1,5 +1,8 @@
 import type { ManipulationOutbound } from "../manipulation/ManipulationTypes";
 import type { InteractionState, InteractionResult } from "../replication/CollaborationTypes";
+/** Observation objects retain stable references while exposing no mutable object fields. */
+export type ReadonlyFacts<T> = T extends readonly unknown[] ? T : T extends object
+  ? { readonly [K in keyof T]: ReadonlyFacts<T[K]> } : T;
 export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number];
 export type YawPose = [number, number, number, number];
@@ -230,6 +233,7 @@ export interface ClientError {
 }
 
 export interface HelloRequest {
+  protocol_version: 2;
   type: "hello_request";
   resume_token?: string;
   ts_client: number;

@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from typing import Any, cast
 
+from dimos.ar.numeric import finite_number
 from dimos.ar.replication.interaction import (
     InteractionAction,
     InteractionKind,
@@ -67,30 +68,18 @@ def decode_interaction_request(data: dict[str, Any]) -> InteractionRequest:
         if name not in data:
             continue
         raw = data[name]
-        if (
-            not isinstance(raw, list)
-            or len(raw) != length
-            or any(
-                isinstance(v, bool) or not isinstance(v, (float, int)) or not math.isfinite(v)
-                for v in raw
-            )
-        ):
+        if not isinstance(raw, list) or len(raw) != length:
             raise ValueError(f"{name} must contain {length} finite numbers")
-        pose.append(tuple(float(v) for v in raw))
+        pose.append(tuple(finite_number(v, name) for v in raw))
     if len(pose) == 1:
         raise ValueError("position and orientation must be supplied together")
     if pose and math.hypot(*pose[1]) < 1e-6:
         raise ValueError("orientation must be nonzero")
     for field in ("speed_scale", "gripper"):
         if field in data:
-            value = data[field]
+            value = finite_number(data[field], field)
             lower = 0.0 if field == "gripper" else 0.000001
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(value)
-                or not lower <= value <= 1
-            ):
+            if not lower <= value <= 1:
                 raise ValueError(f"invalid {field}")
     return InteractionRequest(
         request_id=request_id,

@@ -1,11 +1,10 @@
 import { helloAt } from "../fixtures/SessionFixture";
 import { describe, expect, it } from "vitest";
 import {
-  agentSpeechShouldRun,
   deriveRobotMarkerApplyInput,
   getRobotActivityState,
   robotTitleText,
-} from "../../Assets/Scripts/DimOSSpecsClient/presentation/AppState";
+} from "../../Assets/Scripts/DimOSARClient/robot/RobotMarkerState";
 import { NO_ROBOT_CONNECTED_LABEL } from "../../Assets/Scripts/DimOSARClient/websocket/sessionLinkStatus";
 import type { ARModuleSessionState } from "../../Assets/Scripts/DimOSARClient/websocket/arModuleSession";
 import type { ClientTrackingOrigin } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingOrigin";
@@ -156,20 +155,6 @@ describe("robotTitleText", () => {
 });
 
 const VOICE_OFF = { asrRunning: false, ttsPlaying: false };
-
-describe("agentSpeechShouldRun", () => {
-  it("runs live agent speech only when ready and capable", () => {
-    expect(agentSpeechShouldRun("agent", false, true, true)).toBe(true);
-    expect(agentSpeechShouldRun("agent", false, false, true)).toBe(false);
-    expect(agentSpeechShouldRun("agent", false, true, false)).toBe(false);
-    expect(agentSpeechShouldRun("manual", false, true, true)).toBe(false);
-  });
-
-  it("keeps speech gated by readiness and capability in debug mode", () => {
-    expect(agentSpeechShouldRun("agent", true, false, false)).toBe(false);
-    expect(agentSpeechShouldRun("manual", true, false, false)).toBe(false);
-  });
-});
 
 describe("getRobotActivityState", () => {
   it("returns Idle when nav is null, idle, or resolved", () => {

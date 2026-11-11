@@ -1,6 +1,6 @@
 import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 import { odomToClientTrackingPose } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingTransforms";
-import { DimOSSpecsClient } from "../../Assets/Scripts/DimOSSpecsClient/DimOSSpecsClient";
+import { emitReviewEvent, findProductionRoot } from "./IntegrationHost";
 import { clientTrackingToSpecsPose } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
 import { ARM_FIXTURE } from "./IntegrationArmFixture";
 import { IntegrationInput } from "./IntegrationInput";
@@ -29,13 +29,17 @@ export class ReviewScenario extends BaseScriptComponent {
   private grabOrientation: number[] | null = null;
   private previewControlPending = false;
   private rejectFollowing = false;
+  private followingStartPending = false;
+  private followingCapturePending = false;
   private failedFollowingUpdates = 0;
+  private followingToken: string | null = null;
+  private followingSequence = 0;
   private originalCamera: { position: vec3; rotation: quat } | null = null;
   private tracking: DeviceTracking | null = null;
   private trackingEnabled = false;
   private backdrop: WorldMeshRenderer | null = null;
   private outlineUploads = 0;
-  private emit(value: Record<string, unknown>): void { print(`SPECS_REVIEW ${JSON.stringify({ ...value, unixMs: Date.now() })}`); }
+  private emit(value: Record<string, unknown>): void { emitReviewEvent(value); }
   private check(name: string, passed: boolean): void { this.failed ||= !passed; this.emit({ type: "result", name, passed }); }
   private wire(message: any): void { this.peer.send(message); }
   private scene(id: string): void { this.emit({ type: "scene", id, name: id, label: id, videoOnly: true, durationS: 3 }); }
@@ -44,12 +48,7 @@ export class ReviewScenario extends BaseScriptComponent {
   onAwake(): void {
     if (!integrationTestsEnabled(this.getSceneObject())) return; this.createEvent("OnStartEvent").bind(() => this.createEvent("UpdateEvent").bind(() => this.tick())); }
   private prepare(): void {
-    const find = (object: SceneObject): any => {
-      const root = object.getComponent(DimOSSpecsClient.getTypeName()); if (root) return root;
-      for (let i = 0; i < object.getChildrenCount(); i++) { const found = find(object.getChild(i)); if (found) return found; }
-      return null;
-    };
-    for (let i = 0; i < global.scene.getRootObjectsCount(); i++) { this.root = find(global.scene.getRootObject(i)); if (this.root) break; }
+    this.root = findProductionRoot();
     if (!this.root) throw new Error("Production root missing");
     const root = this.root;
     this.peer = new IntegrationV2Fixture(value => root.session.onTransportText(JSON.stringify(value) + "\n"), "native-manipulation", () => getTime());
@@ -57,6 +56,7 @@ export class ReviewScenario extends BaseScriptComponent {
       if (this.state) { this.state.following_tail = null; this.wire(this.state); }
     };
     this.peer.onFollowingRelease = () => {
+      this.state.following = false;
       const target = this.validatedTarget;
       const tail = target ? { generation: ++this.tailGeneration, group_id: "arm", status: "finishing",
         target_revision: target.revision, position: target.position, orientation: target.orientation,
@@ -71,13 +71,16 @@ export class ReviewScenario extends BaseScriptComponent {
     root.transport.sendText = (text: string) => {
       for (const line of text.trim().split("\n")) {
         const command = JSON.parse(line); this.sent.push(command);
-        if (this.peer.command(command)) continue;
+        if (this.peer.command(command)) { this.followSharedTarget(command); continue; }
         if (command.type !== "manipulation_request") continue;
         if (!["cancel", "release"].includes(command.action) && !this.peer.authorizes(command))
           throw new Error("Unfenced native manipulation command");
         const reply: any = { type: "manipulation_result", request_id: command.request_id,
           group_id: command.group_id, action: command.action, status: "completed" };
-        if (command.action === "acquire") reply.token = `native-follow-${this.tailGeneration}`;
+        if (command.action === "acquire") {
+          this.followingToken = reply.token = `native-follow-${this.tailGeneration}`;
+          this.state.following = true; reply.status = "acquired";
+        }
         if (command.action === "evaluate") { reply.status = "feasible"; reply.joints = ARM_FIXTURE.joints; }
         if (command.action === "plan") Object.assign(reply, { status: "planned", plan_id: "native-plan",
           group_id: command.group_id, target_revision: command.target_revision,
@@ -88,17 +91,6 @@ export class ReviewScenario extends BaseScriptComponent {
           plan_id: reply.plan_id, group_id: reply.group_id, target_revision: reply.target_revision,
           joint_names: reply.joint_names, duration: reply.duration, trajectory: reply.trajectory,
         };
-        if (command.action === "update") {
-          reply.status = "feasible"; reply.sequence = command.sequence; reply.joints = ARM_FIXTURE.joints;
-          const canonical = this.peer.canonical();
-          if (this.rejectFollowing) {
-            reply.status = "infeasible"; reply.code = "ik_failed"; reply.message = "IK failed";
-            this.failedFollowingUpdates++;
-          } else if (canonical) {
-            this.validatedTarget = canonical;
-            this.state.observations.arm.pose = { position: canonical.position, orientation: canonical.orientation };
-          }
-        }
         if (command.action === "gripper") this.state.observations.arm.gripper = command.value;
         if (command.action === "execute") { this.state.execution = "executing"; this.peer.setBusy(true); }
         this.wire(reply);
@@ -119,7 +111,9 @@ export class ReviewScenario extends BaseScriptComponent {
         manipulation: yes,
         localization: yes,
         lidar: no, agent: no, estop: yes,
-        navigation: { ...no, nav_goal: no, nav_joystick: no } } });
+        navigation: { ...no, nav_goal: { ...no, preview: false }, nav_joystick: no } } });
+    if (root.session.view().connection !== "ready")
+      throw new Error(`Native manipulation fixture handshake failed: ${root.session.view().lastError}`);
     this.peer.reset();
     this.wire({ type: "state", server: { connected_clients: 1 }, lidar: { enabled: false, min_height_m: -10, max_height_m: 10, max_range_m: 5 },
       nav: { state: "idle", outcome: null }, agent: { idle: true } });
@@ -133,6 +127,23 @@ export class ReviewScenario extends BaseScriptComponent {
     this.drag = new IntegrationInput(); this.drag.active = true;
     this.other = new IntegrationInput(InteractorInputType.LeftHand); this.other.active = true;
     this.scene("manipulation_measured");
+  }
+  private followSharedTarget(command: any): void {
+    const target = this.peer.canonical();
+    if (command.action !== "update" || target?.domain !== "manipulation" ||
+        !this.state.following || !this.followingToken) return;
+    const sequence = ++this.followingSequence;
+    const result: any = { type: "manipulation_result", action: "update", group_id: "arm",
+      request_id: `shared-follow-${this.followingToken}-${sequence}`, sequence,
+      status: "feasible", joints: ARM_FIXTURE.joints, pose: target, sample_pose: target };
+    if (this.rejectFollowing) {
+      result.status = "infeasible"; result.code = "ik_failed"; result.message = "IK failed";
+      this.failedFollowingUpdates++;
+    } else {
+      this.validatedTarget = target;
+      this.state.observations.arm.pose = { position: target.position, orientation: target.orientation };
+    }
+    this.wire(result);
   }
   private pressControl(button: any): void {
     this.drag!.unhover();
@@ -226,12 +237,27 @@ export class ReviewScenario extends BaseScriptComponent {
     const root = this.root, arm = root.manipulation;
     this.state.ts = getTime(); this.state.observations.arm.measured_at = getTime(); this.wire(this.state);
     root.uiPresenter.mainUIFrame.enabled = false;
-    if (this.phase >= 7) arm.renderer.panelPresenter.root.enabled = false;
+    if (this.phase >= 7) arm.renderer.controls.panelPresenter.root.enabled = false;
     const handle = arm.renderer.handle;
-    if (this.previewControlPending && arm.renderer.previewMenu.isEnabledInHierarchy &&
-        !arm.renderer.buttons.get("plan").button.inactive) {
+    if (this.followingCapturePending) {
+      this.followingCapturePending = false;
+      this.check("manipulation_following_capture", arm.core.interaction.dragging && arm.input.capture.owner !== null);
+    }
+    // State packets are intentionally coalesced until the next production tick.
+    // Wait for execution completion to reach the controller before pressing again.
+    const intent = arm.core.interaction.snapshot();
+    if (this.followingStartPending && !intent.executing && !intent.blocked) {
+      this.followingStartPending = false;
+      const interactable = handle.getComponent("ScriptComponent") as any;
+      this.drag!.ray(handle.getTransform().getWorldPosition().add(new vec3(0, 0, 30)), handle.getTransform().getWorldPosition(), interactable);
+      this.dragFrom = this.drag!.from;
+      this.drag!.start(interactable); arm.input.tick(true);
+      this.followingCapturePending = true;
+    }
+    if (this.previewControlPending && arm.renderer.controls.previewMenu.isEnabledInHierarchy &&
+        !arm.renderer.controls.buttons.get("plan").button.inactive) {
       this.previewControlPending = false;
-      this.pressControl(arm.renderer.buttons.get("plan").button);
+      this.pressControl(arm.renderer.controls.buttons.get("plan").button);
       this.check("manipulation_preview_control", arm.core.presentation.previewRequested);
       this.hoverHandle();
     }
@@ -246,16 +272,16 @@ export class ReviewScenario extends BaseScriptComponent {
     if (this.phase === 0) {
       this.emit({ type: "diagnostic", setup: root.uiPresenter.isSetupCompleted(), mode: root.uiPresenter.getOperatingMode(), connection: root.session.view().connection, error: root.session.view().lastError, origin: root.clientTrackingOriginStore.T_odom_client !== null, meshes: arm.renderer.meshes.size });
       this.check("manipulation_model", arm.renderer.meshes.size > 0 && arm.renderer.object.enabled);
-      const presenter = arm.renderer.panelPresenter;
+      const presenter = arm.renderer.controls.panelPresenter;
       this.check("manipulation_native_frame", presenter.root.isEnabledInHierarchy &&
         presenter.frame.isVisible && presenter.frame.opacity > .99 &&
         presenter.frame.roundedRectangle.renderMeshVisual.enabled &&
-        arm.renderer.panel.isEnabledInHierarchy && arm.renderer.panel.getParent() === presenter.frame.content);
+        arm.renderer.controls.panel.isEnabledInHierarchy && arm.renderer.controls.panel.getParent() === presenter.frame.content);
       this.check("manipulation_base_controls", ["reset", "stop", "estop"].every(key => {
-        const control = arm.renderer.buttons.get(key);
+        const control = arm.renderer.controls.buttons.get(key);
         return control.sceneObject.isEnabledInHierarchy && control.labelText.enabled &&
           control.button.visual.renderMeshVisual.enabled;
-      }) && arm.renderer.speed.getSceneObject().isEnabledInHierarchy);
+      }) && arm.renderer.controls.speed.getSceneObject().isEnabledInHierarchy);
       const expected = arm.renderer.base.getTransform().getWorldPosition().add(
         root.cameraObject.getTransform().getWorldRotation().multiplyVec3(new vec3(0, -13, 0)));
       const top = presenter.root.getTransform().getWorldPosition().add(
@@ -291,36 +317,31 @@ export class ReviewScenario extends BaseScriptComponent {
       this.drag!.end(); arm.input.tick(true);
       this.check("manipulation_evaluate", this.sent.some(c => c.action === "evaluate"));
       const opening = arm.core.interaction.desiredGripper ?? this.state.observations.arm.gripper;
-      this.pressControl(arm.renderer.gripper.button);
+      this.pressControl(arm.renderer.controls.gripper.button);
       this.check("manipulation_gripper_control", arm.core.interaction.desiredGripper === (opening < .5 ? 1 : 0));
       this.check("manipulation_gripper_draft_only", !this.sent.some(c => c.action === "execute" || c.action === "gripper"));
       this.previewControlPending = true; this.hoverHandle();
       this.scene("manipulation_preview");
     } else if (this.phase === 3) {
-      this.check("selected_ee_gripper", ["Open", "Close"].includes(arm.renderer.gripper.labelText.text));
+      this.check("selected_ee_gripper", ["Open", "Close"].includes(arm.renderer.controls.gripper.labelText.text));
       this.check("manipulation_plan", !this.previewControlPending && !!arm.core.interaction.plan &&
         this.sent.some(command => command.action === "plan"));
-      this.pressControl(arm.renderer.buttons.get("execute").button);
+      this.pressControl(arm.renderer.controls.buttons.get("execute").button);
     } else if (this.phase === 4) {
       this.check("manipulation_execute", this.sent.some(c => c.action === "execute" && c.plan_id === "native-plan"));
       this.state.execution = "idle"; this.state.plan = null; this.peer.setBusy(false);
       this.wire(this.state); root.selection.setSelected(false); this.scene("manipulation_follow");
-      const interactable = handle.getComponent("ScriptComponent") as any;
-      this.drag!.ray(handle.getTransform().getWorldPosition().add(new vec3(0, 0, 30)), handle.getTransform().getWorldPosition(), interactable);
-      this.dragFrom = this.drag!.from;
-      this.drag!.start(interactable); arm.input.tick(true);
-      this.check("manipulation_following_capture", arm.core.interaction.dragging && arm.input.capture.owner !== null);
+      this.followingStartPending = true;
     } else if (this.phase === 5) {
-      const update = [...this.sent].reverse().find(c => c.type === "manipulation_request" && c.action === "update");
       this.check("manipulation_ik_retains_capture", this.failedFollowingUpdates > 0 &&
         arm.core.interaction.rejection?.message === "IK failed" && arm.core.interaction.dragging && arm.input.capture.owner !== null);
-      const button = arm.renderer.gripper.button;
+      const button = arm.renderer.controls.gripper.button;
       const owner = arm.input.capture.owner;
       this.other!.ray(root.cameraObject.getTransform().getWorldPosition(),
         button.interactable.getSceneObject().getTransform().getWorldPosition(), button.interactable);
       this.other!.press(button, () => arm.input.tick(true));
       this.check("manipulation_two_hands", owner !== null && owner === arm.input.capture.owner && this.sent.some(c => c.action === "gripper"));
-      this.check("manipulation_following", update !== undefined); this.scene("manipulation_gripper");
+      this.check("manipulation_following", this.followingSequence > 0); this.scene("manipulation_gripper");
       this.drag!.end(); arm.input.tick(true);
     } else if (this.phase === 6) {
       this.check("manipulation_mesh_picking", arm.renderer.picks.size > 0 &&

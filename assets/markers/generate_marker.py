@@ -21,7 +21,6 @@ DEFAULT_MARKER_ID: int = 0
 DEFAULT_APRILTAG_DICT: str = "DICT_APRILTAG_36h11"
 TAG_TOTAL_SIZE_M: float = 0.070
 TAG_MODULES_TOTAL: int = 10
-TAG_BLACK_SIZE_M: float = TAG_TOTAL_SIZE_M * 8 / TAG_MODULES_TOTAL
 
 
 def marker_png_name(tag_id: int) -> str:
@@ -103,9 +102,11 @@ def write_page_pdf(
     page.paste(marker_pil, (x, y))
     draw = ImageDraw.Draw(page)
     label_y = y + marker_height_px + int(0.01 * dpi)
+    black_width_mm = marker_width_mm * MODULES_BLACK / MODULES_PER_SIDE
     lines = [
         f"AprilTag 36h11 ID {tag_id}",
-        "70 mm total / 56 mm black square - print at 100% scale",
+        f"{marker_width_mm:g} mm total / {black_width_mm:g} mm black square"
+        " - print at 100% scale",
         "Mount FLAT (rigid backing). Do not bend or wrap.",
     ]
     for i, line in enumerate(lines):

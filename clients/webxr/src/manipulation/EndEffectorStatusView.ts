@@ -3,7 +3,7 @@ import { NotificationPill } from "../presentation/NotificationPill";
 import { EndEffectorStatus, END_EFFECTOR_STATUS_STYLE, type EndEffectorStatusInput } from "@dimos-ar-client/manipulation/EndEffectorStatus";
 
 /** Non-interactive status beside the end effector, clear of its marker buttons. */
-export class TargetWarning {
+export class EndEffectorStatusView {
   private readonly pill = new NotificationPill({ ...END_EFFECTOR_STATUS_STYLE,
     fontSizeM: 0.0136, iconInsetM: 0.0272, textOffsetM: 0.0232, rightPaddingM: 0.0136,
   });

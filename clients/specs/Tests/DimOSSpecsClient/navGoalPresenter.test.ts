@@ -15,13 +15,13 @@ vi.mock("../../Assets/Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer", 
   }
   return { WorldMeshRenderer: Renderer, AdaptiveStrokeRenderer: Renderer };
 });
-import { NavGoalPresenter } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavGoalPresenter";
+import { NavigationRouteRenderer } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavigationRouteRenderer";
 
 const origin: ClientTrackingOrigin = {
   position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0,
 };
 function harness() {
-  const presenter = new NavGoalPresenter({} as SceneObject);
+  const presenter = new NavigationRouteRenderer({} as SceneObject);
   return { presenter, dots: renderers.get("NavigationRouteDots"), ribbon: renderers.get("NavigationRouteRibbon") };
 }
 beforeEach(() => renderers.clear());

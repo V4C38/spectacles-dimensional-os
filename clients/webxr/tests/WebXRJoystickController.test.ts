@@ -1,6 +1,6 @@
 import { immediateAuthority } from "../../specs/Tests/fixtures/ImmediateAuthority";
 import { describe, expect, it, vi } from "vitest";
-import { filterJoystick, isMenuButtonPressed, isTriggerPressed, WebXRJoystickController } from "../src/navigation/WebXRJoystickController";
+import { filterJoystick, isMenuButtonPressed, WebXRJoystickController } from "../src/navigation/WebXRJoystickController";
 
 describe("WebXRJoystickController", () => {
   it("filters the deadzone and treats the menu button as button 4", () => {
@@ -8,7 +8,6 @@ describe("WebXRJoystickController", () => {
     const live = filterJoystick({ x: 1, y: 0 });
     expect(live?.x).toBeCloseTo(1);
     expect(isMenuButtonPressed([{ pressed: false }, { pressed: false }, { pressed: false }, { pressed: false }, { pressed: true }])).toBe(true);
-    expect(isTriggerPressed([{ pressed: true }])).toBe(true);
   });
 
   it("rate-limits commands and sends an explicit zero on release", () => {

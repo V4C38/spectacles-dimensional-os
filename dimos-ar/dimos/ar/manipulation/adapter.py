@@ -194,6 +194,11 @@ class DimOSManipulationAdapter:
         with self._feedback_lock:
             poses = self._feedback_fk.frame_poses(feedback, frames) if feedback else {}
         values = dict(zip(feedback.name, feedback.position, strict=True)) if feedback else {}
+        velocities = (
+            dict(zip(feedback.name, feedback.velocity, strict=True))
+            if feedback and getattr(feedback, "velocity", None)
+            else {}
+        )
         return ManipulationSnapshot(
             timestamp=time.time(),
             operation_status=OperationStatus[self.module._state.name],
@@ -207,7 +212,7 @@ class DimOSManipulationAdapter:
                         name=list(g.joint_names),
                         position=[values[n] for n in g.joint_names],
                         velocity=[
-                            dict(zip(feedback.name, feedback.velocity, strict=True)).get(n, 0.0)
+                            velocities.get(n, 0.0)
                             for n in g.joint_names
                         ]
                         if getattr(feedback, "velocity", None)

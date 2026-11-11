@@ -13,7 +13,7 @@ export class RobotPanelFrame {
   private readonly corners: THREE.Mesh[]=[];
   constructor(parent: THREE.Object3D) {
     parent.add(this.object);
-    const chrome = panelChrome(this.object, .224, ARM_PANEL_STYLE.cornerM, .5);
+    const chrome = panelChrome(this.object, ARM_PANEL_STYLE.cornerM, .5);
     this.bar = chrome.bar; this.zones.push(chrome.barZone, chrome.cornerZones.left, chrome.cornerZones.right);
     this.corners.push(chrome.cornerArcs.left, chrome.cornerArcs.right);
     for (const [i,mesh] of this.zones.entries()) { mesh.userData.manipulationPanel=true; mesh.userData.panelHandle=["bar","left","right"][i]; }
@@ -64,7 +64,7 @@ export function panelIcon(segments: readonly (readonly [number, number])[]): THR
 }
 
 /** MainUI window chrome, shared by compact robot controls. */
-export function panelChrome(parent: THREE.Object3D, _width: number, radius: number, size = 1) {
+export function panelChrome(parent: THREE.Object3D, radius: number, size = 1) {
   const material = () => new THREE.MeshBasicMaterial({color:0xd1d1d6,transparent:true,opacity:.6,depthWrite:false,side:THREE.DoubleSide});
   const shape = new THREE.Shape(); const w=.12*size,r=.0065*size;
   shape.absarc(-w/2+r,0,r,Math.PI/2,Math.PI*1.5,false);

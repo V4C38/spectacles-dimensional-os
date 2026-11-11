@@ -9,6 +9,7 @@ from uuid import uuid4
 from dimos.ar.manipulation.errors import (
     ExecutionNotStartedError,
     ManipulationError,
+    rejection_result,
     spatial_error_code,
 )
 from dimos.ar.manipulation.following_tail import FollowingTail
@@ -211,25 +212,100 @@ class ManipulationRuntime:
                     self._pending_native = None
         return True
 
+    def skip_zero(self, shutdown: bool) -> dict[str, Any] | None:
+        with self.lock:
+            if not shutdown or not (self.session.stopped or self.session.cancelling):
+                return None
+            self.session.shutdown = True
+            generation = self.session.generation
+            quiesce = self.session.stop_confirmed
+        if quiesce:
+            self.adapter.quiesce()
+            with self.lock:
+                if generation == self.session.generation:
+                    self.session.quiesced = True
+        return {"status": "skipped", "message": "Emergency stop active; automatic motion skipped",
+                "quiescent": self.session.quiesced}
+
+    def begin_zero(self, client_id: str, group: str, shutdown: bool) -> int:
+        self.fresh(group)
+        with self.lock:
+            if not shutdown:
+                self.require_owner(client_id, group)
+                if self.operation.id is not None:
+                    raise ManipulationError("busy", "execution active or outcome uncertain")
+            if not self.planning.acquire(blocking=False):
+                raise ManipulationError("busy", "Planning is pending; retry reset")
+            self.retire()
+            self.session.owner, self.session.group_id = client_id, group
+            self.operation.id = uuid4().hex
+            self.operation.kind = "parking" if shutdown else "resetting"
+            if shutdown:
+                self.session.shutdown = True
+            return self.session.generation
+
+    def require_zero_current(self, generation: int) -> None:
+        with self.lock:
+            if (self.session.generation != generation or self.session.stopped
+                    or self.session.cancelling):
+                raise ManipulationError("ownership", "Reset interrupted by stop or ownership change")
+
+    def confirm_zero_reset(self, generation: int, ready: Any) -> None:
+        with self.lock:
+            self.require_zero_current(generation)
+            if not ready.succeeded:
+                self.session.stopped = True
+                self.session.stop_confirmed = False
+                raise ValueError(ready.message)
+
+    def quiesce_zero(self, generation: int) -> None:
+        self.adapter.quiesce()
+        with self.lock:
+            self.require_zero_current(generation)
+            self.session.quiesced = True
+
+    def fail_zero(self, generation: int, shutdown: bool) -> None:
+        with self.lock:
+            current = self.session.generation == generation and not self.session.stopped
+        if not current:
+            return
+        try:
+            ready = self.adapter.reset()
+        except Exception:
+            with self.lock:
+                if self.session.generation == generation:
+                    self.session.stopped = True
+                    self.session.stop_confirmed = False
+            raise
+        with self.lock:
+            current = self.session.generation == generation
+            if current and not ready.succeeded:
+                self.session.stopped = True
+                self.session.stop_confirmed = False
+        if current and ready.succeeded and shutdown:
+            self.adapter.quiesce()
+            with self.lock:
+                if self.session.generation == generation:
+                    self.session.quiesced = True
+
+    def finish_zero(self, generation: int) -> None:
+        with self.lock:
+            if self.session.generation == generation:
+                self.retire()
+        self.planning.release()
+
+    def retire_for_teardown(self) -> None:
+        with self.lock:
+            self.started = False
+            self.session.stopped = True
+            self.retire()
+
     def dispatch(self, client_id: str, request: dict[str, Any]) -> dict[str, Any]:
         try:
             return self.command(client_id, request)
         except ValueError as exc:
-            message = str(exc)
-            code = exc.code if isinstance(exc, ManipulationError) else spatial_error_code(message)
-            recoverable = request.get("action") in {"update", "evaluate", "plan"} and code in {
-                "ik_failed",
-                "joint_limit",
-                "collision",
-            }
-            result: dict[str, Any] = {
-                "status": "infeasible" if recoverable else "rejected",
-                "code": code,
-                "message": message,
-            }
-            if isinstance(exc, ManipulationError) and exc.failed_joints:
-                result["failed_joints"] = exc.failed_joints
-            if recoverable and request.get("action") == "update":
+            result = rejection_result(request.get("action"), exc)
+            if result["status"] == "infeasible" and request.get("action") == "update":
                 self.clear_following()
             if request.get("action") == "prepare_shutdown":
                 result["quiescent"] = self.session.quiesced
@@ -314,8 +390,6 @@ class ManipulationRuntime:
             self._following_failure = None
             if action == "plan":
                 self.operation.clear()
-                self.operation.id = None
-                self.operation.plan = None
                 self.session.generation += 1
             epoch = self.session.generation
         try:
@@ -659,7 +733,7 @@ class ManipulationRuntime:
             }
             if not evaluation.success:
                 result["code"] = self.adapter.evaluation_code(evaluation)
-        except Exception as exc:  # noqa: BLE001 — RPC/native errors are protocol replies
+        except Exception as exc:  # noqa: BLE001 — native IK failures are advisory wire results
             result = {
                 "status": "infeasible",
                 "code": spatial_error_code(str(exc), "ik_failed"),
@@ -735,7 +809,7 @@ class ManipulationRuntime:
             return {"available": False, "message": "Manipulation runtime is starting"}
         feedback = self.adapter.feedback
         if feedback is None or not 0 <= time.time() - feedback.ts <= self.config.feedback_max_age_s:
-            protection = getattr(self.adapter, "protection", None)
+            protection = self.adapter.protection
             faulted = isinstance(protection, dict) and protection.get("state") in {
                 "paused",
                 "fault",
@@ -759,15 +833,14 @@ class ManipulationRuntime:
             )
         with self.lock:
             goal = self.session.target_key
-            tracking = (getattr(self.adapter, "following_status", {}) or {}).get(
-                self.session.group_id
-            )
+            tracking = (self.adapter.following_status.get(self.session.group_id)
+                        if self.session.group_id is not None else None)
             at_target = False
             if (
                 goal
                 and isinstance(tracking, dict)
                 and tracking.get("arrived")
-                and time.monotonic() - getattr(self.adapter, "following_status_at", 0) < 0.3
+                and time.monotonic() - self.adapter.following_status_at < 0.3
             ):
                 native = self.pose({"position": goal[:3], "orientation": goal[3:]})
                 key = [
@@ -786,7 +859,7 @@ class ManipulationRuntime:
             result: dict[str, Any] = {
                 "available": True,
                 "simulated": bool(global_config.simulation),
-                "protection": getattr(self.adapter, "protection", None),
+                "protection": self.adapter.protection,
                 "ts": time.time(),
                 "model": self.descriptor,
                 "root_pose": (
@@ -812,7 +885,7 @@ class ManipulationRuntime:
                         "measured_at": feedback.ts if value.joints else None,
                         "pose": self.pose_wire(value.end_effector_pose),
                         "gripper": value.gripper_position,
-                        "gripper_target": getattr(self.adapter, "gripper_target", None),
+                        "gripper_target": self.adapter.gripper_target,
                         "joint_velocities": dict(
                             zip(value.joints.name, value.joints.velocity, strict=True)
                         )
@@ -833,12 +906,10 @@ class ManipulationRuntime:
                 else state.execution_status.name.lower()
                 if self.operation.id
                 else "idle",
-                "execution_phase": self.operation.phase
-                if self.operation.id or self.operation.completed_id or self.operation.failed_id
-                else None,
+                "execution_phase": self.operation.published_phase,
                 "message": self.operation.gripper_error
                 or self._following_failure
-                or (getattr(self.adapter, "protection", None) or {}).get("reason")
+                or (self.adapter.protection or {}).get("reason")
                 or state.error,
                 "owner": self.session.owner,
                 "following": self.session.token is not None,
@@ -950,7 +1021,7 @@ class ManipulationRuntime:
             self.emergency_stop(epoch=epoch, revision=revision)
 
     def advance(self) -> None:
-        protection = getattr(self.adapter, "protection", None)
+        protection = self.adapter.protection
         with self.lock:
             protection_stop = (isinstance(protection, dict)
                                and protection.get("state") in {"paused", "fault"}

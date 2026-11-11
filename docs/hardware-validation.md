@@ -7,7 +7,7 @@ Run the established device/robot validation procedure after the full repository 
 | Production Lens | Correct source project deployed; Integration Test Harness Auto Run false; no Review assets or scripted scenario hosts |
 | Localization | Capture/localization, tracking-reference reset, sensor alignment and cross-headset registration |
 | Navigation | Valid placement, invalid release, cancellation and a second client's authority acquisition |
-| Shared sessions | Specs and WebXR joining one PIN, observer interpolation, late joining and brief reconnection |
+| Shared sessions | Specs joining by PIN and WebXR using its same-origin backend, observer interpolation, late joining and brief reconnection |
 | Manipulation | Following, selection, checked Execute, gripper control during following, measured arrival and takeover |
 | Stop behavior | Physical stop response, liveness loss, confirmed resume and orderly parking under the established hardware procedure |
 | Device performance | Camera gate open/closed, LiDAR on/off, repeated localization misses, thermal/memory behavior and frame-time diagnostics over a sustained session |

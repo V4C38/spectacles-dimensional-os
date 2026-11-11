@@ -15,7 +15,7 @@ import type {
 
 const STATE = stateFrame();
 
-function makeSession(pumpSnapshots = true): {
+function makeSession(): {
   session: ARModuleSession;
   transport: FakeTransport;
   clock: FakeClock;
@@ -30,23 +30,11 @@ function makeSession(pumpSnapshots = true): {
     clientTrackingOriginStore: originStore,
     config: { helloTimeoutS: 1, reconnectDelayS: 0.5 },
   });
-  const receive = session.onTransportText.bind(session);
-  let publication: import("../../Assets/Scripts/DimOSARClient/replication/CollaborationTypes").InteractionState | null = null;
-  session.onTransportText = text => {
-    for (const line of text.split("\n").filter(value => value.trim())) {
-      let value: any;
-      try { value = JSON.parse(line); } catch { receive(line + "\n"); continue; }
-      if (value.type === "nav_goal") value = navigationSnapshot(publication, value);
-      if (value.type === "interaction_state") publication = value;
-      receive(JSON.stringify(value) + "\n");
-    }
-    if (pumpSnapshots) session.tick();
-  };
   return { session, transport, clock, originStore };
 }
 
 function submitForResult(session: ARModuleSession, resultTs: number): void {
-  session.onTransportText(JSON.stringify({ result_timeout_s: 15, type: "localization_observations_request", capture_id: `capture-${resultTs}`, capture_policy: "any_angle", observation_count: 1 }) + "\n");
+  session.onTransportText(JSON.stringify({ result_timeout_s: 15, type: "localization_observations_request", capture_id: `capture-${resultTs}`, capture_policy: "any_angle", observation_count: 1 }) + "\n"); session.tick();
   const sync = session.view().hello!.time_sync;
   session.submitLocalizationObservations([{
     ts_capture: resultTs - (sync.ts_server - sync.ts_client), jpeg: new Uint8Array([1]),
@@ -64,7 +52,7 @@ function handshake(
   const hello = helloAt(clock.nowS, capabilities);
   session.start();
   session.onTransportOpen();
-  session.onTransportText(`${JSON.stringify(hello)}\n${JSON.stringify(STATE)}\n`);
+  session.onTransportText(`${JSON.stringify(hello)}\n${JSON.stringify(STATE)}\n`); session.tick();
   expect(session.view().connection).toBe("ready");
   expect(transport.texts).toHaveLength(1);
   expect(JSON.parse(transport.texts[0])).toEqual({ type: "hello_request", protocol_version: 2, ts_client: clock.nowS });
@@ -84,7 +72,7 @@ describe("session handshake", () => {
   it.each([undefined, 1, 3])("rejects incompatible hello version %s with an actionable error", version => {
     const { session } = makeSession();
     session.start(); session.onTransportOpen();
-    session.onTransportText(JSON.stringify({ ...helloAt(0), protocol_version: version }) + "\n");
+    session.onTransportText(JSON.stringify({ ...helloAt(0), protocol_version: version }) + "\n"); session.tick();
     expect(session.view().connection).toBe("failed");
     expect(session.view().lastError).toContain("Incompatible ARModule protocol: expected version 2");
     expect(session.view().hello).toBeNull();
@@ -113,7 +101,7 @@ describe("session handshake", () => {
     const { session } = makeSession();
     session.start();
     session.onTransportOpen();
-    session.onTransportText(`${JSON.stringify(STATE)}\n`);
+    session.onTransportText(`${JSON.stringify(STATE)}\n`); session.tick();
     expect(session.view().connection).toBe("failed");
     expect(session.view().lastError).toMatch(/expected hello/);
   });
@@ -135,7 +123,7 @@ describe("session handshake", () => {
     const { session } = makeSession();
     session.start();
     session.onTransportOpen();
-    session.onTransportText(`${JSON.stringify(helloAt(99))}\n`);
+    session.onTransportText(`${JSON.stringify(helloAt(99))}\n`); session.tick();
     expect(session.view().connection).toBe("failed");
     expect(session.view().lastError).toMatch(/echo hello_request/);
   });
@@ -160,10 +148,10 @@ describe("session facts and tracking origin", () => {
       type: "interaction_state", epoch: "robot", revision: 1, mode: "manual", authority: null, target: null,
       active_goal: { type: "nav_goal", pose: [2,0,0,0], path_poses: [], ts: 1 },
       preview: { type: "nav_goal", preview: true, pose: [2,0,0,0], path_poses: [[0,0,0,0],[2,0,0,0]], ts: 1 } };
-    session.onTransportText(JSON.stringify(interaction) + "\n");
+    session.onTransportText(JSON.stringify(interaction) + "\n"); session.tick();
     expect(session.view().nav_goal?.pose).toEqual([2,0,0,0]);
     expect(session.view().nav_preview).not.toBeNull();
-    session.onTransportText(JSON.stringify({ ...interaction, revision: 2, active_goal: null, preview: null }) + "\n");
+    session.onTransportText(JSON.stringify({ ...interaction, revision: 2, active_goal: null, preview: null }) + "\n"); session.tick();
     expect(session.view().nav_goal).toBeNull(); expect(session.view().nav_preview).toBeNull();
   });
   it("stores telemetry and routes localization_result to the origin store", () => {
@@ -181,14 +169,14 @@ describe("session facts and tracking origin", () => {
         orientation: [0, 0, 0, 1],
         ts: 2,
       }) + "\n",
-    );
+    ); session.tick();
     session.onTransportText(
-      JSON.stringify({
+      JSON.stringify(navigationSnapshot(session.view().interaction ?? null, {
         type: "nav_goal",
         path_poses: [],
         ts: 3,
-      }) + "\n",
-    );
+      })) + "\n",
+    ); session.tick();
     transport.bulk.lidar(pythonLidar(4, []));
     submitForResult(session, 5);
     session.onTransportText(
@@ -199,7 +187,7 @@ describe("session facts and tracking origin", () => {
         confidence: 0.9,
         ts: 5,
       }) + "\n",
-    );
+    ); session.tick();
 
     expect(session.view().pose?.position).toEqual([1, 0, 0]);
     expect(session.view().nav_goal?.path_poses).toEqual([]);
@@ -215,13 +203,13 @@ describe("session facts and tracking origin", () => {
   it("fails a second hello or a malformed frame after ready", () => {
     const { session, transport, clock } = makeSession();
     handshake(session, transport, clock);
-    session.onTransportText(`${JSON.stringify(helloAt(clock.nowS))}\n`);
+    session.onTransportText(`${JSON.stringify(helloAt(clock.nowS))}\n`); session.tick();
     expect(session.view().connection).toBe("failed");
     expect(session.view().lastError).toMatch(/unexpected hello/);
 
     const again = makeSession();
     handshake(again.session, again.transport, again.clock);
-    again.session.onTransportText("not-json\n");
+    again.session.onTransportText("not-json\n"); again.session.tick();
     expect(again.session.view().connection).toBe("failed");
     expect(again.session.view().lastError).toContain("Invalid critical unknown");
     again.clock.nowS = 0.5;
@@ -267,7 +255,7 @@ describe("session facts and tracking origin", () => {
         confidence: 1,
         ts: 1,
       }) + "\n",
-    );
+    ); session.tick();
     expect(session.view()).toMatchObject({
       connection: "failed",
       lastError: "origin rejected",
@@ -286,7 +274,7 @@ describe("session facts and tracking origin", () => {
         confidence: 0.4,
         ts: 1,
       }) + "\n",
-    );
+    ); session.tick();
     submitForResult(session, 2);
     session.onTransportText(
       JSON.stringify({
@@ -296,7 +284,7 @@ describe("session facts and tracking origin", () => {
         confidence: 0.8,
         ts: 2,
       }) + "\n",
-    );
+    ); session.tick();
     expect(originStore.T_odom_client?.position).toEqual([2, 0, 0]);
     expect(originStore.T_odom_client?.ts).toBe(2);
   });
@@ -313,7 +301,7 @@ describe("session facts and tracking origin", () => {
       capture_policy: "any_angle",
       observation_count: 2,
     } as const;
-    session.onTransportText(`${JSON.stringify(request)}\n`);
+    session.onTransportText(`${JSON.stringify(request)}\n`); session.tick();
     expect(requests).toEqual([request]);
     expect(session.view().connection).toBe("ready");
   });
@@ -332,7 +320,7 @@ describe("disconnect and reconnect", () => {
         confidence: 1,
         ts: 1,
       }) + "\n",
-    );
+    ); session.tick();
     expect(originStore.hasTrackingOrigin).toBe(true);
 
     session.onTransportClose();
@@ -347,7 +335,7 @@ describe("disconnect and reconnect", () => {
     expect(transport.connectCount).toBe(2);
 
     session.onTransportOpen();
-    session.onTransportText(`${JSON.stringify(helloAt(clock.nowS))}\n`);
+    session.onTransportText(`${JSON.stringify(helloAt(clock.nowS))}\n`); session.tick();
     expect(session.view().connection).toBe("ready");
     expect(session.view().hasTrackingOrigin).toBe(true);
   });
@@ -403,14 +391,14 @@ describe("session control", () => {
     });
     const outbound: string[] = [];
     session.subscribeOutbound((message) => outbound.push(message.type));
-    session.onTransportText(JSON.stringify({ type: "agent_message", text: "Heading out." }) + "\n");
+    session.onTransportText(JSON.stringify({ type: "agent_message", text: "Heading out." }) + "\n"); session.tick();
     expect(session.view().agentMessage).toBe("Heading out.");
     session.onTransportText(
       JSON.stringify({
         ...STATE,
         agent: { idle: false },
       }) + "\n",
-    );
+    ); session.tick();
     expect(session.view().state?.agent.idle).toBe(false);
     session.onTransportText(
       JSON.stringify({
@@ -418,7 +406,7 @@ describe("session control", () => {
         name: "ar_place_marker",
         args: { id: "kitchen", x: 1, y: 0, z: 0 },
       }) + "\n",
-    );
+    ); session.tick();
     expect(outbound).toContain("agent_message");
     expect(outbound).toContain("agent_skill");
     session.stop();
@@ -472,7 +460,7 @@ it("stores preview replies separately from active navigation and clears both on 
   const { session, transport } = makeSession(); handshake(session, transport);
   const active = { type: "nav_goal", pose: [1, 2, 0, 0], path_poses: [[1, 2, 0, 0]], ts: 1 };
   const preview = { type: "nav_goal", preview: true, pose: [3, 4, 0, 0], path_poses: [[3, 4, 0, 0]], ts: 2 };
-  session.onTransportText(JSON.stringify(active) + "\n" + JSON.stringify(preview) + "\n");
+  session.onTransportText(JSON.stringify(navigationSnapshot(navigationSnapshot(session.view().interaction ?? null, active), preview)) + "\n"); session.tick();
   expect(session.view().nav_goal).toEqual(active);
   expect(session.view().nav_preview).toEqual(preview);
   expect(session.view().nav).toEqual({ state: "idle", outcome: null });
@@ -484,13 +472,13 @@ for (const reference of ["room-a", "room-b", undefined]) {
   it(`only restores localization on reconnect to the same odometry reference (${reference})`, () => {
     const { session, clock, originStore } = makeSession();
     session.start(); session.onTransportOpen();
-    session.onTransportText(JSON.stringify({ ...helloAt(0), odom_reference_id: "room-a" }) + "\n");
+    session.onTransportText(JSON.stringify({ ...helloAt(0), odom_reference_id: "room-a" }) + "\n"); session.tick();
     originStore.setFromLocalizationResult({ type: "localization_result", position: [2, 3, 1], orientation: [0, 0, 0, 1], confidence: 1, ts: 100 });
     session.onTransportClose();
     expect(session.view().hasTrackingOrigin).toBe(false);
     expect(session.view().hasRetainedTrackingOrigin).toBe(true);
     clock.nowS = 0.5; session.tick(); session.onTransportOpen();
-    session.onTransportText(JSON.stringify({ ...helloAt(0.5), odom_reference_id: reference }) + "\n");
+    session.onTransportText(JSON.stringify({ ...helloAt(0.5), odom_reference_id: reference }) + "\n"); session.tick();
     expect(originStore.hasTrackingOrigin).toBe(reference === "room-a");
     expect(session.view().alignmentRequired === true).toBe(reference !== "room-a");
     session.stop(); expect(originStore.hasTrackingOrigin).toBe(false);
@@ -500,14 +488,14 @@ for (const reference of ["room-a", "room-b", undefined]) {
 it("assigns distinct monotonic revisions to identical agent messages across connection teardown", () => {
   const { session, transport, clock } = makeSession(); handshake(session, transport, clock);
   expect(session.view().agentMessageRevision).toBe(0);
-  session.onTransportText(JSON.stringify({ type: "agent_message", text: "Done" }) + "\n");
+  session.onTransportText(JSON.stringify({ type: "agent_message", text: "Done" }) + "\n"); session.tick();
   expect(session.view().agentMessageRevision).toBe(1);
-  session.onTransportText(JSON.stringify({ type: "agent_message", text: "Done" }) + "\n");
+  session.onTransportText(JSON.stringify({ type: "agent_message", text: "Done" }) + "\n"); session.tick();
   expect(session.view().agentMessageRevision).toBe(2);
   session.stop(); expect(session.view().agentMessage).toBeNull();
   expect(session.view().agentMessageRevision).toBe(2);
-  session.start(); session.onTransportOpen(); session.onTransportText(JSON.stringify(helloAt(clock.nowS)) + "\n");
-  session.onTransportText(JSON.stringify({ type: "agent_message", text: "Done" }) + "\n");
+  session.start(); session.onTransportOpen(); session.onTransportText(JSON.stringify(helloAt(clock.nowS)) + "\n"); session.tick();
+  session.onTransportText(JSON.stringify({ type: "agent_message", text: "Done" }) + "\n"); session.tick();
   expect(session.view().agentMessageRevision).toBe(3);
 });
 
@@ -516,7 +504,7 @@ describe("bulk isolation and capture replacement", () => {
     const { session, transport, clock } = makeSession();
     handshake(session, transport, clock);
     const ref = { epoch: "fixture-epoch", id: "route:preview", revision: "slow" };
-    session.onTransportText(JSON.stringify({ type: "nav_goal", preview: true, preview_id: "slow-preview", pose: [1, 0, 0, 0], ts: 100, route_ref: ref }) + "\n");
+    session.onTransportText(JSON.stringify(navigationSnapshot(session.view().interaction ?? null, { type: "nav_goal", preview: true, preview_id: "slow-preview", pose: [1, 0, 0, 0], ts: 100, route_ref: ref })) + "\n"); session.tick();
     transport.bulk.receive({ type: "bulk_record", ...ref, kind: "route", part: 0, parts: 2,
       data: { metadata: { ts: 100, pose: [1, 0, 0, 0] } } });
     session.tick();
@@ -536,7 +524,7 @@ describe("bulk isolation and capture replacement", () => {
     const { session, transport, clock } = makeSession();
     handshake(session, transport, clock);
     const ref = { epoch: "fixture-epoch", id: "route:preview", revision: "evicted" };
-    session.onTransportText(JSON.stringify({ type: "nav_goal", preview: true, preview_id: "missing-preview", pose: [1, 0, 0, 0], ts: 100, route_ref: ref }) + "\n");
+    session.onTransportText(JSON.stringify(navigationSnapshot(session.view().interaction ?? null, { type: "nav_goal", preview: true, preview_id: "missing-preview", pose: [1, 0, 0, 0], ts: 100, route_ref: ref })) + "\n"); session.tick();
     transport.bulk.receive({ type: "bulk_error", code: "asset_unavailable", kind: "route", ...ref });
     session.tick();
     expect(session.view().connection).toBe("ready");
@@ -548,7 +536,7 @@ describe("bulk isolation and capture replacement", () => {
     const { session, transport, clock } = makeSession(); handshake(session, transport, clock);
     const ref = { epoch: "fixture-epoch", id: "permanently-missing-preview", revision: "1" };
     const preview = { type: "nav_goal", preview: true, preview_id: "unavailable", pose: [1, 0, 0, 0], ts: 100, route_ref: ref };
-    session.onTransportText(JSON.stringify(preview) + "\n");
+    session.onTransportText(JSON.stringify(navigationSnapshot(session.view().interaction ?? null, preview)) + "\n"); session.tick();
     for (const time of [0, 2, 6]) {
       clock.nowS = time; session.tick();
       transport.bulk.receive({ type: "bulk_error", code: "asset_unavailable", kind: "route", ...ref });
@@ -557,7 +545,7 @@ describe("bulk isolation and capture replacement", () => {
     expect(session.view().connection).toBe("ready");
     expect(session.view().nav_preview).toMatchObject({ preview: true, preview_id: "unavailable", pose: null, path_poses: [] });
     expect(session.view().manipulationError).toBeNull();
-    session.onTransportText(JSON.stringify({ ...preview, preview_id: "same-unavailable-asset" }) + "\n");
+    session.onTransportText(JSON.stringify(navigationSnapshot(session.view().interaction ?? null, { ...preview, preview_id: "same-unavailable-asset" })) + "\n"); session.tick();
     expect(session.view().connection).toBe("ready");
     session.requestEstop();
     expect(JSON.parse(transport.texts.at(-1)!).type).toBe("estop_request");
@@ -572,8 +560,8 @@ describe("bulk isolation and capture replacement", () => {
       motion_busy: false,
       following_tail: null,
       type: "interaction_state", epoch: "robot", revision: 1, mode: "manual",
-      authority: null, target: null, preview: null, active_goal: { ...goal, path_poses: [] } }) + "\n");
-    session.onTransportText(JSON.stringify(goal) + "\n");
+      authority: null, target: null, preview: null, active_goal: { ...goal, path_poses: [] } }) + "\n"); session.tick();
+    session.onTransportText(JSON.stringify(navigationSnapshot(session.view().interaction ?? null, goal)) + "\n"); session.tick();
     expect(session.view().nav_goal).toMatchObject({ pose: [3, 0, 0, 0], path_poses: [] });
     expect(session.assetTransferDeadline("interaction_state")).not.toBeNull();
     for (const time of [0, 2, 6]) {
@@ -638,9 +626,9 @@ describe("deferred asset state ordering", () => {
 
   it("does not restore a pending route after the server clears the accepted goal", () => {
     const { session, transport } = makeSession(); handshake(session, transport);
-    wire(session, { type: "nav_goal", pose: [1, 0, 0, 0], ts: 1, route_ref: routeRef });
+    wire(session, navigationSnapshot(session.view().interaction ?? null, { type: "nav_goal", pose: [1, 0, 0, 0], ts: 1, route_ref: routeRef })); session.tick();
     expect(session.view().nav_goal?.pose).toEqual([1, 0, 0, 0]);
-    wire(session, interaction(2));
+    wire(session, interaction(2)); session.tick();
     finishRoute(transport); session.tick();
     expect(session.view().nav_goal).toBeNull();
     expect(session.view().connection).toBe("ready");
@@ -648,8 +636,8 @@ describe("deferred asset state ordering", () => {
 
   it("keeps a newer route when an older route finishes downloading", () => {
     const { session, transport } = makeSession(); handshake(session, transport);
-    wire(session, { type: "nav_goal", pose: [1, 0, 0, 0], ts: 1, route_ref: routeRef });
-    wire(session, { type: "nav_goal", pose: [3, 0, 0, 0], ts: 2, path_poses: [[0, 0, 0, 0], [3, 0, 0, 0]] });
+    wire(session, navigationSnapshot(session.view().interaction ?? null, { type: "nav_goal", pose: [1, 0, 0, 0], ts: 1, route_ref: routeRef })); session.tick();
+    wire(session, navigationSnapshot(session.view().interaction ?? null, { type: "nav_goal", pose: [3, 0, 0, 0], ts: 2, path_poses: [[0, 0, 0, 0], [3, 0, 0, 0]] })); session.tick();
     finishRoute(transport); session.tick();
     expect(session.view().nav_goal?.pose).toEqual([3, 0, 0, 0]);
     expect(session.view().nav_goal?.ts).toBe(2);
@@ -657,8 +645,8 @@ describe("deferred asset state ordering", () => {
 
   it("keeps a newer canonical endpoint while an earlier route completes", () => {
     const { session, transport } = makeSession(); handshake(session, transport);
-    wire(session, { type: "nav_goal", pose: [1, 0, 0, 0], ts: 1, route_ref: routeRef });
-    wire(session, { ...interaction(2), active_goal: { type: "nav_goal", pose: [3, 0, 0, 0], path_poses: [], ts: 2 } });
+    wire(session, navigationSnapshot(session.view().interaction ?? null, { type: "nav_goal", pose: [1, 0, 0, 0], ts: 1, route_ref: routeRef })); session.tick();
+    wire(session, { ...interaction(2), active_goal: { type: "nav_goal", pose: [3, 0, 0, 0], path_poses: [], ts: 2 } }); session.tick();
     finishRoute(transport); session.tick();
     expect(session.view().nav_goal?.pose).toEqual([3, 0, 0, 0]);
     expect(session.view().nav_goal?.path_poses).toEqual([]);
@@ -666,15 +654,15 @@ describe("deferred asset state ordering", () => {
 
   it("does not restore a pending preview after the planning reservation is cancelled", () => {
     const { session, transport } = makeSession(); handshake(session, transport);
-    wire(session, { type: "nav_goal", preview: true, preview_id: "cancelled", pose: [1, 0, 0, 0], ts: 1, route_ref: routeRef });
-    wire(session, interaction(2));
+    wire(session, navigationSnapshot(session.view().interaction ?? null, { type: "nav_goal", preview: true, preview_id: "cancelled", pose: [1, 0, 0, 0], ts: 1, route_ref: routeRef })); session.tick();
+    wire(session, interaction(2)); session.tick();
     finishRoute(transport); session.tick();
     expect(session.view().nav_preview).toBeNull();
   });
 
   it("retires pending canonical snapshot assets immediately when requesting estop", () => {
     const { session, transport } = makeSession(); handshake(session, transport);
-    wire(session, { ...interaction(1), active_goal: { type: "nav_goal", pose: [1, 0, 0, 0], ts: 1, route_ref: routeRef } });
+    wire(session, { ...interaction(1), active_goal: { type: "nav_goal", pose: [1, 0, 0, 0], ts: 1, route_ref: routeRef } }); session.tick();
     expect(session.view().nav_goal?.path_poses).toEqual([]);
     session.requestEstop();
     finishRoute(transport); session.tick();
@@ -684,8 +672,8 @@ describe("deferred asset state ordering", () => {
 
   it("does not roll back newer arm execution or restore a cleared plan", () => {
     const { session, transport } = makeSession(); handshake(session, transport);
-    wire(session, { ...state(1), plan_ref: planRef });
-    wire(session, { ...state(2), execution: "executing", plan: null });
+    wire(session, { ...state(1), plan_ref: planRef }); session.tick();
+    wire(session, { ...state(2), execution: "executing", plan: null }); session.tick();
     finishPlan(transport); session.tick();
     expect(session.view().manipulation?.ts).toBe(2);
     expect(session.view().manipulation?.execution).toBe("executing");
@@ -695,8 +683,8 @@ describe("deferred asset state ordering", () => {
   it("does not replace a newer model when an older model finishes downloading", () => {
     const { session, transport } = makeSession(); handshake(session, transport);
     const modelRef = { epoch: "fixture-epoch", id: "old-model", revision: "old" };
-    wire(session, { ...state(1), model: undefined, model_ref: modelRef });
-    wire(session, { ...state(2), model: { ...ARM_FIXTURE.model, revision: "new-model" } });
+    wire(session, { ...state(1), model: undefined, model_ref: modelRef }); session.tick();
+    wire(session, { ...state(2), model: { ...ARM_FIXTURE.model, revision: "new-model" } }); session.tick();
     const { links, joints, ...metadata } = ARM_FIXTURE.model;
     transport.bulk.receive({ type: "bulk_record", ...modelRef, kind: "model", part: 0, parts: 3, data: { metadata } });
     transport.bulk.receive({ type: "bulk_record", ...modelRef, kind: "model", part: 1, parts: 3, data: { links } });
@@ -708,9 +696,9 @@ describe("deferred asset state ordering", () => {
 
   it("retires prior interaction-epoch state completions", () => {
     const { session, transport } = makeSession(); handshake(session, transport);
-    wire(session, interaction(1, "old-reference"));
-    wire(session, { ...state(1), plan_ref: planRef });
-    wire(session, interaction(1, "new-reference"));
+    wire(session, interaction(1, "old-reference")); session.tick();
+    wire(session, { ...state(1), plan_ref: planRef }); session.tick();
+    wire(session, interaction(1, "new-reference")); session.tick();
     finishPlan(transport); session.tick();
     expect(session.view().interaction?.epoch).toBe("new-reference");
     expect(session.view().manipulation?.plan).toBeNull();
@@ -719,9 +707,9 @@ describe("deferred asset state ordering", () => {
 
   it("retires pending facts across reconnect to another odometry reference", () => {
     const { session, transport, clock } = makeSession(); handshake(session, transport, clock);
-    wire(session, { type: "nav_goal", pose: [1, 0, 0, 0], ts: 1, route_ref: routeRef });
+    wire(session, navigationSnapshot(session.view().interaction ?? null, { type: "nav_goal", pose: [1, 0, 0, 0], ts: 1, route_ref: routeRef })); session.tick();
     session.stop(); session.start(); session.onTransportOpen();
-    wire(session, { ...helloAt(clock.nowS), odom_reference_id: "different-room" });
+    wire(session, { ...helloAt(clock.nowS), odom_reference_id: "different-room" }); session.tick();
     finishRoute(transport); session.tick();
     expect(session.view().hello?.odom_reference_id).toBe("different-room");
     expect(session.view().nav_goal).toBeNull();
@@ -732,10 +720,10 @@ describe("deferred asset state ordering", () => {
     const results: any[] = [];
     session.subscribeOutbound(message => { if (message.type === "manipulation_result") results.push(message); });
     wire(session, { type: "manipulation_result", request_id: "accepted-action", action: "plan", group_id: "arm",
-      status: "planned", plan_id: "old-plan", target_revision: 1, joint_names: Object.keys(ARM_FIXTURE.joints), duration: 2, plan_ref: planRef });
-    wire(session, { ...state(2), execution: "executing", plan: null });
+      status: "planned", plan_id: "old-plan", target_revision: 1, joint_names: Object.keys(ARM_FIXTURE.joints), duration: 2, plan_ref: planRef }); session.tick();
+    wire(session, { ...state(2), execution: "executing", plan: null }); session.tick();
     session.requestEstop();
-    wire(session, { type: "manipulation_result", request_id: "execution-outcome", action: "execute", group_id: "arm", status: "accepted" });
+    wire(session, { type: "manipulation_result", request_id: "execution-outcome", action: "execute", group_id: "arm", status: "accepted" }); session.tick();
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({ request_id: "execution-outcome", action: "execute", status: "accepted" });
     finishPlan(transport); session.tick();
@@ -747,7 +735,7 @@ describe("deferred asset state ordering", () => {
 });
 
 it("coalesces snapshot bursts before bounded frame processing", () => {
-  const { session } = makeSession(false);
+  const { session } = makeSession();
   session.start(); session.onTransportOpen();
   session.onTransportText(JSON.stringify(helloAt(0)) + "\n");
   for (let clients = 1; clients <= 100; clients++) {
@@ -761,7 +749,7 @@ it("coalesces snapshot bursts before bounded frame processing", () => {
 
 it("retains the latest congested update while sending a lease renewal", () => {
   const { session, transport, clock } = makeSession();
-  session.start(); session.onTransportOpen(); session.onTransportText(JSON.stringify(helloAt(0)) + "\n");
+  session.start(); session.onTransportOpen(); session.onTransportText(JSON.stringify(helloAt(0)) + "\n"); session.tick();
   for (let n = 0; n < 70; n++) {
     session.sendText(JSON.stringify({ type: "interaction_request", action: "update", sequence: n, payload: "x".repeat(1000) }) + "\n");
   }
@@ -780,18 +768,18 @@ it("exposes navigation facts through the canonical interaction snapshot", () => 
     following_tail: null,
     type: "interaction_state", epoch: "robot", revision: 1, mode: "manual",
     authority: null, target: null, active_goal: null, preview: null };
-  session.onTransportText(JSON.stringify(interaction) + "\n");
+  session.onTransportText(JSON.stringify(interaction) + "\n"); session.tick();
   const active = { type: "nav_goal", pose: [2, 0, 0, 0], path_poses: [[0, 0, 0, 0], [2, 0, 0, 0]], ts: 1 };
-  session.onTransportText(JSON.stringify(active) + "\n");
+  session.onTransportText(JSON.stringify(navigationSnapshot(session.view().interaction ?? null, active)) + "\n"); session.tick();
   let view = session.view();
   expect(view.nav_goal).toBe(view.interaction!.active_goal);
   expect(session.collaboration.snapshot().activeGoal).toBe(view.nav_goal);
   const preview = { ...active, preview: true, preview_id: "canonical-preview" };
-  session.onTransportText(JSON.stringify(preview) + "\n");
+  session.onTransportText(JSON.stringify(navigationSnapshot(session.view().interaction ?? null, preview)) + "\n"); session.tick();
   view = session.view();
   expect(view.nav_preview).toBe(view.interaction!.preview);
   expect(session.collaboration.snapshot().preview).toBe(view.nav_preview);
-  session.onTransportText(JSON.stringify({ ...interaction, revision: 4 }) + "\n");
+  session.onTransportText(JSON.stringify({ ...interaction, revision: 4 }) + "\n"); session.tick();
   view = session.view();
   expect(view.nav_goal).toBeNull(); expect(view.nav_preview).toBeNull();
   expect(view.interaction!.active_goal).toBeNull(); expect(view.interaction!.preview).toBeNull();

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Reproduce GitHub Actions CI locally (.github/workflows/ci.yml).
+# Run the GitHub Actions checks locally (.github/workflows/ci.yml).
+# GitHub pins Ubuntu 24.04; macOS executes the same checks with host libraries.
 #
 # Usage (from repo root):
 #   ./launcher/scripts/run-ci.sh
@@ -144,7 +145,14 @@ run_launcher_job() {
   pip install --upgrade -r requirements-dev.txt
 
   ruff check .
-  pytest --junitxml="${REVIEW_DATA}/unit/launcher/junit.xml"
+  local launcher_test_config
+  launcher_test_config="$(mktemp -d "${TMPDIR:-/tmp}/dimos-launcher-ci.XXXXXX")"
+  if ! XDG_CONFIG_HOME="${launcher_test_config}" pytest --junitxml="${REVIEW_DATA}/unit/launcher/junit.xml"; then
+    rm -rf "${launcher_test_config}"
+    return 1
+  fi
+  rm -rf "${launcher_test_config}"
+  node --test "${LAUNCHER_APP}/tests/static.test.mjs"
 }
 
 run_client_specs_job() {
@@ -164,7 +172,8 @@ run_client_webxr_job() {
   npm test
   npm run build -- --outDir "${CI_WEBXR_BUILD_DIR:-dist}"
   if [[ "$(uname -s)" == "Linux" && "${CI_PLAYWRIGHT_SYSTEM_DEPS:-install}" != "preinstalled" ]]; then
-    npx playwright install --with-deps chromium
+    "${ROOT}/launcher/scripts/install-ci-system-deps.sh" webxr
+    npx playwright install chromium
   else
     npx playwright install chromium
   fi
@@ -181,6 +190,9 @@ run_timed() {
   echo "Timing: $1 completed in $((SECONDS - started))s"
 }
 
+if [[ "$(uname -s)" == Linux && "${CI_PLAYWRIGHT_SYSTEM_DEPS:-install}" != preinstalled ]]; then
+  "${ROOT}/launcher/scripts/install-ci-system-deps.sh" planning
+fi
 check_runtime_tools
 run_timed run_dimos_ar_job
 run_timed run_manipulation_contract_job

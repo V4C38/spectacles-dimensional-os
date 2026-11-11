@@ -23,7 +23,8 @@ const capabilities: Capabilities = {
   },
 };
 
-function view(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionState {
+type MutableFacts<T> = T extends readonly unknown[] ? T : T extends object ? { -readonly [K in keyof T]: MutableFacts<T[K]> } : T;
+function view(overrides: Partial<ARModuleSessionState> = {}): MutableFacts<ARModuleSessionState> {
   return {
     connection: "ready",
     hasTrackingOrigin: false,
@@ -97,9 +98,9 @@ describe("robot presentation", () => {
     expect(gizmo.visible).toBe(true);
     const label = robot.object.getObjectByName("RobotMarkerLabel")!;
     expect(label.scale.x).toBe(1);
-    robot.feedback({ tone: "success", aligned: true, activity: "Idle", message: null });
+    robot.feedback({ tone: "success", activity: "Idle" });
     expect(label.children).toHaveLength(4);
-    robot.feedback({ tone: "success", aligned: true, activity: "Thinking", message: "Ignored speech copy" });
+    robot.feedback({ tone: "success", activity: "Thinking" });
     expect((label.children[2] as { text?: string }).text).toBe("Thinking");
     expect((label.children[2] as unknown as { fontSize: number }).fontSize).toBeGreaterThan((label.children[1] as unknown as { fontSize: number }).fontSize);
     const axes = [
@@ -154,6 +155,38 @@ it("smooths robot motion with Specs position and rotation rates and snaps fresh 
   robot.dispose();
 });
 
+it("adds only a translucent visual copy during a localization correction", () => {
+  const robot = new WebXRRobotPresenter();
+  const origin: ClientTrackingOrigin = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
+  const current = view({ hasTrackingOrigin: true,
+    pose: { type: "pose", position: [0, 0, 0.33], orientation: [0, 0, 0, 1], ts: 0 } });
+  try {
+    robot.apply(current, origin, true, null);
+    const trail = robot.object.getObjectByName("MarkerCorrectionTrail")!;
+    expect(trail.visible).toBe(false);
+    const before = robot.object.position.clone();
+    const aligned = { ...origin, position: [0, 0.4, 0] as [number, number, number] };
+    robot.apply(current, aligned, true, null);
+    expect(robot.object.position.x).toBeCloseTo(0.4);
+    expect(trail.visible).toBe(true);
+    expect(trail.getWorldPosition(new THREE.Vector3()).distanceTo(before)).toBeCloseTo(0);
+    const sphere = trail.children[0] as THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
+    expect(sphere.geometry).toBe((robot.object.getObjectByName("RobotIndicator") as THREE.Mesh).geometry);
+    expect(sphere.material.uniforms.uOpacity.value).toBeCloseTo(0.3);
+    const ray = new THREE.Raycaster(new THREE.Vector3(0, 0.33, 1), new THREE.Vector3(0, 0, -1));
+    expect(ray.intersectObject(trail, true)).toHaveLength(0);
+    robot.tick(0.25);
+    expect(trail.getWorldPosition(new THREE.Vector3()).x).toBeCloseTo(0);
+    expect(robot.object.getObjectByName("RobotIndicator")!.getWorldPosition(new THREE.Vector3()).x).toBeCloseTo(0.2);
+    expect(trail.children[1].visible).toBe(true);
+    robot.tick(0.35);
+    expect(trail.visible).toBe(false);
+    robot.apply(current, origin, true, null);
+    robot.reset();
+    expect(trail.visible).toBe(false);
+  } finally { robot.dispose(); }
+});
+
 it("orients the invisible body collider with the robot and reverses the outline fade without losing selection", () => {
   const robot = new WebXRRobotPresenter();
   robot.object.visible = true;
@@ -167,12 +200,10 @@ it("orients the invisible body collider with the robot and reverses the outline 
   expect(robot.collider.position.y - robot.collider.scale.y / 2).toBeCloseTo(-0.33);
   robot.object.updateMatrixWorld(true);
   expect(robot.collider.getWorldQuaternion(new THREE.Quaternion()).angleTo(robot.object.quaternion)).toBeCloseTo(0);
-  const outline = robot.object.getObjectByName("Robot selection outline") as THREE.LineSegments<THREE.EdgesGeometry, THREE.LineDashedMaterial>;
-  expect(outline.geometry.getAttribute("position").count).toBe(24);
-  expect(outline.material).toBeInstanceOf(THREE.LineDashedMaterial);
-  expect(outline.material.dashSize).toBe(ROBOT_LINE_STYLE.dashM);
-  expect(outline.material.gapSize).toBe(ROBOT_LINE_STYLE.gapM);
-  expect(outline.geometry.getAttribute("lineDistance").count).toBe(24);
+  const outline = robot.object.getObjectByName("Robot selection outline") as THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>;
+  expect(outline.geometry.getAttribute("instanceStart").count).toBe(12);
+  expect(outline.material.uniforms.uDash.value).toBe(ROBOT_LINE_STYLE.dashM);
+  expect(outline.material.uniforms.uGap.value).toBe(ROBOT_LINE_STYLE.gapM);
   expect(outline.material.opacity).toBe(0);
   const center = robot.collider.getWorldPosition(new THREE.Vector3());
   const ray = new THREE.Raycaster(center.clone().add(new THREE.Vector3(0, 0, 2)), new THREE.Vector3(0, 0, -1));
@@ -233,10 +264,10 @@ it("unfolds horizontally from the floor before rising, reverses on hide, and kee
 
 it("keeps the collapsing box visible, uses physical selected strokes, centers text and ends its connector above the floor circle", () => {
   const robot = new WebXRRobotPresenter(); robot.apply(view(), null, true, [0, 1, -2]);
-  robot.feedback({ tone: "success", aligned: true, activity: "Idle", message: null });
-  const outline = robot.object.getObjectByName("Robot selection outline") as THREE.LineSegments<THREE.EdgesGeometry, THREE.LineDashedMaterial>;
+  robot.feedback({ tone: "success", activity: "Idle" });
+  const outline = robot.object.getObjectByName("Robot selection outline") as THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>;
   robot.setSelected(true); robot.tick(1);
-  const selected = outline.children[0] as THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>;
+  const selected = outline;
   expect(selected.material.uniforms.uWidth.value).toBeCloseTo(0.00275);
   expect(selected.material.uniforms.uOpacity.value).toBeCloseTo(0.8);
   robot.setSelected(false); robot.tick(0.1);

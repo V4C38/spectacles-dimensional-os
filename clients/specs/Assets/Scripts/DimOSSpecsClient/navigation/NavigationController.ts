@@ -1,23 +1,21 @@
-import { NavigationInteraction, type Placement } from "../../DimOSARClient/navigation/NavigationInteraction";
-import { NavigationPreviewCoordinator } from "../../DimOSARClient/navigation/NavigationPreviewCoordinator";
-import { NavigationMarkerRenderer } from "./NavigationMarkerRenderer";
-import { DragPlacementPlane, SpecsFloorReference, SpecsDragPosition } from "./GroundPlacement";
-import { specsToClientTrackingPoint, clientTrackingToSpecsPoint, clientTrackingToSpecsYawPose, specsToClientTrackingYawPose } from "../utilities/SpecsCoordinates";
-import type { NavFlash } from "../../DimOSARClient/navigation/NavigationGoalLifecycle";
 import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
 import { requestNavGoal } from "../../DimOSARClient/navigation/navGoalRequest";
-import type { ARModuleSession, ARModuleSessionState } from "../../DimOSARClient/websocket/arModuleSession";
-import type { Vec3, YawPose } from "../../DimOSARClient/websocket/protocolTypes";
+import type { NavFlash } from "../../DimOSARClient/navigation/NavigationGoalLifecycle";
+import { NavigationInteraction,type Placement } from "../../DimOSARClient/navigation/NavigationInteraction";
+import { NavigationPreviewCoordinator } from "../../DimOSARClient/navigation/NavigationPreviewCoordinator";
+import type { ARModuleSession,ARModuleSessionState } from "../../DimOSARClient/websocket/arModuleSession";
+import type { Vec3,YawPose } from "../../DimOSARClient/websocket/protocolTypes";
 import type { RobotPresenter } from "../presentation/RobotPresenter";
+import { clientTrackingToSpecsPoint,clientTrackingToSpecsYawPose,specsToClientTrackingPoint,specsToClientTrackingYawPose } from "../utilities/SpecsCoordinates";
+import { DragPlacementPlane,SpecsDragPosition,SpecsFloorReference } from "./GroundPlacement";
 import { NavGoalMarker } from "./NavGoalMarker";
+import { NavigationMarkerRenderer } from "./NavigationMarkerRenderer";
 
 export class NavigationController {
-  onFlashChange: (() => void) | null = null;
   readonly interaction: NavigationInteraction;
   private marker: NavGoalMarker | null = null;
   private draftMarker: NavGoalMarker | null = null;
   private readonly probes = new Map<string, NavigationMarkerRenderer>();
-  private readonly inside = new Map<string, boolean>();
   private readonly dragPlanes = new Map<string, { plane: DragPlacementPlane; filter: SpecsDragPosition; offset: vec3 | null; time: number }>();
   private readonly floor = new SpecsFloorReference();
   private surveyRemaining = 0;
@@ -25,7 +23,6 @@ export class NavigationController {
   private surveyDeadline = 0;
   private surveyIndex = 0;
   private dragPlaneOrigin: ClientTrackingOrigin | null = null;
-  private previousFlash: NavFlash | null = null;
   private inputEnabled = true;
   private directSource: string | null = null;
   private viewportHeight = 1024;
@@ -120,7 +117,7 @@ export class NavigationController {
     if (!this.inputEnabled || !state.selected || !state.visible) { this.clearAim(sourceId); return; }
     this.interaction.aim(getTime(), this.place(sourceId, from, direction, true), sourceId);
   }
-  clearAim(sourceId: string): void { this.interaction.clearAim(sourceId); this.inside.delete(sourceId); this.dragPlanes.delete(sourceId); }
+  clearAim(sourceId: string): void { this.interaction.clearAim(sourceId); this.dragPlanes.delete(sourceId); }
   hold(sourceId: string, from: vec3, direction: vec3, fromMarker: boolean): void {
     if (!this.inputEnabled || !this.isArmed()) return;
     const selected = this.interaction.snapshot().selected;
@@ -129,6 +126,7 @@ export class NavigationController {
       this.directSource = sourceId;
     }
     const placement = this.place(sourceId, from, direction, !fromMarker);
+    if (!placement && (this.directSource === sourceId || this.interaction.ownsDraft(sourceId))) return;
     this.interaction.hold(getTime(), placement, fromMarker, sourceId);
   }
   release(sourceId: string, from: vec3, direction: vec3): void {
@@ -158,7 +156,7 @@ export class NavigationController {
         drag = { plane: new DragPlacementPlane(pose.position), filter: new SpecsDragPosition(pose.position), offset: null, time };
         this.dragPlanes.set(sourceId, drag);
       }
-      const placed = drag.plane.solve(from, direction, raw, time - drag.time);
+      const placed = drag.plane.solve(from, direction, raw, time - drag.time, this.floor.heightCm ?? drag.filter.position().y, this.deps.cameraObject.getTransform().getWorldPosition());
       if (placed && placed.distance(from) <= 2000 && drag.offset === null) {
         const initial = drag.filter.position();
         drag.offset = new vec3(initial.x - placed.x, 0, initial.z - placed.z);
@@ -213,7 +211,6 @@ export class NavigationController {
   }
   private render(deltaS: number): void {
     const state = this.interaction.snapshot();
-    if (state.flash !== this.previousFlash) { this.previousFlash = state.flash; this.onFlashChange?.(); }
     if (!state.visible || state.attachedToRobot && this.floor.heightCm === null) {
       this.marker?.hide(); this.draftMarker?.hide();
       for (const probe of this.probes.values()) probe.hide(); return;

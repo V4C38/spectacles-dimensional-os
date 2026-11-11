@@ -1,6 +1,6 @@
 import { previewAimChanged } from "./AdvisoryPreview";
 
-/** Deterministic authority policy shared by browser fixtures; native motion stays in each fixture. */
+/** Golden-flow acknowledgments only; Python contract tests prove lease expiry and fencing. */
 export class InteractionPeer {
   revision = 0;
   mode = "manual";

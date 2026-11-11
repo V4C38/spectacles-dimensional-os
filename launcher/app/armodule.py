@@ -14,10 +14,9 @@ import signal
 import socket
 import sys
 import time
-from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -34,6 +33,8 @@ from config import (
 )
 from dimos_config import write_runtime_config
 from discovery import run_json_probe
+from launcher_events import LauncherEvents
+from owned_operation import OwnedOperation
 from robot_sources import BLUEPRINT_CLI
 from tag_config import ui_from_armodule_config
 
@@ -42,8 +43,6 @@ WEBXR_PORT = 5173
 RERUN_WS_PORT = 3030
 RERUN_GRPC_PORT = 9877
 STACK_PORTS = (ARMODULE_PORT, RERUN_WS_PORT, RERUN_GRPC_PORT)
-LOG_BUFFER_SIZE = 500
-SUBSCRIBER_QUEUE_SIZE = 2000
 STOP_GRACE_SECONDS = 8.0
 DIMOS_STOP_GRACE_SECONDS = 60.0
 BLUEPRINTS = tuple(BLUEPRINT_CLI)
@@ -130,13 +129,6 @@ class LauncherStatus:
     error: str | None = None
 
 
-@dataclass
-class _Subscriber:
-    queue: asyncio.Queue[dict[str, Any]] = field(
-        default_factory=lambda: asyncio.Queue(maxsize=SUBSCRIBER_QUEUE_SIZE)
-    )
-
-
 class ProcessManager:
     def __init__(self, root: Path | None = None) -> None:
         self.dimos_stop_grace_seconds = float(
@@ -152,11 +144,7 @@ class ProcessManager:
         self.root = root or repo_root()
         self.scripts = scripts_dir(self.root)
         self.status = LauncherStatus(host_ip=detect_lan_ip())
-        self._log: deque[str] = deque(maxlen=LOG_BUFFER_SIZE)
-        self._last_log_key = ""
-        self._repeated_logs = 0
-        self._last_log_at = 0.0
-        self._subs: list[_Subscriber] = []
+        self.events = LauncherEvents(self.snapshot)
         self._proc: asyncio.subprocess.Process | None = None
         self._run_config_path: Path | None = None
         self._webxr_proc: asyncio.subprocess.Process | None = None
@@ -166,6 +154,7 @@ class ProcessManager:
         self._armodule_ready = asyncio.Event()
         self._lock = asyncio.Lock()
         self._stopping_pids: set[int] = set()
+        self._dependency_operation = OwnedOperation()
         self._check_started = False
         self._can_setup_running = False
         self._planner_lock = asyncio.Lock()
@@ -218,59 +207,14 @@ class ProcessManager:
             "default_clone_dir": str((self.root.parent / "dimos").resolve()),
         }
 
-    async def subscribe(self) -> AsyncIterator[dict[str, Any]]:
-        sub = _Subscriber()
-        self._subs.append(sub)
-        try:
-            for line in list(self._log):
-                yield {"type": "log", "line": line}
-            yield {"type": "status", **self.snapshot()}
-            while True:
-                event = await sub.queue.get()
-                yield event
-        finally:
-            if sub in self._subs:
-                self._subs.remove(sub)
+    def subscribe(self) -> AsyncIterator[dict[str, Any]]:
+        return self.events.subscribe()
 
     def _emit(self, event: dict[str, Any]) -> None:
-        for sub in list(self._subs):
-            try:
-                sub.queue.put_nowait(event)
-            except asyncio.QueueFull:
-                dropped = 0
-                while sub.queue.qsize() > max(0, SUBSCRIBER_QUEUE_SIZE - 3):
-                    try:
-                        old = sub.queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
-                    if old.get("type") == "log":
-                        dropped += 1
-                try:
-                    sub.queue.put_nowait(event)
-                    if dropped:
-                        sub.queue.put_nowait(
-                            {
-                                "type": "log",
-                                "line": f"… {dropped} log lines dropped",
-                            }
-                        )
-                    sub.queue.put_nowait({"type": "status", **self.snapshot()})
-                except asyncio.QueueFull:
-                    pass
+        self.events.emit(event)
 
     def _append_log(self, line: str) -> None:
-        key = re.sub(r"\d{4}-\d{2}-\d{2}[T ][0-9:.]+Z?", "", _strip_ansi(line))
-        now = time.monotonic()
-        if key == self._last_log_key and now - self._last_log_at < 1:
-            self._repeated_logs += 1
-            return
-        if self._repeated_logs:
-            summary = f"… previous message repeated {self._repeated_logs} times"
-            self._log.append(summary)
-            self._emit({"type": "log", "line": summary})
-        self._last_log_key, self._last_log_at, self._repeated_logs = key, now, 0
-        self._log.append(line)
-        self._emit({"type": "log", "line": line})
+        self.events.append_log(line)
 
     def _set_status(self, **kwargs: Any) -> None:
         for key, value in kwargs.items():
@@ -376,6 +320,7 @@ class ProcessManager:
             if (
                 self._proc is not None
                 or self._webxr_proc is not None
+                or self._dependency_operation.running
                 or await self._running_dimos_pids()
             ):
                 raise RuntimeError(
@@ -512,7 +457,7 @@ class ProcessManager:
         return pids
 
     async def _clear_before_start(
-        self, *, client: str, takeover_pids: list[int] | None = None
+        self, *, takeover_pids: list[int] | None = None
     ) -> None:
         occupied = {port: await self._pids_listening(port) for port in STACK_PORTS}
         occupied = {port: pids for port, pids in occupied.items() if pids or self.port_in_use(port)}
@@ -596,94 +541,113 @@ class ProcessManager:
 
     async def run_check(self) -> dict[str, Any]:
         async with self._lock:
-            if self._proc is not None or self._webxr_proc is not None:
-                raise RuntimeError("another process is already running")
-            self._set_status(
-                phase=Phase.CHECKING,
-                check_ok=None,
-                error=None,
-                warning=None,
-                host_ip=detect_lan_ip(),
-            )
-            argv = [str(self.scripts / "setup.sh"), "--check"]
-            check_ok = False
-            dimos_python: str | None = None
-            dimos_version: str | None = None
-            dimos_ref: str | None = None
+            self._require_dependency_idle()
+            task = self._dependency_operation.start(self._check_dependencies())
+        try:
+            return await task
+        except OSError as exc:
+            if self._dependency_operation.task is task:
+                self._set_status(phase=Phase.ERROR, error=str(exc))
+            raise
 
-            async def on_line(line: str) -> None:
-                nonlocal check_ok, dimos_python, dimos_version, dimos_ref
-                plain = _strip_ansi(line)
-                if m := _RE_CHECK_OK.match(plain):
-                    check_ok = m.group(1) == "1"
-                elif m := _RE_DIMOS_PYTHON.match(plain):
-                    dimos_python = abs_dimos_python(m.group(1).strip())
-                elif m := _RE_DIMOS_VERSION.match(plain):
-                    dimos_version = m.group(1).strip()
-                elif m := _RE_DIMOS_REF.match(plain):
-                    dimos_ref = m.group(1).strip()
+    def _require_dependency_idle(self) -> None:
+        if self._proc is not None or self._webxr_proc is not None or self._dependency_operation.running:
+            raise RuntimeError("another process is already running")
 
-            env = os.environ.copy()
-            env["DIMOS_AR_FORCE_COLOR"] = "1"
-            env.pop("DIMOS_PYTHON", None)
-            selected_python = read_env(env_path(self.root)).get("DIMOS_PYTHON")
-            if selected_python:
-                env["DIMOS_PYTHON"] = selected_python
-            await self._run_tracked(argv, env=env, on_line=on_line)
-            self._set_status(
-                phase=Phase.READY if check_ok else Phase.NEEDS_SETUP,
-                check_ok=check_ok,
-                dimos_python=dimos_python,
-                dimos_version=dimos_version,
-                dimos_ref=dimos_ref,
-                error=None,
-            )
-            self._planner_checked_at = 0
-            return self.snapshot()
+    async def _check_dependencies(self) -> dict[str, Any]:
+        self._set_status(
+            phase=Phase.CHECKING,
+            check_ok=None,
+            error=None,
+            warning=None,
+            host_ip=detect_lan_ip(),
+        )
+        argv = [str(self.scripts / "setup.sh"), "--check"]
+        check_ok = False
+        dimos_python: str | None = None
+        dimos_version: str | None = None
+        dimos_ref: str | None = None
+
+        async def on_line(line: str) -> None:
+            nonlocal check_ok, dimos_python, dimos_version, dimos_ref
+            plain = _strip_ansi(line)
+            if m := _RE_CHECK_OK.match(plain):
+                check_ok = m.group(1) == "1"
+            elif m := _RE_DIMOS_PYTHON.match(plain):
+                dimos_python = abs_dimos_python(m.group(1).strip())
+            elif m := _RE_DIMOS_VERSION.match(plain):
+                dimos_version = m.group(1).strip()
+            elif m := _RE_DIMOS_REF.match(plain):
+                dimos_ref = m.group(1).strip()
+
+        env = os.environ.copy()
+        env["DIMOS_AR_FORCE_COLOR"] = "1"
+        env.pop("DIMOS_PYTHON", None)
+        selected_python = read_env(env_path(self.root)).get("DIMOS_PYTHON")
+        if selected_python:
+            env["DIMOS_PYTHON"] = selected_python
+        await self._run_tracked(argv, env=env, on_line=on_line)
+        self._set_status(
+            phase=Phase.READY if check_ok else Phase.NEEDS_SETUP,
+            check_ok=check_ok,
+            dimos_python=dimos_python,
+            dimos_version=dimos_version,
+            dimos_ref=dimos_ref,
+            error=None,
+        )
+        self._planner_checked_at = 0
+        return self.snapshot()
 
     async def run_setup(
-        self,
-        *,
-        dimos_python: str | None = None,
-        clone_dir: str | None = None,
-        dimos_ref: str | None = None,
-        manipulation: bool = False,
+        self, *, dimos_python: str | None = None, clone_dir: str | None = None,
+        dimos_ref: str | None = None, manipulation: bool = False,
     ) -> None:
         async with self._lock:
-            if self._proc is not None or self._webxr_proc is not None:
-                raise RuntimeError("another process is already running")
+            self._require_dependency_idle()
             if self._can_setup_running or await self._running_dimos_pids():
-                raise RuntimeError(
-                    "Stop DimOS yourself before installing dependencies, and wait for CAN setup to finish"
-                )
-            argv = self.build_setup_argv(
-                dimos_python=dimos_python,
-                clone_dir=clone_dir,
-                dimos_ref=dimos_ref,
-                manipulation=manipulation,
-            )
-            self._append_log("Installing dependencies…")
-            self._set_status(phase=Phase.INSTALLING, error=None)
-            env = os.environ.copy()
-            env["DIMOS_AR_FORCE_COLOR"] = "1"
-            env.pop("DIMOS_PYTHON", None)
-            code = await self._run_tracked(argv, env=env)
-            if code != 0:
-                self._set_status(
-                    phase=Phase.NEEDS_SETUP,
-                    check_ok=False,
-                    error=None,
-                )
-                raise RuntimeError(f"setup.sh exited with code {code}")
-            selected_python = dimos_python
-            if clone_dir:
-                selected_python = str(
-                    Path(clone_dir).expanduser() / ".venv" / "bin" / "python3"
-                )
-            if selected_python:
-                merge_env({"DIMOS_PYTHON": selected_python}, env_path(self.root))
+                raise RuntimeError("Stop DimOS yourself before installing dependencies, and wait for CAN setup to finish")
+            task = self._dependency_operation.start(self._install_dependencies(
+                dimos_python=dimos_python, clone_dir=clone_dir,
+                dimos_ref=dimos_ref, manipulation=manipulation,
+            ))
+        try:
+            await task
+        except OSError as exc:
+            if self._dependency_operation.task is task:
+                self._set_status(phase=Phase.ERROR, error=str(exc))
+            raise
 
-        await self.run_check()
+    async def _install_dependencies(
+        self, *, dimos_python: str | None, clone_dir: str | None,
+        dimos_ref: str | None, manipulation: bool,
+    ) -> None:
+        argv = self.build_setup_argv(
+            dimos_python=dimos_python,
+            clone_dir=clone_dir,
+            dimos_ref=dimos_ref,
+            manipulation=manipulation,
+        )
+        self._append_log("Installing dependencies…")
+        self._set_status(phase=Phase.INSTALLING, check_ok=None, error=None)
+        env = os.environ.copy()
+        env["DIMOS_AR_FORCE_COLOR"] = "1"
+        env.pop("DIMOS_PYTHON", None)
+        code = await self._run_tracked(argv, env=env)
+        if code != 0:
+            self._set_status(
+                phase=Phase.NEEDS_SETUP,
+                check_ok=False,
+                error=None,
+            )
+            raise RuntimeError(f"setup.sh exited with code {code}")
+        selected_python = dimos_python
+        if clone_dir:
+            selected_python = str(
+                Path(clone_dir).expanduser() / ".venv" / "bin" / "python3"
+            )
+        if selected_python:
+            merge_env({"DIMOS_PYTHON": selected_python}, env_path(self.root))
+        await self._check_dependencies()
 
     async def _configure_system_if_needed(self) -> None:
         """Apply DimOS's required macOS settings via one native admin prompt.
@@ -829,8 +793,8 @@ class ProcessManager:
         if client not in CLIENTS:
             raise ValueError(f"client must be one of {', '.join(CLIENTS)}")
         async with self._lock:
-            if self._proc is not None:
-                raise RuntimeError("ARModule is already running")
+            if self._proc is not None or self._dependency_operation.running:
+                raise RuntimeError("ARModule or dependency operation is already running")
             if self._can_setup_running:
                 raise RuntimeError("Wait for CAN setup to finish")
             if self.status.check_ok is False:
@@ -847,7 +811,7 @@ class ProcessManager:
                     if not can["ready"]:
                         raise ValueError(can["message"])
             self._require_vps_credentials(armodule_config)
-            await self._clear_before_start(client=client, **({"takeover_pids": takeover_pids} if takeover_pids is not None else {}))
+            await self._clear_before_start(**({"takeover_pids": takeover_pids} if takeover_pids is not None else {}))
             await self._configure_system_if_needed()
 
             pinned_ip = robot_ip.strip() if robot_ip else None
@@ -903,9 +867,10 @@ class ProcessManager:
             self._startup_error = None
             self._append_log(f"$ {' '.join(argv)}")
             try:
-                await self._spawn(argv, env=env, parse_armodule=True)
-            except BaseException:
+                await self._spawn(argv, env=env)
+            except BaseException as exc:
                 self._clear_run_config()
+                self._set_status(phase=Phase.ERROR, error=str(exc) or "Startup cancelled")
                 raise
             if client == "webxr" and self._webxr_proc is None and self._webxr_start_task is None:
                 assert self._proc is not None
@@ -1055,7 +1020,7 @@ class ProcessManager:
 
     async def stop_armodule(self, *, force: bool = False) -> None:
         if force:
-            roots = self._stopping_pids | {p.pid for p in (self._proc, self._webxr_proc) if p is not None and p.returncode is None}
+            roots = self._stopping_pids | {p.pid for p in (self._proc, self._webxr_proc, self._dependency_operation.process) if p is not None and p.returncode is None}
             children: dict[int, list[int]] = {}
             for entry in Path("/proc").iterdir() if Path("/proc").is_dir() else []:
                 if not entry.name.isdigit():
@@ -1112,31 +1077,27 @@ class ProcessManager:
             return
         async with self._lock:
             self._set_status(phase=Phase.STOPPING)
+            await self._dependency_operation.cancel()
             stopped_managed = await self._stop_children_unlocked()
             if stopped_managed:
                 self._append_log("ARModule stopped.")
             else:
                 self._append_log("No launcher-owned runtime process to stop.")
 
-            if (
-                stopped_managed
-                or self.status.phase in (Phase.RUNNING, Phase.STARTING, Phase.STOPPING)
-            ):
-                self._stopping_pids.clear()
-                self._set_status(
-                    phase=Phase.READY if self.status.check_ok else Phase.IDLE,
-                    websocket_url=None,
-                    pin=None,
-                    webxr_url=None,
-                    webxr_local_url=None,
-                )
+            self._stopping_pids.clear()
+            self._set_status(
+                phase=Phase.READY if self.status.check_ok else Phase.IDLE,
+                websocket_url=None,
+                pin=None,
+                webxr_url=None,
+                webxr_local_url=None,
+            )
 
     async def _spawn(
         self,
         argv: list[str],
         *,
         env: dict[str, str],
-        parse_armodule: bool,
     ) -> None:
         self._proc = await asyncio.create_subprocess_exec(
             *argv,
@@ -1148,7 +1109,7 @@ class ProcessManager:
         )
         self._reader_task = asyncio.create_task(
             self._read_stream(
-                self._proc, parse_armodule=parse_armodule, ready=self._armodule_ready
+                self._proc, ready=self._armodule_ready
             )
         )
 
@@ -1184,22 +1145,21 @@ class ProcessManager:
         on_line: Callable[[str], Awaitable[None]] | None = None,
     ) -> int:
         async with self._logged_command(argv, cwd=self.root, env=env, label="Setup") as proc:
-            self._proc = proc
+            self._dependency_operation.process = proc
             try:
                 return await self._drain_output(proc, on_line)
             finally:
-                if self._proc is proc:
-                    self._proc = None
+                if self._dependency_operation.process is proc:
+                    self._dependency_operation.process = None
 
     async def _read_stream(
         self,
         proc: asyncio.subprocess.Process,
         *,
-        parse_armodule: bool,
         ready: asyncio.Event | None = None,
     ) -> None:
         async def on_line(line: str) -> None:
-            if parse_armodule and self._proc is proc and self.status.phase != Phase.STOPPING:
+            if self._proc is proc and self.status.phase != Phase.STOPPING:
                 self._parse_armodule_line(line)
                 if ready is not None and self.status.phase == Phase.RUNNING:
                     ready.set()

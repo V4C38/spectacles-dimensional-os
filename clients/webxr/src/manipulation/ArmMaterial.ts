@@ -1,7 +1,7 @@
 import { ARM_VISUAL_STYLE as STYLE } from "@dimos-ar-client/manipulation/ManipulationVisuals";
 import * as THREE from "three";
 
-export function armMaterial(thin = false): THREE.ShaderMaterial {
+export function armMaterial(): THREE.ShaderMaterial {
   const material = new THREE.ShaderMaterial({
     uniforms: { uOpacity: { value: 1 }, uColor: { value: new THREE.Color(STYLE.color) } },
     vertexShader: "attribute float armAlpha; varying float vArmAlpha; void main() { vArmAlpha = armAlpha; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
@@ -15,6 +15,5 @@ export function armMaterial(thin = false): THREE.ShaderMaterial {
       }`,
     transparent: true, depthWrite: false, toneMapped: false,
   });
-  material.userData.armVariant = thin ? "tool" : "arm";
   return material;
 }

@@ -233,11 +233,9 @@ resolve_robot_ip() {
 
   if (( count > 1 )); then
     if [[ "${NON_INTERACTIVE}" -eq 1 ]]; then
-      sn="${discovered[0]%%$'\t'*}"
-      ip="${discovered[0]#*$'\t'}"
-      ROBOT_IP="${ip}"
-      print_color 2 32 "Found ${count} robots — using first: ${sn} at ${ip}"
-      return 0
+      print_color 2 31 "Multiple robots found; select one explicitly with --robot-ip <address>."
+      printf '%s\n' "${discovered[@]}" >&2
+      exit 1
     fi
     for line in "${discovered[@]}"; do
       sn="${line%%$'\t'*}"

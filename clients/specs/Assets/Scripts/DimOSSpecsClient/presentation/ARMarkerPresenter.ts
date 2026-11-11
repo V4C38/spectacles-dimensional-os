@@ -1,13 +1,13 @@
 import type { RoundedRectangle } from "SpectaclesUIKit.lspkg/Scripts/Visuals/RoundedRectangle/RoundedRectangle";
-import { WorldMeshRenderer, sphereMesh } from "./WorldMeshRenderer";
-import { createRoundedSurface, createText, COLOR_WHITE } from "./UIKit";
 import {
-  composePlaceArMarker,
-  type PlaceArMarkerArgs,
+composePlaceArMarker,
+type PlaceArMarkerArgs,
 } from "../../DimOSARClient/agent/agentSkills";
 import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
 import type { Vec3 } from "../../DimOSARClient/websocket/protocolTypes";
 import { clientTrackingToSpecsPoint } from "../utilities/SpecsCoordinates";
+import { COLOR_WHITE,createRoundedSurface,createText } from "./UIKit";
+import { WorldMeshRenderer,sphereMesh } from "./WorldMeshRenderer";
 
 export interface ARMarkerPresenterDeps {
   parent: SceneObject;
@@ -18,10 +18,13 @@ type MarkerEntry = {
   root: SceneObject;
   args: PlaceArMarkerArgs;
   progress: number;
+  lastOpacity?: number;
   visual?: { orb: WorldMeshRenderer; label: SceneObject; title: Text; caption: Text; plate: RoundedRectangle };
 };
 
 /** Owns world-anchored ar_place_marker visuals in the Specs tracking frame. */
+const MARKER_SPHERE = sphereMesh(2.5, 24, 16);
+
 export class ARMarkerPresenter {
   private readonly _parent: SceneObject;
   private readonly _markerPrefab: ObjectPrefab | null;
@@ -78,8 +81,10 @@ export class ARMarkerPresenter {
       entry.progress = Math.min(1, entry.progress + Math.max(0, deltaS) / 0.18);
       const eased = entry.progress * entry.progress * (3 - 2 * entry.progress);
       entry.root.getTransform().setLocalScale(vec3.one().uniformScale(0.94 + 0.06 * eased));
-      const mesh = sphereMesh(2.5, 24, 16);
-      visual.orb.triangles(mesh.positions, mesh.indices, [1, 1, 1, eased], undefined, mesh.normals);
+      if (entry.lastOpacity !== eased) {
+        visual.orb.triangles(MARKER_SPHERE.positions, MARKER_SPHERE.indices, [1, 1, 1, eased], undefined, MARKER_SPHERE.normals);
+        entry.lastOpacity = eased;
+      }
       visual.title.text = entry.args.title || "World marker";
       visual.title.textFill.color = new vec4(1, 1, 1, eased);
       visual.caption.textFill.color = new vec4(0.68, 0.68, 0.7, eased);

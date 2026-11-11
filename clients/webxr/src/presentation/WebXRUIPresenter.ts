@@ -21,7 +21,6 @@ import {
   type StatusTone,
 } from "@dimos-ar-client/websocket/sessionLinkStatus";
 import { requestUserMessage } from "@dimos-ar-client/agent/userMessageRequest";
-import { toneHex } from "./StatusTones";
 
 export type OperatingMode = "manual" | "agent";
 
@@ -49,6 +48,7 @@ export interface WebXRUISnapshot {
   nextLabel: string;
   backVisible: boolean;
   debugText: string;
+  readDebugText?: () => string;
   activity: RobotActivityState;
   setupCompleted: boolean;
   connectionText: string;
@@ -82,13 +82,18 @@ export class WebXRUIPresenter {
   manipulationDiagnostics: () => string = () => "—";
   private get openedFromRuntime(): boolean { return this.flow.openedFromRuntime; }
   private localizationError: string | null = null;
-  operatingMode: OperatingMode = "manual";
+  private fallbackMode: OperatingMode = "manual";
+  get operatingMode(): OperatingMode {
+    const mode = this.session.view().interaction?.mode ?? this.fallbackMode;
+    return mode === "agent" && this.session.view().capabilities?.agent.available !== true ? "manual" : mode;
+  }
+  get setupCelebrating(): boolean { return this.successElapsedS !== null && this.successElapsedS < 1.5; }
   get lidarMode(): LidarDisplayMode { return this.sensors.mode; }
   get lidarPreferences(): Readonly<LidarDisplayPreferences> { return this.sensors.preferences; }
   cameraStatus = "Not capturing";
   trackingStatus = "Not tracking";
   surfaceCount = 0;
-  estopPressed = false;
+  get estopPressed(): boolean { return this.stopFeedback(); }
   get alignmentReview() { return this.flow.alignmentReview; }
 
   requestAlignmentReview(reason: string): void {
@@ -118,6 +123,7 @@ export class WebXRUIPresenter {
     private readonly cameraError: () => string | null = () => null,
     private readonly robotSelection: () => ReturnType<RobotSelection["snapshot"]> = () => ({ selected: false, eligible: false }),
     private readonly activityVoice: () => { ttsPlaying: boolean; asrRunning: boolean } = () => ({ ttsPlaying: false, asrRunning: false }),
+    private readonly stopFeedback: () => boolean = () => false,
   ) {
     this.flow = new SetupFlow(session, episode);
     this.sensors = new LidarDisplayController(session, { read: readLidarPreferences, write: saveLidarPreferences });
@@ -149,7 +155,6 @@ export class WebXRUIPresenter {
   }
 
   tick(now: number): void {
-    if (this.session.view().interaction) this.operatingMode = this.session.view().interaction!.mode;
     const visibleDeltaS = this.lastVisibleTickAt === null ? 0 : Math.min(0.1, Math.max(0, now - this.lastVisibleTickAt));
     this.lastVisibleTickAt = now;
     if (this.successElapsedS !== null) this.successElapsedS += visibleDeltaS;
@@ -165,9 +170,6 @@ export class WebXRUIPresenter {
       return;
     }
     this.sendPostWizardLidarDefault();
-    if (this.operatingMode === "agent" && this.session.view().capabilities?.agent.available !== true) {
-      this.operatingMode = "manual";
-    }
   }
 
   snapshot(): WebXRUISnapshot {
@@ -184,13 +186,13 @@ export class WebXRUIPresenter {
     const issue = kind === "unavailable" ? null : this.localizationError ?? this.cameraError() ?? (episode.phase === "failed" ? episode.lastError : null);
     const guidance = localizationGuidance(kind);
     const card = this.wizardStep === "connect"
-      ? { title: view.connection === "ready" ? "Connected to dimOS ARModule" : "Connecting", body: view.connection === "ready" ? `WebSocket connected\nRobot: ${view.hello?.robot.display_name ?? "Unavailable"}\n${availableFeatures(view.capabilities)}` : "Waiting for the launcher." }
+      ? { title: view.connection === "ready" ? "Connected to dimOS ARModule" : "Connecting", body: view.connection === "ready" ? `Robot: ${view.hello?.robot.display_name ?? "Unavailable"}\n${availableFeatures(view.capabilities)}` : "Waiting for the launcher." }
       : issue ? { title: episode.phase === "failed" ? "Capture failed" : "Camera unavailable", body: issue }
         : { title: kind === "unavailable" ? "Localization unavailable" : capture.text.split("\n")[0] || "Preparing camera…", body: guidance };
     return {
       connectComplete: view.connection === "ready",
       localizationKind: kind,
-      setupCelebrating: this.successElapsedS !== null && this.successElapsedS < 1.5,
+      setupCelebrating: this.setupCelebrating,
       setupSuccessProgress: this.successElapsedS === null ? 0 : Math.min(1, this.successElapsedS / 0.65),
       wizardCardTitle: card.title,
       wizardCardBody: card.body,
@@ -206,7 +208,8 @@ export class WebXRUIPresenter {
       wizardDescription: descriptions[this.wizardStep],
       nextLabel: this.wizardStep === "connect" && view.connection === "ready" ? "Continue" : "Skip",
       backVisible: this.wizardStep === "localization" || this.openedFromRuntime,
-      debugText: `Arm capture: ${this.manipulationDiagnostics()}\nPlayback: ${JSON.stringify(view.state?.playback ?? null)}\nLocalization timings: ${JSON.stringify(this.episode.timing?.() ?? {})}\nConnection: ${view.connection}\nAligned: ${view.hasTrackingOrigin ? "Yes" : "No"}\nCapture: ${capture.text}\n${issue ?? ""}`,
+      debugText: "",
+      readDebugText: () => `Arm capture: ${this.manipulationDiagnostics()}\nPlayback: ${JSON.stringify(view.state?.playback ?? null)}\nLocalization timings: ${JSON.stringify(this.episode.timing?.() ?? {})}\nConnection: ${view.connection}\nAligned: ${view.hasTrackingOrigin ? "Yes" : "No"}\nCapture: ${capture.text}\n${issue ?? ""}`,
       activity: getRobotActivityState(view, this.activityVoice()),
       setupCompleted: this.setupCompleted,
       connectionText: view.connection === "awaiting_hello" ? "Connecting…" : view.connection === "failed" ? "Reconnecting…" : link.text.trim(),
@@ -230,10 +233,6 @@ export class WebXRUIPresenter {
       hudTone: this.hudTone,
       menuOpen: this.menuOpen,
     };
-  }
-
-  hudColor(): number | null {
-    return this.hudTone ? toneHex(this.hudTone) : null;
   }
 
   completeSetup(): void {
@@ -281,7 +280,7 @@ export class WebXRUIPresenter {
     this.successElapsedS = null;
     this.flow.restart(this.setupCompleted);
     this.localizationError = null;
-    this.operatingMode = "manual";
+    this.fallbackMode = "manual";
     this.wizardLidarOffSent = false;
     this.postWizardLidarSent = false;
     this.menuOpen = true;
@@ -298,10 +297,9 @@ export class WebXRUIPresenter {
       throw new Error("hello.capabilities.agent is not available");
     }
     if (this.session.view().interaction) this.session.collaboration.setMode(mode);
-    else this.operatingMode = mode;
+    else this.fallbackMode = mode;
   }
 
-  cycleLidar(): LidarDisplayMode { return this.sensors.cycle(); }
   setLidarMode(mode: LidarDisplayMode): void { this.sensors.setMode(mode); }
   adjustLidarRange(direction: number): void { this.sensors.adjustRange(direction); }
   adjustLidarPoints(direction: number): void { this.sensors.adjustPoints(direction); }

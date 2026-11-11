@@ -13,14 +13,14 @@ from dimos.ar.localization.map_localization import MapLocalization
 from dimos.ar.localization.odom_map_transform import OdomMapTransform
 from dimos.ar.localization.types import LocalizedPose
 from dimos.ar.localization.vps.admission import VpsAdmission
-from dimos.ar.localization.worker import LocalizationWorker
+from dimos.ar.worker import BoundedWorker
 from dimos.msgs.geometry_msgs.Pose import Pose
 from test_support.localization import _observation
 
 
 def runtime(localize):
     odometry = SimpleNamespace(generation=0, reference_id="odom")
-    worker = LocalizationWorker()
+    worker = BoundedWorker()
     messages = []
     service = MapLocalization(
         odometry=odometry, transforms=OdomMapTransform(), robot_images=SimpleNamespace(),
@@ -152,7 +152,7 @@ async def test_vendor_response_to_robot_and_headset_alignment_randomized() -> No
     ok, encoded = cv2.imencode(".jpg", np.zeros((16, 16, 3), dtype=np.uint8))
     assert ok
     intrinsics = Intrinsics(10, 10, 8, 8, 16, 16, "none", ())
-    worker = LocalizationWorker()
+    worker = BoundedWorker()
     localizer = VpsLocalizer(client=Vendor(), worker=worker)
     service, odometry, unused_worker, messages = runtime(localizer.localize)
     unused_worker.close()

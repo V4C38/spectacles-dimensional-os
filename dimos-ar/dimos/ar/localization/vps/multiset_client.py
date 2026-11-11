@@ -15,6 +15,7 @@ import numpy as np
 from dimos.ar.localization.types import Intrinsics
 from dimos.ar.localization.vps.localizer import VpsQueryResult
 from dimos.msgs.geometry_msgs.Pose import Pose
+from dimos.utils.logging_config import setup_logger
 from dimos.utils.transform_utils import matrix_to_pose, pose_to_matrix
 
 _CLIENT_ID_ENV = "MULTISET_CLIENT_ID"
@@ -25,6 +26,7 @@ _DEFAULT_QUERY_PATH = "/vps/map/query-form"
 _QUERY_MODE = "vps-1"
 _TOKEN_REFRESH_MARGIN_S = 60.0
 _QUAT_NORM_EPS = 1e-9
+logger = setup_logger()
 
 # Rx(+90°): MultiSet right-handed Y-up map -> canonical right-handed Z-up map.
 _T_ZUP_YUP = np.array(
@@ -133,6 +135,12 @@ class MultisetVpsClient:
             if status == 401:
                 raise MultisetVpsAuthError("MultiSet VPS query returned 401 after token refresh")
         if status != 200:
+            logger.warning(
+                "VPS query rejected",
+                http_status=status,
+                reason="map_not_found" if status == 404 else "http_error",
+                map_code=self._config.map_code,
+            )
             detail = text[:300] if text else ""
             raise MultisetVpsError(
                 f"POST {self._config.query_path} failed with HTTP {status}: {detail}"
@@ -160,6 +168,7 @@ class MultisetVpsClient:
         headers = {"Authorization": f"Basic {_basic_token(self._client_id, self._client_secret)}"}
         status, payload, text = await self._post(self._auth_url(), headers=headers)
         if status != 200:
+            logger.warning("VPS authentication rejected", http_status=status)
             detail = text[:300] if text else ""
             raise MultisetVpsAuthError(
                 f"POST {self._config.auth_path} failed with HTTP {status}: {detail}"
@@ -201,6 +210,8 @@ class MultisetVpsClient:
         files = {"queryImage": ("query.jpg", jpeg, "image/jpeg")}
         if self._admit is not None:
             self._admit()
+        logger.info("VPS query dispatched", map_code=self._config.map_code,
+                    endpoint=self._config.query_path)
         return await self._post(self._query_url(), headers=headers, data=data, files=files)
 
     async def _post(

@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { validPin } from "../../Assets/Scripts/DimOSARClient/websocket/ConnectionResolution";
+import { validPin } from "../../Assets/Scripts/DimOSARClient/websocket/connectionPin";
 
 it("retains leading zeros and rejects non-six-digit PINs", () => {
     expect(validPin("012345")).toBe(true);

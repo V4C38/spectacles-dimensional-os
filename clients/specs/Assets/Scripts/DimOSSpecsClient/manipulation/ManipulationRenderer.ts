@@ -1,52 +1,45 @@
-import { SpecsArmPanelPresenter } from "./SpecsArmPanelPresenter";
+import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable";
+import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
+import { odomToClientTrackingPose } from "../../DimOSARClient/localization/clientTrackingTransforms";
+import { ArmPresentationSampler } from "../../DimOSARClient/manipulation/ArmPresentationSampler";
+import { ArmTrajectoryProgress } from "../../DimOSARClient/manipulation/ArmTrajectoryProgress";
+import type { ManipulationController } from "../../DimOSARClient/manipulation/ManipulationController";
+import type { ManipulationInputCapture } from "../../DimOSARClient/manipulation/ManipulationInputCapture";
+import { endEffectorAction,manipulationActivePlan,manipulationButtonEnabled,manipulationMenuRows,manipulationPathOpacity } from "../../DimOSARClient/manipulation/ManipulationPresentation";
+import type { ManipulationPose,ManipulationState } from "../../DimOSARClient/manipulation/ManipulationTypes";
+import { ArmMeshFade,ArmOpacityCadence,ARM_VISUAL_STYLE as STYLE,armLinkPresentation,armLinkWeight,armShapeEdges,endEffectorAngles,endEffectorDisplayPose } from "../../DimOSARClient/manipulation/ManipulationVisuals";
+import { composePose,linkPoses,manipulationPlanPath } from "../../DimOSARClient/manipulation/ModelKinematics";
+import { ARM_PANEL_STYLE } from "../../DimOSARClient/presentation/PanelFrameStyle";
+import { PanelHeightAnimation } from "../../DimOSARClient/presentation/PanelHeightAnimation";
+import { ROBOT_LABEL_STYLE,WORLD_DASH_STYLE } from "../../DimOSARClient/presentation/WorldVisualStyle";
+import type { Vec3 } from "../../DimOSARClient/websocket/protocolTypes";
+import { COLOR_WHITE,SnapOS2Styles,createRobotLabelText,setButtonStyle,uiMaterialLayer } from "../presentation/UIKit";
+import { AdaptiveStrokeRenderer,WorldMeshRenderer,sphereMesh } from "../presentation/WorldMeshRenderer";
+import { MarkerCorrectionRenderer } from "../presentation/MarkerCorrectionRenderer";
+import { clientTrackingToSpecsPoint,clientTrackingToSpecsPose } from "../utilities/SpecsCoordinates";
+import { ArmControlsView } from "./ArmControlsView";
+import { ARM_MATERIAL,ARM_SURFACE_MATERIAL,ArmOpacityUniforms,configureArmMaterial,configureArmSurface } from "./ArmMaterial";
 import { ArmStrokeRenderer } from "./ArmStrokeRenderer";
 import { EndEffectorStatusPill } from "./EndEffectorStatusPill";
-import { endEffectorAngles, endEffectorDisplayPose } from "../../DimOSARClient/manipulation/ManipulationVisuals";
-import { ARM_PANEL_STYLE, PANEL_PIN_SEGMENTS, PANEL_SCAN_SEGMENTS } from "../../DimOSARClient/presentation/PanelFrameStyle";
-import { manipulationObservedJoints, manipulationProposedJoints, manipulationActivePlan, manipulationMenuRows, manipulationButtonEnabled, endEffectorAction, manipulationPathOpacity } from "../../DimOSARClient/manipulation/ManipulationPresentation";
-import { PanelHeightAnimation } from "../../DimOSARClient/presentation/PanelHeightAnimation";
-import { armMotionContext, ArmJointFilter } from "../../DimOSARClient/manipulation/ArmJointFilter";
-import { ArmTrajectoryProgress } from "../../DimOSARClient/manipulation/ArmTrajectoryProgress";
-import { ARM_VISUAL_STYLE as STYLE, armShapeEdges, armPointDisplacement, armLinkWeight, armLinkPresentation, ArmMeshFade, ArmPointOpacity, armPointOpacityKey, ArmOpacityCadence } from "../../DimOSARClient/manipulation/ManipulationVisuals";
-import { ARM_MATERIAL, configureArmMaterial, ARM_SURFACE_MATERIAL, configureArmSurface } from "./ArmMaterial";
-import type { ManipulationInputCapture } from "../../DimOSARClient/manipulation/ManipulationInputCapture";
-import { WORLD_DASH_STYLE, ROBOT_LABEL_STYLE } from "../../DimOSARClient/presentation/WorldVisualStyle";
-import { Slider } from "SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider";
-import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable";
-import { AdaptiveStrokeRenderer, WorldMeshRenderer, sphereMesh } from "../presentation/WorldMeshRenderer";
-import { createIconButton, createText, createRobotLabelText,  panelButtonLayer, setButtonStyle, uiMaterialLayer, SnapOS2Styles, COLOR_WHITE, type IconButtonResult } from "../presentation/UIKit";
-import { clientTrackingToSpecsPoint, clientTrackingToSpecsPose } from "../utilities/SpecsCoordinates";
-import { odomToClientTrackingPose } from "../../DimOSARClient/localization/clientTrackingTransforms";
-import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
-import { composePose, linkPoses, manipulationPlanPath } from "../../DimOSARClient/manipulation/ModelKinematics";
-import type { ManipulationController } from "../../DimOSARClient/manipulation/ManipulationController";
-import type { ManipulationPose, ManipulationState } from "../../DimOSARClient/manipulation/ManipulationTypes";
-import type { Vec3 } from "../../DimOSARClient/websocket/protocolTypes";
 import { OPENYAM_MESH } from "./OpenYAMMesh";
 
 export class ManipulationRenderer {
   private readonly placements = new Map<SceneObject, ManipulationPose>();
-  private readonly geometry = new Map<string, { positions: number[]; normals: number[]; indices: readonly number[]; points: Vec3[]; opacity: ArmPointOpacity; fillAlpha?: number; color?: number }>();
+  private readonly pointOpacity = new Map<string, ArmOpacityUniforms>();
   readonly object: SceneObject;
+  readonly controls: ArmControlsView;
   readonly handle: SceneObject;
-  readonly panel: SceneObject;
   private readonly base: SceneObject;
-  private readonly previewMenu: SceneObject;
-  private readonly gripper: IconButtonResult;
   private readonly label: Text;
   private readonly nameLabel: Text;
   private readonly activityLabel: Text;
   private readonly sphere: WorldMeshRenderer;
-  private readonly speedLabel: Text;
-  private readonly panelTitle: Text;
+  private readonly correction: MarkerCorrectionRenderer;
   localizationAvailable = false;
-  private readonly rescan: IconButtonResult;
-  private scanIcon: WorldMeshRenderer | null = null;
   private readonly warning: EndEffectorStatusPill;
-  private readonly buttons = new Map<string, IconButtonResult>();
   private readonly picks = new Map<string, SceneObject>();
   private readonly meshes = new Map<string, WorldMeshRenderer>();
-  private readonly edges = new Map<string, { stroke: ArmStrokeRenderer; points: Vec3[]; localPoints: Vec3[]; opacity: ArmPointOpacity; renderKey: string }>();
+  private readonly edges = new Map<string, { stroke: ArmStrokeRenderer }>();
   private readonly path: AdaptiveStrokeRenderer;
   private readonly measured: WorldMeshRenderer;
   private readonly subscriptions: (() => void)[] = [];
@@ -54,18 +47,11 @@ export class ManipulationRenderer {
   private readonly hoverSources = new Set<string>();
   private readonly handleHover = new Set<string>();
   private readonly actionHover = new Set<string>();
-  private readonly jointFilter = new ArmJointFilter();
-  private previousSolution: object | null = null;
-  private solutionSequence = 0;
-  private readonly previewFilter = new ArmJointFilter(0.15, 0.25);
+  private readonly sampler = new ArmPresentationSampler();
   private readonly progress = new ArmTrajectoryProgress();
-  private readonly speed: Slider;
-  private readonly panelPresenter: SpecsArmPanelPresenter;
   private readonly menuHeight = new PanelHeightAnimation();
-  private syncingSpeed = false;
   private menuRows = "";
   private modelRevision = "";
-  private context = "";
   private pathKey = "";
   private pathPoints: Vec3[] = [];
   private pathDistances: number[] = [];
@@ -73,18 +59,15 @@ export class ManipulationRenderer {
   private lastTime = 0;
   private hoverUntil = 0;
   private hoverProgress = 0;
-  private state: ManipulationState | null | undefined;
   private controlsEnabled = false;
   private readonly meshFade = new ArmMeshFade();
   private readonly opacityCadence = new ArmOpacityCadence();
-  private readonly pointFade = new ArmMeshFade();
   private readonly fillFade = new ArmMeshFade();
-  private selected = false;
   debugEnabled = false;
   private readonly debugNodes = new Map<string, {axes: AdaptiveStrokeRenderer[]; label: Text}>();
 
   constructor(parent: SceneObject, private readonly core: ManipulationController,
-    stop: () => void, private readonly capture: ManipulationInputCapture, private readonly recalibrate: () => void = () => {}) {
+    private readonly capture: ManipulationInputCapture, recalibrate: () => void = () => {}) {
     this.object = this.node(parent, "Manipulation");
     this.handle = this.node(this.object, "EndEffectorHandle");
     const geometry = sphereMesh(0.9, 20, 16);
@@ -93,6 +76,7 @@ export class ManipulationRenderer {
     (this.sphere.material.mainPass as Pass & { fill: number }).fill = 0.75;
     const handleGeometry = sphereMesh(1.2, 20, 16);
     this.sphere.triangles(handleGeometry.positions, handleGeometry.indices, [0.82, 0.82, 0.82, 1], undefined, handleGeometry.normals);
+    this.correction = new MarkerCorrectionRenderer(this.object, this.sphere);
     const collider = this.handle.createComponent("Physics.ColliderComponent") as ColliderComponent;
     collider.shape = Shape.createSphereShape(); (collider.shape as SphereShape).radius = 3.6;
     const hit = this.handle.createComponent(Interactable.getTypeName()) as Interactable;
@@ -120,78 +104,22 @@ export class ManipulationRenderer {
     this.nameLabel = createRobotLabelText(labels, "ArmTitle", style.title.emM, style.title.xM, style.title.yM, style.title.widthM, true, COLOR_WHITE, 21);
     this.activityLabel = createRobotLabelText(labels, "ArmActivity", style.activity.emM, 0, style.activity.yM, style.activity.widthM, false, COLOR_WHITE, 22);
     this.label = createRobotLabelText(labels, "ArmMovementSpeed", style.detail.emM, 0, style.detail.yM, style.detail.widthM, false, new vec4(1, 1, 1, 0.5), 22);
-    this.panelPresenter = new SpecsArmPanelPresenter(this.object);
-    this.panel = this.panelPresenter.content;
+    this.controls = new ArmControlsView(this.object, core, () => this.controlsEnabled,
+      (key, active) => { if (active) this.actionHover.add(key); else this.actionHover.delete(key); }, recalibrate);
     this.menuHeight.request(4 * ARM_PANEL_STYLE.rowM + ARM_PANEL_STYLE.paddingM + ARM_PANEL_STYLE.headerM, true);
-    this.previewMenu = this.node(this.object, "PreviewMenu");
-    const add = (key: string, text: string, action: () => void, style = SnapOS2Styles.Secondary) => {
-      const button = createIconButton(key === "plan" || key === "execute" ? this.previewMenu : this.panel, key, text, key === "estop" ? 20 : key === "plan" || key === "execute" ? 9.5 : key === "reset" || key === "stop" ? 9.2 : 14, ARM_PANEL_STYLE.buttonHeightM*100, vec3.zero(), style);
-      this.subscriptions.push(button.button.onTriggerDown.add(() => { if ((this.controlsEnabled || key === "estop" || key === "stop") && !button.button.inactive) action(); }));
-      button.labelText.size = ARM_PANEL_STYLE.buttonFontM * 100 * 32 / 0.69492703;
-      if (key === "plan" || key === "execute") {
-        button.sceneObject.getTransform().setLocalPosition(new vec3(0, key === "plan" ? 3.9 : 0, 0));
-        this.subscriptions.push(button.button.interactable.onHoverEnter.add(() => this.actionHover.add(key)));
-        this.subscriptions.push(button.button.interactable.onHoverExit.add(() => this.actionHover.delete(key)));
-      }
-      this.buttons.set(key, button);
-    };
-    add("plan", "Preview", () => core.action("plan"));
-    add("execute", "Execute", () => core.action("execute"), SnapOS2Styles.Primary);
-    add("reset", "Reset", () => core.action("reset"));
-    add("stop", "Stop", () => core.action("stop"));
-    add("estop", "E-stop", () => { if (this.state?.stopped) core.action("resume"); else { core.interaction.discard(); stop(); } }, SnapOS2Styles.Special);
-    const speedRoot = this.node(this.panel, "ManipulationSpeed");
-    this.speed = speedRoot.createComponent(Slider.getTypeName()) as Slider;
-    this.speed.size = new vec3(14, 2.25, 0.5); this.speed.knobSize = new vec2(2.4, 2.4);
-    this.speedLabel = createText({ parent: speedRoot, name: "SpeedLabel", text: "", fontSize: 0.011 * 100 * 32 / 0.69492703, color: COLOR_WHITE,
-      position: new vec3(0, 2, 0), horizontalAlignment: HorizontalAlignment.Center, worldSpaceRect: Rect.create(-12, 12, -2, 2) });
-    this.subscriptions.push(this.speed.onValueChange.add(value => {
-      if (!this.syncingSpeed && core.interaction.snapshot().canManipulate) core.interaction.setSpeedScale(0.05 + Math.max(0, Math.min(1, value)) * 0.95);
-    }));
-    this.gripper = createIconButton(this.object, "Gripper", "Open", 9.5, 3.2, vec3.zero());
-    this.subscriptions.push(this.gripper.button.interactable.onHoverEnter.add(() => this.actionHover.add("gripper")));
-    this.subscriptions.push(this.gripper.button.interactable.onHoverExit.add(() => this.actionHover.delete("gripper")));
-    const pin = createIconButton(this.panel,"Pin to robot","",ARM_PANEL_STYLE.pinSizeM*100,ARM_PANEL_STYLE.pinSizeM*100,
-      new vec3(ARM_PANEL_STYLE.pinXM*100,ARM_PANEL_STYLE.pinYM*100,.8),SnapOS2Styles.Secondary);
-    panelButtonLayer(pin);
-    this.subscriptions.push(pin.button.onTriggerUp.add(() => this.resetPanel()));
-    this.panelTitle = createText({parent: this.panel, name: "ArmPanelTitle", text: "Arm", fontSize: 1.3 * 32 / .69492703, color: COLOR_WHITE,
-      position: new vec3(-9.6, ARM_PANEL_STYLE.pinYM*100, 1.4), horizontalAlignment: HorizontalAlignment.Left, worldSpaceRect: Rect.create(0,12,-1.6,1.6)});
-    const rescan = this.rescan = createIconButton(this.panel, "Recalibrate", "", ARM_PANEL_STYLE.pinSizeM*100, ARM_PANEL_STYLE.pinSizeM*100, new vec3((ARM_PANEL_STYLE.pinXM-.039)*100, ARM_PANEL_STYLE.pinYM*100,.8));
-    panelButtonLayer(rescan);
-    this.subscriptions.push(rescan.button.onTriggerUp.add(() => { const intent = this.core.interaction.snapshot(); if (!intent.executing && !intent.dragging && !intent.resetting) this.recalibrate(); }));
-    const drawIcon = (segments: readonly (readonly [number,number])[], x: number) => {
-    const icon = new WorldMeshRenderer(this.panel,"PinIcon");
-    icon.object.getTransform().setLocalPosition(new vec3(x*100,ARM_PANEL_STYLE.pinYM*100,1.4));
-    uiMaterialLayer(icon.visual, 66);
-    const positions:number[]=[], indices:number[]=[];
-    for(let i=0;i<segments.length;i+=2){
-      const a=segments[i],b=segments[i+1],dx=b[0]-a[0],dy=b[1]-a[1],length=Math.hypot(dx,dy),nx=-dy/length*ARM_PANEL_STYLE.iconStrokeM*50,ny=dx/length*ARM_PANEL_STYLE.iconStrokeM*50,k=positions.length/3;
-      positions.push(a[0]*100+nx,a[1]*100+ny,.2,a[0]*100-nx,a[1]*100-ny,.2,b[0]*100+nx,b[1]*100+ny,.2,b[0]*100-nx,b[1]*100-ny,.2);
-      indices.push(k,k+1,k+2,k+2,k+1,k+3);
-    }
-    const xs = positions.filter((_, i) => i % 3 === 0), ys = positions.filter((_, i) => i % 3 === 1);
-    const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-    for (let i = 0; i < positions.length; i += 3) { positions[i] -= cx; positions[i+1] -= cy; }
-    icon.triangles(positions,indices,[1,1,1,1]);
-    return icon;
-    };
-    drawIcon(PANEL_PIN_SEGMENTS, ARM_PANEL_STYLE.pinXM);
-    this.scanIcon = drawIcon(PANEL_SCAN_SEGMENTS, ARM_PANEL_STYLE.pinXM-.039);
     this.warning = new EndEffectorStatusPill(this.object);
   }
 
-  resetPanel(): void { this.panelPresenter.reset(); }
 
   private node(parent: SceneObject, name: string): SceneObject {
     const object = global.scene.createSceneObject(name); object.setParent(parent); return object;
   }
   pressEndEffectorAction(object: SceneObject, sourceId: string): boolean {
     let target: SceneObject | null = object;
-    while (target && target !== this.gripper.sceneObject) target = target.getParent();
+    while (target && target !== this.controls.gripper.sceneObject) target = target.getParent();
     if (!target) return false;
     const intent = this.core.interaction.snapshot();
-    if (!this.controlsEnabled || this.gripper.button.inactive) return true;
+    if (!this.controlsEnabled || this.controls.gripper.button.inactive) return true;
     if (intent.canManipulate && this.capture.pressGripper(sourceId)) this.core.action("gripper");
     return true;
   }
@@ -202,21 +130,23 @@ export class ManipulationRenderer {
     selected: boolean, enabled: boolean, now: number, camera: SceneObject, title: string): void {
     if(this.core.interaction.retainingFeedback && origin) {
       this.core.presentation.hold(now);
-      this.jointFilter.hold(now); this.previewFilter.hold(now);
+      this.sampler.hold(now);
       this.controlsEnabled = false;
-      for (const [key, button] of this.buttons) button.button.inactive = key !== "estop" && key !== "stop";
-      this.gripper.button.inactive = true; this.speed.enabled = false;
+      for (const [key, button] of this.controls.buttons) button.button.inactive = key !== "estop" && key !== "stop";
+      this.controls.gripper.button.inactive = true; this.controls.speed.enabled = false;
       if(this.core.interaction.target) this.place(this.handle,this.core.interaction.target,origin);
+      this.correction.update(this.handle.enabled ? origin : null, now);
       this.warning.apply({ blocked: false, fresh: false, stopped: false, moving: false,
         rejection: null }, this.handle, camera, now);
       this.activityLabel.text="No feedback"; return;
     }
-    this.state = state; this.controlsEnabled = enabled; this.selected = selected;
+    this.controlsEnabled = enabled;
     this.object.enabled = !!origin && enabled;
     if (!this.object.enabled || !state?.available || !state.model || !origin) {
       this.object.enabled = !!origin && enabled && this.modelRevision !== "";
       this.meshFade.reset(); this.measured.object.enabled = false;
-      this.handle.enabled = false; this.previewMenu.enabled = false; this.gripper.sceneObject.enabled = false;
+      this.handle.enabled = false; this.controls.previewMenu.enabled = false; this.controls.gripper.sceneObject.enabled = false;
+      this.correction.reset();
       for (const mesh of this.meshes.values()) mesh.object.enabled = false;
       for (const pick of this.picks.values()) pick.enabled = false;
       for (const edge of this.edges.values()) edge.stroke.hide();
@@ -224,41 +154,34 @@ export class ManipulationRenderer {
       this.warning.apply({ blocked: false, fresh: false, stopped: false, moving: false,
         rejection: null }, this.handle, camera, now);
       this.controlsEnabled = false;
-      for (const [key, button] of this.buttons) button.button.inactive = key === "estop" ? !(this.core.interaction.snapshot().canStop || this.core.interaction.snapshot().canResume) : key !== "stop" || !this.core.interaction.snapshot().canStop;
-      this.speed.enabled = false;
+      for (const [key, button] of this.controls.buttons) button.button.inactive = key === "estop" ? !(this.core.interaction.snapshot().canStop || this.core.interaction.snapshot().canResume) : key !== "stop" || !this.core.interaction.snapshot().canStop;
+      this.controls.speed.enabled = false;
       return;
     }
     const model = state.model, interaction = this.core.interaction, intent = interaction.snapshot();
     const group = state.groups?.find(g => g.id === interaction.groupId), observed = state.observations?.[interaction.groupId ?? ""];
     const dt = this.lastTime ? Math.max(0, Math.min(0.1, now - this.lastTime)) : 1 / 60; this.lastTime = now;
-    const context = armMotionContext(model.revision, interaction.groupId, origin);
-    if (this.context !== context) { this.jointFilter.reset(); this.previewFilter.reset(); this.progress.reset(); this.context = context; }
-    const observedValues = manipulationObservedJoints(model, state, group);
-    const all = this.jointFilter.sample(model, observedValues, context, now, .1, observed?.measured_at ?? undefined, observed?.joint_velocities);
     const root: ManipulationPose = state.root_pose ?? { position: [0, 0, 0], orientation: [0, 0, 0, 1] };
     const plan = manipulationActivePlan(state, interaction.plan, intent.executing);
     if (intent.dragging || state.stopped) this.core.presentation.reset();
     const playback = this.core.presentation.sample(plan, now);
-    const proposed = manipulationProposedJoints(model, group, observedValues, {
-      plan, playback, selected, dragging: intent.dragging, rejected: !!interaction.rejection,
-      solution: interaction.previewJoints, opening: selected ? interaction.desiredGripper : observed?.gripper,
-    });
-    if(interaction.previewJoints !== this.previousSolution) { this.previousSolution = interaction.previewJoints; this.solutionSequence++; }
-    const source = selected ? `${plan?.plan_id ?? this.solutionSequence}` : `${this.solutionSequence}`;
-    const values = playback.playing ? this.previewFilter.playback(model,proposed,context,now,playback.time) : this.previewFilter.sample(model, proposed, context, now, .1, source);
-    const poses = linkPoses(model, values), measuredPoses = linkPoses(model, all);
+    const sampled = this.sampler.sample({ model, state, group, origin, now, selected,
+      dragging: intent.dragging, rejected: !!interaction.rejection, solution: interaction.previewJoints,
+      opening: selected ? interaction.desiredGripper : observed?.gripper, plan, playback });
+    if (sampled.contextChanged) this.progress.reset();
+    const { observedValues, proposed: poses, measured: measuredPoses } = sampled;
     const displaced = !!interaction.target && intent.targetOffset;
-    const markerAction = endEffectorAction(selected, intent, selected ? interaction.desiredGripper ?? observed?.gripper_target ?? observed?.gripper : observed?.gripper, group?.has_gripper === true);
+    const markerAction = endEffectorAction(intent, selected ? interaction.desiredGripper ?? observed?.gripper_target ?? observed?.gripper : observed?.gripper, group?.has_gripper === true);
     const displayedPose = endEffectorDisplayPose(observed?.pose, interaction.target, {
       selected, following: state.following === true, dragging: intent.dragging === true,
-      finishing: intent.finishing === true, offset: intent.targetOffset,
+      finishing: intent.finishing === true, offset: intent.targetOffset, sharedDraft: intent.sharedDraft,
     });
     if (this.modelRevision !== model.revision) {
       for (const unsubscribe of this.modelSubscriptions) unsubscribe(); this.modelSubscriptions.length = 0;
       for (const mesh of this.meshes.values()) mesh.destroy(); this.meshes.clear();
       for (const { stroke } of this.edges.values()) stroke.destroy(); this.edges.clear();
       for (const pick of this.picks.values()) pick.destroy(); this.picks.clear(); this.hoverSources.clear();
-      this.geometry.clear(); this.placements.clear();
+      this.pointOpacity.clear(); this.placements.clear();
       this.modelRevision = model.revision; this.pathKey = "";
       for (const link of model.links) {
         const data = OPENYAM_MESH.links[link.name];
@@ -270,7 +193,7 @@ export class ManipulationRenderer {
           positions.push(...clientTrackingToSpecsPoint(rotate(data.positions.slice(i, i + 3) as Vec3)));
           normals.push(...clientTrackingToSpecsPoint(rotate(data.normals.slice(i, i + 3) as Vec3)).map(v => v / 100));
         }
-        this.geometry.set(link.name, { positions, normals, indices: data.indices, opacity: new ArmPointOpacity(), points: Array.from({length: data.positions.length / 3}, (_, i) => rotate(data.positions.slice(i * 3, i * 3 + 3) as Vec3)) });
+        this.pointOpacity.set(link.name, new ArmOpacityUniforms());
         mesh.triangles(positions, data.indices, [0.8, 0.85, 0.88, 1], undefined, normals); this.meshes.set(link.name, mesh);
         const pickRoot = this.node(this.object, `Pick_${link.name}`);
         this.picks.set(link.name, pickRoot);
@@ -288,14 +211,15 @@ export class ManipulationRenderer {
 
         const stroke = new ArmStrokeRenderer(this.object, `Outline_${link.name}`); stroke.minimumPixels = STYLE.minimumPixels;
         const points = armShapeEdges(data.positions, data.indices).map(rotate);
-        this.edges.set(link.name, { stroke, points, localPoints: points.map(clientTrackingToSpecsPoint), opacity: new ArmPointOpacity(), renderKey: "" });
+        stroke.segments(points.map(clientTrackingToSpecsPoint), STYLE.widthM * 100, 1,
+          STYLE.dashM * 100, STYLE.gapM * 100, false);
+        this.edges.set(link.name, { stroke });
       }
     }
     const world = (pose: ManipulationPose): ManipulationPose => clientTrackingToSpecsPose(odomToClientTrackingPose(pose, origin));
     this.meshFade.beginFrame(now, `${model.revision}:${interaction.groupId}`);
     const opacityElapsed = this.opacityCadence.sample(now);
     const sampleOpacity = opacityElapsed !== null;
-    if (sampleOpacity) this.pointFade.beginFrame(now, `${model.revision}:${interaction.groupId}`);
     this.fillFade.beginFrame(now, `${model.revision}:${interaction.groupId}`);
     for (const link of model.links) {
       const pose = composePose(root, poses[link.name]);
@@ -305,46 +229,25 @@ export class ManipulationRenderer {
         failedLink: model.joints.some(j => j.child === link.name && interaction.rejection?.failedJoints?.includes(j.name)) });
       const alpha = this.meshFade.sample(link.name, style.visible ? style.alpha : 0);
       const fillAlpha = this.fillFade.sample(link.name, style.showFill ? style.alpha : 0);
-      const pointWeight = armPointDisplacement(measuredPoses[link.name], poses[link.name]);
-      const opacityKey = armPointOpacityKey(measuredPoses[link.name], poses[link.name], style.pointVisible, style.floor, style.displacementBoost);
-      const pointOpacity = (point: Vec3) => style.pointVisible ? style.floor + Math.max(0, pointWeight(...point) - style.floor) * style.displacementBoost : 0;
+      const pointOpacity = this.pointOpacity.get(link.name);
+      pointOpacity?.sample(measuredPoses[link.name], poses[link.name], style, sampleOpacity, dt);
       const visible = alpha > 0.0001;
       const mesh = this.meshes.get(link.name);
       if (mesh) {
         configureArmSurface(mesh.material, fillAlpha, style.color);
-        const data = this.geometry.get(link.name);
-        if (data) {
-          const weightsChanged = sampleOpacity && data.opacity.sample(data.points, opacityKey, pointOpacity,
-            (previous, target) => this.pointFade.sampleValue(previous, target));
-          const changed = data.color === undefined || weightsChanged;
-          if (changed) {
-            mesh.triangles(data.positions, data.indices, [((style.color >> 16) & 255) / 255, ((style.color >> 8) & 255) / 255, (style.color & 255) / 255, 1], undefined, data.normals, data.opacity.values);
-            data.color = style.color;
-          }
-        }
-        mesh.object.enabled = visible; this.place(mesh.object, pose, origin);
-        const geometry = this.geometry.get(link.name);
-        if (geometry && geometry.fillAlpha !== fillAlpha) {
-          configureArmSurface(mesh.material, fillAlpha, style.color); geometry.fillAlpha = fillAlpha;
-        }
+        pointOpacity?.apply(mesh.material);
+        mesh.object.enabled = fillAlpha > 0.0001;
+        if (mesh.object.enabled) this.place(mesh.object, pose, origin);
       }
       const edge = this.edges.get(link.name);
       if (edge) {
         const color: Vec3 = [((style.color >> 16) & 255) / 255, ((style.color >> 8) & 255) / 255, (style.color & 255) / 255];
-        const weightsChanged = sampleOpacity && edge.opacity.sample(edge.points, opacityKey, pointOpacity,
-          (previous, target) => this.pointFade.sampleValue(previous, target));
+        pointOpacity?.apply(edge.stroke.material);
         if (!visible) { edge.stroke.hide(); }
         else {
           edge.stroke.object.enabled = true;
-          const renderKey = JSON.stringify([style.widthM]);
           edge.stroke.pose(world(pose));
           edge.stroke.style(style.widthM * 100, STYLE.opacity * alpha, color);
-          if (weightsChanged || edge.renderKey !== renderKey) {
-            edge.stroke.segments(edge.localPoints,
-              style.widthM * 100, 1, STYLE.dashM * 100, STYLE.gapM * 100, false, [1, 1, 1], edge.opacity.values);
-            edge.stroke.style(style.widthM * 100, STYLE.opacity * alpha, color);
-            edge.renderKey = renderKey;
-          }
         }
       }
       const pickRoot = this.picks.get(link.name);
@@ -388,49 +291,52 @@ export class ManipulationRenderer {
       const p = this.handle.getTransform().getWorldPosition();
       if (this.handleHover.size || this.actionHover.size || this.capture.owner !== null) this.hoverUntil = now + 0.3;
       this.hoverProgress += ((now < this.hoverUntil ? 1 : 0) - this.hoverProgress) * (1 - Math.exp(-14 * dt));
-      this.gripper.sceneObject.enabled = markerAction.available && !state.stopped && (!intent.dragging || markerAction.allowDuringGrab) && this.hoverProgress > 0.01;
-      this.gripper.sceneObject.getTransform().setLocalScale(new vec3(1, 1, 1).uniformScale(Math.max(0.01, this.hoverProgress)));
-      this.gripper.sceneObject.getTransform().setWorldPosition(p.add(new vec3(0, -5, 0)));
-      this.gripper.sceneObject.getTransform().setWorldRotation(camera.getTransform().getWorldRotation());
-      this.previewMenu.enabled = selected && !intent.dragging && !state.stopped && this.hoverProgress > 0.01;
-      this.previewMenu.getTransform().setLocalScale(new vec3(1,1,1).uniformScale(Math.max(0.01, this.hoverProgress)));
-      this.previewMenu.getTransform().setWorldPosition(p.add(new vec3(0, 5, 0)));
-      this.previewMenu.getTransform().setWorldRotation(camera.getTransform().getWorldRotation());
+      this.controls.gripper.sceneObject.enabled = markerAction.available && !state.stopped && (!intent.dragging || markerAction.allowDuringGrab) && this.hoverProgress > 0.01;
+      this.controls.gripper.sceneObject.getTransform().setLocalScale(new vec3(1, 1, 1).uniformScale(Math.max(0.01, this.hoverProgress)));
+      this.controls.gripper.sceneObject.getTransform().setWorldPosition(p.add(new vec3(0, -5, 0)));
+      this.controls.gripper.sceneObject.getTransform().setWorldRotation(camera.getTransform().getWorldRotation());
+      this.controls.previewMenu.enabled = selected && !intent.dragging && !state.stopped && this.hoverProgress > 0.01;
+      this.controls.previewMenu.getTransform().setLocalScale(new vec3(1,1,1).uniformScale(Math.max(0.01, this.hoverProgress)));
+      this.controls.previewMenu.getTransform().setWorldPosition(p.add(new vec3(0, 5, 0)));
+      this.controls.previewMenu.getTransform().setWorldRotation(camera.getTransform().getWorldRotation());
     }
-    this.gripper.labelText.text = markerAction.label;
-    this.gripper.button.inactive = !markerAction.enabled;
-    setButtonStyle(this.gripper.button, SnapOS2Styles.Secondary);
+    this.controls.gripper.labelText.text = markerAction.label;
+    this.controls.gripper.button.inactive = !markerAction.enabled;
+    setButtonStyle(this.controls.gripper.button, SnapOS2Styles.Secondary);
     this.place(this.base, root, origin); this.base.getTransform().setWorldRotation(camera.getTransform().getWorldRotation());
     this.nameLabel.text = title;
-    this.panelTitle.text = title.length > 15 ? `${title.slice(0,14)}…` : title;
-    this.rescan.sceneObject.enabled = this.localizationAvailable;
-    if(this.scanIcon) this.scanIcon.object.enabled = this.localizationAvailable;
-    this.rescan.button.inactive = intent.executing || intent.dragging || intent.resetting;
+    this.controls.panelTitle.text = title.length > 15 ? `${title.slice(0,14)}…` : title;
+    this.controls.rescan.sceneObject.enabled = this.localizationAvailable;
+    if(this.controls.scanIcon) this.controls.scanIcon.object.enabled = this.localizationAvailable;
+    this.controls.rescan.button.inactive = intent.executing || intent.dragging || intent.resetting;
     this.activityLabel.text = intent.activity + (model.visual_signature !== OPENYAM_MESH.signature ? " · Preview mesh unavailable" : "");
     this.label.text = `Movement speed ${Math.round(interaction.speedScale * 100)}%`;
-    this.sphere.setColor(interaction.rejection ? [1, 0.8, 0, 1] : [0.82, 0.82, 0.82, 1]);
+    this.sphere.setColor(intent.blocked || interaction.rejection
+      ? [((STYLE.warningColor >> 16) & 255) / 255, ((STYLE.warningColor >> 8) & 255) / 255, (STYLE.warningColor & 255) / 255, 1]
+      : [0.82, 0.82, 0.82, 1]);
+    this.correction.update(this.handle.enabled ? origin : null, now);
 
-    this.speedLabel.text = `Speed · ${Math.round(interaction.speedScale * 100)}%`;
+    this.controls.speedLabel.text = `Speed · ${Math.round(interaction.speedScale * 100)}%`;
     const speedValue = (interaction.speedScale - 0.05) / 0.95;
-    if (this.speed.currentValue !== speedValue) {
-      this.syncingSpeed = true; this.speed.currentValue = speedValue; this.syncingSpeed = false;
+    if (this.controls.speed.currentValue !== speedValue) {
+      this.controls.syncingSpeed = true; this.controls.speed.currentValue = speedValue; this.controls.syncingSpeed = false;
     }
-    this.speed.enabled = intent.canManipulate;
-    const rows = manipulationMenuRows(selected, !!state.stopped);
+    this.controls.speed.enabled = intent.canManipulate;
+    const rows = manipulationMenuRows();
     this.menuHeight.request((rows.length-1) * ARM_PANEL_STYLE.rowM + ARM_PANEL_STYLE.paddingM + ARM_PANEL_STYLE.headerM); this.menuHeight.tick(dt);
-    this.panelPresenter.update(state.root_pose ? this.base : null, camera, this.menuHeight.height);
+    this.controls.panelPresenter.update(state.root_pose ? this.base : null, camera, this.menuHeight.height);
     const menuRows = rows.join(":");
     if (menuRows !== this.menuRows) rows.forEach(key => {
       const i = key === "stop" || key === "reset" ? 0 : key === "speed" ? 1 : 2;
-      const node = key === "speed" ? this.speed.getSceneObject() : this.buttons.get(key)!.sceneObject;
+      const node = key === "speed" ? this.controls.speed.getSceneObject() : this.controls.buttons.get(key)!.sceneObject;
       node.getTransform().setLocalPosition(new vec3(key === "reset" ? 5.3 : key === "stop" ? -5.3 : 0, -ARM_PANEL_STYLE.headerM*100-2.8-i*4-(key === "speed" ? 1 : i>1 ? 1.2 : 0),.8));
     });
     this.menuRows = menuRows;
-    for (const [key, button] of this.buttons) {
+    for (const [key, button] of this.controls.buttons) {
       if (key !== "plan" && key !== "execute") button.sceneObject.enabled = rows.includes(key);
       button.button.inactive = !manipulationButtonEnabled(key, intent);
     }
-    const emergency = this.buttons.get("estop")!;
+    const emergency = this.controls.buttons.get("estop")!;
     emergency.labelText.text = state.stopped ? "Resume operation" : "E-stop";
     setButtonStyle(emergency.button, state.stopped ? SnapOS2Styles.Primary : SnapOS2Styles.Special);
     this.warning.apply({ blocked: intent.blocked === true, fresh: intent.fresh, stopped: intent.stopped,
@@ -470,7 +376,7 @@ export class ManipulationRenderer {
     this.placements.set(object, p);
   }
   dispose(): void {
-    this.placements.clear(); this.panelPresenter.dispose();
+    this.placements.clear(); this.controls.dispose();
     for (const unsubscribe of this.modelSubscriptions) unsubscribe();
     for (const unsubscribe of this.subscriptions) unsubscribe();
     for (const pick of this.picks.values()) pick.destroy();

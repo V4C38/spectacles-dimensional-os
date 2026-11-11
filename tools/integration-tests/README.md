@@ -1,7 +1,7 @@
 # Client integration contract
 
 `scenarios.json` is the shared coverage contract for WebXR and Spectacles 2024.
-It defines stable case IDs, applicability, the ordered hand-input golden pathss,
+It defines stable case IDs, applicability, the ordered hand-input golden paths,
 its timing budget, and deterministic server/hardware fixtures. Cases cannot be
 substituted by similarly named screenshots: every applicable case needs a real
 passing assertion with its exact ID and a captured image. Unsupported platform
@@ -44,7 +44,7 @@ removed only after a new successful publication; unrelated files remain.
 
 Each completed full run contains consecutively numbered `01_setup_entry.png` style
 images, `golden-path.mp4` (WebXR targets one minute within 45–75 seconds;
-native Specs targets roughly 90 seconds within 75–105), `results.json`, and diagnostics. The
+native Specs uses 16 chapters with 87 seconds of declared holds within 75–105), `results.json`, and diagnostics. Both golden paths include one brief re-localization. The
 canonical golden video is produced by default for both clients. Set
 `INTEGRATION_EXTRA_MEDIA=1` for WebXR or pass native `--extra-media` to also encode
 controller/probe and supplemental edited clips. Functional tests and failure
@@ -60,7 +60,8 @@ inside each chapter remains intact. The golden pass does not invoke native
 screenshot export; its images are extracted afterward, preventing Preview pauses
 from altering the walkthrough. The browser clock is aligned using a captured
 magenta marker outside the final chapters; Specs uses actual ScreenCaptureKit
-recording timestamps. Raw recordings and capture metadata remain in diagnostics.
+recording timestamps. Golden and failure recordings and capture metadata remain
+in diagnostics; successful non-golden raw recordings follow the retention policy below.
 Production UI scale and font sizes are not changed for recording. Declared capture
 crops keep UI readable, with wider views for world interactions.
 

@@ -440,7 +440,7 @@ async def test_old_idle_snapshot_cannot_retire_accepted_execution(snapshot_durin
     await asyncio.gather(*service._tasks)
     request = ManipulationRequest("execute", "execute", "arm", {})
     module._interaction.begin_manipulation_motion(request.request_id)
-    module._interaction.set_motion_busy(True)
+    module._interaction.observe_manipulation_snapshot({"available": True, "execution": "executing"})
     try:
         if snapshot_during_command:
             service.submit(request, "a")

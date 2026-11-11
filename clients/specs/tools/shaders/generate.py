@@ -55,7 +55,8 @@ def float_inputs(code: str) -> list[str]:
 
 
 def code_node(template: dict[str, Any], level: int, title: str, code: str,
-              inputs: dict[str, int], vertex: bool = False) -> dict[str, Any]:
+              inputs: dict[str, int], vertex: bool = False,
+              interpolated: dict[str, int] | None = None) -> dict[str, Any]:
     node = deepcopy(template)
     node["LevelID"] = graph.unsigned(level)
     node["Title1"] = graph.string(title)
@@ -71,12 +72,23 @@ def code_node(template: dict[str, Any], level: int, title: str, code: str,
     stage = ports["Stage"]["Property"]["Variables"]
     stage["ItemIndex"] = graph.variable(struct.pack("<i", 0 if vertex else 1), 2)
     stage["ItemName"] = graph.text_variable("Vertex" if vertex else "Pixel")
-    ports["Position" if vertex else "Result"] = graph.port(
-        "Position" if vertex else "Result", 3 if vertex else 4, output=True,
-    )
+    for kind, name in re.findall(r"\boutput_(float|vec[234])\s+(\w+)\s*;", code):
+        ports[name] = graph.port(name, 1 if kind == "float" else int(kind[-1]), output=True)
+    bindings = {**inputs, **(interpolated or {})}
     for name in float_inputs(code):
         ports[name] = graph.port(name, 1)
-        graph.connect(ports[name], inputs[name], "Output")
+        graph.connect(ports[name], bindings[name], "Output")
+    return node
+
+
+def interpolate_node(template: dict[str, Any], level: int) -> dict[str, Any]:
+    """Use the native 5.15 Interpolate node to evaluate opacity once per vertex."""
+    node = deepcopy(template)
+    node["LevelID"] = graph.unsigned(level)
+    node["Ports"]["Input0"] = graph.port("Input0", 1)
+    node["Ports"]["Output"] = graph.port("Output", 1, output=True)
+    graph.connect(node["Ports"]["Input0"], 6, "PointOpacity")
+    node["Ports"]["Flat"]["Property"]["Variables"]["VariableX"] = graph.variable(b"\0", 1)
     return node
 
 
@@ -96,26 +108,37 @@ def float_parameter(template: dict[str, Any], name: str, level: int) -> dict[str
 
 
 def generate(base: dict[str, Any], custom: dict[str, Any], parameter: dict[str, Any],
-             name: str, pixel: str, vertex: str | None) -> dict[str, Any]:
+             name: str, pixel: str, vertex: str | None,
+             interpolate: dict[str, Any] | None = None) -> dict[str, Any]:
     tree = deepcopy(base)
     children = tree["Nodes"]["ChildNodes"]
     main = children["Node0"]
-    inputs = {
-        key: 7 + index for index, key in enumerate(float_inputs(pixel + "\n" + (vertex or "")))
-    }
-    add_node(children, "Node1", code_node(custom, 5, name, pixel, inputs))
+    # The caller may use an existing graph as its base in portable tests.
+    for key in list(children):
+        if key.startswith("Node") and not re.match(r"Node0(?:\D|$)", key):
+            del children[key]
+    point_opacity = bool(vertex and "output_float PointOpacity;" in vertex)
+    first_parameter = 8 if point_opacity else 7
+    uniforms = [key for key in float_inputs(pixel + "\n" + (vertex or "")) if key != "PointOpacity"]
+    inputs = {key: first_parameter + index for index, key in enumerate(uniforms)}
+    add_node(children, "Node1", code_node(custom, 5, name, pixel, inputs,
+        interpolated={"PointOpacity": 7} if point_opacity else None))
     graph.connect(main["Ports"]["FinalColor"], 5, "Result")
     if vertex:
         add_node(children, "Node2", code_node(custom, 6, name + " Vertex", vertex, inputs, True))
-        graph.connect(main["Ports"]["WorldPosition"], 6, "Position")
+        if "output_vec3 Position;" in vertex:
+            graph.connect(main["Ports"]["WorldPosition"], 6, "Position")
+    if point_opacity:
+        if interpolate is None:
+            raise ValueError("Point opacity requires the native Interpolate template")
+        add_node(children, "Node3", interpolate_node(interpolate, 7))
     parameter_keys = []
     for index, (key, level) in enumerate(inputs.items()):
-        node_key = f"Node{(3 if vertex else 2) + index}"
+        node_key = f"Node{(4 if point_opacity else 3 if vertex else 2) + index}"
         add_node(children, node_key, float_parameter(parameter, key, level))
         parameter_keys.append(node_key)
-    ordered = parameter_keys + ["Node1"]
-    if vertex:
-        ordered.append("Node2")
+    ordered = parameter_keys + (["Node2", "Node3", "Node1"] if point_opacity
+                               else ["Node1", "Node2"] if vertex else ["Node1"])
     ordered.append("Node0")
     for dependency, key in enumerate(ordered):
         children[key]["DependencyIndex"] = graph.integer(dependency)
@@ -137,6 +160,8 @@ def main() -> None:
     base, source = graph.load(base_path), graph.load(args.source_graph)
     custom = find_node(source, "node_util_custom")
     parameter = find_node(source, "nodes_inputs_parameters_float")
+    interpolate_path = args.app / "Contents/Plugins/Es_ShaderGraph.bundle/GraphResources/library/subgraph/Flipbook Coords - Interpolate UV.subgraph"
+    interpolate = find_node(graph.load(interpolate_path), "nodes_main_interpolate")
     if custom is None or parameter is None:
         raise ValueError("Source graph must contain a custom-code node and float parameter")
     args.out.mkdir(parents=True, exist_ok=True)
@@ -144,7 +169,7 @@ def main() -> None:
         pixel = (args.sources / f"{name}.customCode").read_text(encoding="utf-8")
         vertex_file = args.sources / f"{name}Vertex.customCode"
         vertex = vertex_file.read_text(encoding="utf-8") if vertex_file.is_file() else None
-        encoded = graph.dumps(generate(base, custom, parameter, name, pixel, vertex))
+        encoded = graph.dumps(generate(base, custom, parameter, name, pixel, vertex, interpolate))
         if graph.dumps(graph.loads(encoded)) != encoded:
             raise ValueError(f"Generated graph failed lossless roundtrip: {name}")
         (args.out / f"{name}.ss_graph").write_bytes(encoded)

@@ -1,9 +1,9 @@
 import { expect, it } from "vitest";
 import * as THREE from "three";
 import { NotificationPill } from "../src/presentation/NotificationPill";
-import { TargetWarning } from "../src/manipulation/TargetWarning";
+import { EndEffectorStatusView } from "../src/manipulation/EndEffectorStatusView";
 it("keeps a non-interactive pill beside the EE and fades it out on recovery", () => {
-  const warning = new TargetWarning(), marker = new THREE.Vector3(1, 1, 1);
+  const warning = new EndEffectorStatusView(), marker = new THREE.Vector3(1, 1, 1);
   const failed = { blocked: false, fresh: true, stopped: false, moving: false,
     rejection: { message: "Unreachable" } };
   warning.update(marker, 1, failed);
@@ -23,7 +23,7 @@ it("keeps a non-interactive pill beside the EE and fades it out on recovery", ()
 });
 
 it("lays out a 16 cm EE pill with its existing physical font size and a full-size viewer pill", () => {
-  const warning = new TargetWarning();
+  const warning = new EndEffectorStatusView();
   warning.update(new THREE.Vector3(), 1, { blocked: true, fresh: true, stopped: false,
     moving: true, rejection: null });
   warning.update(new THREE.Vector3(), 2, { blocked: true, fresh: true, stopped: false,

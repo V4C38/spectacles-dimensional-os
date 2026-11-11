@@ -2,20 +2,15 @@
 import { ManipulationPressEdges } from "@dimos-ar-client/manipulation/ManipulationInputCapture";
 import { MenuAnchorController } from "../src/input/MenuAnchorController";
 import { expect, it, vi } from "vitest";
-vi.hoisted(() => {
-  class AudioContextStub {
-    destination = {};
-    createGain() { return { connect() {}, gain: { value: 1 } }; }
-  }
-  Object.defineProperty(window, "AudioContext", { value: AudioContextStub, configurable: true });
-});
+import "./fixtures/xrEnvironment";
+
 import * as xb from "xrblocks";
 import { SurfaceButton } from "../src/presentation/SurfaceButton";
 import { DIMOS_AR_DESIGN } from "../src/presentation/DimOSARDesign";
 import { MainMenuView } from "../src/presentation/MainMenuView";
 
 it("constructs real XR Blocks buttons and activates the supported trigger hook", () => {
-  const handlers = { onSetup: vi.fn(), onBack: vi.fn(), onRetry: vi.fn(), onRestart: vi.fn(), onMenu: vi.fn(), onMode: vi.fn(), onRobot: vi.fn(), onDebug: vi.fn(), onLidar: vi.fn(), onLocalize: vi.fn(), onRealign: vi.fn(), onEstop: vi.fn(), onDraft: vi.fn(), onAgentText: vi.fn(() => true) };
+  const handlers = { onSetup: vi.fn(), onBack: vi.fn(), onRetry: vi.fn(), onRestart: vi.fn(), onMenu: vi.fn(), onMode: vi.fn(), onRobot: vi.fn(), onDebug: vi.fn(), onLocalize: vi.fn(), onRealign: vi.fn(), onEstop: vi.fn(), onDraft: vi.fn(), onAgentText: vi.fn(() => true) };
   const view = new MainMenuView(handlers);
   expect(view.panel.scale.x).toBeCloseTo(DIMOS_AR_DESIGN.panel.height * 0.432);
   expect(view.panel.getObjectByName("Capabilities robot icon")?.children).toHaveLength(4);
@@ -49,7 +44,7 @@ it("constructs real XR Blocks buttons and activates the supported trigger hook",
 
 it("grips the panel body, rotates around the grab point with smoothing, and retains the released pose", () => {
   const noop = () => {};
-  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
   view.panel.position.set(0, 0, -1);
   expect(view.beginManipulation([0, 0, 0], [0, 0, -1], new THREE.Quaternion(), true)).toBe(true);
   const rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 4);
@@ -61,8 +56,10 @@ it("grips the panel body, rotates around the grab point with smoothing, and reta
   for (let i = 0; i < 90; i++) view.updateManipulation([0.2, 0, 0], direction, rotation, 0.016);
   expect(view.panel.quaternion.angleTo(rotation)).toBeLessThan(0.001);
   expect(view.panel.position.x).toBeCloseTo(0.2 + direction[0], 3);
+  view.panel.updateMatrix();
   const released = view.panel.matrix.clone();
   view.endManipulation(); view.updateManipulation([5, 0, 0], [0, 0, -1]);
+  view.panel.updateMatrix();
   expect(view.panel.matrix).toEqual(released);
 });
 
@@ -139,8 +136,10 @@ it("consumes UI selection, cancels drags on input loss, invalidates resets, and 
   const aligned = client.originStore.setFromLocalizationResult({ type: "localization_result", position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 10 });
   client.ui.flow.finish();
   const beforeFocus = invalidated.mock.calls.length;
+  const beforeSuspend = lost.mock.calls.length;
   session.visibilityState = "hidden"; session.dispatchEvent(new Event("visibilitychange"));
   app.update(10.1, frame);
+  expect(lost.mock.calls.length - beforeSuspend).toBe(1);
   expect(client.originStore.T_odom_client).toBe(aligned);
   session.visibilityState = "visible"; session.dispatchEvent(new Event("visibilitychange"));
   app.update(10.2, frame);
@@ -181,7 +180,7 @@ it("consumes UI selection, cancels drags on input loss, invalidates resets, and 
 
 it("keeps the panel upright while grabbing with a rolled and pitched controller", () => {
   const noop = () => {};
-  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
   view.panel.position.set(0, 0, -1);
   view.panel.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), 0.4);
   const bar = view.panel.localToWorld(new THREE.Vector3(0, -0.54, 0));
@@ -199,7 +198,7 @@ it("keeps the panel upright while grabbing with a rolled and pitched controller"
 it("shows separate response and draft fields, moves robot controls into settings and gates Send", () => {
   const noop = () => {};
   const onMode = vi.fn(), onRobot = vi.fn(), onDebug = vi.fn();
-  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode, onRobot, onDebug, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode, onRobot, onDebug, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
   const buttons: xb.TextButton[] = [];
   view.panel.traverse(object => { if (object instanceof xb.TextButton) buttons.push(object); });
   const snap = {
@@ -259,7 +258,7 @@ it("shows separate response and draft fields, moves robot controls into settings
 
 it("keeps every panel action inside its inset and leaves Emergency Stop a clear bottom margin", () => {
   const noop = () => {};
-  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
   const buttons: xb.TextButton[] = [];
   view.panel.traverse(object => { if (object instanceof xb.TextButton && object.name !== "Robot selection button") buttons.push(object); });
   for (const button of buttons) {
@@ -275,7 +274,7 @@ it("keeps every panel action inside its inset and leaves Emergency Stop a clear 
 
 it("disposes allocated UI resources once, including shared icon materials and scroll fields", () => {
   const noop = () => {};
-  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
   const geometries = new Set<THREE.BufferGeometry>(), materials = new Set<THREE.Material>();
   view.panel.traverse(node => {
     if (node instanceof THREE.Mesh || node instanceof THREE.Line) {
@@ -290,7 +289,7 @@ it("disposes allocated UI resources once, including shared icon materials and sc
 
 it("uses identical conversation fields, shared tabs and one robot badge in setup", () => {
   const noop = () => {};
-  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
   const internals = view as unknown as { agent: xb.TextView; inputLabel: xb.TextView; inputField: xb.TextButton; robotBadge: THREE.Group; stepTabs: xb.TextButton[] };
   expect(internals.agent.width).toBe(internals.inputLabel.width);
   expect(internals.agent.height).toBe(internals.inputLabel.height);
@@ -309,7 +308,7 @@ it("uses identical conversation fields, shared tabs and one robot badge in setup
 
 it("separates tab layers and text depth without competing internal depth-buffer writes", () => {
   const noop = () => {};
-  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
   const tabs: xb.TextButton[] = [];
   view.panel.traverse(node => { if (node instanceof xb.TextButton && ["Manual", "Agent", "01 Connect", "02 Localization"].includes(node.text)) tabs.push(node); });
   expect(tabs).toHaveLength(4);
@@ -367,7 +366,7 @@ it("locks palm summoning to one hand, supports the right hand and does not dismi
 
 it("uses dark text on white primary/selected controls and physical depth across resizing", () => {
   const noop = () => {};
-  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
   const control = view.panel.getObjectByName("Button: Manual")!.parent as SurfaceButton;
   control.setActive(true); control.update();
   expect(control.fontColor).toBe(DIMOS_AR_DESIGN.colors.primaryText);
@@ -383,7 +382,7 @@ it("uses dark text on white primary/selected controls and physical depth across 
 
 it("billboards a bottom-bar drag in yaw and pitch without roll or moving the grabbed point", () => {
   const noop = () => {};
-  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
   view.panel.position.set(0, 1, -1); view.panel.updateWorldMatrix(true, true);
   const localGrab = new THREE.Vector3(0, -0.406 / 0.76, 0);
   const grabbed = view.panel.localToWorld(localGrab.clone());
@@ -415,7 +414,7 @@ it("starts a panel grab from the accepted input ray while the visual laser is st
 
 it("gives every control one physical body without a competing front cap", () => {
   const noop = () => {};
-  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
   const controls: SurfaceButton[] = [];
   view.panel.traverse(node => { if (node instanceof SurfaceButton) controls.push(node); });
   expect(controls.length).toBeGreaterThan(10);

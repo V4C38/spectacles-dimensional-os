@@ -1,5 +1,7 @@
+import { clientTrackingToWebxrPoint } from "./utilities/WebXRCoordinates";
+import { odomToClientTrackingPose } from "@dimos-ar-client/localization/clientTrackingTransforms";
 import { WebXRManipulationController } from "./manipulation/WebXRManipulationController";
-import { applyLocalizationNotification } from "@dimos-ar-client/presentation/NotificationCenter";
+import { AlignmentWarning } from "@dimos-ar-client/presentation/NotificationCenter";
 import { ClientPosePublisher } from "@dimos-ar-client/agent/ClientPosePublisher";
 import { ViewerNotificationPresenter } from "./presentation/ViewerNotificationPresenter";
 import { reportDiagnostic } from "./diagnostics/BrowserDiagnostics";
@@ -21,13 +23,11 @@ import type { Quat, Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
 import type { HmdCameraSource } from "./localization/HmdCameraSource";
 import { WebXRJoystickController, type JoystickAxes } from "./navigation/WebXRJoystickController";
 import {
-  robotDeadzoneRadiusM,
   WebXRNavigationController,
 } from "./navigation/WebXRNavigationController";
 import {
   navigationSurfaceHits,
   type FloorPlane,
-  type RobotGroundDeadzone,
 } from "./navigation/WebXRGroundPlacement";
 import { WebXRARMarkerPresenter } from "./presentation/WebXRARMarkerPresenter";
 import { WebXRLidarRenderer } from "./sensors/WebXRLidarRenderer";
@@ -46,6 +46,7 @@ export interface DimOSWebXRClientDeps {
 }
 
 export class DimOSWebXRClient {
+  private readonly alignmentWarning = new AlignmentWarning();
   readonly notifications = new ViewerNotificationPresenter();
   private stopFeedbackRemaining = 0;
   private localizationBaseline: {origin: ClientTrackingOrigin; reference: string | undefined; hello: unknown} | null = null;
@@ -107,7 +108,7 @@ export class DimOSWebXRClient {
       () => this.selection.snapshot(), () => {
         const status = this.speech?.snapshot().status;
         return { ttsPlaying: status === "Responding", asrRunning: status === "Listening" };
-      });
+      }, () => this.stopFeedbackRemaining > 0);
     this.ui.manipulationDiagnostics = () => JSON.stringify({ capture: this.manipulation.interaction.captureEvents, advisory: this.manipulation.interaction.diagnostics() });
     this.speech = new AgentDraftSession({
       recognition: deps.recognition ?? null, synthesis: deps.synthesis ?? null,
@@ -152,7 +153,7 @@ export class DimOSWebXRClient {
       this.applyView();
     });
     this.unsubscribeOutbound = this.session.subscribeOutbound((message) => {
-      applyLocalizationNotification(message, this.notifications);
+      this.alignmentWarning.observe(message);
       if (message.type === "localization_result") {
         reportDiagnostic("localization-result", { confidence: message.confidence, origin: this.originStore.hasTrackingOrigin });
       }
@@ -177,13 +178,15 @@ export class DimOSWebXRClient {
     });
   }
 
-  tick(cameraPose: { position: Vec3; orientation: Quat }, joystick: JoystickAxes | null): void {
+  pumpSession(): void { if (!this.disposed) this.session.tick(); }
+
+  tick(cameraPose: { position: Vec3; orientation: Quat }, joystick: JoystickAxes | null, pumpSession = true): void {
     if (this.disposed) {
       return;
     }
     this.lastCamera = cameraPose;
     this.camera.samplePose(cameraPose.position, cameraPose.orientation);
-    this.session.tick();
+    if (pumpSession) this.pumpSession();
     this.episode.tick();
     const now = this.clock.now();
     this.ui.tick(now);
@@ -194,7 +197,6 @@ export class DimOSWebXRClient {
       view.agentMessage, view.state?.agent.idle ?? true, view.agentMessageRevision);
     const visibleDeltaS = this.lastTickAt === null ? 0 : Math.min(0.1, Math.max(0, now - this.lastTickAt));
     this.stopFeedbackRemaining = Math.max(0, this.stopFeedbackRemaining - visibleDeltaS);
-    this.ui.estopPressed = this.stopFeedbackRemaining > 0;
     this.manipulation.renderer.debugEnabled = this.ui.debugEnabled;
     this.manipulation.tick(this.controlsEnabled() && view.hasTrackingOrigin);
     this.navigation.tick(now, visibleDeltaS);
@@ -204,15 +206,12 @@ export class DimOSWebXRClient {
     this.lastTickAt = now;
     this.applyView(deltaS);
     this.markers.update(cameraPose.position, deltaS);
-    const feedback = this.speech.snapshot();
     this.ui.cameraStatus = this.camera.previewFrame() ? "Capturing · " + this.camera.previewFrame()!.width + " × " + this.camera.previewFrame()!.height : "Not capturing";
     const ui = this.ui.snapshot();
     this.robot.setDebug(this.ui.debugEnabled);
     this.robot.feedback({
       tone: ui.connectionTone,
-      aligned: view.hasTrackingOrigin,
       activity: ui.activity,
-      message: feedback.response || view.agentMessage || feedback.prompt || null,
     });
     this.maybeSendClientPose();
   }
@@ -232,7 +231,6 @@ export class DimOSWebXRClient {
       rayFrom,
       rayDir,
       hits,
-      this.deadzone(),
       this.robot.floorWorldY() ?? 0,
       fromMarker,
       sourceId,
@@ -249,7 +247,6 @@ export class DimOSWebXRClient {
       rayFrom,
       rayDir,
       hits,
-      this.deadzone(),
       this.robot.floorWorldY() ?? 0,
       sourceId,
     );
@@ -271,7 +268,7 @@ export class DimOSWebXRClient {
     if (!this.controlsEnabled() || !this.originStore.hasTrackingOrigin) { this.navigation.clearAim(); return; }
     const floorY = this.robot.floorWorldY() ?? 0;
     this.navigation.aim(this.clock.now(), rayFrom, rayDir,
-      navigationSurfaceHits(rayFrom, rayDir, planes, floorY), this.deadzone(), floorY, sourceId);
+      navigationSurfaceHits(rayFrom, rayDir, planes, floorY), floorY, sourceId);
   }
 
   emergencyStop(): void {
@@ -281,7 +278,7 @@ export class DimOSWebXRClient {
       if (this.navigation.interaction.snapshot().goalActive) {
         if (!this.navigation.interaction.cancel(this.clock.now())) throw new Error("Stop request could not be sent");
       } else this.session.requestEstop();
-      this.stopFeedbackRemaining = 0.35; this.ui.estopPressed = true;
+      this.stopFeedbackRemaining = 0.35;
       this.notifications.show({ text: "Emergency stop requested", tone: "danger", glyph: "stop", priority: 100 });
     } catch {
       this.notifications.show({ text: "Stop request failed", tone: "danger", glyph: "stop", priority: 100 });
@@ -293,7 +290,7 @@ export class DimOSWebXRClient {
   }
 
   controlsEnabled(): boolean {
-    return this.ui.setupCompleted && !this.ui.alignmentReview?.pending && !this.ui.snapshot().setupCelebrating && this.ui.operatingMode === "manual" &&
+    return this.ui.setupCompleted && !this.ui.alignmentReview?.pending && !this.ui.setupCelebrating && this.ui.operatingMode === "manual" &&
       this.session.view().connection === "ready";
   }
 
@@ -306,7 +303,6 @@ export class DimOSWebXRClient {
   }
 
   suspend(): void {
-    this.manipulation.suspend();
     this.lastTickAt = null;
     this.speech.stop();
     this.loseInput();
@@ -376,18 +372,6 @@ export class DimOSWebXRClient {
     this.ui.restartLocalization();
   }
 
-  deadzone(): RobotGroundDeadzone | null {
-    const robot = this.session.view().hello?.robot;
-    if (!robot) {
-      return null;
-    }
-    return {
-      radiusM: robotDeadzoneRadiusM(robot.footprint_m),
-      getRobotWorldPosition: () => this.robot.worldPosition(),
-      getRobotFloorWorldY: () => this.robot.floorWorldY(),
-    };
-  }
-
   dispose(): void {
     if (this.disposed) {
       return;
@@ -449,6 +433,19 @@ export class DimOSWebXRClient {
       goalY,
       { executing: view.nav?.state === "following_path", startCircle: this.robot.floorCircleBounds(), endCircle: this.navigation.marker.circleBounds() },
     );
+
+      let alignmentDistance: number | null = null;
+      try {
+        const viewer = this.camera.trackingPosition?.();
+        if (viewer) this.navigation.setViewerPosition(clientTrackingToWebxrPoint(viewer));
+        const pose = view.pose ?? view.manipulation?.root_pose;
+        if (origin && pose && viewer && view.hasTrackingOrigin) {
+          const robot = odomToClientTrackingPose(pose, origin).position;
+          alignmentDistance = Math.hypot(...robot.map((v, i) => v - viewer[i]));
+        }
+      } catch { /* No usable headset pose: do not infer weak alignment. */ }
+      if (this.notifications) this.alignmentWarning.update(alignmentDistance,
+        view.hello?.localization?.providers.includes("vps") === true, this.episode.view().phase, this.notifications);
     this.previewRoute.apply(this.navigation.previewPath(), origin, this.navigation.isAiming(), this.robot.floorWorldY(), this.navigation.draftMarker.pose().position[1],
       { preview: true, startCircle: this.robot.floorCircleBounds(), endCircle: this.navigation.draftMarker.circleBounds() });
     if (origin !== this.lastMarkerOrigin) {

@@ -1,12 +1,7 @@
 // @vitest-environment jsdom
 import { expect, it, vi } from "vitest";
-vi.hoisted(() => {
-  class AudioContextStub {
-    destination = {};
-    createGain() { return { connect() {}, gain: { value: 1 } }; }
-  }
-  Object.defineProperty(window, "AudioContext", { value: AudioContextStub, configurable: true });
-});
+import "./fixtures/xrEnvironment";
+
 import * as THREE from "three";
 import * as xb from "xrblocks";
 import { WebXRInputController } from "../src/input/WebXRInputController";
@@ -27,7 +22,7 @@ it("interrupts another source's capture with one emergency stop on press", () =>
   const left = new THREE.Group(), right = new THREE.Group();
   left.userData.id = 1; right.userData.id = 2;
   f.internal.capture.press(left, {});
-  f.internal.worldHold = left;
+  f.internal.primary = { kind: "navigation", source: left, fromMarker: true };
   f.internal.interaction.hit.mockReturnValue({ object: new THREE.Mesh(), point: new THREE.Vector3() });
   f.controller.onSelectStart({ target: right });
   expect(f.internal.capture.owner).toBeNull();
@@ -85,7 +80,7 @@ it("lets the other hand toggle the gripper without ending the owner's drag", () 
   const owner = new THREE.Group(), other = new THREE.Group();
   owner.userData.id = 1; other.userData.id = 2;
   (other as any).inputSource = { hand: {}, handedness: "left" };
-  f.internal.capture.press(owner, {}); f.internal.manipulationHold = owner;
+  f.internal.capture.press(owner, {}); f.internal.primary = { kind: "arm", source: owner };
   f.internal.canInteract = () => true;
   const button = new THREE.Mesh(); button.userData.manipulationAction = "gripper";
   f.internal.interaction.hit.mockReturnValue({ object: button, point: new THREE.Vector3() });

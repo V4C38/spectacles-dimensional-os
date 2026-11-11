@@ -117,11 +117,6 @@ export class GlassSurface extends THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMa
 
   setOpacity(opacity: number): void { this.material.uniforms.uOpacity.value = opacity; if (this.backing) this.backing.material.opacity = 0.9 * opacity; }
 
-  setTint(color: string, alpha?: number): void {
-    this.material.uniforms.uTint.value.set(color);
-    if (alpha !== undefined) this.material.uniforms.uAlpha.value = alpha;
-  }
-
   setHover(amount: number): void { this.hoverTarget = amount; }
 
   hover(): number { return this.material.uniforms.uHover.value; }

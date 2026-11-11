@@ -27,7 +27,11 @@ def runtime():
     config = ManipulationConfig(
         model=SimpleNamespace(model=SimpleNamespace(load=lambda: SimpleNamespace(xml="<robot/>"))),
     )
-    adapter = SimpleNamespace(config=config, ready=False, feedback=SimpleNamespace(ts=time.time()))
+    adapter = SimpleNamespace(
+        config=config, ready=False, feedback=SimpleNamespace(ts=time.time()),
+        endpoint_holding=False, gripper_target=None, following_status={},
+        following_status_at=0.0, protection={"state": "normal", "effective_speed_scale": 1.0},
+    )
     module = ManipulationRuntime(adapter)
     module.started = True
     # Explicit fake control plane for domain-only native unit cases.

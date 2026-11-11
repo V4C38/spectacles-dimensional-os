@@ -6,7 +6,7 @@ on:
 
 jobs:
   dimos-ar:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: dimos-ar
@@ -37,8 +37,7 @@ jobs:
 
       - name: Install isolated manipulation runtime
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libegl1
+          ../launcher/scripts/install-ci-system-deps.sh planning
           python -m venv "${RUNNER_TEMP}/planning-venv"
           "${RUNNER_TEMP}/planning-venv/bin/python" -m pip install --upgrade pip
           GIT_LFS_SKIP_SMUDGE=1 "${RUNNER_TEMP}/planning-venv/bin/python" -m pip install --src "${RUNNER_TEMP}/planning-source" -e "dimos[planning] @ git+https://github.com/dimensionalOS/dimos.git@$(cat ../.dimos-revision)" -e ".[manipulation,dev]"
@@ -63,7 +62,7 @@ jobs:
           if-no-files-found: warn
 
   launcher:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: launcher/app
@@ -83,11 +82,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Ruff
         run: ruff check .
 
       - name: Pytest
-        run: pytest --junitxml="../../Review Data/unit/launcher/junit.xml"
+        run: |
+          test_config="$(mktemp -d)"
+          trap 'rm -rf "$test_config"' EXIT
+          XDG_CONFIG_HOME="$test_config" pytest --junitxml="../../Review Data/unit/launcher/junit.xml"
+
+      - name: Launcher browser policy tests
+        run: node --test tests/static.test.mjs
 
       - name: Upload launcher test reports
         if: always()
@@ -99,7 +108,7 @@ jobs:
           if-no-files-found: warn
 
   client-specs-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: clients/specs/Tests
@@ -132,7 +141,7 @@ jobs:
           if-no-files-found: warn
 
   client-webxr-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: clients/webxr
@@ -144,9 +153,9 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
-      - run: npx playwright install --with-deps chromium
-      - name: Install review video encoder
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install browser and video prerequisites
+        run: ../../launcher/scripts/install-ci-system-deps.sh webxr
+      - run: npx playwright install chromium
       - name: Verify integration contract and continuous encoding
         run: |
           mkdir -p "../../Review Data/unit/integration-tooling"

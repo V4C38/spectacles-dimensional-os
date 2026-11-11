@@ -476,3 +476,22 @@ def test_discrete_motion_admission_reserves_one_revision_per_pending_request():
     assert owner.revision == reserved
     owner.begin_manipulation_motion("successor")
     assert owner.revision > reserved
+
+
+def test_accepted_execution_stays_busy_across_another_result_until_native_terminal(fixture):
+    from dimos.ar.manipulation.protocol import ManipulationRequest
+
+    owner, _clock = fixture
+    owner.begin_manipulation_motion("first")
+    owner.observe_manipulation_result(
+        ManipulationRequest("first", "execute", "arm", {}), {"status": "accepted"}
+    )
+    owner.begin_manipulation_motion("second")
+    owner.observe_manipulation_result(
+        ManipulationRequest("second", "execute", "arm", {}), {"status": "rejected"}
+    )
+    assert owner.motion_busy
+    owner.observe_manipulation_snapshot({"available": False})
+    assert owner.motion_busy
+    owner.observe_manipulation_snapshot({"available": True, "execution": "completed"})
+    assert not owner.motion_busy

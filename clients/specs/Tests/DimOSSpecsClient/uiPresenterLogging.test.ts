@@ -91,7 +91,7 @@ it("restarts on the next tick without stale scale animations reopening or hiding
     wristMenuController: { closeImmediate: vi.fn(), tick: palmTick },
     mainMenuView: { setVisible, setOperatingMode: vi.fn(), tick: menuTick },
     uiLogger: { tick: vi.fn() }, ensureWizardLidarOff: vi.fn(), refreshHud: vi.fn(),
-    deps: { session: { stop }, speechController: { reset: vi.fn(), tick: vi.fn() },
+    deps: { session: { stop, view: () => ({ interaction: null }) }, speechController: { reset: vi.fn(), tick: vi.fn() },
       onModeChanged: vi.fn(), clientTrackingOriginStore: { clear: vi.fn() },
       robotPresenter: { reset: vi.fn() }, episode: { reset: vi.fn() } },
   });
@@ -193,4 +193,44 @@ it("publishes a 350 ms emergency-stop latch while dispatching the request once",
   setMockTime(10.34); expect(presenter.snapshot().estopPressed).toBe(true);
   setMockTime(10.36); expect(presenter.snapshot().estopPressed).toBe(false);
   expect(emergencyStop).toHaveBeenCalledOnce(); vi.restoreAllMocks();
+});
+
+it("derives effective mode from shared facts without storing a host mirror", () => {
+  const presenter = new UIPresenter();
+  const shared = { mode: "agent" as "agent" | "manual" };
+  const capability = { available: true };
+  Object.assign(presenter, { deps: { session: { view: () => ({ interaction: shared, capabilities: { agent: capability } }) } } });
+  expect(presenter.getOperatingMode()).toBe("agent");
+  shared.mode = "manual"; expect(presenter.getOperatingMode()).toBe("manual");
+  shared.mode = "agent"; capability.available = false;
+  expect(presenter.getOperatingMode()).toBe("manual");
+  expect(shared.mode).toBe("agent");
+});
+
+it("does not derive expensive diagnostics while their page is hidden", () => {
+  const presenter = new UIPresenter(), timing = vi.fn(() => ({})), diagnostics = vi.fn(() => "arm");
+  let visible = false;
+  Object.assign(presenter, { mainMenuView: { isDiagnosticsVisible: () => visible },
+    deps: { previewTexture: () => null, selection: new RobotSelection(), manipulationDiagnostics: diagnostics,
+      session: { view: () => ({ connection: "ready", state: null, nav: null }) },
+      episode: { view: () => ({ phase: "idle", lastError: null }), timing } } });
+  expect(presenter.snapshot().debugText).toBe("");
+  expect(timing).not.toHaveBeenCalled(); expect(diagnostics).not.toHaveBeenCalled();
+  visible = true;
+  expect(presenter.snapshot().debugText).toContain("Arm capture: arm");
+  expect(timing).toHaveBeenCalledOnce(); expect(diagnostics).toHaveBeenCalledOnce();
+});
+
+it.each([true, false])("restart preserves the shared owner and resets only fallback mode (shared=%s)", shared => {
+  const presenter = new UIPresenter();
+  const interaction = shared ? { mode: "agent" } : null;
+  const start = vi.fn();
+  Object.assign(presenter, { setupWizardPanel: {}, mainUIFrame: {}, fallbackMode: "agent",
+    setupWizardController: { start }, setUIState: vi.fn(), sendPostWizardLidarDefault: vi.fn(),
+    deps: { session: { view: () => ({ interaction, capabilities: { agent: { available: true } } }) },
+      onModeChanged: vi.fn(), robotPresenter: { reset: vi.fn() } } });
+  (presenter as any).performSetupRestart();
+  expect(presenter.getOperatingMode()).toBe(shared ? "agent" : "manual");
+  expect(start).toHaveBeenCalledWith(true);
+  if (interaction) expect(interaction.mode).toBe("agent");
 });

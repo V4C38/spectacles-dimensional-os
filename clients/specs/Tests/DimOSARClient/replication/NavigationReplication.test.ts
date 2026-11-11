@@ -79,7 +79,6 @@ describe("navigation replication adapter", () => {
   });
   it("clears an invalidated shared preview without reviving a private stale route", () => {
     const { nav, preview, collaboration, state } = fixture();
-    preview.previewPath = () => [[0,0,0,0], [8,0,0,0]];
     collaboration.apply({ ...state, revision: 1, preview: { type: "nav_goal", preview: true, pose: [2,0,0,0], path_poses: [[0,0,0,0], [2,0,0,0]], ts: 1 } });
     expect(nav.previewPath()?.at(-1)?.[0]).toBe(2);
     collaboration.apply({ ...state, revision: 2, preview: null });

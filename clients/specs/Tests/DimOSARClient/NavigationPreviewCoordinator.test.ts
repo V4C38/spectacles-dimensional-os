@@ -86,3 +86,15 @@ it("retires an expired bulk request and prevents its late reply releasing a succ
   f.assets.set(old, 15); f.tick(15); expect(f.id()).not.toBe(old);
   f.reply(old); f.tick(15.5); expect(f.sendText).toHaveBeenCalledTimes(2);
 });
+
+it("retains the last path during refresh, but clears it when interaction authority ends", () => {
+  const f = fixture();
+  const path = [[1, 2, 0, 0], [3, 2, 0, 0]] as [number, number, number, number][];
+  f.authority.state.preview = { type: "nav_goal", pose: [3, 2, 0, 0], path_poses: path, ts: 0 };
+  f.authority.publish();
+  expect(f.coordinator.displayPath()).toEqual(path);
+  f.authority.state.preview = null; f.authority.publish();
+  expect(f.coordinator.displayPath()).toEqual(path);
+  f.authority.state.authority = null; f.authority.publish();
+  expect(f.coordinator.displayPath()).toBeNull();
+});

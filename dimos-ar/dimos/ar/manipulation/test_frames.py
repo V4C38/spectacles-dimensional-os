@@ -28,3 +28,18 @@ def test_rotated_translated_reference_preserves_complete_tool_pose():
 def test_reference_rejects_invalid_configuration(data):
     with pytest.raises(ValueError):
         ReferencePose(**data)
+
+
+def test_pose_error_preserves_quaternion_equivalence_and_rejects_nonfinite_feedback():
+    import math
+    from types import SimpleNamespace
+
+    from dimos.ar.manipulation.frames import pose_error
+    from dimos.msgs.geometry_msgs.Pose import Pose
+
+    assert pose_error(Pose(), Pose(0, 0, 0, 0, 0, 0, -1)) == (0, 0)
+    distance, angle = pose_error(Pose(1, 0, 0), Pose(0, 0, 0, 0, 0, 1, 0))
+    assert distance == 1 and angle == pytest.approx(math.pi)
+    invalid = SimpleNamespace(position=SimpleNamespace(x=float("nan"), y=0, z=0),
+                              orientation=SimpleNamespace(x=0, y=0, z=0, w=1))
+    assert pose_error(invalid, Pose()) == (float("inf"), float("inf"))

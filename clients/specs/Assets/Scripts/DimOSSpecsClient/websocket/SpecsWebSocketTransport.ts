@@ -1,13 +1,17 @@
-import { AR_MODULE_CLIENT_CONFIG, type WebSocketTransport } from "../../DimOSARClient/websocket/hostPorts";
+import type { WebSocketTransportHandlers as SpecsWebSocketTransportHandlers } from "../../DimOSARClient/websocket/hostPorts";
+import { AR_MODULE_CLIENT_CONFIG,type WebSocketTransport } from "../../DimOSARClient/websocket/hostPorts";
 
 const WS_CONNECTING = 0;
 const WS_OPEN = 1;
 const WATCHDOG_INTERVAL_S = 0.2;
 
 export type { WebSocketTransportHandlers as SpecsWebSocketTransportHandlers } from "../../DimOSARClient/websocket/hostPorts";
-import type { WebSocketTransportHandlers as SpecsWebSocketTransportHandlers } from "../../DimOSARClient/websocket/hostPorts";
 
-type BlobLike = { bytes(): Promise<Uint8Array> };
+const RECEIVE_RECORD_LIMIT = 256;
+const RECEIVE_BYTE_LIMIT = 4 * 1024 * 1024;
+const BINARY_RECORD_LIMIT = 16384;
+type BlobLike = { bytes(): Promise<Uint8Array>; size?: number };
+type ReceiveQueue = { items: { data: string | BlobLike; bytes: number }[]; bytes: number; draining: boolean };
 
 export class SpecsWebSocketTransport implements WebSocketTransport {
   private readonly internetModule: InternetModule;
@@ -18,6 +22,7 @@ export class SpecsWebSocketTransport implements WebSocketTransport {
   private handlers: SpecsWebSocketTransportHandlers | null = null;
   private socket: WebSocket | null = null;
   private connecting = false;
+  private receiveQueue: ReceiveQueue | null = null;
   private hostClosing = false;
   private readonly retiredSockets = new Set<WebSocket>();
   private bulkSibling: SpecsWebSocketTransport | null = null;
@@ -98,6 +103,7 @@ export class SpecsWebSocketTransport implements WebSocketTransport {
     }
 
     this.socket = socket;
+    this.receiveQueue = { items: [], bytes: 0, draining: false };
     this.attachHandlers(socket);
     this.connectTimeoutEvent.reset(this.connectTimeoutS);
     this.connectWatchdogEvent.reset(WATCHDOG_INTERVAL_S);
@@ -108,6 +114,7 @@ export class SpecsWebSocketTransport implements WebSocketTransport {
     try {
       this.clearTimers();
       const socket = this.socket;
+      this.clearReceiveQueue();
       this.socket = null;
       this.connecting = false;
       if (socket) {
@@ -164,27 +171,43 @@ export class SpecsWebSocketTransport implements WebSocketTransport {
   }
 
   private dispatchMessage(socket: WebSocket, event: WebSocketMessageEvent): void {
-    const data = event.data;
-    if (typeof data === "string") {
-      this.handlers?.onTransportText(data);
-      return;
+    const data = event.data, queue = this.receiveQueue;
+    if (!queue || (typeof data !== "string" && !isBlobLike(data))) return;
+    // Missing native Blob.size reserves a full binary record before decoding.
+    const declaredBytes = typeof data === "string" ? data.length * 2 : data.size ?? BINARY_RECORD_LIMIT;
+    const bytes = typeof data === "string" ? declaredBytes : BINARY_RECORD_LIMIT;
+    if (!Number.isSafeInteger(declaredBytes) || declaredBytes < 0 ||
+      typeof data !== "string" && declaredBytes > BINARY_RECORD_LIMIT ||
+      queue.items.length >= RECEIVE_RECORD_LIMIT || queue.bytes + bytes > RECEIVE_BYTE_LIMIT) {
+      this.failCurrent(socket); return;
     }
-    if (isBlobLike(data)) {
-      void this.dispatchBlob(socket, data);
-    }
+    queue.items.push({ data, bytes }); queue.bytes += bytes;
+    if (!queue.draining) void this.drainReceiveQueue(socket, queue);
   }
 
-  private async dispatchBlob(socket: WebSocket, blob: BlobLike): Promise<void> {
-    let bytes: Uint8Array;
+  private async drainReceiveQueue(socket: WebSocket, queue: ReceiveQueue): Promise<void> {
+    queue.draining = true;
     try {
-      bytes = await blob.bytes();
+      while (this.socket === socket && this.receiveQueue === queue && queue.items.length) {
+        const item = queue.items[0];
+        if (typeof item.data === "string") this.handlers?.onTransportText(item.data);
+        else {
+          const bytes = await item.data.bytes();
+          if (this.socket !== socket || this.receiveQueue !== queue) return;
+          if (bytes.byteLength > BINARY_RECORD_LIMIT) throw new Error("Binary receive budget exceeded");
+          this.handlers?.onTransportBinary(bytes);
+        }
+        if (this.receiveQueue !== queue) return;
+        queue.items.shift(); queue.bytes -= item.bytes;
+      }
     } catch {
-      return;
-    }
-    if (this.socket !== socket) {
-      return;
-    }
-    this.handlers?.onTransportBinary(bytes);
+      if (this.socket === socket && this.receiveQueue === queue) this.failCurrent(socket);
+    } finally { queue.draining = false; }
+  }
+
+  private clearReceiveQueue(): void {
+    if (this.receiveQueue) { this.receiveQueue.items.length = 0; this.receiveQueue.bytes = 0; }
+    this.receiveQueue = null;
   }
 
   private completeOpen(socket: WebSocket): void {
@@ -221,6 +244,7 @@ export class SpecsWebSocketTransport implements WebSocketTransport {
   }
 
   private failCurrent(socket: WebSocket): void {
+    this.clearReceiveQueue();
     this.clearTimers();
     this.connecting = false;
     if (this.socket === socket) {

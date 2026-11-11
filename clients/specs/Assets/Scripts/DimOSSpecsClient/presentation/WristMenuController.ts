@@ -1,5 +1,4 @@
 import { HandInputData } from "SpectaclesInteractionKit.lspkg/Providers/HandInputData/HandInputData";
-import { HandType } from "SpectaclesInteractionKit.lspkg/Providers/HandInputData/HandType";
 
 export type PalmGestureGateConfig = {
   showPitchDeg: number;
@@ -146,7 +145,6 @@ export type WristMenuControllerDeps = {
   panel: SceneObject;
   anchorRoot: SceneObject;
   cameraObject?: SceneObject;
-  handType?: HandType;
   onBeforeShow?: () => void;
   centerOffsetCm?: () => number;
   onPin?: () => void;
@@ -171,6 +169,10 @@ export class WristMenuController {
   }
 
   pin(): void { this.source = null; this.deps.onPin?.(); }
+  showPinned(): void {
+    this.visible = true; this.pin();
+    this.deps.onMenuShow();
+  }
   isPinned(): boolean { return this.visible && this.source === null; }
   sourceHand(): "left" | "right" | null { return this.source; }
   closeImmediate(): void {

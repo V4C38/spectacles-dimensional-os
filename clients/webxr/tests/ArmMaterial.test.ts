@@ -3,7 +3,7 @@ import { armMaterial } from "../src/manipulation/ArmMaterial";
 import { AdaptiveDashedLineRenderer } from "../src/presentation/AdaptiveDashedLineRenderer";
 
 it("keeps translucent arm surfaces from writing depth", () => {
-  for (const material of [armMaterial(), armMaterial(true)]) {
+  for (const material of [armMaterial()]) {
     expect(material.depthWrite).toBe(false);
     material.dispose();
   }

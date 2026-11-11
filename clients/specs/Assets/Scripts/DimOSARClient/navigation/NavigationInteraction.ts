@@ -1,3 +1,4 @@
+import { sameTrackingReference } from "../localization/clientTrackingOrigin";
 import type { InteractionAuthorityPort } from "../replication/CollaborationTypes";
 import { clientTrackingToOdomPose, odomToClientTrackingPose } from "../localization/clientTrackingTransforms";
 import type { ClientTrackingOrigin } from "../localization/clientTrackingOrigin";
@@ -32,11 +33,10 @@ export class NavigationInteraction {
   private selected = false;
   private armed = false;
   private floor: NavigationPose | null = null;
-  private directPose: NavigationPose | null = null;
-  private directStart: Vec3 | null = null;
-  private directSource: NavigationInputId | null = null;
-  private dragging = false;
-  private directHeading: Quat = [0, 0, 0, 1];
+  private direct: { source: NavigationInputId; start: Vec3; heading: Quat; pose: NavigationPose | null } | null = null;
+  private get directSource(): NavigationInputId | null { return this.direct?.source ?? null; }
+  private get directPose(): NavigationPose | null { return this.direct?.pose ?? null; }
+  private get dragging(): boolean { return this.direct?.pose !== null && this.direct !== null; }
   private readonly heading: NavigationHeading;
   private lastDenial = 0;
   constructor(commands: NavigationCommands, private readonly previews: NavigationPreviewCoordinator, headingSmoothingRate = 6, private readonly collaboration: InteractionAuthorityPort) { if (!collaboration) throw new Error("Navigation requires interaction authority"); this.goals = new NavigationGoalLifecycle(commands); this.heading = new NavigationHeading(headingSmoothingRate); }
@@ -64,13 +64,24 @@ export class NavigationInteraction {
   applyView(view: ARModuleSessionState, origin: ClientTrackingOrigin | null, floor: NavigationPose | null, _now: number): void {
     this.previews.apply(origin);
     const available = view.connection === "ready" && view.hasTrackingOrigin && view.capabilities?.navigation.available === true && view.capabilities.navigation.nav_goal.available === true && origin !== null;
-    if (!available || this.origin !== origin) this.cancelDrag();
+    if (!available || !sameTrackingReference(this.origin, origin)) this.cancelDrag();
+    else if (this.origin && origin && this.origin !== origin) {
+      const previous = this.origin;
+      const convert = (pose: NavigationPose) => odomToClientTrackingPose(clientTrackingToOdomPose(pose, previous), origin);
+      this.placement.rebase(convert, _now);
+      if (this.direct) {
+        const baseline = convert({ position: this.direct.start, orientation: this.direct.heading });
+        this.direct.start = baseline.position;
+        this.direct.heading = baseline.orientation;
+        if (this.direct.pose) this.direct.pose = convert(this.direct.pose);
+        this.heading.reset(this.direct.pose?.position ?? baseline.position, this.direct.pose?.orientation ?? baseline.orientation, _now);
+      }
+    }
     this.origin = available ? origin : null; this.floor = floor; this.armed = available;
     if (!available) this.selected = false;
     const shared = this.collaboration.snapshot();
     if (shared.blocked || this.lastDenial !== this.collaboration.denialRevision) {
-      this.placement.clear(); this.previews.clear(); this.directPose = this.directStart = null;
-      this.directSource = null; this.dragging = false;
+      this.placement.clear(); this.previews.clear(); this.direct = null;
     }
     this.lastDenial = this.collaboration.denialRevision;
     this.goals.apply(view, this.origin, floor);
@@ -88,7 +99,7 @@ export class NavigationInteraction {
   isRouteVisible(): boolean { return this.armed && this.flash() === null; }
   activePath(): YawPose[] | null { return this.goals.snapshot().path; }
   previewPath(): YawPose[] | null {
-    return this.collaboration.snapshot().preview?.path_poses ?? null;
+    return this.previews.displayPath();
   }
   flash(): NavFlash | null { return this.goals.snapshot().flash; }
   aim(now: number, placed: Placement, sourceId = DEFAULT_SOURCE): void {
@@ -119,22 +130,21 @@ export class NavigationInteraction {
     }
     if (this.placement.snapshot().draft) return false;
     if (!placed || placed.blocked) return false;
-    if (!this.directStart) {
+    if (!this.direct) {
       if (!this.collaboration.begin("live", sourceId, clientTrackingToOdomPose({
         position: placed.position, orientation: this.goals.snapshot().pose?.orientation ?? [0, 0, 0, 1] }, this.origin))) return false;
-      this.directSource = sourceId;
       this.placement.clear(); this.previews.clear();
-      this.directStart = [...(this.goals.snapshot().pose?.position ?? placed.position)];
-      this.directHeading = this.goals.snapshot().pose?.orientation ?? [0, 0, 0, 1];
-      this.heading.reset(this.directStart, this.directHeading, now);
+      this.direct = { source: sourceId, pose: null,
+        start: [...(this.goals.snapshot().pose?.position ?? placed.position)],
+        heading: this.goals.snapshot().pose?.orientation ?? [0, 0, 0, 1] };
+      this.heading.reset(this.direct.start, this.direct.heading, now);
     }
-    const dx = placed.position[0] - this.directStart[0], dy = placed.position[1] - this.directStart[1];
-    if (Math.hypot(dx, dy) > DRAG_THRESHOLD_M) this.dragging = true;
-    if (this.dragging) {
-      this.directHeading = this.heading.update(placed.position, now);
-      this.directPose = { position: [...placed.position], orientation: this.directHeading };
-      this.collaboration.update(clientTrackingToOdomPose(this.directPose, this.origin));
-      this.goals.send(now, this.directPose);
+    const dx = placed.position[0] - this.direct.start[0], dy = placed.position[1] - this.direct.start[1];
+    if (this.dragging || Math.hypot(dx, dy) > DRAG_THRESHOLD_M) {
+      this.direct.heading = this.heading.update(placed.position, now);
+      this.direct.pose = { position: [...placed.position], orientation: this.direct.heading };
+      this.collaboration.update(clientTrackingToOdomPose(this.direct.pose, this.origin));
+      this.goals.send(now, this.direct.pose);
     }
     return this.dragging;
   }
@@ -154,7 +164,7 @@ export class NavigationInteraction {
         this.previews.aim(draft.position, draft.orientation); this.previews.tick(now);
       } else this.collaboration.cancel(["live", "navigation_planning"]); }
     } else if (this.dragging && placed && !placed.blocked) {
-      const finalPose = { position: placed.position, orientation: this.directHeading };
+      const finalPose = { position: placed.position, orientation: this.direct!.heading };
       if (this.origin) {
         this.goals.submitted(now, finalPose);
         this.collaboration.release(clientTrackingToOdomPose(finalPose, this.origin), ["live"]);
@@ -162,10 +172,10 @@ export class NavigationInteraction {
     }
     if (this.directSource && (!this.dragging || !placed || placed.blocked))
       this.collaboration.cancel(["live", "navigation_planning"]);
-    this.directPose = null; this.directStart = null; this.directSource = null; this.dragging = false;
+    this.direct = null;
   }
   cancel(_now: number): boolean { this.cancelDrag(); return this.goals.cancel(); }
-  cancelDrag(): void { this.collaboration.cancel(["live", "navigation_planning"]); this.placement.clear(); this.previews.clear(); this.directPose = null; this.directStart = null; this.directSource = null; this.dragging = false; }
+  cancelDrag(): void { this.collaboration.cancel(["live", "navigation_planning"]); this.placement.clear(); this.previews.clear(); this.direct = null; }
   reset(): void { this.cancelDrag(); this.goals.reset(); this.origin = null; this.floor = null; this.armed = this.selected = false; }
   dispose(): void { this.reset(); this.previews.reset(); }
 }

@@ -1,4 +1,4 @@
-import { requireUsableProfile } from "./HmdCalibration";
+import { requireAcceptedProfile, requireUsableProfile } from "./HmdCalibration";
 import type { HmdCalibrationProfile, HmdId } from "./HmdCalibration";
 
 const ACCEPTANCE = {
@@ -54,10 +54,11 @@ export const HMD_PROFILES: Record<HmdId, HmdCalibrationProfile> = {
 // Model-specific calibration files override the built-in device profiles.
 const measuredProfiles = import.meta.glob<HmdCalibrationProfile>("./profiles/*.json", { eager: true, import: "default" });
 
-export function profileForHmd(id: HmdId): HmdCalibrationProfile {
-  const measured = measuredProfiles[`./profiles/${id}.json`];
+export function profileForHmd(id: HmdId, overrides: Readonly<Record<string, HmdCalibrationProfile>> = measuredProfiles): HmdCalibrationProfile {
+  const measured = overrides[`./profiles/${id}.json`];
   if (measured) {
     requireUsableProfile(measured);
+    requireAcceptedProfile(measured);
     if (measured.id !== id) throw new Error("calibration model mismatch");
     return measured;
   }

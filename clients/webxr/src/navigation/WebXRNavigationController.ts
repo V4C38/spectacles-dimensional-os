@@ -7,17 +7,18 @@ import { NavigationPreviewCoordinator } from "@dimos-ar-client/navigation/Naviga
 import { requestNavGoal } from "@dimos-ar-client/navigation/navGoalRequest";
 import { clientTrackingToWebxrPose, clientTrackingToWebxrPoint, webxrHeadingToClientTrackingPose, webxrToClientTrackingPoint } from "../utilities/WebXRCoordinates";
 import { WebXRNavGoalView, type NavFlash } from "./WebXRNavGoalView";
-import { FLOOR_AIM_RANGE_M, RAY_LENGTH_M, solveMeshPlacement, type MeshHit, type RobotGroundDeadzone } from "./WebXRGroundPlacement";
+import { FLOOR_AIM_RANGE_M, RAY_LENGTH_M, solveMeshPlacement, type MeshHit } from "./WebXRGroundPlacement";
 export { FLASH_DURATION_S, robotDeadzoneRadiusM } from "@dimos-ar-client/navigation/NavigationInteraction";
 
 /** WebXR placement and scene binding. All navigation interaction policy lives in ClientCore. */
 export class WebXRNavigationController {
+  private viewerPosition: Vec3 | null = null;
+  setViewerPosition(position: Vec3): void { this.viewerPosition = position; }
   readonly probeRoot = new THREE.Group();
   readonly marker = new WebXRNavGoalView();
   readonly draftMarker = new WebXRNavGoalView();
   readonly probes = new Map<string, WebXRNavGoalView>();
   readonly interaction: NavigationInteraction;
-  private wasInsideDeadzone = false;
 
   constructor(session: ARModuleSession) {
     this.interaction = new NavigationInteraction({ sendGoal: pose => requestNavGoal(session, pose), cancel: () => session.requestEstop() }, new NavigationPreviewCoordinator(session), undefined, session.collaboration);
@@ -44,25 +45,27 @@ export class WebXRNavigationController {
   clearAim(sourceId?: string): void { this.interaction.clearAim(sourceId); this.sync(); }
   cancel(now: number): void { this.interaction.cancel(now); this.sync(); }
   cancelDrag(): void { this.interaction.cancelDrag(); this.sync(); }
-  reset(): void { this.interaction.reset(); this.wasInsideDeadzone = false; this.sync(); }
+  reset(): void { this.interaction.reset(); this.sync(); }
   dispose(): void { this.probeRoot.removeFromParent(); this.interaction.dispose(); this.marker.dispose(); this.draftMarker.dispose(); for (const view of this.probes.values()) view.dispose(); this.probes.clear(); }
 
-  aim(now: number, from: Vec3, dir: Vec3, hits: MeshHit[], deadzone: RobotGroundDeadzone | null, fallbackY: number, sourceId = "default"): void {
-    this.interaction.aim(now, this.place(from, dir, hits, deadzone, fallbackY, true), sourceId); this.sync();
+  aim(now: number, from: Vec3, dir: Vec3, hits: MeshHit[], fallbackY: number, sourceId = "default"): void {
+    this.interaction.aim(now, this.place(from, dir, hits, fallbackY, true), sourceId); this.sync();
   }
-  hold(now: number, from: Vec3, dir: Vec3, hits: MeshHit[], deadzone: RobotGroundDeadzone | null, fallbackY: number, streaming = true, sourceId = "default"): boolean {
-    const held = this.interaction.hold(now, this.place(from, dir, hits, deadzone, fallbackY, !streaming), streaming, sourceId); this.sync(); return held;
+  hold(now: number, from: Vec3, dir: Vec3, hits: MeshHit[], fallbackY: number, streaming = true, sourceId = "default"): boolean {
+    const held = this.interaction.hold(now, this.place(from, dir, hits, fallbackY, !streaming), streaming, sourceId); this.sync(); return held;
   }
-  release(now: number, from: Vec3, dir: Vec3, hits: MeshHit[], deadzone: RobotGroundDeadzone | null, fallbackY: number, sourceId = "default"): void {
-    this.interaction.release(now, this.place(from, dir, hits, deadzone, fallbackY, this.interaction.snapshot().placementHeld === true), sourceId); this.sync();
+  release(now: number, from: Vec3, dir: Vec3, hits: MeshHit[], fallbackY: number, sourceId = "default"): void {
+    this.interaction.release(now, this.place(from, dir, hits, fallbackY, this.interaction.snapshot().placementHeld === true), sourceId); this.sync();
   }
 
-  private place(from: Vec3, dir: Vec3, hits: MeshHit[], deadzone: RobotGroundDeadzone | null, fallbackY: number, floorAim = false): { position: Vec3; blocked: boolean } {
+  private place(from: Vec3, dir: Vec3, hits: MeshHit[], fallbackY: number, floorAim = false): { position: Vec3; blocked: boolean } {
     const length = Math.hypot(...dir) || 1;
     const to = from.map((value, i) => value + dir[i] / length * (floorAim ? FLOOR_AIM_RANGE_M : RAY_LENGTH_M)) as Vec3;
-    const result = solveMeshPlacement({ rayFrom: from, rayTo: to, hits, deadzone, wasInsideDeadzone: this.wasInsideDeadzone, fallbackY });
-    this.wasInsideDeadzone = result.wasInsideDeadzone;
-    return { position: webxrToClientTrackingPoint(result.goalPosition ?? result.probePosition), blocked: result.status !== "ok" };
+    const result = solveMeshPlacement({ rayFrom: from, rayTo: to, hits, fallbackY });
+    const position: Vec3 = [...(result.goalPosition ?? result.probePosition)];
+    const viewer = this.viewerPosition ?? from;
+    if (Math.hypot(...position.map((v, i) => v - viewer[i])) > 2.5) position[1] = Math.max(fallbackY, position[1]);
+    return { position: webxrToClientTrackingPoint(position), blocked: result.status !== "ok" };
   }
   private sync(): void {
     const state = this.interaction.snapshot();
@@ -74,7 +77,6 @@ export class WebXRNavigationController {
     this.draftMarker.setBlocked(state.blocked === true);
     this.marker.setSelected(state.selected);
     this.marker.setAiming(false);
-    this.marker.setGoalActive(state.goalActive);
     this.marker.setInteraction(state.dragging, state.followingPath);
     this.marker.setFlash(state.flash, state.feedbackProgress);
     this.marker.setProbe(null);
@@ -94,10 +96,4 @@ export class WebXRNavigationController {
       view.setProbe(clientTrackingToWebxrPoint(probe.position)); view.setSharedOpacity(opacity);
     }
   }
-}
-
-/** Direction helper for WebXR callers; portable heading math uses +X forward, Z up. */
-export function yawFromPlanarDirection(x: number, z: number): Quat {
-  const yaw = Math.atan2(-x, -z);
-  return [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)];
 }

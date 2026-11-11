@@ -149,7 +149,7 @@ async def test_setup_logs_failure_and_releases_single_flight_guard(
     )
     with pytest.raises(RuntimeError, match="cancelled or failed"):
         await manager.setup_can()
-    assert "Authentication cancelled" in manager._log
+    assert "Authentication cancelled" in manager.events._log
     assert manager._proc is None
     assert not manager._can_setup_running
 

@@ -1,4 +1,4 @@
-import { HeadsetTravel } from "./HeadsetTravel";
+import { LocalizationTrackingReporter } from "./LocalizationTrackingReporter";
 import {
   AR_MODULE_CLIENT_CONFIG,
   type CameraCaptureSource,
@@ -8,14 +8,11 @@ import {
 } from "../websocket/hostPorts";
 import {
   encodeLocalizationStartRequest,
-  encodeText,
 } from "../websocket/protocol";
 import type { ARModuleSession } from "../websocket/arModuleSession";
 import type {
   CapturePolicy,
   LocalizationObservation,
-  LocalizationTracking,
-  LocalizationCaptureProgress,
   LocalizationObservationsRequest,
   Outbound,
 } from "../websocket/protocolTypes";
@@ -30,7 +27,6 @@ export type LocalizationCapturePhase =
   | "waiting_for_geometric_gate"
   | "waiting_for_retry"
   | "capturing"
-  | "sending"
   | "awaiting_result"
   | "failed";
 
@@ -80,11 +76,11 @@ export class LocalizationCaptureEpisode {
   private recoveryRequestedUntil: number | null = null;
   private recoveryUntil: number | null = null;
   private observations: LocalizationObservation[] = [];
-  private geometricGateWaitStartedAt: number | null = null;
+  private geometricGateDeadline: number | null = null;
   private nextCaptureAt: number | null = null;
   private resultDeadline: number | null = null;
   private retryAt: number | null = null;
-  private lastError: string | null = null;
+  private failure: { kind: "capture" | "result_timeout"; message: string } | null = null;
   private captureGeneration = 0;
   private inflight: Promise<void> | null = null;
   private inflightGeneration: number | null = null;
@@ -94,11 +90,7 @@ export class LocalizationCaptureEpisode {
   private readonly traceSink?: (event: LocalizationTrace) => void;
   private episodeStartedAt: number | null = null;
   private episodeEndedAt: number | null = null;
-  private readonly travel = new HeadsetTravel();
-  private trackingReference = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  private lastTrackingReport = -Infinity;
-  private reportedActive: boolean | null = null;
-  private reportedAlignment: string | null = null;
+  private readonly trackingReporter: LocalizationTrackingReporter;
 
   private batchStartedAt: number | null = null;
   private sentAt: number | null = null;
@@ -115,6 +107,7 @@ export class LocalizationCaptureEpisode {
     this.clock = deps.clock;
     this.tracking = deps.tracking;
     this.capture = deps.capture;
+    this.trackingReporter = new LocalizationTrackingReporter(deps.session, deps.clientTrackingOriginStore, deps.tracking, deps.clock);
     this.captureEnabled = !deps.initiallyPaused;
     this.geometry = requireGeometry(deps.geometry ?? AR_MODULE_CLIENT_CONFIG.capture.geometry);
     const config = deps.config ?? AR_MODULE_CLIENT_CONFIG.capture.episode;
@@ -130,28 +123,10 @@ export class LocalizationCaptureEpisode {
   }
 
   private publishTracking(force = false, inactive = false): void {
-    if (!this.clientTrackingOriginStore.mapContext || this.session.view().connection !== "ready") return;
-    this.clientTrackingOriginStore.beginTrackingReference(this.trackingReference);
-    let active = !inactive && this.captureEnabled && !this.suspended;
-    try {
-      if (active) this.travel.sample(this.tracking.trackingPosition?.() ?? this.tracking.cameraOptical().position, this.clock.now());
-    } catch { active = false; }
-    if (!active) this.travel.pause();
-    const alignment = this.clientTrackingOriginStore.mapAlignment?.id ?? null;
-    const now = this.clock.now();
-    if (!force && active === this.reportedActive && alignment === this.reportedAlignment && now - this.lastTrackingReport < 1) return;
-    const message: LocalizationTracking = { type: "localization_tracking", tracking_reference_id: this.trackingReference,
-      travel_m: this.travel.total, active, ...(alignment ? { alignment_id: alignment } : {}) };
-    this.session.sendText(encodeText(message));
-    this.lastTrackingReport = now; this.reportedActive = active; this.reportedAlignment = alignment;
+    this.trackingReporter.publish(!inactive && this.captureEnabled && !this.suspended, force);
   }
   private captureProgress(phase: "waiting" | "capturing" | "submitted" | "unavailable", timestamp?: number): void {
-    if (!this.request?.episode_id || this.session.view().connection !== "ready") return;
-    this.publishTracking(true);
-    const message: LocalizationCaptureProgress = { type: "localization_capture_progress", episode_id: this.request.episode_id,
-      phase, travel_m: timestamp === undefined ? this.travel.total : this.travel.at(timestamp),
-      ...(timestamp === undefined ? {} : { capture_ts: timestamp }) };
-    this.session.sendText(encodeText(message));
+    this.trackingReporter.progress(this.request, phase, this.captureEnabled && !this.suspended, timestamp);
   }
 
   timing() {
@@ -165,7 +140,7 @@ export class LocalizationCaptureEpisode {
     return {
       phase: this.phase,
       capturePolicy: this.request?.capture_policy ?? null,
-      lastError: this.lastError,
+      lastError: this.failure?.message ?? null,
       capturedCount: this.observations.length,
       observationCount: this.request?.observation_count ?? 0,
     };
@@ -180,10 +155,7 @@ export class LocalizationCaptureEpisode {
   }
 
   reset(): void {
-    this.trackingReference = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    this.travel.reset();
-    this.tracking.clearTracking?.();
-    this.clientTrackingOriginStore.beginTrackingReference(this.trackingReference);
+    this.trackingReporter.reset();
     this.captureEnabled = false;
     this.resetIdle();
   }
@@ -201,7 +173,7 @@ export class LocalizationCaptureEpisode {
   suspend(): void {
     if (this.suspended) return;
     this.publishTracking(true, true);
-    this.travel.pause();
+    this.trackingReporter.pause();
     this.suspended = true;
     this.captureGeneration++;
     this.inflight = null;
@@ -210,7 +182,6 @@ export class LocalizationCaptureEpisode {
     if (this.phase === "awaiting_result" || this.phase === "failed") return;
     this.phase = "idle";
     this.observations = [];
-    this.geometricGateWaitStartedAt = null;
     this.nextCaptureAt = null;
   }
 
@@ -242,7 +213,8 @@ export class LocalizationCaptureEpisode {
     // An explicit realign may be recovering from an incorrect retained origin.
     // Bypass only its geometric hint, for one bounded batch; server detection,
     // exposure/pose validation and result correlation remain authoritative.
-    this.recoveryRequestedUntil = this.clientTrackingOriginStore.hasTrackingOrigin
+    this.recoveryRequestedUntil = this.clientTrackingOriginStore.hasTrackingOrigin &&
+      !this.clientTrackingOriginStore.mapContext
       ? this.clock.now() + DELIBERATE_RECOVERY_CAPTURE_S : null;
     this.captureEnabled = true;
     if ((this.phase === "idle" || this.phase === "waiting_for_retry") && this.request !== null) {
@@ -262,7 +234,7 @@ export class LocalizationCaptureEpisode {
     const submissionDeadline = this.session.localizationResultDeadline?.();
     if (this.phase === "awaiting_result" && submissionDeadline != null) this.resultDeadline = submissionDeadline;
     if (this.suspended) {
-      if (this.phase === "awaiting_result" && this.resultDeadline !== null && now >= this.resultDeadline) this.enterFailed("result timeout");
+      if (this.phase === "awaiting_result" && this.resultDeadline !== null && now >= this.resultDeadline) this.enterFailed("result timeout", "result_timeout");
       return;
     }
     if (this.phase === "waiting_for_retry") {
@@ -297,7 +269,7 @@ export class LocalizationCaptureEpisode {
     }
     if (this.phase === "awaiting_result") {
       if (this.resultDeadline !== null && now >= this.resultDeadline) {
-        this.enterFailed("result timeout");
+        this.enterFailed("result timeout", "result_timeout");
       }
       return;
     }
@@ -318,6 +290,7 @@ export class LocalizationCaptureEpisode {
     hardwareStarted: this.hardwareStarted, captureInFlight: this.inflight !== null }; }
 
   private onRequest(request: LocalizationObservationsRequest): void {
+    if (request !== this.request) this.geometricGateDeadline = null;
     this.recoveryUntil = this.recoveryRequestedUntil;
     this.recoveryRequestedUntil = null;
     if (this.phase === "awaiting_result" && !request.episode_id) this.scheduleRuntimeRetry();
@@ -335,7 +308,7 @@ export class LocalizationCaptureEpisode {
     this.observations = [];
     this.resultDeadline = null;
     this.retryAt = null;
-    this.lastError = null;
+    this.failure = null;
     this.request = request;
     this.batchStartedAt = this.clock.now(); this.sentAt = null;
     this.captureGeneration += 1;
@@ -345,7 +318,9 @@ export class LocalizationCaptureEpisode {
     try {
       if (this.shouldWaitForGeometricGate()) {
         this.phase = "waiting_for_geometric_gate";
-        this.geometricGateWaitStartedAt = this.clock.now();
+        if (request.capture_policy === "robot_los_preferred") {
+          this.geometricGateDeadline ??= this.clock.now() + request.wait_timeout_s;
+        }
         this.nextCaptureAt = null;
         this.stopHardware();
         this.captureProgress("waiting");
@@ -399,15 +374,14 @@ export class LocalizationCaptureEpisode {
   private preferredTimedOut(now: number): boolean {
     return (
       this.request?.capture_policy === "robot_los_preferred" &&
-      this.geometricGateWaitStartedAt !== null &&
-      now >= this.geometricGateWaitStartedAt + this.request.wait_timeout_s
+      this.geometricGateDeadline !== null &&
+      now >= this.geometricGateDeadline
     );
   }
 
   private enterCapturing(): void {
     const alreadyCapturing = this.phase === "capturing";
     this.phase = "capturing";
-    this.geometricGateWaitStartedAt = null;
     this.nextCaptureAt = this.clock.now();
     if (!alreadyCapturing) {
       this.captureProgress("capturing");
@@ -506,7 +480,7 @@ export class LocalizationCaptureEpisode {
     if (this.session.view().connection !== "ready") {
       return;
     }
-    if (this.request !== null && this.lastError !== "result timeout") {
+    if (this.request !== null && this.failure?.kind !== "result_timeout") {
       // A local camera failure has not consumed the server's pending request.
       // Resume it after backoff, including during runtime relocalization.
       this.onRequest(this.request);
@@ -523,16 +497,15 @@ export class LocalizationCaptureEpisode {
     if (error !== null && typeof error === "object" && "retryable" in error && error.retryable === false) this.retryAt = null;
   }
 
-  private enterFailed(reason: string): void {
+  private enterFailed(reason: string, kind: "capture" | "result_timeout" = "capture"): void {
     this.recoveryUntil = this.recoveryRequestedUntil = null;
     if (this.request?.episode_id) { this.captureProgress("unavailable"); this.resetIdle(); return; }
-    if (reason === "result timeout") this.scheduleRuntimeRetry();
+    if (kind === "result_timeout") this.scheduleRuntimeRetry();
     this.session.cancelLocalizationSubmission();
     this.phase = "failed";
     this.stopHardware();
-    this.lastError = reason; this.trace("failed", reason);
+    this.failure = { kind, message: reason }; this.trace("failed", reason);
     this.observations = [];
-    this.geometricGateWaitStartedAt = null;
     this.nextCaptureAt = null;
     this.resultDeadline = null;
     this.retryAt = Math.max(this.clock.now() + this.retryBackoffS, this.runtimeRetryAt ?? -Infinity);
@@ -549,11 +522,11 @@ export class LocalizationCaptureEpisode {
     this.phase = "idle";
     this.request = null;
     this.observations = [];
-    this.geometricGateWaitStartedAt = null;
+    this.geometricGateDeadline = null;
     this.nextCaptureAt = null;
     this.resultDeadline = null;
     this.retryAt = null;
-    this.lastError = null;
+    this.failure = null;
   }
 
   private trace(stage: string, detail?: string): void {

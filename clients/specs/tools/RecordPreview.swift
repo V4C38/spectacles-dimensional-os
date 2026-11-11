@@ -171,6 +171,28 @@ final class PreviewFrames: NSObject, SCStreamOutput, @unchecked Sendable {
     }
 }
 
+@MainActor func ensureFocus(_ application: NSRunningApplication, budget: URL) async throws -> (FocusPolicy, FocusPolicy.Action) {
+    var focusPolicy = try FocusPolicy(url: budget)
+    func focused() -> Bool { NSWorkspace.shared.frontmostApplication?.processIdentifier == application.processIdentifier }
+    var action = try focusPolicy.request(now: ProcessInfo.processInfo.systemUptime, focused: focused())
+    while action == .wait {
+        try await Task.sleep(nanoseconds: 100_000_000)
+        action = try focusPolicy.request(now: ProcessInfo.processInfo.systemUptime, focused: focused())
+    }
+    if action == .abort {
+        throw NSError(domain: "SpecsReview", code: 7,
+            userInfo: [NSLocalizedDescriptionKey: "Focus limit reached; explicit authorization is required to resume"])
+    }
+    if action == .initial || action == .restore {
+        guard application.activate(options: []) else {
+            try "Cannot restore Lens Studio focus; explicit authorization is required to resume.".write(
+                to: focusPolicy.abortURL, atomically: true, encoding: .utf8)
+            throw NSError(domain: "SpecsReview", code: 4)
+        }
+    }
+    return (focusPolicy, action)
+}
+
 @main struct RecordPreview {
     @MainActor static func main() async throws {
         _ = NSApplication.shared
@@ -178,33 +200,61 @@ final class PreviewFrames: NSObject, SCStreamOutput, @unchecked Sendable {
             reason: "Recording the native Lens Studio review")
         defer { ProcessInfo.processInfo.endActivity(activity) }
         let arguments = CommandLine.arguments
+        if arguments.count == 4 && arguments[1] == "--focus-policy" {
+            guard let pid = Int32(arguments[2]), let application = NSRunningApplication(processIdentifier: pid) else {
+                throw NSError(domain: "SpecsReview", code: 4)
+            }
+            _ = try await ensureFocus(application, budget: URL(fileURLWithPath: arguments[3]))
+            return
+        }
         guard arguments.count >= 4, let pid = Int32(arguments[1]), let duration = Double(arguments[3]) else {
             throw NSError(domain: "SpecsReview", code: 1, userInfo: [NSLocalizedDescriptionKey: "Usage: RecordPreview PID output.mp4 durationSeconds"])
         }
         guard CGPreflightScreenCaptureAccess() else {
             throw NSError(domain: "SpecsReview", code: 2, userInfo: [NSLocalizedDescriptionKey: "Screen Recording permission is required for continuous Preview video"])
         }
-        guard let application = NSRunningApplication(processIdentifier: pid),
-            application.activate(options: []) else {
+        guard let application = NSRunningApplication(processIdentifier: pid) else {
             throw NSError(domain: "SpecsReview", code: 4, userInfo: [NSLocalizedDescriptionKey: "Cannot activate Lens Studio for a live Preview recording"])
         }
         let outputURL = URL(fileURLWithPath: arguments[2])
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-        let candidates = content.windows.filter { $0.owningApplication?.processID == pid && $0.frame.width > 300 && $0.frame.height > 200 }
-        let previewWindows = candidates.filter { ($0.title ?? "").localizedCaseInsensitiveContains("preview") }
-        guard let window = (previewWindows.isEmpty ? candidates : previewWindows)
-            .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) else {
+        let focusBudgetURL = arguments.count > 5 ? URL(fileURLWithPath: arguments[5])
+            : outputURL.deletingPathExtension().appendingPathExtension("focus-budget")
+        var (focusPolicy, initialAction) = try await ensureFocus(application, budget: focusBudgetURL)
+        func focused() -> Bool { NSWorkspace.shared.frontmostApplication?.processIdentifier == pid }
+        // A Preview refresh can briefly remove its AX toolbar/footer. Wait passively
+        // for measured bounds, refreshing window metadata without restoring focus.
+        let viewportDeadline = ProcessInfo.processInfo.systemUptime + 10
+        var content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        var candidates: [SCWindow] = []
+        var selectedWindow: SCWindow?
+        var measuredViewport: CGRect?
+        repeat {
+            candidates = content.windows.filter { $0.owningApplication?.processID == pid && $0.frame.width > 300 && $0.frame.height > 200 }
+            let previewWindows = candidates.filter { ($0.title ?? "").localizedCaseInsensitiveContains("preview") }
+            selectedWindow = (previewWindows.isEmpty ? candidates : previewWindows)
+                .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
+            if let window = selectedWindow,
+               let measured = previewViewport(pid: pid, window: window.frame, title: window.title ?? ""),
+               !measured.isNull, measured.width > 100, measured.height > 100 {
+                measuredViewport = measured
+                break
+            }
+            guard ProcessInfo.processInfo.systemUptime < viewportDeadline else { break }
+            try await Task.sleep(nanoseconds: 250_000_000)
+            content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        } while ProcessInfo.processInfo.systemUptime < viewportDeadline
+        guard let window = selectedWindow else {
             throw NSError(domain: "SpecsReview", code: 3, userInfo: [NSLocalizedDescriptionKey: "Lens Studio window was not found"])
+        }
+        guard var viewport = measuredViewport else {
+            throw NSError(domain: "SpecsReview", code: 8,
+                userInfo: [NSLocalizedDescriptionKey: "Cannot locate the native Preview viewport through Accessibility after waiting ten seconds"])
         }
         let configuration = SCStreamConfiguration()
         guard let display = content.displays.max(by: {
             let a = $0.frame.intersection(window.frame), b = $1.frame.intersection(window.frame)
             return a.width * a.height < b.width * b.height
         }) else { throw NSError(domain: "SpecsReview", code: 6) }
-        guard var viewport = previewViewport(pid: pid, window: window.frame, title: window.title ?? "") else {
-            throw NSError(domain: "SpecsReview", code: 8,
-                userInfo: [NSLocalizedDescriptionKey: "Cannot locate the native Preview viewport through Accessibility"])
-        }
         configuration.sourceRect = viewport.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
         configuration.width = 1280
         configuration.height = 900
@@ -219,6 +269,7 @@ final class PreviewFrames: NSObject, SCStreamOutput, @unchecked Sendable {
         let frames = try PreviewFrames(outputURL: outputURL, window: window, candidates: candidates,
             displayID: display.displayID, frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0,
             width: configuration.width, height: configuration.height)
+        if initialAction == .restore { frames.noteFocusRestore() }
         let stream = SCStream(filter: SCContentFilter(display: display, including: [window]), configuration: configuration, delegate: nil)
         try stream.addStreamOutput(frames, type: .screen, sampleHandlerQueue: frames.queue)
         try await stream.startCapture()
@@ -232,22 +283,16 @@ final class PreviewFrames: NSObject, SCStreamOutput, @unchecked Sendable {
         frames.noteLayout(source: configuration.sourceRect, destination: configuration.destinationRect, viewport: viewport)
         var lostFocusAt: Date?
         var focusFailed = false
-        let focusBudgetURL = arguments.count > 5 ? URL(fileURLWithPath: arguments[5])
-            : outputURL.deletingPathExtension().appendingPathExtension("focus-budget")
-        let focusAbortURL = focusBudgetURL.appendingPathExtension("aborted")
-        var focusRestoreAttempts = Int((try? String(contentsOf: focusBudgetURL, encoding: .utf8)) ?? "0") ?? 0
-        var nextFocusRestore = Date.distantPast
+        let focusAbortURL = focusPolicy.abortURL
         while Date() < deadline {
             if FileManager.default.fileExists(atPath: stopURL.path) { break }
-            if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
+            if !focused() {
                 if lostFocusAt == nil { lostFocusAt = Date() }
-                if Date() >= nextFocusRestore {
-                    if focusRestoreAttempts >= 3 { focusFailed = true; break }
-                    focusRestoreAttempts += 1
-                    try String(focusRestoreAttempts).write(to: focusBudgetURL, atomically: true, encoding: .utf8)
+                let action = try focusPolicy.request(now: ProcessInfo.processInfo.systemUptime, focused: false)
+                if action == .abort { focusFailed = true; break }
+                if action == .restore {
                     frames.noteFocusRestore()
                     application.unhide(); application.activate(options: [])
-                    nextFocusRestore = Date().addingTimeInterval(1)
                 }
                 if Date().timeIntervalSince(lostFocusAt!) > 2 { focusFailed = true; break }
             } else { lostFocusAt = nil }

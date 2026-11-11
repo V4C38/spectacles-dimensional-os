@@ -103,7 +103,7 @@ async def test_nav_goal_request_reaches_handler(harness: ServerHarness) -> None:
                 }
             )
         )
-        await asyncio.sleep(0.05)
+        assert await asyncio.to_thread(harness.nav_goal_received.wait, 3)
     assert len(harness.nav_goal_requests) == 1
     assert harness.nav_goal_requests[0].position == (1.0, 2.0, 0.0)
 
@@ -125,7 +125,7 @@ async def test_localization_start_request_reaches_handler(harness: ServerHarness
     async with websockets.connect(f"ws://127.0.0.1:{harness.port}/ws") as ws:
         hello = await _send_hello_request(ws)
         await ws.send(json.dumps({"type": "localization_start_request"}))
-        await asyncio.sleep(0.05)
+        assert await asyncio.to_thread(harness.localization_start_received.wait, 3)
     assert harness.localization_start_requests == [hello["client_id"]]
 
 
@@ -743,8 +743,8 @@ async def test_concurrent_resume_claims_have_one_owner_and_one_valid_bulk_token(
         release.set()
         await asyncio.gather(pending, return_exceptions=True)
         handle.cancel()
-        server._encoder.shutdown(wait=False)
-        server._hello_executor.shutdown(wait=False)
+        server._encoder.close()
+        server._hello_worker.close()
 
 
 @pytest.mark.asyncio
@@ -773,8 +773,8 @@ async def test_failed_resume_send_releases_claim_without_retiring_the_session():
         assert "client" not in server._bulk_tokens
     finally:
         handle.cancel()
-        server._encoder.shutdown(wait=False)
-        server._hello_executor.shutdown(wait=False)
+        server._encoder.close()
+        server._hello_worker.close()
 
 
 @pytest.mark.asyncio
@@ -817,8 +817,8 @@ async def test_expired_resume_claim_does_not_keep_a_logical_session_alive():
     finally:
         release.set()
         await asyncio.gather(pending, return_exceptions=True)
-        server._encoder.shutdown(wait=False)
-        server._hello_executor.shutdown(wait=False)
+        server._encoder.close()
+        server._hello_worker.close()
 
 
 @pytest.mark.asyncio
@@ -893,8 +893,8 @@ async def test_cancelled_post_hello_send_rolls_back_admission_without_retiring_r
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         handle.cancel()
-        server._encoder.shutdown(wait=False)
-        server._hello_executor.shutdown(wait=False)
+        server._encoder.close()
+        server._hello_worker.close()
 
 
 @pytest.mark.asyncio
@@ -929,5 +929,43 @@ async def test_admission_callback_failure_removes_the_published_session_and_send
         assert server._client_ids == server._outbound == server._time_sync == {}
         assert not server._bulk_tokens and not server._resume_tokens
     finally:
-        server._encoder.shutdown(wait=False)
-        server._hello_executor.shutdown(wait=False)
+        server._encoder.close()
+        server._hello_worker.close()
+
+
+@pytest.mark.asyncio
+async def test_forced_invalid_input_retirement_closes_idle_bulk_and_clears_session(harness):
+    from dimos.ar.websocket.bulk import TokenBucket
+
+    url = f"ws://127.0.0.1:{harness.port}"
+    async with websockets.connect(url) as control, websockets.connect(url) as observer:
+        hello = await _send_hello_request(control)
+        observer_hello = await _send_hello_request(observer)
+        identity = hello["client_id"]
+        await harness.wait_for_connection(identity)
+        await harness.wait_for_connection(observer_hello["client_id"])
+        async with websockets.connect(url + hello["bulk_url"]) as bulk:
+            await bulk.send(json.dumps({"type": "bulk_hello_request", "protocol_version": 2,
+                                        "client_id": identity, "token": hello["bulk_token"]}))
+            assert json.loads(await bulk.recv())["type"] == "bulk_hello"
+            peer = harness._server._bulk_peers[identity]
+            installed = threading.Event()
+            def limit():
+                harness._server._ingress[identity] = TokenBucket(0, 1)
+                installed.set()
+            harness.loop.call_soon_threadsafe(limit)
+            assert await asyncio.to_thread(installed.wait, 1)
+            invalid = json.dumps({"type": "client_pose", "position": [10**400, 0, 0],
+                                  "orientation": [0, 0, 0, 1], "ts": 1})
+            await control.send(invalid)
+            await control.send(invalid)
+            async with asyncio.timeout(2):
+                await control.wait_closed()
+                await bulk.wait_closed()
+            assert peer.task.done()
+            server = harness._server
+            for mapping in (server._connections, server._bulk_peers, server._bulk_tokens,
+                            server._capture_ids, server._ingress, server._ingress_timing):
+                assert identity not in mapping
+            assert harness.disconnected_client_ids == [identity]
+            assert observer_hello["client_id"] in server._connections

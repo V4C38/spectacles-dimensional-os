@@ -194,11 +194,11 @@ def main(fd: int) -> None:
                             ),
                         )
                 send(channel, (True, result))
-            except Exception as exc:  # noqa: BLE001 — isolate native planning errors at the process boundary
+            except Exception as exc:  # noqa: BLE001 — serialize native planner errors across the process boundary
                 send(channel, (False, str(exc)))
     except EOFError:
         pass
-    except Exception as exc:  # noqa: BLE001 — isolate native planning errors at the process boundary
+    except Exception as exc:  # noqa: BLE001 — child initialization failures use the same error channel
         send(channel, str(exc))
     finally:
         channel.close()

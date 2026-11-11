@@ -1,4 +1,4 @@
-import { rotateVecByQuat } from "../localization/clientTrackingTransforms";
+import { rotateVecByQuat, multiplyRotation } from "../localization/clientTrackingTransforms";
 import type { Quat, Vec3 } from "../websocket/protocolTypes";
 import type {
   ManipulationModel,
@@ -6,14 +6,6 @@ import type {
   ManipulationPose,
 } from "./ManipulationTypes";
 
-export function multiplyRotation(a: Quat, b: Quat): Quat {
-  return [
-    a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
-    a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
-    a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
-    a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
-  ];
-}
 export function composePose(
   a: ManipulationPose,
   b: ManipulationPose,
@@ -124,14 +116,4 @@ export function toolSubtree(
     for (const joint of model.joints)
       if (links.has(joint.parent)) links.add(joint.child);
   return { root, links };
-}
-
-/** Transform a rigid point batch with one rotation matrix and no intermediate poses. */
-export function transformPoints(pose: ManipulationPose, points: readonly Vec3[]): Vec3[] {
-  const [x, y, z, w] = pose.orientation, [px, py, pz] = pose.position;
-  const r00 = 1 - 2 * (y*y + z*z), r01 = 2 * (x*y - z*w), r02 = 2 * (x*z + y*w);
-  const r10 = 2 * (x*y + z*w), r11 = 1 - 2 * (x*x + z*z), r12 = 2 * (y*z - x*w);
-  const r20 = 2 * (x*z - y*w), r21 = 2 * (y*z + x*w), r22 = 1 - 2 * (x*x + y*y);
-  return points.map(([a, b, c]) => [px + r00*a + r01*b + r02*c,
-    py + r10*a + r11*b + r12*c, pz + r20*a + r21*b + r22*c]);
 }

@@ -1,7 +1,7 @@
-import { SpecsReplicationPresenter } from "../replication/SpecsReplicationPresenter";
-import { FLOOR_MARKER_STYLE, NAVIGATION_COLORS, NAVIGATION_OUTCOME_STYLE, WORLD_DASH_STYLE, circleStrokeSegments, navigationCancelReveal, NAVIGATION_PREVIEW_ARROW_STYLE } from "../../DimOSARClient/presentation/WorldVisualStyle";
-import { NAV_FEEDBACK_ANIMATION_S, NAV_FEEDBACK_TIMING, type NavFlash } from "../../DimOSARClient/navigation/NavigationGoalLifecycle";
-import { WorldMeshRenderer, AdaptiveStrokeRenderer, circleMesh, strokeMesh2D, type WorldColor } from "../presentation/WorldMeshRenderer";
+import { ARM_VISUAL_STYLE } from "../../DimOSARClient/manipulation/ManipulationVisuals";
+import { NAV_FEEDBACK_ANIMATION_S,NAV_FEEDBACK_TIMING,type NavFlash } from "../../DimOSARClient/navigation/NavigationGoalLifecycle";
+import { FLOOR_MARKER_STYLE,NAVIGATION_COLORS,NAVIGATION_OUTCOME_STYLE,NAVIGATION_PREVIEW_ARROW_STYLE,WORLD_DASH_STYLE,circleStrokeSegments,navigationCancelReveal } from "../../DimOSARClient/presentation/WorldVisualStyle";
+import { AdaptiveStrokeRenderer,WorldMeshRenderer,circleMesh,strokeMesh2D,type WorldColor } from "../presentation/WorldMeshRenderer";
 
 export interface NavigationMarkerStyle {
   selected: boolean; blocked?: boolean; hovered?: boolean; dragging: boolean; following: boolean;
@@ -66,7 +66,7 @@ export class NavigationMarkerRenderer {
     this.scale += (targetScale - this.scale) * alpha;
     const radius = this.radiusCm * this.scale * (1 + 0.04 * pulse * this.motion);
     this.renderedRadius = radius;
-    const color: WorldColor = style.blocked ? SpecsReplicationPresenter.color(this.opacity) : style.flash ? [...NAVIGATION_COLORS[style.flash], 1] : [1, 1, 1, this.opacity];
+    const color: WorldColor = style.flash ? [...NAVIGATION_COLORS[style.flash], 1] : style.blocked ? ownershipColor(this.opacity) : [1, 1, 1, this.opacity];
     this.circle.object.getTransform().setLocalPosition(new vec3(0, this.circleHeightCm(), 0));
     this.draftCircle.object.getTransform().setLocalPosition(new vec3(0, this.circleHeightCm(), 0));
     this.arrow.object.getTransform().setLocalPosition(new vec3(0, 2.3 * this.scale, 0));
@@ -77,17 +77,12 @@ export class NavigationMarkerRenderer {
       this.draftCircle.setViewportHeight(viewportHeight);
       this.draftCircle.segments(circleStrokeSegments(radius - WORLD_DASH_STYLE.widthM * 50),
         WORLD_DASH_STYLE.widthM * 100, this.opacity, WORLD_DASH_STYLE.dashM * 100,
-        WORLD_DASH_STYLE.gapM * 100, true);
+        WORLD_DASH_STYLE.gapM * 100, true, [color[0], color[1], color[2]]);
     } else {
       this.draftCircle.hide();
       const ring = circleMesh(radius, FLOOR_MARKER_STYLE.strokeM * 100);
       // Retain the full white floor circle beneath the colored tracing ring.
       this.circle.triangles(ring.positions, ring.indices, style.blocked ? color : [1, 1, 1, this.opacity]);
-    }
-    if (style.blocked) {
-      this.arrow.hide(); this.stem.hide(); this.outcomeRing.hide();
-      const glyph = SpecsReplicationPresenter.cross(this.scale);
-      this.glyph.triangles(glyph.positions, glyph.indices, color); return;
     }
     if (style.flash) {
       this.arrow.hide(); this.stem.hide();
@@ -127,4 +122,9 @@ export class NavigationMarkerRenderer {
   hide(): void { this.root.enabled = false; }
   show(): void { this.root.enabled = true; }
   destroy(): void { this.root.destroy(); }
+}
+
+function ownershipColor(opacity: number): WorldColor {
+  const color = ARM_VISUAL_STYLE.warningColor;
+  return [((color >> 16) & 255) / 255, ((color >> 8) & 255) / 255, (color & 255) / 255, opacity];
 }

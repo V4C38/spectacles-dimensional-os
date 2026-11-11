@@ -53,11 +53,18 @@ def read_env(path: Path | None = None) -> dict[str, str]:
     return values
 
 
+def validate_env_value(value: str | None) -> None:
+    if value is not None and re.search(r"[\x00\n\r\v\f\x1c-\x1e\x85\u2028\u2029]", value):
+        raise ValueError("environment values must contain one line without NUL characters")
+
+
 def merge_env(updates: dict[str, str | None], path: Path | None = None) -> None:
     """Merge keys into .env without truncating unrelated lines.
 
     A value of None removes the key. Empty string writes KEY=.
     """
+    for value in updates.values():
+        validate_env_value(value)
     target = path or env_path()
     existing_lines: list[str] = []
     if target.is_file():

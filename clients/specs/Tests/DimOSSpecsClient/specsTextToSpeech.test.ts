@@ -28,3 +28,27 @@ it("does not call native stop on an enabled idle component without a player", ()
   expect(() => tts.stop()).not.toThrow();
   expect(audio.stop).not.toHaveBeenCalled();
 });
+
+it("recovers from synchronous synthesis errors and accepts the next request", () => {
+  vi.stubGlobal("TextToSpeech", { Options: { create: () => ({}) } });
+  let fail = true;
+  const play = vi.fn(), ended = vi.fn();
+  const tts = new SpecsTextToSpeech({ audio: { enabled: true, play, isPlaying: () => false },
+    module: { synthesize: (_text: string, _options: unknown, complete: (track: unknown) => void) => {
+      if (fail) throw new Error("native synthesis failed"); complete({});
+    } } } as never);
+  expect(() => tts.speak("first", ended)).toThrow("native synthesis failed");
+  expect(tts.isPlaying).toBe(false); expect(ended).toHaveBeenCalledOnce();
+  fail = false; tts.speak("second", ended); tts.tick();
+  expect(play).toHaveBeenCalledOnce(); expect(ended).toHaveBeenCalledTimes(2);
+});
+
+it("settles callback failures once and ignores their late successful callback", () => {
+  vi.stubGlobal("TextToSpeech", { Options: { create: () => ({}) } });
+  let complete!: (track: unknown) => void, reject!: (code: number, message: string) => void;
+  const play = vi.fn(), ended = vi.fn();
+  const tts = new SpecsTextToSpeech({ audio: { enabled: true, play, isPlaying: () => false },
+    module: { synthesize: (_text: string, _options: unknown, good: typeof complete, bad: typeof reject) => { complete = good; reject = bad; } } } as never);
+  tts.speak("first", ended); reject(1, "unavailable"); reject(1, "duplicate"); complete({}); tts.tick();
+  expect(tts.isPlaying).toBe(false); expect(ended).toHaveBeenCalledOnce(); expect(play).not.toHaveBeenCalled();
+});

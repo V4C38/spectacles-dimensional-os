@@ -1,36 +1,35 @@
-import { getRobotActivityState } from "../../DimOSARClient/robot/RobotMarkerState";
-import { SpecsConnectionController } from "./SpecsConnectionController";
-import { SETUP_PANEL_SCALE } from "./PanelLayout";
-import { availableCapabilityLabels, localizationGuidance, localizationProviderLabel, localizationKind } from "../../DimOSARClient/presentation/ControlPanelPresentation";
+import { availableCapabilityLabels,localizationGuidance,localizationKind,localizationProviderLabel } from "../../DimOSARClient/presentation/ControlPanelPresentation";
 import { SetupFlow } from "../../DimOSARClient/presentation/SetupFlow";
+import { getRobotActivityState } from "../../DimOSARClient/robot/RobotMarkerState";
+import { SETUP_PANEL_SCALE } from "./PanelLayout";
+import { SpecsConnectionController } from "./SpecsConnectionController";
 require("LensStudio:TextInputModule");
 
+import type { ClientTrackingOrigin,ClientTrackingOriginStore } from "../../DimOSARClient/localization/clientTrackingOrigin";
 import type { LocalizationCaptureEpisode } from "../../DimOSARClient/localization/localizationCaptureEpisode";
-import type { ClientTrackingOrigin, ClientTrackingOriginStore } from "../../DimOSARClient/localization/clientTrackingOrigin";
-import {
-  isValidHost,
-  loadStoredModuleHost,
-  type ModuleHostStore,
-} from "../../DimOSARClient/websocket/hostNormalization";
-import type { ARModuleSession } from "../../DimOSARClient/websocket/arModuleSession";
-import type { SpecsWebSocketTransport } from "../websocket/SpecsWebSocketTransport";
 import { localizationCaptureStatus } from "../../DimOSARClient/localization/localizationCaptureStatus";
-import type { ARModuleSessionState } from "../../DimOSARClient/websocket/arModuleSession";
+import type { ARModuleSession,ARModuleSessionState } from "../../DimOSARClient/websocket/arModuleSession";
 import {
-  deriveSessionLinkPhase,
-  NO_ROBOT_CONNECTED_LABEL,
-  sessionLinkStatus,
-  type SessionLinkPhase,
-  type StatusText,
+isValidHost,
+loadStoredModuleHost,
+type ModuleHostStore,
+} from "../../DimOSARClient/websocket/hostNormalization";
+import {
+deriveSessionLinkPhase,
+NO_ROBOT_CONNECTED_LABEL,
+sessionLinkStatus,
+type SessionLinkPhase,
+type StatusText,
 } from "../../DimOSARClient/websocket/sessionLinkStatus";
 import {
-  toggleConnectionMethod,
-  type ConnectionMethod,
-  type IpRelayClient,
+toggleConnectionMethod,
+type ConnectionMethod,
+type IpRelayClient,
 } from "../IpRelayClient";
-import { scaleIn, nextAnimationVersion, DEFAULT_SCALE_ANIMATION_VERSION_KEY } from "../utilities/AnimationUtilities";
-import { placePanelInFront, setPanelFollowing, getFrameComponent, COLOR_ERROR, COLOR_WARN, statusToneColor } from "./UIKit";
-import { SetupWizardStep, SetupWizardView } from "./SetupWizardView";
+import { DEFAULT_SCALE_ANIMATION_VERSION_KEY,nextAnimationVersion,scaleIn } from "../utilities/AnimationUtilities";
+import type { SpecsWebSocketTransport } from "../websocket/SpecsWebSocketTransport";
+import { SetupWizardStep,SetupWizardView } from "./SetupWizardView";
+import { COLOR_ERROR,COLOR_WARN,getFrameComponent,placePanelInFront,setPanelFollowing,statusToneColor } from "./UIKit";
 
 const WIZARD_STEP_TITLES = {
   [SetupWizardStep.Connect]: "Connect",
@@ -141,7 +140,6 @@ export class SetupWizardController {
     this.connection = new SpecsConnectionController({
       script: deps.script, session: deps.session, transport: deps.transport,
       hostStore: deps.hostStore, ipRelayClient: deps.ipRelayClient,
-      onPinConsumed: () => this.view.clearInput(),
       onChanged: () => { this.showConnectStatus(); this.refreshFooterButtons(); },
       onConnectionTargetChanged: () => {
         this.invalidateBaseline(); this.deps.episode.reset();
@@ -155,7 +153,6 @@ export class SetupWizardController {
       () => {
         if (this.disposed) return;
         this.cancelAutoconnect("connection input edited", false);
-        if (this._connectionMethod === "pin") this.view.clearInput();
         this.showConnectStatus();
       },
     );
@@ -303,7 +300,7 @@ export class SetupWizardController {
       this.showConnectStatus();
       return;
     }
-    if (savedPin) this.startAutoconnect(true);
+    if (savedPin) this.startAutoconnect();
     else this.showConnectStatus();
   }
 
@@ -325,7 +322,7 @@ export class SetupWizardController {
     if (this._connectionMethod === "pin") {
       const savedPin = this.loadStoredPin();
       this.fillConnectField(savedPin);
-      if (savedPin) this.startAutoconnect(true);
+      if (savedPin) this.startAutoconnect();
       else this.showConnectStatus();
       return;
     }
@@ -409,9 +406,9 @@ export class SetupWizardController {
     return true;
   }
 
-  private startAutoconnect(loadedPin = false): void {
+  private startAutoconnect(): void {
     if (!this.disposed && this._currentStep === SetupWizardStep.Connect)
-      this.connection.start(this._connectionMethod, this.view.getInputText(), loadedPin);
+      this.connection.start(this._connectionMethod, this.view.getInputText());
   }
 
   private invalidatePending(): void { this.connection.cancel(); }

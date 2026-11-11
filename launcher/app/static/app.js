@@ -1,3 +1,7 @@
+import { sourceRequest, replayRobot, replayPreferenceKey } from "./source-selection.mjs";
+import { logConsole } from "./log-console.mjs";
+import { settingsWriter, profilesForRobot } from "./persistence.mjs";
+import { launcherPresentation } from "./presentation.mjs";
 (() => {
   const $ = (id) => document.getElementById(id);
 
@@ -49,7 +53,6 @@
   const locCard = $("locCard");
   const locSummary = $("locSummary");
   const agentSummary = $("agentSummary");
-  const logCard = $("logCard");
   const logSummary = $("logSummary");
   const logLevel = $("logLevel");
   const fiducialPanel = $("fiducialPanel");
@@ -59,6 +62,8 @@
   const multisetClientId = $("multisetClientId");
   const multisetClientSecret = $("multisetClientSecret");
   const revealMultiset = $("revealMultiset");
+
+  const { appendLog, clearLog, copyLog, applyLogFilter } = logConsole({ logEl, logFilterLevel, logFilterSource, copyLogBtn });
 
   let client = "webxr";
   let blueprint = "unitree_go2_ar";
@@ -78,22 +83,11 @@
   let plannerPython = null;
   let keyVisible = false;
   let multisetVisible = false;
-  const MAX_LOG_LINES = 5000;
-  const logLines = [];
-  const pendingLines = [];
-  let frameHandle = null;
 
-  const DEFAULT_MOUNT = {
-    marker_id: 0,
-    print_size_mm: 70,
-    forward_m: 0.18,
-    lateral_m: 0.0,
-    up_m: 0.06,
-    yaw_deg: -90,
-    pitch_deg: -15,
-  };
 
-  let presetMarkerIds = [0, 1, 2];
+  const DEFAULT_MOUNT = {};
+
+  let presetMarkerIds = [];
   let mounts = [{ ...DEFAULT_MOUNT }];
   let settingsReady = false;
   let persistTimer = null;
@@ -130,7 +124,6 @@
   let preferencesEdited = false;
   let preferencesSave = Promise.resolve();
   const launcherPreferences = { go2_source: "auto", openyam_source: "auto", replay: "", openyam_replay: "", openyam_playback: "simulator" };
-  const replayPreferenceKey = robot => robot === "openyam" ? "openyam_replay" : "replay";
   const discoveredRobots = {go2: [], openyam: []};
   function applyBlueprintInfo() {
     blueprint = blueprintSelect.value;
@@ -147,7 +140,7 @@
     syncSource();
 
 
-    document.querySelectorAll("[data-client=specs]").forEach(button => { button.disabled = false; });
+    document.querySelectorAll("[data-client=specs]").forEach(button => { button.disabled = configIsLocked(); });
     if (settingsReady) {
       void refreshRobotProfiles();
       if (rememberedSource.startsWith("device:")) void refreshRobotDiscovery();
@@ -165,19 +158,19 @@
       const option = document.createElement("option"); option.value = value; option.textContent = label;
       select.insertBefore(option, select.querySelector('[value="simulated"]'));
     };
-    for (const device of discoveredRobots[manipulationSelected() ? "openyam" : "go2"]) add(`device:${device.id}`, device.label || device.id);
+    for (const device of discoveredRobots[replayRobot(blueprint)]) add(`device:${device.id}`, device.label || device.id);
     if (!manipulationSelected() && (robotIp.value.trim() || selected === "manual")) add("manual", `${robotIp.value.trim()} (manual)`);
     if (selected.startsWith("device:") && ![...select.options].some(option => option.value === selected)) add(selected, `${selected.slice(7)} (${missing})`);
     select.value = selected;
   }
 
   function manipulationSelected() { return blueprint === "openyam_ar_planner"; }
-  function canRequired() {
-    return manipulationSelected() && !($("robotSource").value === "simulated" && manipulationSelected()) && canStatus.state !== "not_required";
+  function presentation() {
+    return launcherPresentation({ status: lastStatus, manipulation: manipulationSelected(),
+      simulated: $("robotSource").value === "simulated", can: canStatus, planner: plannerStatus,
+      settingUp: Boolean(canSetupPending || lastStatus.can_setup_running || canStatus.setting_up) });
   }
-  function hardwareNotSetup() {
-    return manipulationSelected() && (!plannerStatus.ready || (canRequired() && !canStatus.ready));
-  }
+  function canRequired() { return presentation().canRequired; }
   function syncHardwareSetup() {
     const selected = manipulationSelected();
     const mock = ($("robotSource").value === "simulated" && manipulationSelected());
@@ -204,13 +197,9 @@
     $("plannerStatus").classList.toggle("hidden", !selected);
     $("plannerStatus").textContent = plannerStatus.message || "Checking manipulation dependencies…";
     $("plannerStatus").dataset.phase = plannerStatus.state === "error" ? "error" : plannerStatus.ready ? "ready" : "checking";
-    const deps = describeDeps(lastStatus);
-    depsSummary.textContent = deps.text;
-    depsSummary.dataset.phase = deps.phase;
-    syncInstallBanner();
-    applyHeader(lastStatus);
-    startBtn.disabled = configIsLocked() || ["checking", "installing"].includes(lastStatus.phase) || lastStatus.check_ok !== true || settingUp || hardwareNotSetup();
+    renderControls();
   }
+
   async function refreshCan() {
     if (!manipulationSelected() || canCheckPending || canSetupPending || document.hidden) return;
     canCheckPending = true;
@@ -280,7 +269,7 @@
     return Boolean(BLUEPRINTS[blueprint]?.agent) && !apiKey.value.trim();
   }
 
-  function syncConfigCards() {
+  function syncConfigCards(render = true) {
     const locMissing = locNotSetup();
     locCard.classList.toggle("needs-setup", locMissing);
     locSummary.textContent = locMissing ? "incomplete" : "";
@@ -293,14 +282,14 @@
 
     logSummary.textContent = logLevel.value || "INFO";
     logSummary.dataset.phase = "";
-    applyHeader(lastStatus);
+    if (render) renderControls();
   }
 
   function cloneMount(raw) {
-    const src = raw || DEFAULT_MOUNT;
+    const src = { ...DEFAULT_MOUNT, ...raw };
     return {
       marker_id: Number(src.marker_id) || 0,
-      print_size_mm: Number(src.print_size_mm) > 0 ? Number(src.print_size_mm) : 70,
+      print_size_mm: Number(src.print_size_mm),
       forward_m: Number(src.forward_m) || 0,
       lateral_m: Number(src.lateral_m) || 0,
       up_m: Number(src.up_m) || 0,
@@ -314,13 +303,14 @@
     if (configIsLocked()) return;
     clearTimeout(persistTimer);
     persistTimer = setTimeout(() => {
+      persistTimer = null;
       void saveSettings();
     }, 400);
   }
 
-  const policyDefaults = { travel_threshold_m: 0.75, heading_threshold_deg: 30,
-    marker_preference_s: 1.5, headset_travel_threshold_m: 10 };
-  const policyInputs = Object.fromEntries(Object.keys(policyDefaults).map(key => [key, $(key)]));
+  const policyDefaults = {};
+  const policyKeys = [...document.querySelectorAll("[data-localization-policy]")].map(input => input.id);
+  const policyInputs = Object.fromEntries(policyKeys.map(key => [key, $(key)]));
   Object.values(policyInputs).forEach(input => {
     input.addEventListener("change", () => { if (input.reportValidity()) schedulePersist(); });
     input.addEventListener("blur", () => { if (input.reportValidity()) schedulePersist(); });
@@ -342,34 +332,32 @@
     };
   }
 
-  async function saveSettings() {
-    try {
-      const res = await fetch("/api/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(settingsBody()),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        appendLog(`Settings save failed: ${data.detail || res.statusText}`);
-        return null;
-      }
-      if (data.phase) applyStatus(data);
-      const profile = robotProfiles.find(p => p.id === robotProfileId);
-      if (profile) profile.settings = { ...profile.settings, ...settingsBody() };
-      return data;
-    } catch (err) {
-      appendLog(`Settings save failed: ${err}`);
-      return null;
-    }
+  const writer = settingsWriter({
+    request: body => fetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }),
+    saved: (profileId, data) => {
+      const profile = robotProfiles.find(p => p.id === profileId);
+      if (profile) profile.settings = { ...profile.settings, ...data };
+    },
+    failed: error => appendLog(`Settings save failed: ${error.message || error}`),
+  });
+  function saveSettings() {
+    clearTimeout(persistTimer); persistTimer = null;
+    if (!settingsReady || !robotProfileId) return Promise.resolve(null);
+    return writer.save(settingsBody());
+  }
+  async function flushSettings() {
+    return saveSettings();
   }
 
   function applySettingsPayload(data) {
+    Object.assign(policyDefaults, data.defaults.localization);
     if (data.defaults?.mounts?.[0]) {
       Object.assign(DEFAULT_MOUNT, cloneMount(data.defaults.mounts[0]));
     }
     if (Array.isArray(data.defaults?.preset_marker_ids) && data.defaults.preset_marker_ids.length) {
-      presetMarkerIds = [0, 1, 2];
+      presetMarkerIds = [...data.defaults.preset_marker_ids];
     }
     const loaded = Array.isArray(data.mounts) && data.mounts.length ? data.mounts : [DEFAULT_MOUNT];
     mounts = loaded.map((item) => cloneMount(item));
@@ -401,7 +389,7 @@
     applyBlueprintInfo();
   }
 
-  function configIsLocked() { return ["starting", "running", "stopping"].includes(lastStatus.phase); }
+  function configIsLocked() { return presentation().locked; }
 
   function setConfigLocked(locked) {
     Object.values(policyInputs).forEach(input => { input.disabled = locked; });
@@ -463,7 +451,7 @@
       if (!Number.isFinite(n)) n = 0;
       if (meta.min != null) n = Math.max(meta.min, n);
       if (meta.max != null) n = Math.min(meta.max, n);
-      if (meta.field === "print_size_mm" && n <= 0) n = 70;
+      if (meta.field === "print_size_mm" && n <= 0) n = DEFAULT_MOUNT.print_size_mm;
       input.value = String(n);
       onChange(n);
     };
@@ -681,7 +669,7 @@
     vpsPanel.classList.toggle("hidden", !vpsEnabled.checked);
   }
 
-  function describeState(status) {
+  function describeState(status, view) {
     const p = status.phase || "idle";
     switch (p) {
       case "checking":
@@ -701,7 +689,7 @@
           phase: "error",
         };
       default: {
-        if (status.check_ok !== true || locNotSetup() || agentNotSetup() || hardwareNotSetup()) {
+        if (status.check_ok !== true || locNotSetup() || agentNotSetup() || view.hardwareMissing) {
           return { label: "Setup incomplete", detail: "", phase: "needs_setup" };
         }
         if (status.warning) {
@@ -715,8 +703,8 @@
     }
   }
 
-  function applyHeader(status) {
-    const info = describeState(status || {});
+  function applyHeader(status, view) {
+    const info = describeState(status || {}, view);
     stateValue.textContent = info.label;
     stateValue.dataset.phase = info.phase;
     stateDetail.textContent = info.detail;
@@ -724,31 +712,25 @@
     stateDetail.classList.toggle("hidden", !info.detail);
   }
 
-  function describeDeps(status) {
-    const p = status.phase || "idle";
-    if (p === "installing") {
-      return { text: "installing…", phase: "installing" };
-    }
-    if (p === "checking") {
-      return { text: "checking…", phase: "checking" };
-    }
-    if (status.check_ok === true && !hardwareNotSetup()) {
-      return { text: "", phase: "" };
-    }
-    return { text: "incomplete", phase: "needs_setup" };
+  function renderControls() {
+    const view = presentation();
+    applyHeader(lastStatus, view);
+    depsSummary.textContent = view.dependencyText;
+    depsSummary.dataset.phase = view.dependencyPhase;
+    syncInstallBanner(view);
+    startBtn.disabled = view.startDisabled || !settingsReady || !robotProfileId;
+    stopBtn.disabled = false;
+    stopBtn.textContent = view.stopLabel;
+    stopBtn.classList.toggle("danger", view.stopDanger);
+    setConfigLocked(view.locked);
   }
 
   function setupMode() {
     return document.querySelector('input[name="setupMode"]:checked')?.value || "existing";
   }
 
-  function syncInstallBanner() {
-    const ready = lastStatus.check_ok === true && (!manipulationSelected() || plannerStatus.ready);
-    const busy =
-      lastStatus.phase === "checking" ||
-      lastStatus.phase === "installing" ||
-      lastStatus.phase === "starting" ||
-      lastStatus.phase === "stopping";
+  function syncInstallBanner(view) {
+    const ready = view.setupReady;
     const needsInstall = !ready;
     const cloning = setupMode() === "clone";
     const showInstall = needsInstall || cloning;
@@ -760,186 +742,14 @@
     dimosRefField.classList.toggle("hidden", !cloning);
     installBtn.textContent = cloning ? "Download & install" : "Install";
     installBtn.classList.toggle("hidden", !showInstall);
-    installBtn.disabled = busy || configIsLocked() || canSetupPending || lastStatus.can_setup_running;
-    installBanner.classList.toggle("needs-setup", needsInstall || hardwareNotSetup());
+    installBtn.disabled = view.installDisabled;
+    installBanner.classList.toggle("needs-setup", needsInstall || view.hardwareMissing);
 
     const versionBits = [];
     if (lastStatus.dimos_version) versionBits.push(`DimOS ${lastStatus.dimos_version}`);
     if (lastStatus.dimos_ref) versionBits.push(lastStatus.dimos_ref);
     dimosVersionHint.textContent = versionBits.join(" · ");
     dimosVersionHint.classList.toggle("hidden", versionBits.length === 0);
-  }
-
-  const ANSI_RE = /\u001b\[([0-9;]*)m/g;
-
-  function escapeHtml(text) {
-    return text
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-  }
-
-  function ansiToHtml(line) {
-    let html = "";
-    let last = 0;
-    let classes = new Set();
-    ANSI_RE.lastIndex = 0;
-    let match;
-    while ((match = ANSI_RE.exec(line)) !== null) {
-      if (match.index > last) {
-        const chunk = escapeHtml(line.slice(last, match.index));
-        if (classes.size) {
-          html += `<span class="${[...classes].join(" ")}">${chunk}</span>`;
-        } else {
-          html += chunk;
-        }
-      }
-      last = match.index + match[0].length;
-      const codes = match[1] === "" ? ["0"] : match[1].split(";");
-      for (const code of codes) {
-        if (code === "0" || code === "") {
-          classes = new Set();
-        } else if (code === "1") {
-          classes.add("ansi-bold");
-        } else if (code === "2") {
-          classes.add("ansi-dim");
-        } else if (code === "22") {
-          classes.delete("ansi-bold");
-          classes.delete("ansi-dim");
-        } else if (code === "39") {
-          for (const c of [...classes]) {
-            if (c.startsWith("ansi-fg-")) classes.delete(c);
-          }
-        } else if (/^(3[0-7]|9[0-7])$/.test(code)) {
-          for (const c of [...classes]) {
-            if (c.startsWith("ansi-fg-")) classes.delete(c);
-          }
-          classes.add(`ansi-fg-${code}`);
-        }
-      }
-    }
-    if (last < line.length) {
-      const chunk = escapeHtml(line.slice(last));
-      if (classes.size) {
-        html += `<span class="${[...classes].join(" ")}">${chunk}</span>`;
-      } else {
-        html += chunk;
-      }
-    }
-    return html;
-  }
-
-  function stripAnsi(text) {
-    return text.replace(ANSI_RE, "");
-  }
-
-  const LEVEL_RANK = { debug: 0, info: 1, warning: 2, error: 3 };
-  const LEVEL_RE = /(?:\[\s*|\b)(debug|dbg|info|inf|warning|warn|wrn|error|err|critical|exception)\b(?:\s*\])?/i;
-  const AR_RE = /armodule|dimos[./]ar\b|ARModule/i;
-  let lastLevel = "info";
-  let lastAr = false;
-
-  function classifyLine(line) {
-    const plain = stripAnsi(line);
-    const m = LEVEL_RE.exec(plain.slice(0, 80));
-    if (m) {
-      const key = m[1].toLowerCase();
-      lastLevel = key.startsWith("d")
-        ? "debug"
-        : key.startsWith("i")
-          ? "info"
-          : key.startsWith("w")
-            ? "warning"
-            : "error";
-      lastAr = AR_RE.test(plain);
-    } else if (AR_RE.test(plain)) {
-      lastAr = true;
-    }
-    return { level: lastLevel, ar: lastAr };
-  }
-
-  function lineVisible(entry) {
-    const min = LEVEL_RANK[logFilterLevel.value] ?? 0;
-    if (LEVEL_RANK[entry.level] < min) return false;
-    return !(logFilterSource.value === "ar" && !entry.ar);
-  }
-
-  function makeLogLineEl(entry) {
-    const el = document.createElement("div");
-    el.className = "log-line";
-    el.innerHTML = ansiToHtml(entry.line);
-    el.hidden = !lineVisible(entry);
-    entry.el = el;
-    return el;
-  }
-
-  function applyLogFilter() {
-    for (const entry of logLines) {
-      if (entry.el) entry.el.hidden = !lineVisible(entry);
-    }
-    logEl.scrollTop = logEl.scrollHeight;
-  }
-
-  function flushLog() {
-    frameHandle = null;
-    if (!pendingLines.length) return;
-    const nearBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 48;
-    const fragment = document.createDocumentFragment();
-    for (const line of pendingLines) {
-      const entry = { line, ...classifyLine(line), el: null };
-      fragment.appendChild(makeLogLineEl(entry));
-      logLines.push(entry);
-    }
-    pendingLines.length = 0;
-    logEl.appendChild(fragment);
-
-    const excess = logLines.length - MAX_LOG_LINES;
-    if (excess > 0) {
-      for (let i = 0; i < excess; i++) {
-        const first = logEl.firstElementChild;
-        if (first) logEl.removeChild(first);
-      }
-      logLines.splice(0, excess);
-    }
-
-    if (nearBottom) {
-      logEl.scrollTop = logEl.scrollHeight;
-    }
-  }
-
-  function appendLog(line) {
-    pendingLines.push(line);
-    if (frameHandle === null) {
-      frameHandle = requestAnimationFrame(flushLog);
-    }
-  }
-
-  function clearLog() {
-    if (frameHandle !== null) {
-      cancelAnimationFrame(frameHandle);
-      frameHandle = null;
-    }
-    pendingLines.length = 0;
-    logLines.length = 0;
-    logEl.textContent = "";
-  }
-
-  async function copyLog() {
-    const text = logLines
-      .filter(lineVisible)
-      .map((entry) => stripAnsi(entry.line))
-      .join("\n");
-    try {
-      await navigator.clipboard.writeText(text);
-      const prev = copyLogBtn.textContent;
-      copyLogBtn.textContent = "Copied";
-      setTimeout(() => {
-        copyLogBtn.textContent = prev;
-      }, 1200);
-    } catch (err) {
-      appendLog(`Copy failed: ${err}`);
-    }
   }
 
   function setText(el, value, fallback = "—") {
@@ -994,10 +804,6 @@
     const environmentChanged = nextPython !== plannerPython;
     plannerPython = nextPython;
 
-    applyHeader(status);
-    const deps = describeDeps(status);
-    depsSummary.textContent = deps.text;
-    depsSummary.dataset.phase = deps.phase;
     if (["starting", "running", "stopping"].includes(lastStatus.phase) && status.client) {
       client = status.client;
       document.querySelectorAll("[data-client]").forEach(btn => btn.classList.toggle("active", btn.dataset.client === client));
@@ -1018,31 +824,22 @@
       errorText.classList.add("hidden");
     }
 
-    if ("openai_api_key" in status && document.activeElement !== apiKey) {
+    if (!settingsReady && "openai_api_key" in status && document.activeElement !== apiKey) {
       apiKey.value = status.openai_api_key || "";
     }
-    if ("multiset_client_id" in status && document.activeElement !== multisetClientId) {
+    if (!settingsReady && "multiset_client_id" in status && document.activeElement !== multisetClientId) {
       multisetClientId.value = status.multiset_client_id || "";
     }
     if (
-      "multiset_client_secret" in status &&
+      !settingsReady && "multiset_client_secret" in status &&
       document.activeElement !== multisetClientSecret
     ) {
       multisetClientSecret.value = status.multiset_client_secret || "";
     }
-    syncConfigCards();
-
-    const busy =
-      lastStatus.phase === "checking" ||
-      lastStatus.phase === "installing" ||
-      lastStatus.phase === "starting" ||
-      lastStatus.phase === "stopping";
-    const running = lastStatus.phase === "running" || lastStatus.phase === "starting";
-    const locked = lastStatus.phase === "starting" || lastStatus.phase === "running" || lastStatus.phase === "stopping";
+    syncConfigCards(false);
 
     controlsCard.classList.remove("hidden");
     actionsBar.classList.remove("hidden");
-    syncInstallBanner();
 
     if (status.default_clone_dir && !cloneDir.value) {
       cloneDir.value = status.default_clone_dir;
@@ -1051,16 +848,8 @@
       dimosPython.value = status.dimos_install_dir || status.dimos_python;
     }
 
-    startBtn.disabled = busy || running || lastStatus.check_ok !== true;
-    stopBtn.disabled = false;
-    stopBtn.textContent = lastStatus.phase === "stopping" ? "Force stop" : "Stop";
-    stopBtn.classList.toggle(
-      "danger",
-      lastStatus.phase === "running" || lastStatus.phase === "starting" || lastStatus.phase === "stopping"
-    );
-    setConfigLocked(locked);
     syncHardwareSetup();
-    if (environmentChanged || lastStatus.phase === "ready") { void refreshPlanner(); }
+    if (environmentChanged) { void refreshPlanner(); }
 
   }
 
@@ -1068,7 +857,7 @@
     const existing = setupMode() === "existing";
     cloneDirField.classList.toggle("hidden", existing);
     dimosPythonField.classList.toggle("hidden", !existing);
-    syncInstallBanner();
+    renderControls();
   }
 
   function initSplitter() {
@@ -1140,7 +929,8 @@
 
   blueprintSelect.addEventListener("change", async () => {
     if (configIsLocked()) return;
-    if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; await saveSettings(); }
+    const saved = await flushSettings();
+    if (robotProfileId && !saved) { blueprintSelect.value = blueprint; return; }
     blueprint = blueprintSelect.value;
     localStorage.setItem("dimos.blueprint", blueprint);
     applyBlueprintInfo();
@@ -1298,10 +1088,9 @@
       blueprint,
       client,
       profile_id: robotProfileId,
-        source: { mode: $("robotSource").value.startsWith("device:") ? "device" : $("robotSource").value,
-        device_id: $("robotSource").value.replace(/^device:/, ""), address: robotIp.value.trim(),
-        replay: $("replayPath").value.trim() || null, playback: $("playbackSource").value,
-        streams: replayStreams[manipulationSelected() ? "openyam" : "go2"] || {} },
+      source: sourceRequest({ selection: $("robotSource").value, address: robotIp.value,
+        replay: $("replayPath").value, playback: $("playbackSource").value,
+        streams: replayStreams[replayRobot(blueprint)] || {} }),
     };
     try {
       const res = await fetch("/api/armodule/start", {
@@ -1313,7 +1102,7 @@
       if (!res.ok) {
         const detail = data.detail;
         if (Array.isArray(detail?.devices)) {
-          discoveredRobots[manipulationSelected() ? "openyam" : "go2"] = detail.devices;
+          discoveredRobots[replayRobot(blueprint)] = detail.devices;
           renderSourceOptions();
         }
         if (detail?.suggest_simulated) { $("robotSource").value = "simulated"; syncSource(); }
@@ -1398,16 +1187,13 @@
 
   async function refreshRobotProfiles(preferredId = robotProfileId) {
     const generation = ++profileLoadGeneration;
-    const response = await fetch("/api/robot-profiles");
-    if (!response.ok) { appendLog("Could not load robot profiles"); return; }
-    const data = await response.json();
-    if (generation !== profileLoadGeneration) return;
     const robot = blueprint === "openyam_ar_planner" ? "openyam" : "unitree_go2";
-    robotProfiles = data.profiles.filter(profile => profile.robot === robot);
-    if (!robotProfiles.length) {
-      await fetch("/api/robot-profiles", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ robot }) });
-      return refreshRobotProfiles(null);
-    }
+    let profiles;
+    try { profiles = await profilesForRobot(fetch, robot, !configIsLocked()); }
+    catch (error) { appendLog(error.message); return; }
+    if (generation !== profileLoadGeneration || robot !== (manipulationSelected() ? "openyam" : "unitree_go2")) return;
+    robotProfiles = profiles;
+    if (!profiles.length) { robotProfileId = null; return; }
     const select = $("robotProfileSelect"); select.replaceChildren();
     for (const profile of robotProfiles) {
       const option = document.createElement("option"); option.value = profile.id; option.textContent = profile.name; select.append(option);
@@ -1434,7 +1220,7 @@
   }
   $("robotProfileSelect").addEventListener("change", async () => {
     if (configIsLocked()) return;
-    if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; if (!(await saveSettings())) { $("robotProfileSelect").value = robotProfileId; return; } }
+    if ((persistTimer || robotProfileId) && !(await flushSettings())) { $("robotProfileSelect").value = robotProfileId; return; }
     robotProfileId = $("robotProfileSelect").value;
     localStorage.setItem(`dimos.profile.${blueprint === "openyam_ar_planner" ? "openyam" : "unitree_go2"}`, robotProfileId);
     applyRobotProfile();
@@ -1443,7 +1229,7 @@
     const simulated = $("robotSource").value === "simulated";
 
     $("replayRow").classList.toggle("hidden", !simulated);
-    const robot = manipulationSelected() ? "openyam" : "go2";
+    const robot = replayRobot(blueprint);
     if (robot !== playbackRobot) {
       playbackRobot = robot;
       $("replayPath").value = launcherPreferences[replayPreferenceKey(robot)] || "";
@@ -1461,7 +1247,7 @@
   }
   robotIp.addEventListener("change", () => { void saveLauncherPreferences(); });
   $("robotSource").addEventListener("change", () => {
-    launcherPreferences[`${manipulationSelected() ? "openyam" : "go2"}_source`] = $("robotSource").value;
+    launcherPreferences[`${replayRobot(blueprint)}_source`] = $("robotSource").value;
     syncSource();
     void saveLauncherPreferences();
   });
@@ -1484,7 +1270,7 @@
       if (manipulationSelected() && selected === "auto" && data.devices.length === 1) {
         resolvedCan = data.devices[0].address; void refreshCan();
       }
-      discoveredRobots[manipulationSelected() ? "openyam" : "go2"] = data.devices;
+      discoveredRobots[replayRobot(blueprint)] = data.devices;
       if (!manipulationSelected()) go2DiscoveryState = {text: data.devices.length ? `${data.devices.length} found` : "None found", phase: data.devices.length ? "ready" : "needs_setup"};
       renderSourceOptions(selected, "unavailable");
       $("discoveryStatus").textContent = data.devices.length ? `${data.devices.length} connection(s) found` : "No devices found. Check the connection and try Discover again.";
@@ -1515,7 +1301,7 @@
     const generation = ++replayInspectionGeneration;
     const path = $("replayPath").value.trim();
     if (!path) return;
-    const robot = manipulationSelected() ? "openyam" : "go2";
+    const robot = replayRobot(blueprint);
     $("replayStatus").textContent = "Checking recording…";
     try {
       const response = await fetch("/api/replay/inspect", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({path, robot: robot === "go2" ? "unitree_go2" : robot, streams: replayStreams[robot] || {}})});
@@ -1539,7 +1325,7 @@
     } catch (error) { $("replayStatus").textContent = String(error); }
   }
   $("replayPath").addEventListener("change", () => {
-    const robot = manipulationSelected() ? "openyam" : "go2";
+    const robot = replayRobot(blueprint);
     const path = $("replayPath").value.trim();
     if (path === (launcherPreferences[replayPreferenceKey(robot)] || "")) return;
     replayStreams[robot] = {};
@@ -1572,13 +1358,13 @@
     Object.assign(replayStreams, preferences.replay_streams || {});
     playbackRobot = null;
     if (typeof preferences.manual_ip === "string") robotIp.value = preferences.manual_ip;
-    const value = launcherPreferences[`${manipulationSelected() ? "openyam" : "go2"}_source`] || "auto";
+    const value = launcherPreferences[`${replayRobot(blueprint)}_source`] || "auto";
     renderSourceOptions(value); syncSource();
     if (value.startsWith("device:")) void refreshRobotDiscovery();
   }).catch(error => appendLog(`Could not load launcher preferences: ${error}`));
   async function saveLauncherPreferences() {
     preferencesEdited = true;
-    launcherPreferences[`${manipulationSelected() ? "openyam" : "go2"}_source`] = $("robotSource").value;
+    launcherPreferences[`${replayRobot(blueprint)}_source`] = $("robotSource").value;
     const body = JSON.stringify({ ...launcherPreferences, replay_streams: replayStreams, manual_ip: robotIp.value.trim() });
     preferencesSave = preferencesSave.catch(() => {}).then(async () => {
       const response = await fetch("/api/launcher-preferences", {method: "PUT", headers: {"Content-Type": "application/json"}, body});

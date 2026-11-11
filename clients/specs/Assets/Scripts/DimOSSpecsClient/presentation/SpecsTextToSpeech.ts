@@ -1,5 +1,3 @@
-export type SpecsTextToSpeechErrorHandler = (message: string) => void;
-
 export interface SpecsTextToSpeechDeps {
   module: TextToSpeechModule;
   audio: AudioComponent;
@@ -11,17 +9,12 @@ export class SpecsTextToSpeech {
   private readonly _audio: AudioComponent;
   private _queue: string[] = [];
   private _synthesizing = false;
-  private _errorHandler: SpecsTextToSpeechErrorHandler | null = null;
   private generation = 0;
   private onEnd: (() => void) | null = null;
 
   constructor(deps: SpecsTextToSpeechDeps) {
     this._module = deps.module;
     this._audio = deps.audio;
-  }
-
-  public onError(handler: SpecsTextToSpeechErrorHandler): void {
-    this._errorHandler = handler;
   }
 
   public get isPlaying(): boolean {
@@ -90,22 +83,30 @@ export class SpecsTextToSpeech {
   private _synthesize(text: string): void {
     const generation = this.generation;
     this._synthesizing = true;
-    const options = TextToSpeech.Options.create();
-    this._module.synthesize(
-      text,
-      options,
-      (audioTrack: AudioTrackAsset) => {
-        if (generation !== this.generation) return;
-        this._synthesizing = false;
-        this._audio.audioTrack = audioTrack;
-        this._audio.play(1);
-      },
-      (_errorCode: number, description: string) => {
-        if (generation !== this.generation) return;
-        this._synthesizing = false;
-        const message = description || "TTS synthesis failed";
-        this._errorHandler?.(message);
-      },
-    );
+    try {
+      const options = TextToSpeech.Options.create();
+      this._module.synthesize(text, options,
+        (audioTrack: AudioTrackAsset) => {
+          if (generation !== this.generation) return;
+          this._synthesizing = false;
+          try { this._audio.audioTrack = audioTrack; this._audio.play(1); }
+          catch (error) { this.fail(String(error)); }
+        },
+        (_errorCode: number, description: string) => {
+          if (generation === this.generation) this.fail(description || "TTS synthesis failed");
+        });
+    } catch (error) {
+      this.fail(String(error));
+      throw error;
+    }
+  }
+
+  private fail(message: string): void {
+    this.generation++;
+    this._synthesizing = false;
+    this._queue = [];
+    const end = this.onEnd; this.onEnd = null;
+    print(`Speech synthesis failed: ${message}`);
+    end?.();
   }
 }

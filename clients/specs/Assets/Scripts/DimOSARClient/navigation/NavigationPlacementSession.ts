@@ -48,5 +48,9 @@ export class NavigationPlacementSession {
     return { probes: [...this.probes].filter(([id]) => id !== this.owner).map(([sourceId, position]) => ({ sourceId, position: [...position] as Vec3 })),
       draft: this.owner && this.pose ? { ownerId: this.owner, position: [...this.pose.position] as Vec3, orientation: [...this.pose.orientation] as Quat, held: this.held, firstGesture: this.firstGesture } : null };
   }
+  rebase(convert: (pose: NavigationPose) => NavigationPose, now: number): void {
+    if (this.pose) { this.pose = convert(this.pose); this.heading.reset(this.pose.position, this.pose.orientation, now); }
+    this.probes.forEach((position, id) => this.probes.set(id, convert({ position, orientation: [0, 0, 0, 1] }).position));
+  }
   private clearDraft(): void { this.owner = null; this.pose = null; this.held = this.firstGesture = false; }
 }

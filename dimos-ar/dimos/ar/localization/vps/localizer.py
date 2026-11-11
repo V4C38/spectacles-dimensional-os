@@ -11,7 +11,7 @@ import numpy as np
 from dimos.ar.localization.transforms import fuse_pose_estimates
 from dimos.ar.localization.types import Intrinsics, LocalizedPose, Observation
 from dimos.ar.localization.undistort import undistort_to_pinhole
-from dimos.ar.localization.worker import LocalizationWorker
+from dimos.ar.worker import BoundedWorker
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.utils.transform_utils import matrix_to_pose, pose_to_matrix
 
@@ -83,10 +83,10 @@ class VpsLocalizer:
         *,
         client: VpsClient,
         config: VpsLocalizerConfig | None = None,
-        worker: LocalizationWorker | None = None,
+        worker: BoundedWorker | None = None,
     ) -> None:
         self._owns_worker = worker is None
-        self._worker = worker or LocalizationWorker()
+        self._worker = worker or BoundedWorker()
         self._client = client
         self._config = config or VpsLocalizerConfig()
 

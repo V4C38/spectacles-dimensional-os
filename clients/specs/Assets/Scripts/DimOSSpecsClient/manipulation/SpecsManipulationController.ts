@@ -1,12 +1,12 @@
-import { sameArmTrackingOrigin } from "../../DimOSARClient/manipulation/ArmJointFilter";
-import { specsToClientTrackingPose } from "../utilities/SpecsCoordinates";
-import { ManipulationInputCapture } from "../../DimOSARClient/manipulation/ManipulationInputCapture";
+import { sameTrackingReference } from "../../DimOSARClient/localization/clientTrackingOrigin";
+import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
+import { clientTrackingToOdomPose } from "../../DimOSARClient/localization/clientTrackingTransforms";
 import { ManipulationController } from "../../DimOSARClient/manipulation/ManipulationController";
 import { ManipulationGesture } from "../../DimOSARClient/manipulation/ManipulationGesture";
-import { clientTrackingToOdomPose } from "../../DimOSARClient/localization/clientTrackingTransforms";
-import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
-import type { ARModuleSession } from "../../DimOSARClient/websocket/arModuleSession";
+import { ManipulationInputCapture } from "../../DimOSARClient/manipulation/ManipulationInputCapture";
 import type { ManipulationPose } from "../../DimOSARClient/manipulation/ManipulationTypes";
+import type { ARModuleSession } from "../../DimOSARClient/websocket/arModuleSession";
+import { specsToClientTrackingPose } from "../utilities/SpecsCoordinates";
 import { ManipulationRenderer } from "./ManipulationRenderer";
 import { SpecsManipulationInput } from "./SpecsManipulationInput";
 
@@ -22,7 +22,7 @@ export class SpecsManipulationController {
     private readonly camera: SceneObject, private readonly select: () => void, stop: () => void, recalibrate: () => void = () => {}) {
     this.core = new ManipulationController(session, () => getTime(), stop);
     const capture = new ManipulationInputCapture();
-    this.renderer = new ManipulationRenderer(parent, this.core, stop, capture, recalibrate);
+    this.renderer = new ManipulationRenderer(parent, this.core, capture, recalibrate);
     this.input = new SpecsManipulationInput(this, capture);
   }
   setSelected(selected: boolean): void {
@@ -57,7 +57,8 @@ export class SpecsManipulationController {
       view.connection !== "ready" && view.capabilities === null && this.core.interaction.retainingFeedback;
     const retained = supported && this.core.interaction.retainingFeedback;
     const origin = this.origin() ?? (retained ? this.lastOrigin : null);
-    if (!supported || (!enabled && !retained) || !sameArmTrackingOrigin(origin, this.lastOrigin)) this.suspend();
+    if (!supported || (!enabled && !retained) || !sameTrackingReference(origin, this.lastOrigin)) this.suspend();
+    if (origin && this.lastOrigin && origin !== this.lastOrigin && sameTrackingReference(origin, this.lastOrigin)) this.gesture.rebase(this.lastOrigin, origin);
     this.lastOrigin = origin;
     const active = supported && (enabled || retained) && !!origin && this.core.interaction.available;
     this.core.tick(active);

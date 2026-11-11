@@ -142,3 +142,18 @@ it("freezes the summon offset so head motion only changes its billboard", () => 
     expect((quat as any).lookAt).toHaveBeenCalled();
   } finally { (quat as any).lookAt = nativeLookAt; }
 });
+
+it("keeps programmatic alignment review pinned through palm open and close edges", () => {
+  setMockTime(0);
+  let facing = false;
+  setMockHands({ left: { isTracked: () => true, getPalmPitchAngle: () => facing ? 45 : -80, isFacingCamera: () => facing } });
+  const panel = sceneObject(), show = vi.fn(), hide = vi.fn();
+  const controller = new WristMenuController({ panel, anchorRoot: sceneObject(), onMenuShow: show, onMenuHide: hide });
+  controller.showPinned(); panel.getTransform().setWorldPosition(new vec3(9, 8, 7));
+  expect(controller.isPinned()).toBe(true);
+  facing = true; controller.tick(.016); setMockTime(.3); controller.tick(.016);
+  facing = false; controller.tick(.016); setMockTime(.5); controller.tick(.016);
+  expect(panel.getTransform().getWorldPosition()).toEqual(new vec3(9, 8, 7));
+  expect(controller.isPinned()).toBe(true); expect(show).toHaveBeenCalledOnce(); expect(hide).toHaveBeenCalledOnce();
+  controller.closeImmediate(); expect(controller.isPinned()).toBe(false); expect(hide).toHaveBeenCalledTimes(2);
+});

@@ -34,4 +34,49 @@
     opacityScale:
       typeIdx: 1
       value: 1.000000
+    pointBoost:
+      typeIdx: 1
+      value: 0.000000
+    pointDelta00:
+      typeIdx: 1
+      value: 0.000000
+    pointDelta01:
+      typeIdx: 1
+      value: 0.000000
+    pointDelta02:
+      typeIdx: 1
+      value: 0.000000
+    pointDelta10:
+      typeIdx: 1
+      value: 0.000000
+    pointDelta11:
+      typeIdx: 1
+      value: 0.000000
+    pointDelta12:
+      typeIdx: 1
+      value: 0.000000
+    pointDelta20:
+      typeIdx: 1
+      value: 0.000000
+    pointDelta21:
+      typeIdx: 1
+      value: 0.000000
+    pointDelta22:
+      typeIdx: 1
+      value: 0.000000
+    pointDeltaX:
+      typeIdx: 1
+      value: 0.000000
+    pointDeltaY:
+      typeIdx: 1
+      value: 0.000000
+    pointDeltaZ:
+      typeIdx: 1
+      value: 0.000000
+    pointFloor:
+      typeIdx: 1
+      value: 0.000000
+    pointVisibility:
+      typeIdx: 1
+      value: 0.000000
   Pass: !<reference> c045f108-f406-4da9-a11f-db5ab174435c

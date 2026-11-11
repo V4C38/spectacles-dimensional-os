@@ -53,7 +53,7 @@ await writeFile(
 );
 let passed = false;
 try {
-  passed = (await finalize(output, "webxr")).passed;
+  passed = (await finalize(output, "webxr", process.env.INTEGRATION_SCOPE ?? "all")).passed;
 } catch (error) {
   await writeFile(
     join(output, "failure.json"),
@@ -61,7 +61,7 @@ try {
   );
   console.error(error);
 }
-if (passed && command.status === 0 && dirname(output) === defaultRoot)
+if (passed && command.status === 0 && (process.env.INTEGRATION_SCOPE ?? "all") === "all" && dirname(output) === defaultRoot)
   await removeOldResults(dirname(output), [basename(output)]);
 console.log(`${passed && command.status === 0 ? "PASS" : "FAIL"}: ${output}`);
 process.exitCode = passed && command.status === 0 ? 0 : 1;

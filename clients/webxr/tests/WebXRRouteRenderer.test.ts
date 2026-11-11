@@ -1,57 +1,51 @@
-import { expect, it } from "vitest";
+import * as THREE from "three";
+import { expect, it, vi } from "vitest";
 import { WebXRRouteRenderer } from "../src/navigation/WebXRRouteRenderer";
-import { ROBOT_LINE_STYLE, WORLD_DASH_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
-
-it("updates the entire route as its segment count grows and shrinks", () => {
+import { WORLD_DASH_STYLE, ROBOT_LINE_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
+const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
+const dashed = (route: WebXRRouteRenderer) => route.object.getObjectByName("Adaptive dashed line") as THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>;
+const ribbon = (route: WebXRRouteRenderer) => route.object.getObjectByName("Executing route ribbon") as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+it("updates the visible stroke through route growth, motion and shrinkage and disposes it", () => {
   const route = new WebXRRouteRenderer();
-  const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
-  route.apply([[0, 0, 0, 0], [0.1, 0, 0, 0]], origin, true, 0, 0);
-  const shortGeometry = route.object.geometry;
-  route.apply([[0, 0, 0, 0], [0.1, 0, 0, 0], [1, 0, 0, 0], [5, 0, 0, 0]], origin, true, 0, 0);
-  expect(route.object.geometry).not.toBe(shortGeometry);
-  const geometry = route.object.geometry;
-  const ends = geometry.getAttribute("instanceEnd");
-  expect(ends.getZ(ends.count - 1)).toBeCloseTo(-5);
-  expect(geometry.instanceCount).toBe(ends.count);
-  route.apply([[0, 0, 0, 0], [0.1, 0, 0, 0], [1, 0, 0, 0], [6, 0, 0, 0]], origin, true, 0, 0);
-  expect(route.object.geometry).toBe(geometry);
-  expect(ends.getZ(ends.count - 1)).toBeCloseTo(-6);
-  route.apply([[0, 0, 0, 0], [0.1, 0, 0, 0]], origin, true, 0, 0);
-  expect(route.object.geometry.instanceCount).toBe(1);
-  route.dispose();
+  try {
+    for (const points of [[0,.1], [0,.1,1,5], [0,.1,1,6], [0,.1]]) {
+      route.apply(points.map(x => [x,0,0,0]), origin, true, 0, 0);
+      const geometry = dashed(route).geometry, ends = geometry.getAttribute("instanceEnd");
+      expect(geometry.instanceCount).toBe(ends.count);
+      expect(ends.getZ(ends.count - 1)).toBeCloseTo(-points[points.length - 1]);
+      expect(dashed(route).visible).toBe(true);
+    }
+    const dispose = vi.spyOn(dashed(route).geometry, "dispose");
+    route.dispose(); expect(dispose).toHaveBeenCalledOnce();
+  } finally { route.dispose(); }
 });
-
-
-it("renders preview and pending routes with the robot box's dash pattern at circle edges", () => {
+it("clips dashed paths to circles and preserves physical dash styling", () => {
   const route = new WebXRRouteRenderer();
-  const origin = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 } as import("@dimos-ar-client/localization/clientTrackingOrigin").ClientTrackingOrigin;
-  const style = { preview: true, startCircle: { center: [0, 0.001, 0] as [number, number, number], radius: 0.06 }, endCircle: { center: [0, 0.015, -2] as [number, number, number], radius: 0.268 } };
-  route.apply([[0, 0, 0, 0], [2, 0, 0, 0]], origin, true, 0, 0, style);
-  const geometry = route.object.geometry, start = geometry.getAttribute("instanceStart"), end = geometry.getAttribute("instanceEnd");
-  expect(start.getZ(0)).toBeCloseTo(-0.06); expect(start.getY(0)).toBeCloseTo(0.001);
-  expect(end.getZ(end.count - 1)).toBeCloseTo(-1.732); expect(end.getY(end.count - 1)).toBeCloseTo(0.015);
-  expect(route.object.material.opacity).toBe(0.6); expect(route.object.material.dashed).toBe(true); expect(route.object.material.linewidth).toBe(WORLD_DASH_STYLE.widthM);
-  const dashed = route.object.getObjectByName("Adaptive dashed line") as import("three").Mesh<import("three").InstancedBufferGeometry, import("three").ShaderMaterial>;
-  expect(dashed.material.uniforms.uDash.value).toBe(ROBOT_LINE_STYLE.dashM);
-  expect(dashed.material.uniforms.uGap.value).toBe(ROBOT_LINE_STYLE.gapM);
-  expect(dashed.material.uniforms.uWidth.value).toBe(WORLD_DASH_STYLE.widthM);
-  route.apply([[0, 0, 0, 0], [2, 0, 0, 0]], origin, true, 0, 0, { ...style, preview: false, endCircle: { ...style.endCircle, radius: 0.134 } });
-  expect(route.object.material.opacity).toBe(0.85); expect(end.getZ(end.count - 1)).toBeCloseTo(-1.866);
-  route.dispose();
+  try {
+    route.apply([[0,0,0,0],[2,0,0,0]], origin, true, 0, 0, { preview: true,
+      startCircle: { center: [0,.001,0], radius: .06 }, endCircle: { center: [0,.015,-2], radius: .268 } });
+    const stroke = dashed(route), start = stroke.geometry.getAttribute("instanceStart"), end = stroke.geometry.getAttribute("instanceEnd");
+    expect(start.getZ(0)).toBeCloseTo(-.06); expect(start.getY(0)).toBeCloseTo(.001);
+    expect(end.getZ(end.count-1)).toBeCloseTo(-1.732); expect(end.getY(end.count-1)).toBeCloseTo(.015);
+    expect(stroke.material.uniforms.uOpacity.value).toBe(.6);
+    expect(stroke.material.uniforms.uDash.value).toBe(ROBOT_LINE_STYLE.dashM);
+    expect(stroke.material.uniforms.uGap.value).toBe(ROBOT_LINE_STYLE.gapM);
+    expect(stroke.material.uniforms.uWidth.value).toBe(WORLD_DASH_STYLE.widthM);
+  } finally { route.dispose(); }
 });
-
-it("draws executing routes as solid strokes with round caps outside circles and keeps previews dashed", () => {
+it("uses a visible solid ribbon during execution and dashed previews", () => {
   const route = new WebXRRouteRenderer();
-  const origin = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 } as import("@dimos-ar-client/localization/clientTrackingOrigin").ClientTrackingOrigin;
-  const path: [number, number, number, number][] = [[0, 0, 0, 0], [2, 0, 0, 0]];
-  const style = { executing: true, startCircle: { center: [0, 0, 0] as [number, number, number], radius: 0.06 }, endCircle: { center: [0, 0, -2] as [number, number, number], radius: 0.3 } };
-  route.apply(path, origin, true, 0, 0, style);
-  expect(route.object.material.dashed).toBe(false); expect(route.object.material.opacity).toBe(0.85);
-  expect(route.object.geometry.getAttribute("instanceStart").getZ(0)).toBeCloseTo(-0.064);
-  expect(route.object.geometry.getAttribute("instanceEnd").getZ(0)).toBeCloseTo(-1.696);
-  route.apply(path, origin, true, 0, 0, { ...style, preview: true });
-  expect(route.object.material.dashed).toBe(true); expect(route.object.material.opacity).toBe(0.6);
-  route.apply(path, origin, true, 0, 0, { ...style, executing: false });
-  expect(route.object.material.dashed).toBe(true); expect(route.object.material.opacity).toBe(0.85);
-  route.dispose();
+  try {
+    const path: [number,number,number,number][] = [[0,0,0,0],[2,0,0,0]];
+    const style = { executing: true, startCircle: { center: [0,0,0] as [number,number,number], radius: .06 }, endCircle: { center: [0,0,-2] as [number,number,number], radius: .3 } };
+    route.apply(path, origin, true, 0, 0, style);
+    expect(ribbon(route).visible).toBe(true); expect(dashed(route).visible).toBe(false);
+    expect(ribbon(route).material.opacity).toBe(.85);
+    const positions = ribbon(route).geometry.getAttribute("position");
+    const zs = Array.from({ length: positions.count }, (_,i) => positions.getZ(i));
+    expect(Math.max(...zs)).toBeCloseTo(-.06); expect(Math.min(...zs)).toBeCloseTo(-1.7);
+    route.apply(path, origin, true, 0, 0, { ...style, preview: true });
+    expect(ribbon(route).visible).toBe(false); expect(dashed(route).visible).toBe(true);
+    expect(dashed(route).material.uniforms.uOpacity.value).toBe(.6);
+  } finally { route.dispose(); }
 });

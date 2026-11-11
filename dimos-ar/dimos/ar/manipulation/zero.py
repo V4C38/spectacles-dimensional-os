@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 import time
 from typing import TYPE_CHECKING, Any
-from uuid import uuid4
 import xml.etree.ElementTree as ET
 
 from dimos.ar.manipulation.errors import ManipulationError
@@ -22,59 +21,22 @@ class JointZeroOperation:
 
     def run(self, client_id: str, group: str, speed: float, shutdown: bool) -> dict[str, Any]:
         runtime = self.runtime
-        tolerance = getattr(runtime.config, "joint_arrival_tolerance_rad", 0.02)
-        with runtime.lock:
-            skip = shutdown and (runtime.session.stopped or runtime.session.cancelling)
-            if skip:
-                runtime.session.shutdown = True
-                quiesce = runtime.session.stop_confirmed
-        if skip:
-            if quiesce:
-                runtime.adapter.quiesce()
-                with runtime.lock:
-                    runtime.session.quiesced = True
-            return {"status": "skipped", "message": "Emergency stop active; automatic motion skipped",
-                    "quiescent": runtime.session.quiesced}
-        runtime.fresh(group)
-        with runtime.lock:
-            if not shutdown:
-                runtime.require_owner(client_id, group)
-                if runtime.operation.id is not None:
-                    raise ManipulationError("busy", "execution active or outcome uncertain")
-            if not runtime.planning.acquire(blocking=False):
-                raise ManipulationError("busy", "Planning is pending; retry reset")
-            runtime.retire()
-            epoch = runtime.session.generation
-            runtime.session.owner, runtime.session.group_id = client_id, group
-            runtime.operation.id = uuid4().hex
-            runtime.operation.kind = "parking" if shutdown else "resetting"
-            if shutdown:
-                runtime.session.shutdown = True
+        tolerance = runtime.config.joint_arrival_tolerance_rad
+        skipped = runtime.skip_zero(shutdown)
+        if skipped is not None:
+            return skipped
+        epoch = runtime.begin_zero(client_id, group, shutdown)
 
         def require_current() -> None:
-            if (
-                runtime.session.generation != epoch
-                or runtime.session.stopped
-                or runtime.session.cancelling
-            ):
-                raise ManipulationError(
-                    "ownership", "Reset interrupted by stop or ownership change"
-                )
+            runtime.require_zero_current(epoch)
 
         operation_deadline = time.monotonic() + 55
         try:
-            with runtime.lock:
-                require_current()
+            require_current()
             runtime.clear_following()
-            with runtime.lock:
-                require_current()
+            require_current()
             ready = runtime.adapter.reset()
-            with runtime.lock:
-                require_current()
-                if not ready.succeeded:
-                    runtime.session.stopped = True
-                    runtime.session.stop_confirmed = False
-                    raise ValueError(ready.message)
+            runtime.confirm_zero_reset(epoch, ready)
             definition = next(g for g in runtime.adapter.list_planning_groups() if g.id == group)
             joints = list(definition.joint_names)
             bounds = {
@@ -107,14 +69,12 @@ class JointZeroOperation:
                     {group: target}, speed_scale=min(speed, 0.2) if shutdown else speed
                 )
             )
-            with runtime.lock:
-                require_current()
+            require_current()
             if planned is not None and (not planned.succeeded or planned.plan is None):
                 raise ValueError(planned.message)
             if planned is not None:
                 result = runtime.adapter.execute(blocking=False, plan_id=planned.plan.plan_id)
-                with runtime.lock:
-                    require_current()
+                require_current()
                 if result.status.name not in {"ACCEPTED", "COMPLETED", "SUCCEEDED"}:
                     raise ValueError(result.message)
             started = time.monotonic()
@@ -124,8 +84,7 @@ class JointZeroOperation:
             last_measurement = float("-inf")
             last_log = float("-inf")
             while time.monotonic() < deadline:
-                with runtime.lock:
-                    require_current()
+                require_current()
                 observed = runtime.fresh(group)
                 actual = dict(zip(observed.joints.name, observed.joints.position, strict=True))
                 now = time.monotonic()
@@ -157,20 +116,11 @@ class JointZeroOperation:
                         if settled is None:
                             settled = now
                         if now - settled >= 0.5:
-                            with runtime.lock:
-                                require_current()
+                            require_current()
                             ready = runtime.adapter.reset()
-                            with runtime.lock:
-                                require_current()
-                                if not ready.succeeded:
-                                    runtime.session.stopped = True
-                                    runtime.session.stop_confirmed = False
-                                    raise ValueError(ready.message)
+                            runtime.confirm_zero_reset(epoch, ready)
                             if shutdown:
-                                runtime.adapter.quiesce()
-                                with runtime.lock:
-                                    require_current()
-                                    runtime.session.quiesced = True
+                                runtime.quiesce_zero(epoch)
                             return {"status": "completed", "message": "Zero pose confirmed",
                                     "quiescent": runtime.session.quiesced}
                     else:
@@ -183,30 +133,7 @@ class JointZeroOperation:
                 f"(tolerance {tolerance:.4f} rad); settling deadline reached"
             )
         except Exception:
-            with runtime.lock:
-                current = runtime.session.generation == epoch and not runtime.session.stopped
-            if current:
-                try:
-                    ready = runtime.adapter.reset()
-                except Exception:
-                    with runtime.lock:
-                        if runtime.session.generation == epoch:
-                            runtime.session.stopped = True
-                            runtime.session.stop_confirmed = False
-                    raise
-                with runtime.lock:
-                    current = runtime.session.generation == epoch
-                    if current and not ready.succeeded:
-                        runtime.session.stopped = True
-                        runtime.session.stop_confirmed = False
-                if current and ready.succeeded and shutdown:
-                    runtime.adapter.quiesce()
-                    with runtime.lock:
-                        if runtime.session.generation == epoch:
-                            runtime.session.quiesced = True
+            runtime.fail_zero(epoch, shutdown)
             raise
         finally:
-            with runtime.lock:
-                if runtime.session.generation == epoch:
-                    runtime.retire()
-            runtime.planning.release()
+            runtime.finish_zero(epoch)

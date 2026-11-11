@@ -1,9 +1,8 @@
-import type { ManipulationInteraction } from "./ManipulationInteraction";
 import { gripperJointValues } from "./ArmToolKinematics";
 import { samplePlan } from "./ModelKinematics";
 import type { ManipulationGroup, ManipulationModel, ManipulationPlan, ManipulationState } from "./ManipulationTypes";
 
-export class ManipulationPresentation {
+export class ManipulationPreviewPlayback {
   previewRequested = false;
   private previewId: string | null = null;
   private started = 0;
@@ -24,26 +23,7 @@ export class ManipulationPresentation {
   }
 }
 
-export function manipulationControls(state: ManipulationState | null | undefined,
-  interaction: Pick<ManipulationInteraction, "snapshot" | "groupId" | "desiredGripper">, selected: boolean) {
-  const intent = interaction.snapshot();
-  const fresh = intent.fresh;
-  const working = intent.planning || intent.executing || intent.resetting;
-  const observed = state?.observations?.[interaction.groupId ?? ""];
-  const opening = selected ? interaction.desiredGripper ?? observed?.gripper_target ?? observed?.gripper : observed?.gripper_target ?? observed?.gripper;
-  return {
-    working,
-    executeAction: "execute" as const,
-    executeLabel: "Execute",
-    canExecute: intent.canExecute,
-    canPreview: intent.canPreview,
-    gripperLabel: opening == null ? "Gripper —" : opening < 0.5 ? "Open" : "Close",
-    canGripper: intent.canManipulate && opening != null,
-    status: !fresh ? "Feedback unavailable" : state?.stopped ? "Stopped" : intent.activity,
-  };
-}
-
-export function manipulationMenuRows(_selected: boolean, _stopped: boolean): string[] {
+export function manipulationMenuRows(): string[] {
   return ["reset", "speed", "stop", "estop"];
 }
 export function manipulationButtonEnabled(key: string, intent: import("./ManipulationInteraction").ManipulationSnapshot): boolean {
@@ -59,7 +39,7 @@ export function manipulationButtonEnabled(key: string, intent: import("./Manipul
 
 
 /** The near-EE button represents the current interaction mode on both hosts. */
-export function endEffectorAction(_selected: boolean, intent: import("./ManipulationInteraction").ManipulationSnapshot,
+export function endEffectorAction(intent: import("./ManipulationInteraction").ManipulationSnapshot,
   opening: number | null | undefined, hasGripper: boolean) {
   return { action: "gripper" as const, label: opening == null ? "Gripper —" : opening < 0.5 ? "Open" : "Close",
     available: hasGripper, enabled: intent.canManipulate && opening != null, allowDuringGrab: true };

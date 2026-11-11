@@ -1,6 +1,6 @@
 import type { InteractionAuthorityPort } from "../replication/CollaborationTypes";
 import { ManipulationInteraction } from "./ManipulationInteraction";
-import { ManipulationPresentation } from "./ManipulationPresentation";
+import { ManipulationPreviewPlayback } from "./ManipulationPresentation";
 import type { ARModuleSession } from "../websocket/arModuleSession";
 
 export type ManipulationControlAction = "reset" | "estop" | "plan" | "execute" | "cancel" | "stop" | "resume" | "group" | "gripper";
@@ -8,7 +8,7 @@ export type ManipulationControlAction = "reset" | "estop" | "plan" | "execute" |
 /** Shared user commands; session observations remain the execution authority. */
 export class ManipulationController {
   readonly interaction: ManipulationInteraction;
-  readonly presentation = new ManipulationPresentation();
+  readonly presentation = new ManipulationPreviewPlayback();
   private selected = false;
   private suspended = false;
   private target = "null";

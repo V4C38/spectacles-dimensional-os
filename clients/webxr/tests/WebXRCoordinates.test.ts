@@ -38,7 +38,7 @@ describe("WebXRCoordinates", () => {
 import { composeOptical } from "../src/localization/HmdCameraSource";
 import { HMD_PROFILES } from "../src/localization/HmdProfiles";
 import { webxrHeadingToClientTrackingPose, clientTrackingToWebxrPose } from "../src/utilities/WebXRCoordinates";
-import { yawFromPlanarDirection } from "../src/navigation/WebXRNavigationController";
+
 import { clientTrackingToOdomPose } from "@dimos-ar-client/localization/clientTrackingTransforms";
 
 it("preserves generic identity rotations while keeping optical right/down/forward axes fixed", () => {
@@ -66,7 +66,8 @@ it("composes viewer-local camera translation before changing the world basis", (
 it.each([
   [0, -1, 1, 0], [-1, 0, 0, 1], [1, 0, 0, -1], [0, 1, -1, 0],
 ])("maps physical WebXR heading (%s,%s) to protocol forward (%s,%s), including a rotated origin", (x, z, fx, fy) => {
-  const heading = yawFromPlanarDirection(x, z);
+  const yaw = Math.atan2(-x, -z);
+  const heading: [number, number, number, number] = [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)];
   const arrow = rotateVecByQuat(heading, [0, 0, -1]);
   expect(arrow[0]).toBeCloseTo(x); expect(arrow[2]).toBeCloseTo(z);
   const local = webxrHeadingToClientTrackingPose({ position: [2, 0, -3], orientation: heading });

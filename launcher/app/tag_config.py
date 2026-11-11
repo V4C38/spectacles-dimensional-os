@@ -9,7 +9,7 @@ from typing import Any
 LOCALIZATION_POLICY_DEFAULTS = {
     "travel_threshold_m": 0.75,
     "heading_threshold_deg": 30.0,
-    "marker_preference_s": 1.5,
+    "marker_preference_s": 3.0,
     "headset_travel_threshold_m": 10.0,
 }
 

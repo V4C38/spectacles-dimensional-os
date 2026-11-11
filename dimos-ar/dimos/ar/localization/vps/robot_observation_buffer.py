@@ -22,7 +22,6 @@ if TYPE_CHECKING:
 DEFAULT_MAXLEN = 3
 DEFAULT_MAX_TRAVEL_M = 1.0
 DEFAULT_MAX_AGE_S = 2.0
-DEFAULT_STATIC_ANGULAR_RPS = 0.05
 
 
 @dataclass(frozen=True)
@@ -51,7 +50,6 @@ class RobotObservationBuffer:
             raise ValueError("max_age_s must be finite and positive")
         self._max_age_s = max_age_s
         self._T_base_camera_optical = T_base_camera_optical
-        self._maxlen = maxlen
         self._max_travel_m = max_travel_m
         self._lock = threading.Lock()
         self._camera_info: CameraInfo | None = None
@@ -101,35 +99,6 @@ class RobotObservationBuffer:
     def expire(self, travel_m: float) -> None:
         with self._lock:
             self._drop_stale(travel_m)
-
-    def push_image(
-        self,
-        image: Image,
-        *,
-        ts_server: float,
-        speed_mps: float,
-        travel_m: float,
-    ) -> None:
-        if self._T_base_camera_optical is None:
-            return
-        if not math.isfinite(speed_mps):
-            with self._lock:
-                self._drop_stale(travel_m)
-            return
-
-        with self._lock:
-            camera_info = self._camera_info
-            self._drop_stale(travel_m)
-        if camera_info is None:
-            return
-
-        sample = self.prepare_image(image, ts_server=ts_server, travel_m=travel_m)
-        if sample is None:
-            return
-
-        with self._lock:
-            self._drop_stale(travel_m)
-            self._samples.append(sample)
 
     def newest(self, *, now_server: float | None = None) -> RobotObservationSample | None:
         now = time.time() if now_server is None else now_server

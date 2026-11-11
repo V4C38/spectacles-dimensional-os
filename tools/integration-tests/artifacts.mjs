@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import {
   readdir,
   readFile,
@@ -19,6 +19,40 @@ import { catalog, applicableCases } from "./catalog.mjs";
 export const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 export const reviewDataRoot = join(repositoryRoot, "Review Data");
 
+/** Match the native runner's production inputs; Review assets are declared overlays. */
+export function nativeProjectFiles(root) {
+  const files = {};
+  const visit = (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (entry.name === ".DS_Store") continue;
+      const path = join(directory, entry.name);
+      const key = relative(root, path).split("\\").join("/");
+      if (key === "Assets/Review" || key === "Assets/Review.meta") continue;
+      if (entry.isDirectory()) visit(path);
+      else files[key] = createHash("sha256").update(readFileSync(path)).digest("hex");
+    }
+  };
+  visit(join(root, "Assets"));
+  for (const name of readdirSync(root).filter(name => name.endsWith(".esproj")))
+    files[name] = createHash("sha256").update(readFileSync(join(root, name))).digest("hex");
+  return files;
+}
+
+function sameFiles(left, right) {
+  return left && right && JSON.stringify(Object.entries(left).sort()) === JSON.stringify(Object.entries(right).sort());
+}
+
+export function nativeProvenanceMatches(value) {
+  try {
+    return value?.publicationEligible === true
+      && resolve(value.selectedRoot) === resolve(repositoryRoot, "clients/specs")
+      && resolve(value.workspaceRoot) !== resolve(value.selectedRoot)
+      && sameFiles(value.productionFiles, value.selectedFiles)
+      && sameFiles(nativeProjectFiles(value.selectedRoot), value.selectedFiles)
+      && sameFiles(nativeProjectFiles(value.workspaceRoot), value.workspaceFiles);
+  } catch { return false; }
+}
+
 /** Publish only a fully verified run; replacing one client's video is atomic. */
 export async function publishGoldenVideo(root, client, destination = reviewDataRoot) {
   if (!["webxr", "specs"].includes(client)) throw new Error("Unknown golden video client");
@@ -27,6 +61,7 @@ export async function publishGoldenVideo(root, client, destination = reviewDataR
   if (result.client !== client || !result.passed || !["all", "golden"].includes(result.scope)
       || !passedCheck("golden_video_present") || !passedCheck("source_unchanged")) return null;
   if (client === "specs" && (result.sourceAuditState !== "passed" || !passedCheck("source_editor_clean"))) return null;
+  if (client === "specs" && (!passedCheck("tested_source_matches") || !nativeProvenanceMatches(result.nativeProvenance))) return null;
   const source = join(root, "golden-path.mp4");
   if ((await stat(source)).size === 0) throw new Error("Cannot publish an empty golden video");
   await mkdir(destination, { recursive: true });
@@ -45,6 +80,8 @@ export async function publishGoldenVideo(root, client, destination = reviewDataR
       await writeFile(join(root, "results.json"), JSON.stringify(result, null, 2) + "\n");
       throw new Error("Source changed before golden publication; previous video retained");
     }
+    if (client === "specs" && !nativeProvenanceMatches(result.nativeProvenance))
+      throw new Error("Tested native project changed before publication; previous video retained");
     await rename(temporary, target);
   } finally {
     await rm(staging, { recursive: true, force: true });

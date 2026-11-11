@@ -53,15 +53,13 @@ export const SnapOS2Styles = {
   Special: "special",
 };
 
-export function findText(_root: unknown, _name: string): null {
-  return null;
-}
-
-export function findChildRecursive(_root: unknown, _name: string): null {
-  return null;
-}
-
-export function findFirstText(_root: unknown): null {
+export function findChildRecursive(root: SceneObject, name: string): SceneObject | null {
+  for (let i = 0; i < (root.getChildrenCount?.() ?? 0); i++) {
+    const child = root.getChild(i);
+    if (child.name === name) return child;
+    const nested = findChildRecursive(child, name);
+    if (nested) return nested;
+  }
   return null;
 }
 

@@ -33,6 +33,51 @@ function fixture() {
   return { core, collaboration, state, sent, native, grant, ackTarget, view, tick: () => { clock += 0.1; view.manipulation.observations.arm.measured_at = clock; collaboration.tick(); core.tick(); }, reply: (command: any, payload: object) => listener({ type: "manipulation_result", request_id: command.request_id, action: command.action, group_id: "arm", status: "completed", ...payload } as Outbound) };
 }
 describe("manipulation shared authority", () => {
+  it("exposes remote planning drafts to an unselected observer through release without sending traffic", () => {
+    const f = fixture();
+    f.state.authority = { client_id: "other", source_id: "hand", acquisition_id: "remote", lease_id: "remote", kind: "manipulation_planning", group_id: "arm", held: true, expires_at: 102, sequence: 1 };
+    f.state.targets = [{ ...pose(.4), domain: "manipulation", group_id: "arm", revision: 1, phase: "draft", sample_ts: 100, sequence: 1 }];
+    f.state.revision++; f.collaboration.apply({ ...f.state }); f.tick();
+    expect(f.core.target).toEqual(pose(.4));
+    expect(f.core.snapshot()).toMatchObject({ sharedDraft: true, blocked: true, dragging: false, canExecute: false });
+    f.state.authority = null;
+    f.state.targets = [{ ...f.state.targets[0], ...pose(.6), revision: 2, sequence: 2 }];
+    f.state.revision++; f.collaboration.apply({ ...f.state }); f.tick(); f.tick();
+    expect(f.core.target).toEqual(pose(.6));
+    expect(f.core.snapshot()).toMatchObject({ sharedDraft: true, blocked: false, canExecute: false });
+    expect(f.sent).toEqual([]);
+  });
+  it.each(["before", "after"])("ignores a native following tail arriving %s a newer planning acquisition", arrival => {
+    const f = fixture();
+    const tail = { generation: 1, group_id: "arm", status: "finishing" as const, target_revision: 1, ...pose(.2), joints: { j: .2 } };
+    f.state.following_tail = tail;
+    f.state.targets = [{ ...pose(.2), domain: "manipulation", group_id: "arm", revision: 1, phase: "live", sample_ts: 100, sequence: 1 }];
+    f.state.revision++; f.collaboration.apply({ ...f.state }); f.tick();
+    expect(f.core.finishing).toBe(true);
+    if (arrival === "before") f.view.manipulation.following_tail = tail;
+    f.state.following_tail = null;
+    f.state.authority = { client_id: "other", source_id: "hand", acquisition_id: "remote", lease_id: "remote", kind: "manipulation_planning", group_id: "arm", held: true, expires_at: 102, sequence: 2 };
+    f.state.targets = [{ ...f.state.targets[0], ...pose(.8), phase: "draft", revision: 2, sequence: 2 }];
+    f.state.revision++; f.collaboration.apply({ ...f.state });
+    if (arrival === "after") f.view.manipulation.following_tail = tail;
+    f.tick(); f.tick();
+    expect(f.core.target).toEqual(pose(.8));
+    expect(f.core.snapshot()).toMatchObject({ finishing: false, sharedDraft: true });
+    expect(f.sent).toEqual([]);
+  });
+  it("ends canonical following presentation while a stale native tail remains", () => {
+    const f = fixture();
+    const tail = { generation: 1, group_id: "arm", status: "finishing" as const, target_revision: 1, ...pose(.2), joints: { j: .2 } };
+    f.state.following_tail = tail;
+    f.view.manipulation.following_tail = tail;
+    f.state.targets = [{ ...pose(.2), domain: "manipulation", group_id: "arm", revision: 1, phase: "live", sample_ts: 100, sequence: 1 }];
+    f.state.revision++; f.collaboration.apply({ ...f.state }); f.tick();
+    expect(f.core.finishing).toBe(true);
+    f.state.following_tail = null;
+    f.state.revision++; f.collaboration.apply({ ...f.state }); f.tick();
+    expect(f.core.snapshot()).toMatchObject({ finishing: false, sharedDraft: false });
+    expect(f.sent).toEqual([]);
+  });
   it("retains idle slider speed until a new shared target arrives", () => {
     const f = fixture();
     f.state.targets = [{ ...pose(0.3), domain: "manipulation", group_id: "arm", speed_scale: 0.2, revision: 1, phase: "draft", sample_ts: 100, sequence: 1 }];
@@ -297,6 +342,7 @@ it("does not restore a discarded draft from repeated server snapshots", () => {
   expect(f.core.target).not.toBeNull();
   f.core.cancel(); f.tick(); f.tick();
   expect(f.core.target).toBeNull();
+  expect(f.core.snapshot().sharedDraft).toBe(false);
   expect(f.native().at(-1)).toMatchObject({ action: "cancel", epoch: "robot", lease_id: "unowned" });
   f.state.targets = [{ ...f.state.targets[0], ...pose(.4), revision: 2 }];
   f.state.revision++; f.collaboration.apply({ ...f.state }); f.tick();

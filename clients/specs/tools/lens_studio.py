@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 import time
 
+from ls_awake import KeepAwake
+
 
 def dismiss_welcome(pid: int) -> None:
     """Close only Lens Studio's Home/Welcome windows, which can block MCP actions."""
@@ -21,11 +23,10 @@ tell application "System Events"
           try
             perform action "AXClose" of targetWindow
           on error
-            set frontmost to true
-            perform action "AXRaise" of targetWindow
-            delay 0.1
+            if frontmost is false then error "Welcome window cannot be closed without taking focus"
             set focusedName to name of (value of attribute "AXFocusedWindow")
-            if focusedName is windowName then keystroke "w" using command down
+            if focusedName is not windowName then error "Welcome window is not the focused window"
+            keystroke "w" using command down
           end try
         end try
       end if
@@ -65,7 +66,8 @@ def main() -> None:
     parser.add_argument("--app", type=Path, required=True)
     parser.add_argument("--project", type=Path, required=True)
     args = parser.parse_args()
-    launch_source(args.app.expanduser().resolve(), args.project.expanduser().resolve())
+    with KeepAwake():
+        launch_source(args.app.expanduser().resolve(), args.project.expanduser().resolve())
 
 
 def resize_project_window(pid: int, height: int | None = None, width: int | None = None, bounds: dict | None = None) -> dict:

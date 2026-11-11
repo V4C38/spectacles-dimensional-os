@@ -9,8 +9,9 @@ import math
 import os
 from pathlib import Path
 import time
-from typing import Any
+from typing import Any, ClassVar
 
+from dimos.ar.localization.source_clock import RobotSourceClock
 from dimos.ar.manipulation.frames import ReferencePose
 from dimos.ar.module import ARModule
 from dimos.ar.robot.capabilities import Capability, CapabilityName
@@ -104,9 +105,13 @@ def inspect_recording(
 class RecordedARModule(ARModule):
     """Publishes recording messages through the normal AR handlers at 1x, once."""
 
+    _recording_source: ClassVar[bool] = True
+
     @rpc  # type: ignore[untyped-decorator]
     def build(self) -> None:
         super().build()
+        # Playback translates producer timestamps once, before normal handlers.
+        self._odometry.clock = RobotSourceClock()
         from dimos.memory.replay import resolve_db_path
 
         self._recording_path = os.environ.get("REPLAY_DB") or str(resolve_db_path("go2_short"))
@@ -138,6 +143,8 @@ class RecordedARModule(ARModule):
         if self._recording_robot == "openyam":
             self._capabilities._items[CapabilityName.MANIPULATION] = Capability(True, None)
         self._last_samples: dict[str, Any] = {}
+        self._sample_tasks: set[asyncio.Task[None]] = set()
+        self._recording_epoch = 0.0
         self._playback_start = 0.0
         self._duration = 0.0
         self._playback_state = "playing"
@@ -207,6 +214,7 @@ class RecordedARModule(ARModule):
         ends = [s.last_ts() for s in streams.values() if s.last_ts() is not None]
         anchor = min(starts)
         self._duration = max(ends) - anchor
+        self._recording_epoch = time.time() - anchor
         replay.pin_anchor(anchor)
         self._playback_start = time.monotonic()
         subscriptions = []
@@ -214,7 +222,7 @@ class RecordedARModule(ARModule):
             subscriptions.append(
                 stream.observable().subscribe(
                     lambda sample, role=role: self._loop.call_soon_threadsafe(
-                        lambda: asyncio.create_task(self._sample(role, sample))
+                        lambda: self._schedule_sample(role, sample)
                     )
                 )
             )
@@ -225,24 +233,50 @@ class RecordedARModule(ARModule):
                     if time.monotonic() - self._playback_start >= self._duration
                     else "playing"
                 )
-                for role, sample in (
-                    tuple(self._last_samples.items()) if self._playback_state == "ended" else ()
-                ):
-                    await self._sample(role, sample)
+                if self._playback_state == "ended":
+                    await self._publish_retained()
                 self._broadcast_state()
                 await asyncio.sleep(0.1)
         finally:
             for subscription in subscriptions:
                 subscription.dispose()
+            for task in tuple(self._sample_tasks):
+                task.cancel()
+            await asyncio.gather(*self._sample_tasks, return_exceptions=True)
             store.stop()
             self._recording_store = None
+
+    def _schedule_sample(self, role: str, sample: Any) -> None:
+        task = asyncio.create_task(self._sample(role, sample))
+        self._sample_tasks.add(task)
+        def done(completed: asyncio.Task[None]) -> None:
+            self._sample_tasks.discard(completed)
+            if not completed.cancelled():
+                completed.exception()
+        task.add_done_callback(done)
+
+    async def _publish_retained(self) -> None:
+        # Retention is presentation, not a new source measurement or camera query.
+        pose = self._odometry.history.latest()
+        if pose is not None:
+            self._state_publisher.publish_odom(pose)
+        for role in ("lidar", "joints"):
+            sample = self._last_samples.get(role)
+            if sample is None:
+                continue
+            msg = copy.copy(sample)
+            msg.ts = float(sample.ts) + self._recording_epoch
+            if role == "joints":
+                self._publish_arm(msg)
+            else:
+                await self.handle_lidar(msg)
 
     async def _sample(self, role: str, sample: Any) -> None:
         self._last_samples[role] = sample
         msg = copy.copy(sample)
         if role == "gripper":
             return
-        msg.ts = time.time()
+        msg.ts = float(sample.ts) + self._recording_epoch
         if role == "joints":
             self._publish_arm(msg)
         else:

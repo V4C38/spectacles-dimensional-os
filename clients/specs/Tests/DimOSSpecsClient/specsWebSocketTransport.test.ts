@@ -203,3 +203,49 @@ it("reuses the bulk transport and its native timers across handshakes", () => {
   for (let i = 0; i < 50; i++) expect(transport.createSibling("/bulk")).toBe(sibling);
   expect(sibling.getUrl()).toBe("ws://192.168.1.10:8787/bulk");
 });
+
+it("delivers interleaved headers and deferred binary chunks in arrival order", async () => {
+  const h = makeTransport(), delivered: string[] = [];
+  h.handlers.onTransportText.mockImplementation(text => delivered.push(text));
+  h.handlers.onTransportBinary.mockImplementation(bytes => delivered.push(String(bytes[0])));
+  h.transport.connect(); h.sockets[0].readyState = WS_OPEN; h.sockets[0].onopen?.();
+  let first!: (bytes: Uint8Array) => void, second!: (bytes: Uint8Array) => void;
+  const a = new Promise<Uint8Array>(resolve => { first = resolve; });
+  const b = new Promise<Uint8Array>(resolve => { second = resolve; });
+  const decodeB = vi.fn(() => b);
+  const receive = (data: unknown) => h.sockets[0].onmessage?.({ data } as WebSocketMessageEvent);
+  receive("header-a"); receive({ bytes: () => a }); receive("header-b"); receive({ bytes: decodeB });
+  second(new Uint8Array([2])); await Promise.resolve();
+  expect(delivered).toEqual(["header-a"]); expect(decodeB).not.toHaveBeenCalled();
+  first(new Uint8Array([1]));
+  for (let tick = 0; tick < 4; tick++) await Promise.resolve();
+  expect(delivered).toEqual(["header-a", "1", "header-b", "2"]);
+});
+
+it.each(["records", "bytes", "decoded-size", "decode-failure"])("retires a socket when its receive %s budget fails", async reason => {
+  const h = makeTransport(); h.transport.connect(); h.sockets[0].readyState = WS_OPEN; h.sockets[0].onopen?.();
+  const receive = (data: unknown) => h.sockets[0].onmessage?.({ data } as WebSocketMessageEvent);
+  if (reason === "records") {
+    receive({ bytes: () => new Promise(() => {}) });
+    for (let i = 0; i < 256; i++) receive("queued");
+  } else if (reason === "bytes") {
+    receive({ bytes: () => new Promise(() => {}) }); receive("x".repeat(4 * 1024 * 1024));
+  } else if (reason === "decoded-size") receive({ size: 1, bytes: async () => new Uint8Array(16385) });
+  else receive({ bytes: async () => { throw new Error("decode failed"); } });
+  for (let tick = 0; tick < 3; tick++) await Promise.resolve();
+  expect(h.handlers.onTransportClose).toHaveBeenCalledOnce();
+  expect(h.handlers.onTransportBinary).not.toHaveBeenCalled();
+  expect(h.sockets[0].close).toHaveBeenCalled();
+});
+
+it("does not deliver an old socket's queued header after reconnect", async () => {
+  const h = makeTransport(); h.transport.connect(); h.sockets[0].readyState = WS_OPEN; h.sockets[0].onopen?.();
+  let complete!: (bytes: Uint8Array) => void;
+  h.sockets[0].onmessage?.({ data: { bytes: () => new Promise(resolve => { complete = resolve; }) } } as unknown as WebSocketMessageEvent);
+  h.sockets[0].onmessage?.({ data: "old" } as WebSocketMessageEvent);
+  h.transport.connect(); h.sockets[1].readyState = WS_OPEN; h.sockets[1].onopen?.();
+  h.sockets[1].onmessage?.({ data: "new" } as WebSocketMessageEvent);
+  complete(new Uint8Array([1])); await Promise.resolve();
+  expect(h.handlers.onTransportText.mock.calls).toEqual([["new"]]);
+  expect(h.handlers.onTransportBinary).not.toHaveBeenCalled();
+});

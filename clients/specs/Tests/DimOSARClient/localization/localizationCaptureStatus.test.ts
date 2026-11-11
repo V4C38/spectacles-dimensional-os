@@ -21,7 +21,14 @@ function view(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionSta
 }
 
 describe("localizationCaptureStatus", () => {
-  it.each<LocalizationCapturePhase>(["capturing", "sending", "awaiting_result"])(
+  it("gives mapped-room guidance for VPS frames instead of asking for a marker", () => {
+    const session = view({ connection: "ready", capabilities: {
+      localization: { available: true, reason: null },
+    } as ARModuleSessionState["capabilities"] });
+    expect(localizationCaptureStatus(session, { phase: "capturing", lastError: null,
+      capturePolicy: "any_angle" }).text).toBe("Scanning .\nLook around the mapped room");
+  });
+  it.each<LocalizationCapturePhase>(["capturing", "awaiting_result"])(
     "keeps scan guidance stable during %s without implying frames are marker sightings",
     (phase) => {
       const session = view({ connection: "ready", capabilities: {

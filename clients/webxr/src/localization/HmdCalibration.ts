@@ -7,11 +7,6 @@ export const HMD_OPTIONS = [
 
 export type HmdId = (typeof HMD_OPTIONS)[number]["id"];
 
-export interface HmdOption {
-  id: HmdId;
-  label: string;
-}
-
 export interface HmdStreamIdentity {
   width: number;
   height: number;

@@ -1,14 +1,28 @@
-import type { SetupStep } from "../../DimOSARClient/presentation/SetupFlow";
-import type { RoundedRectangleVisual } from "SpectaclesUIKit.lspkg/Scripts/Visuals/RoundedRectangle/RoundedRectangleVisual";
-import { PanelHeightController } from "./PanelHeightController";
-import { SETUP_PANEL_SCALE, SETUP_LAYOUTS, panelFooterY, type PanelProfile } from "./PanelLayout";
-import type { RoundedRectangle } from "SpectaclesUIKit.lspkg/Scripts/Visuals/RoundedRectangle/RoundedRectangle";
-import { SETUP_SUCCESS_STYLE, NAVIGATION_COLORS } from "../../DimOSARClient/presentation/WorldVisualStyle";
-import { WorldMeshRenderer, circleMesh, strokeMesh2D } from "./WorldMeshRenderer";
 import type { TextInputField } from "SpectaclesUIKit.lspkg/Scripts/Components/TextInputField/TextInputField";
-import { CONTROL_PANEL_COPY as COPY, CONTROL_PANEL_LAYOUT, CONTROL_PANEL_TYPE, controlPanelTab, robotBadgeText } from "../../DimOSARClient/presentation/ControlPanelPresentation";
-import { createRoundedSurface, createPanelSurface, createText, createIconButton, createTextInput, getFrameComponent, COLOR_WHITE,
-  configureControlPanelFrame, configurePanelText, createRobotLabelText, SnapOS2Styles, setButtonStyle, panelButtonLayer, panelFontSize, uiMaterialLayer, setButtonEnabled, setButtonSelected, type IconButtonResult } from "./UIKit";
+import type { RoundedRectangle } from "SpectaclesUIKit.lspkg/Scripts/Visuals/RoundedRectangle/RoundedRectangle";
+import type { RoundedRectangleVisual } from "SpectaclesUIKit.lspkg/Scripts/Visuals/RoundedRectangle/RoundedRectangleVisual";
+import { CONTROL_PANEL_LAYOUT,CONTROL_PANEL_TYPE,CONTROL_PANEL_COPY as COPY,controlPanelTab,robotBadgeText } from "../../DimOSARClient/presentation/ControlPanelPresentation";
+import type { SetupStep } from "../../DimOSARClient/presentation/SetupFlow";
+import { NAVIGATION_COLORS,SETUP_SUCCESS_STYLE } from "../../DimOSARClient/presentation/WorldVisualStyle";
+import { PanelHeightController } from "./PanelHeightController";
+import { SETUP_LAYOUTS,SETUP_PANEL_SCALE,panelFooterY,type PanelProfile } from "./PanelLayout";
+import {
+COLOR_WHITE,
+SnapOS2Styles,
+configureControlPanelFrame,configurePanelText,
+createIconButton,
+createPanelSurface,
+createRobotLabelText,
+createRoundedSurface,
+createText,
+createTextInput,getFrameComponent,
+panelButtonLayer,panelFontSize,
+setButtonEnabled,setButtonSelected,
+setButtonStyle,
+uiMaterialLayer,
+type IconButtonResult
+} from "./UIKit";
+import { WorldMeshRenderer,circleMesh,strokeMesh2D } from "./WorldMeshRenderer";
 
 export interface ConnectionPresentation { text: string; color: vec4; phase: "entry" | "error" | "connected"; details?: string; capabilities?: readonly string[]; }
 export const SetupWizardStep = { Connect: "connect", Localization: "localization" } as const;
@@ -58,6 +72,10 @@ export class SetupWizardView {
   private readonly previewLabel: Text;
   private readonly guide: WorldMeshRenderer;
   private handlers: Handlers | null = null;
+  private inputVisible = false;
+  private inputEnabled = false;
+  private inputCycleActive = false;
+  private inputSubmitted = false;
   private step: SetupWizardStep = SetupWizardStep.Connect;
   private provider = "Waiting for localization…";
 
@@ -128,9 +146,9 @@ export class SetupWizardView {
     this.successDetail = this.text(this.success, "", 0, -14.5, CONTENT, 4, 20, HorizontalAlignment.Center);
     this.input.renderOrder = 12;
     uiMaterialLayer(this.guide.visual, 14);
-    this.retain(this.input.onReturnKeyPressed.add(() => this.handlers?.onInputSubmit()));
-    this.retain(this.input.onEditMode.add((editing: boolean) => { if (editing) this.handlers?.onInputEdit?.(); }));
-    this.retain(this.input.onKeyboardStateChanged.add((open: boolean) => { if (!open) this.handlers?.onInputSubmit(); }));
+    this.retain(this.input.onReturnKeyPressed.add(() => this.submitInput()));
+    this.retain(this.input.onEditMode.add((editing: boolean) => { if (editing) this.beginInputEdit(); }));
+    this.retain(this.input.onKeyboardStateChanged.add((open: boolean) => this.keyboardStateChanged(open)));
     this.applyStepLayout(SetupWizardStep.Connect);
   }
 
@@ -144,17 +162,30 @@ export class SetupWizardView {
   bindHandlers(onNext: () => void, onPrevious: () => void, onInputSubmit: () => void, onConnectionToggle: () => void, onRetry?: () => void, onInputEdit?: () => void): void {
     this.handlers = { onNext, onPrevious, onInputSubmit, onConnectionToggle, onRetry, onInputEdit };
   }
+  private beginInputEdit(): void {
+    if (this.disposed || !this.inputVisible || !this.inputEnabled || this.step !== SetupWizardStep.Connect || this.inputCycleActive) return;
+    this.inputCycleActive = true; this.inputSubmitted = false;
+    this.handlers?.onInputEdit?.();
+  }
+  private submitInput(): void {
+    if (this.disposed || !this.inputCycleActive || this.inputSubmitted) return;
+    this.inputSubmitted = true;
+    this.handlers?.onInputSubmit();
+  }
+  private keyboardStateChanged(open: boolean): void {
+    if (open) this.beginInputEdit();
+    else { this.submitInput(); this.inputCycleActive = false; }
+  }
   get panel(): SceneObject { return this._panel; }
   setStepContent(_title: string, description: string, color?: vec4): void {
     this.body.enabled = true; this.success.enabled = false;
     this.description.text = description; this.description.textFill.color = color ?? COLOR_WHITE;
   }
-  setInputEnabled(enabled: boolean): void { this.input.getSceneObject().enabled = enabled; this.input.enabled = enabled; }
+  setInputEnabled(enabled: boolean): void { this.inputEnabled = enabled; if (!enabled) this.inputCycleActive = false; this.input.getSceneObject().enabled = enabled; this.input.enabled = enabled; }
   setConnectionToggleVisible(visible: boolean): void { this.connectionToggle.sceneObject.enabled = visible; }
   setConnectionToggleLabel(label: string): void { this.connectionToggle.labelText.text = label; }
-  initializeInput(text: string, placeholder: string): void { this.input.initialize(); this.input.placeholderText = placeholder; this.input.text = text; }
+  initializeInput(text: string, placeholder: string): void { this.inputCycleActive = false; this.input.initialize(); this.input.placeholderText = placeholder; this.input.text = text; }
   getInputText(): string { return this.input.text.trim(); }
-  clearInput(): void { this.input.text = ""; }
   setConnectionState(state: ConnectionPresentation): void {
     if (this.step !== SetupWizardStep.Connect) return;
     this.cardTitle.text = state.text;
@@ -174,7 +205,7 @@ export class SetupWizardView {
       this.layout();
     }
   }
-  setVisible(visible: boolean): void { if (!visible) this.setCameraPreview(null); this.heightController.setVisible(visible); }
+  setVisible(visible: boolean): void { this.inputVisible = visible; if (!visible) { this.inputCycleActive = false; this.setCameraPreview(null); } this.heightController.setVisible(visible); }
   placed(): void { this.heightController.placed(); }
   private setCapabilities(labels: readonly string[] | null): void {
     const key = JSON.stringify(labels);

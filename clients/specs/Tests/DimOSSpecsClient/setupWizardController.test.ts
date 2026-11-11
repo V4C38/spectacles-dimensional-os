@@ -11,7 +11,6 @@ vi.mock("../../Assets/Scripts/DimOSSpecsClient/presentation/SetupWizardView", ()
     bindHandlers(next: () => void, previous: () => void, submit: () => void, toggle: () => void, _retry: () => void, edit: () => void) { mocks.next = next; mocks.previous = previous; mocks.submit = submit; mocks.toggle = toggle; mocks.edit = edit; }
     dispose() {}
     getInputText() { return mocks.input; }
-    clearInput() { mocks.input = ""; }
     setStepContent(title: string, description: string) { mocks.content(title, description); }
     applyStepLayout() {}
     setInputEnabled() {}
@@ -130,14 +129,14 @@ it("preserves the saved PIN after invalid input", () => {
   expect(mocks.input).toBe("012345");
 });
 
-it("clears the field on edit without deleting the saved PIN", () => {
+it("preserves the field and saved PIN on edit", () => {
   const storage = new Map([["dimos_ar_module_pin", "012345"]]);
   const { controller, view } = harness(storage);
   view.connection = "disconnected";
   controller.start(true);
   expect(mocks.input).toBe("012345");
   mocks.edit();
-  expect(mocks.input).toBe("");
+  expect(mocks.input).toBe("012345");
   controller.start(true);
   expect(mocks.input).toBe("012345");
 });
@@ -351,10 +350,22 @@ it("cancels saved-PIN resolution and retries when the user edits the PIN", async
   const f = harness(storage, { connection: "disconnected", advance: false,
     resolve: () => new Promise(resolve => { complete = resolve; }) });
   mocks.edit(); complete({ ip: "192.168.1.42", port: 8787 }); await Promise.resolve();
-  expect(mocks.input).toBe(""); expect(storage.has("dimos_ar_module_pin")).toBe(true);
+  expect(mocks.input).toBe("012345"); expect(storage.has("dimos_ar_module_pin")).toBe(true);
   expect(f.session.start).not.toHaveBeenCalled(); expect(f.transport.setUrl).not.toHaveBeenCalled();
   expect(f.events[0].cancel).toHaveBeenCalled();
   f.events[0].fire(); expect(f.resolve).toHaveBeenCalledOnce();
+});
+
+it("keeps the entered and saved PIN after transient saved-PIN retries are exhausted", async () => {
+  const storage = new Map([["dimos_ar_module_pin", "012345"]]);
+  const f = harness(storage, { connection: "disconnected", advance: false, resolve: async () => null });
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await Promise.resolve();
+    if (attempt < 3) f.events[1].fire();
+  }
+  expect(mocks.input).toBe("012345");
+  expect(storage.get("dimos_ar_module_pin")).toBe("012345");
+  mocks.submit(); expect(f.resolve).toHaveBeenCalledTimes(5);
 });
 
 it("ignores saved-PIN results after changing connection modes", async () => {

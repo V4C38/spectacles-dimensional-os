@@ -9,6 +9,16 @@ import pytest
 
 import app as launcher_app
 from config import env_path, merge_env, read_env
+from tag_config import ui_from_armodule_config
+
+
+def test_marker_preference_default_and_explicit_override() -> None:
+    assert launcher_app.SettingsBody().marker_preference_s == 3
+    assert ui_from_armodule_config({})["marker_preference_s"] == 3
+    assert launcher_app.SettingsBody(marker_preference_s=1.5).marker_preference_s == 1.5
+    assert ui_from_armodule_config({"localization": {"marker_preference_s": 1.5}})[
+        "marker_preference_s"
+    ] == 1.5
 
 
 def test_settings_read_uses_launcher_env_file(tmp_path: Path, monkeypatch) -> None:
@@ -270,3 +280,42 @@ async def test_invalid_preferences_are_reported_and_preserved(tmp_path, monkeypa
     assert error.value.status_code == 400
     assert "Invalid launcher preferences" in error.value.detail
     assert target.read_text() == saved
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["openai_api_key", "multiset_client_id", "multiset_client_secret"])
+@pytest.mark.parametrize("separator", ["\n", "\r", "\x85", "\u2028", "\0"])
+async def test_multiline_credentials_reject_before_profile_or_env_write(tmp_path, monkeypatch, field, separator):
+    from fastapi import HTTPException
+
+    from robot_profiles import RobotProfiles
+
+    profiles = RobotProfiles(tmp_path / "profiles.json")
+    profile = profiles.create("unitree_go2")
+    original_profiles = profiles.path.read_bytes()
+    target = tmp_path / "launcher.env"
+    target.write_text("OPENAI_API_KEY=unchanged\n")
+    original_env = target.read_bytes()
+    monkeypatch.setattr(launcher_app, "robot_profiles", profiles)
+    monkeypatch.setattr(launcher_app, "env_path", lambda: target)
+    body = launcher_app.SettingsBody(
+        profile_id=profile["id"], fiducial_marker=True,
+        **{field: f"abc{separator}MULTISET_CLIENT_ID=changed"},
+    )
+    with pytest.raises(HTTPException) as error:
+        await launcher_app.api_settings_put(body)
+    assert error.value.status_code == 400
+    assert profiles.path.read_bytes() == original_profiles
+    assert target.read_bytes() == original_env
+
+
+@pytest.mark.asyncio
+async def test_credentials_preserve_outer_trim_quotes_and_blank_deletion(tmp_path, monkeypatch):
+    target = tmp_path / "launcher.env"
+    target.write_text("MULTISET_CLIENT_SECRET=old\n")
+    monkeypatch.setattr(launcher_app, "env_path", lambda: target)
+    monkeypatch.setattr(launcher_app.manager, "root", tmp_path)
+    await launcher_app.api_settings_put(launcher_app.SettingsBody(
+        openai_api_key=' \n"sk-test"\r ', multiset_client_secret=" \t\n",
+    ))
+    assert read_env(target) == {"OPENAI_API_KEY": "sk-test"}

@@ -26,7 +26,6 @@ it("dims the unselected marker independently of active goals and turns red on ca
   const view = new WebXRNavGoalView();
   const ring = view.object.getObjectByName("NavigationCircle") as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
   expect(ring.material.opacity).toBeCloseTo(0.35);
-  view.setGoalActive(true);
   expect(ring.material.opacity).toBeCloseTo(0.35);
   view.setSelected(true); view.tick(1);
   expect(ring.material.opacity).toBeCloseTo(0.6);
@@ -234,19 +233,17 @@ it("gives Cancel an opaque red body with the same reduced thickness as panel con
   expect(materialDispose).toHaveBeenCalledOnce();
 });
 
-it("shows a grey cross and disables only motion picking when another client owns the robot", () => {
+it("keeps the heading visible in warning yellow and disables motion picking for a remote owner", () => {
   const view = new WebXRNavGoalView();
   view.show(); view.setBlocked(true); view.tick(1);
-  const cross = view.object.getObjectByName("Navigation blocked cross")!;
   const ring = view.object.getObjectByName("NavigationCircle") as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
-  expect(cross.visible).toBe(true);
-  expect(ring.material.color.getHex()).toBe(0x8e969e);
+  expect(view.object.getObjectByName("Navigation blocked cross")).toBeUndefined();
+  expect(ring.material.color.getHex()).toBe(0xffcc00);
   expect(ring.userData.rayDisabled).toBe(true);
-  expect(view.object.getObjectByName("NavigationHeading")!.visible).toBe(false);
+  expect(view.object.getObjectByName("NavigationHeading")!.visible).toBe(true);
   view.setCancelVisible(true); view.tick(1);
   expect(view.cancelVisible()).toBe(true);
   view.setBlocked(false); view.tick(1);
-  expect(cross.visible).toBe(false);
   expect(ring.material.color.getHex()).toBe(0xffffff);
   expect(ring.userData.rayDisabled).toBe(false);
   view.dispose();

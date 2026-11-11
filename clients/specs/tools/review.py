@@ -26,20 +26,18 @@ import time
 from typing import Any, Iterator
 
 from lens_studio import dismiss_welcome, resize_project_window
+from ls_awake import KeepAwake
 from integration_catalog import applicable_cases, case_filename, load_catalog
 from native_project import prepare_harness
+import native_provenance
+from review_evidence import ReviewError, ReviewEvents, checkpoint, parse_events, runtime_error_lines
+from native_recording import NativeRecording
 
 SPECS_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = SPECS_ROOT.parents[1]
 REVIEW_DATA_ROOT = REPO_ROOT / "Review Data"
 DEFAULT_CLAD = Path(os.environ.get("DIMOS_CLAD_ROOT", Path.home() / ".local/share/ls515-clad"))
-EVENT_PREFIX = "SPECS_REVIEW "
 PREVIEW_ID = "Snap.Plugin.Gui.PreviewPanel"
-
-class ReviewError(RuntimeError):
-    """A review could not produce trustworthy artifacts."""
-
-
 
 def native_log_file() -> Path:
     paths = list((Path.home() / "Library/Preferences/Snap/Lens Studio/logs").glob("LensStudioLog-*.txt"))
@@ -114,53 +112,6 @@ def extract_images(value: Any, destination: Path, stem: str) -> list[Path]:
     return saved
 
 
-def parse_events(text: str) -> list[dict[str, Any]]:
-    events: list[dict[str, Any]] = []
-    decoder = json.JSONDecoder()
-    for line in text.splitlines():
-        if EVENT_PREFIX not in line:
-            continue
-        payload = line.split(EVENT_PREFIX, 1)[1]
-        try:
-            event, _ = decoder.raw_decode(payload.lstrip())
-        except ValueError:
-            continue
-        if isinstance(event, dict) and event.get("type") in {"scene", "result", "complete", "host"}:
-            events.append(event)
-    return events
-
-
-def runtime_error_lines(text: str) -> list[str]:
-    """SIK's dispatcher catches script errors and prints them at Info level."""
-    return list(dict.fromkeys(
-        line for line in text.splitlines()
-        if (line.startswith(("E ", "F ")) and re.search(
-            r"(?:InternalError|TypeError|ReferenceError|RangeError|SyntaxError|Error):", line,
-        )) or "UpdateDispatcher: Error in event" in line
-    ))
-
-
-def checkpoint(event: dict[str, Any], recording_started_ms: float,
-               previous: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    name, unix_ms = event.get("name"), event.get("unixMs")
-    if not isinstance(name, str) or not name.strip():
-        raise ReviewError("A scene checkpoint is missing its name")
-    if previous and any(scene["name"] == name for scene in previous):
-        raise ReviewError(f"Native scenario restarted at {name!r}; rerun after compilation settles")
-    if isinstance(unix_ms, bool) or not isinstance(unix_ms, (int, float)) or not math.isfinite(unix_ms):
-        raise ReviewError(f"Checkpoint {name!r} is missing a finite unixMs timestamp")
-    at = (unix_ms - recording_started_ms) / 1000
-    if at < 0:
-        raise ReviewError(f"Checkpoint {name!r} occurred before continuous recording started")
-    # Native checkpoints announce the start of an action. Browser checkpoints
-    # announce completed actions and use the shared renderer's usual lead-in.
-    return {
-        "name": name, "at": at, "unixMs": unix_ms, "leadInS": 0,
-        "durationS": 1.4 if name in {"navigation-stop", "navigation-success", "navigation-cancelled"} else 2.8,
-        "videoOnly": event.get("videoOnly") is True,
-    }
-
-
 def copy_project(source: Path, destination: Path, harness: Path) -> Path:
     if destination.exists():
         raise ReviewError(f"Disposable workspace already exists: {destination}")
@@ -182,6 +133,7 @@ def copy_project(source: Path, destination: Path, harness: Path) -> Path:
             shutil.copy2(file, destination / file.name)
     write_json(destination / ".specs-review.json", {
         "kind": "dimos-specs-review", "source": str(source.resolve()), "project": projects[0].name,
+        "productionFiles": native_provenance.project_files(source),
     })
     prepare_harness(destination, harness)
     return destination / projects[0].name
@@ -376,12 +328,18 @@ async def compile_project(mcp: LensMcp, output: Path, workspace: Path, timeout: 
 
 def app_pid(app: Path) -> int:
     result = subprocess.run(
-        ["pgrep", "-f", str(app / "Contents" / "MacOS" / "Lens Studio")],
+        ["pgrep", "-x", "Lens Studio"],
         check=False, capture_output=True, text=True,
     )
-    candidates = result.stdout.split()
+    executable = str(app / "Contents" / "MacOS" / "Lens Studio")
+    candidates = []
+    for pid in result.stdout.split():
+        process = subprocess.run(["ps", "-p", pid, "-o", "comm="],
+                                 check=False, capture_output=True, text=True)
+        if process.returncode == 0 and process.stdout.strip() == executable:
+            candidates.append(pid)
     if len(candidates) != 1:
-        raise ReviewError("Start the chosen Lens Studio app and its MCP server before review")
+        raise ReviewError(f"Expected one running main Lens Studio executable for {app}; found {len(candidates)}")
     return int(candidates[0])
 
 
@@ -392,23 +350,13 @@ def recorder_binary(destination: Path, override: Path | None) -> Path:
         return override
     source = Path(__file__).with_name("RecordPreview.swift")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if not destination.is_file() or source.stat().st_mtime > destination.stat().st_mtime:
+    policy = source.with_name("FocusPolicy.swift")
+    if not destination.is_file() or max(source.stat().st_mtime, policy.stat().st_mtime) > destination.stat().st_mtime:
         subprocess.run(
-            ["xcrun", "swiftc", "-parse-as-library", str(source), "-o", str(destination)],
+            ["xcrun", "swiftc", "-parse-as-library", str(source), str(policy), "-o", str(destination)],
             check=True,
         )
     return destination
-
-
-async def wait_json(path: Path, process: asyncio.subprocess.Process, timeout: float) -> dict[str, Any]:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if path.is_file():
-            return json.loads(path.read_text(encoding="utf-8"))
-        if process.returncode is not None:
-            raise ReviewError("Recorder exited before recording started; see recorder.log")
-        await asyncio.sleep(0.1)
-    raise ReviewError("Recorder did not report a start time; see recorder.log")
 
 
 async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> dict[str, Any]:
@@ -422,21 +370,22 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
         prepare_harness(workspace, args.harness)
     else:
         project = copy_project(args.source, workspace, args.harness)
+    if not hasattr(args, "native_provenance"):
+        args.native_provenance = native_provenance.begin(args.source, workspace, SPECS_ROOT)
     with (args.app / "Contents" / "Info.plist").open("rb") as stream:
         version = plistlib.load(stream).get("CFBundleShortVersionString", "")
     if not version.startswith("5.15."):
         raise ReviewError(f"Spectacles 2024 review requires Lens Studio 5.15.x, found {version}")
     profile = getattr(args, "profile", "probe")
     pid = app_pid(args.app)
-    dismiss_welcome(pid)
     recording_dir = output / "diagnostics"
     recording_dir.mkdir(parents=True, exist_ok=True)
     binary = recorder_binary(args.recorder_cache / "RecordPreview", args.recorder)
+    subprocess.run([str(binary), "--focus-policy", str(pid), str(args.focus_budget)], check=True)
+    dismiss_welcome(pid)
     manifest: dict[str, Any] = {"recording": "diagnostics/recording.mp4", "profile": profile, "client": "specs", "scenes": [], "source": "Lens Studio native Preview"}
-    events: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    completion: dict[str, Any] | None = None
-    recorder: asyncio.subprocess.Process | None = None
+    collected = ReviewEvents()
+    events = collected.events
     offset = 0
     logfile: Path | None = None
     original_window: dict[str, int] | None = None
@@ -463,7 +412,9 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
             print("Waiting for native TypeScript compilation", flush=True)
             await compile_project(mcp, output, workspace)
             print("Attaching review scenario through the editor API", flush=True)
+            native_provenance.before_scene_overlay(args.native_provenance)
             await attach_scenario(mcp, workspace, args.start_delay, profile)
+            native_provenance.record_scene_overlay(args.native_provenance)
             logfile = native_log_file()
             offset = logfile.stat().st_size
             # Refresh can briefly remove Preview's AX viewport controls. Reset it
@@ -474,20 +425,15 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
             )
             # The recorded start timestamp is emitted by ScreenCaptureKit only
             # after the first recording frame, never guessed from process spawn.
-            with (recording_dir / "recorder.log").open("wb") as recorder_log:
-                recorder = await asyncio.create_subprocess_exec(
-                    str(binary), str(pid), str(recording_dir / "recording.mp4"), str(args.duration),
-                    str(recording_dir / "recording.stop"), str(args.focus_budget),
-                    stdout=recorder_log, stderr=recorder_log,
-                )
-                ready = await wait_json(recording_dir / "recording.ready.json", recorder, 20)
+            async with NativeRecording(binary, pid, recording_dir, args.duration, args.focus_budget) as recording:
+                recorder = recording.process
+                ready = recording.ready
                 manifest["startedAt"] = ready["startedAt"]
                 if ready.get("captureCrop"):
                     manifest["captureCrop"] = ready["captureCrop"]
                 elif profile == "golden":
                     raise ReviewError("Cannot locate the native Preview viewport for golden capture")
                 deadline = time.monotonic() + args.duration
-                partial = ""
                 while time.monotonic() < deadline:
                     if recorder.returncode not in (None, 0):
                         raise ReviewError("Continuous recording failed; see recorder.log")
@@ -501,19 +447,9 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
                         if chunk:
                             with (output / "native.log").open("ab") as log_copy:
                                 log_copy.write(chunk)
-                            native_text = chunk.decode("utf-8", errors="replace")
-                            if runtime_error_lines(partial + native_text):
-                                raise ReviewError("Native Preview stopped with a runtime error; see native.log")
-                            partial += native_text
-                            lines = partial.split("\n")
-                            partial = lines.pop()
-                            for event in parse_events("\n".join(lines)):
-                                key = json.dumps(event, sort_keys=True)
-                                if key in seen:
-                                    continue
-                                seen.add(key)
-                                events.append(event)
-                                write_json(output / "events.json", events)
+                            fresh = collected.feed(chunk)
+                            write_json(output / "events.json", events)
+                            for event in fresh:
                                 if event["type"] == "scene":
                                     scene = checkpoint(event, ready["startedAt"], manifest["scenes"])
                                     scene["id"] = event.get("id", event["name"])
@@ -554,29 +490,13 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
                                     viewport_variants.append({"variant": variant, "window": bounds,
                                                               "image": str(image.relative_to(output))})
                                     write_json(output / "viewport-variants.json", viewport_variants)
-                                elif event["type"] == "complete":
-                                    completion = event
-                    if completion:
+                    if collected.completion:
                         break
                     await asyncio.sleep(0.2)
-                # Keep continuous capture alive through the final outcome hold.
-                if completion and recorder.returncode is None:
-                    await asyncio.sleep(1)
-                    (recording_dir / "recording.stop").touch()
-                if recorder.returncode is None:
-                    try:
-                        await asyncio.wait_for(recorder.wait(), 15)
-                    except asyncio.TimeoutError as error:
-                        raise ReviewError("Recorder did not finalize the continuous video; see recorder.log") from error
-                if recorder.returncode != 0:
-                    raise ReviewError("Recorder failed; see recorder.log")
+                await recording.finish(completed=collected.completion is not None)
     finally:
         if original_window is not None and not args.focus_budget.with_suffix(".aborted").exists():
             resize_project_window(pid, bounds=original_window)
-        if recorder and recorder.returncode is None:
-            recorder.terminate()
-            with contextlib.suppress(ProcessLookupError, asyncio.TimeoutError):
-                await asyncio.wait_for(recorder.wait(), 5)
         write_json(output / "review-scenes.json", manifest)
         write_json(output / "events.json", events)
     checks = [event for event in events if event["type"] == "result"]
@@ -597,7 +517,7 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
                 scene["screenshotSource"] = "two native Preview renders after actual editor resizing"
     native_lines = (output / "native.log").read_text(encoding="utf-8", errors="replace").splitlines()
     runtime_errors = runtime_error_lines("\n".join(native_lines))
-    passed = bool(completion and completion.get("passed") is True and checks)
+    passed = bool(collected.completion and collected.completion.get("passed") is True and checks)
     passed = passed and all(event.get("passed") is True for event in checks) and not runtime_errors
     full_scenario = True
     if profile == "golden":
@@ -626,7 +546,7 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
             subprocess.run(command + ["-frames:v", "1", "-y", str(destination)], check=True)
     write_json(output / "review-scenes.json", manifest)
     result = {
-        "passed": passed, "completed": completion is not None,
+        "passed": passed, "completed": collected.completion is not None,
         "lensStudioVersion": version, "workspace": str(workspace),
         "durationS": time.monotonic() - started, "checks": checks,
         "sceneCount": len(manifest["scenes"]), "nativeLog": str(logfile) if logfile else None,
@@ -636,7 +556,7 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
         "runtimeErrors": runtime_errors,
     }
     write_json(output / "results.json", result)
-    if not completion:
+    if not collected.completion:
         raise ReviewError("Review scenario did not emit a completion event before the deadline")
     if not manifest["scenes"]:
         raise ReviewError("Review scenario did not emit visual checkpoints")
@@ -653,6 +573,7 @@ async def run_review(args: argparse.Namespace, output: Path, workspace: Path) ->
         return await run_pass(args, output, workspace)
     harnesses = SPECS_ROOT / "Tests/integration-tests"
     project = args.prepared_project or copy_project(args.source, workspace, harnesses / "IntegrationScenario.ts")
+    args.native_provenance = native_provenance.begin(args.source, workspace, SPECS_ROOT)
     suites = ["golden", "regression"] if args.suite == "all" else [args.suite]
     passes = []
     for profile in suites:
@@ -733,7 +654,8 @@ async def restore_source_project(args: argparse.Namespace, output: Path, workspa
 
 async def review_and_restore(args: argparse.Namespace, output: Path, workspace: Path) -> dict[str, Any]:
     failure: BaseException | None = None
-    args.focus_budget = output / "focus-budget"
+    args.focus_budget = getattr(args, "focus_budget", None) or output / "focus-budget"
+    args.focus_budget.parent.mkdir(parents=True, exist_ok=True)
     try:
         result = await run_review(args, output, workspace)
         if not args.keep_open:
@@ -745,6 +667,8 @@ async def review_and_restore(args: argparse.Namespace, output: Path, workspace: 
     finally:
         if getattr(args, "mcp_config", None):
             try:
+                if hasattr(args, "native_provenance"):
+                    native_provenance.before_scene_overlay(args.native_provenance)
                 async with LensMcp(args.mcp_config, output / "disable-harness") as mcp:
                     disabled = await mcp.editor(
                         'const p=pluginSystem.findInterface(Editor.Model.IModel).project;'
@@ -755,6 +679,8 @@ async def review_and_restore(args: argparse.Namespace, output: Path, workspace: 
                         'p.save();return {autoRun:false};'
                     )
                     write_json(output / "harness-disabled.json", disabled)
+                    if hasattr(args, "native_provenance"):
+                        native_provenance.record_scene_overlay(args.native_provenance)
             except Exception as error:
                 write_json(output / "harness-disabled.json", {"disabled": False, "error": str(error)})
                 print(f"Could not verify harness disabled: {error}", file=sys.stderr)
@@ -799,6 +725,18 @@ async def verify_source_handoff(args: argparse.Namespace, output: Path, result: 
     check.update({"passed": passed, "state": "complete"})
     result["sourceAuditState"] = "passed" if passed else "failed"
     result["passed"] = result["scenarioPassed"] and passed
+    if hasattr(args, "native_provenance"):
+        provenance = args.native_provenance
+        matched = native_provenance.matches(provenance)
+        result["nativeProvenance"] = provenance
+        result["checks"].append({"caseId": "source_handoff", "name": "tested_source_matches",
+                                 "passed": matched})
+        result["passed"] = result["passed"] and matched
+        run_path = output / "run.json"
+        if run_path.is_file():
+            run = json.loads(run_path.read_text())
+            run["nativeProvenance"] = provenance
+            write_json(run_path, run)
     write_json(output / "results.json", result)
     return result
 
@@ -854,6 +792,8 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--start-delay", type=float, default=5)
     parser.add_argument("--recorder", type=Path, help="Use a precompiled ScreenCaptureKit recorder")
     parser.add_argument("--recorder-cache", type=Path, default=Path.home() / "Library/Caches/dimos-specs-review")
+    parser.add_argument("--focus-budget", type=Path,
+                        help="Reuse the same focus policy across retries; an aborted budget still refuses to resume")
     parser.add_argument("--extra-media", action="store_true", help="Also assemble edited diagnostic/probe videos; golden video is always produced")
     parser.add_argument("--prepare-only", action="store_true", help="Copy project/harness without using Lens Studio")
     parser.add_argument("--keep-open", action="store_true", help="Leave the disposable fixture project open for debugging")
@@ -861,7 +801,7 @@ def arguments() -> argparse.Namespace:
     args = parser.parse_args()
     if args.duration <= args.start_delay + 5 or args.start_delay < 0:
         parser.error("duration must leave at least five seconds after the nonnegative start delay")
-    for name in ("source", "harness", "app", "mcp_config", "work_root", "output_root", "recorder_cache"):
+    for name in ("source", "harness", "app", "mcp_config", "work_root", "output_root", "recorder_cache", "focus_budget"):
         value = getattr(args, name)
         if value is not None: setattr(args, name, value.expanduser().resolve())
     if args.prepared_project:
@@ -871,8 +811,7 @@ def arguments() -> argparse.Namespace:
     return args
 
 
-def main() -> int:
-    args = arguments()
+def _run(args: argparse.Namespace) -> int:
     run_id = "SpecsReview-" + time.strftime("%Y%m%d-%H%M%S") + f"-{os.getpid()}"
     workspace = args.prepared_project.parent if args.prepared_project else args.work_root / run_id
     output = args.output_root / run_id
@@ -933,9 +872,18 @@ def main() -> int:
             "completed": False, "workspace": str(workspace), "checks": [],
         }
         results.update(passed=False, error=message)
+        if hasattr(args, "native_provenance"):
+            results["nativeProvenance"] = args.native_provenance
         write_json(results_path, results)
         print(f"Review failed: {message}\nArtifacts: {output}", file=sys.stderr)
         return 130 if interrupted else 1
+
+
+def main() -> int:
+    args = arguments()
+    guard = contextlib.nullcontext() if args.prepare_only else KeepAwake()
+    with guard:
+        return _run(args)
 
 
 if __name__ == "__main__":

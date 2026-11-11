@@ -1,6 +1,6 @@
 import type { Vec3 } from "../websocket/protocolTypes";
-import type { ManipulationPose, ManipulationModel } from "./ManipulationTypes";
-import { composePose, inversePose, toolSubtree } from "./ModelKinematics";
+import type { ManipulationPose } from "./ManipulationTypes";
+import { composePose, inversePose } from "./ModelKinematics";
 
 export const ARM_VISUAL_STYLE = {
   fill: 0.28, opacity: 1, widthM: 0.0006, dashM: 0.006, gapM: 0.009,
@@ -40,27 +40,6 @@ export function armShapeEdges(positions: readonly number[], indices: readonly nu
   }
   return result;
 }
-
-export function gripperBounds(model: ManipulationModel, poses: Record<string, ManipulationPose>, tip: string) {
-  const tool = toolSubtree(model, tip), inverse = inversePose(poses[tool.root]);
-  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
-  for (const link of model.links) {
-    if (!tool.links.has(link.name) || !link.bounds) continue;
-    const transform = composePose(inverse, poses[link.name]);
-    for (let i = 0; i < 8; i++) {
-      const local = link.bounds.center.map((v, axis) => v + ((i & (1 << axis)) ? 1 : -1) * link.bounds!.size[axis] / 2) as Vec3;
-      const p = composePose(transform, { position: local, orientation: [0, 0, 0, 1] }).position;
-      p.forEach((v, axis) => { min[axis] = Math.min(min[axis], v); max[axis] = Math.max(max[axis], v); });
-    }
-  }
-  return { ...tool, center: min.map((v, i) => (v + max[i]) / 2) as Vec3, size: min.map((v, i) => max[i] - v) as Vec3 };
-}
-
-/** OpenYAM visual envelope in its URDF link frame; independent of planning collisions. */
-export const OPENYAM_FOREARM_BOXES: readonly { center: Vec3; size: Vec3 }[] = [
-  { center: [-0.0600003, -0.0344453, -0.1530005], size: [0.057, 0.06671, 0.240914] },
-  { center: [-0.0298676, -0.034925, -0.0005235], size: [0.122666, 0.08985, 0.064041] },
-];
 
 /** Both hosts consume the same visibility, displacement and IK presentation policy. */
 export function armLinkPresentation(input: {
@@ -148,47 +127,10 @@ export function endEffectorAngles(base: ManipulationPose, ee: ManipulationPose):
 export function endEffectorDisplayPose(
   measured: ManipulationPose | null | undefined,
   target: ManipulationPose | null | undefined,
-  input: { selected: boolean; following: boolean; dragging: boolean; finishing: boolean; offset: boolean },
+  input: { selected: boolean; following: boolean; dragging: boolean; finishing: boolean; offset: boolean; sharedDraft?: boolean },
 ): ManipulationPose | null | undefined {
-  const active = input.selected || input.following || input.dragging || input.finishing;
+  const active = input.selected || input.following || input.dragging || input.finishing || input.sharedDraft;
   return active && (input.offset || input.dragging) && target ? target : measured;
-}
-
-/** Recompute per-point targets only when presentation changes; stop scanning settled fades. */
-export class ArmPointOpacity {
-  readonly values: number[] = [];
-  private targets: number[] = [];
-  private key: string | null = null;
-  private pending = false;
-
-  sample(points: readonly Vec3[], key: string, target: (point: Vec3) => number,
-    fade: (previous: number, target: number) => number): boolean {
-    if (this.key !== key || this.values.length !== points.length) {
-      if (this.values.length !== points.length) {
-        this.values.length = points.length; this.values.fill(0);
-      }
-      this.targets = points.map(target);
-      this.key = key; this.pending = true;
-    }
-    if (!this.pending) return false;
-    this.pending = false;
-    let changed = false;
-    for (let i = 0; i < this.values.length; i++) {
-      const previous = this.values[i], next = fade(previous, this.targets[i]);
-      this.values[i] = next;
-      changed ||= next !== previous;
-      this.pending ||= next !== this.targets[i];
-    }
-    return changed;
-  }
-}
-
-export function armPointOpacityKey(measured: ManipulationPose, proposed: ManipulationPose,
-  visible: boolean, floor: number, boost: number): string {
-  if (!visible) return "hidden";
-  const relative = composePose(inversePose(measured), proposed);
-  return JSON.stringify([relative.position.map(v => Math.round(v * 1e9)),
-    relative.orientation.map(v => Math.round(v * 1e9)), floor, boost]);
 }
 
 /** Latest-state sampling only: missed opacity samples never accumulate. */

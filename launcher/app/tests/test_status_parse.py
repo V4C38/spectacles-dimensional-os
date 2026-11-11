@@ -123,10 +123,17 @@ def test_check_ok_regexes_match_setup_output() -> None:
     assert _RE_CHECK_OK.match("CHECK_OK_GO2=1") is None
 
 
-def test_detect_lan_ip_returns_string() -> None:
-    ip = detect_lan_ip()
-    assert isinstance(ip, str)
-    assert ip
+@pytest.mark.parametrize("address", ["10.0.0.8", "127.0.0.1", None])
+def test_detect_lan_ip(address, monkeypatch) -> None:
+    from unittest.mock import Mock
+    sock = Mock()
+    if address is None:
+        sock.connect.side_effect = OSError("no route")
+    else:
+        sock.getsockname.return_value = (address, 1234)
+    monkeypatch.setattr("armodule.socket.socket", lambda *args: sock)
+    assert detect_lan_ip() == (address if address and not address.startswith("127.") else "unknown")
+    sock.close.assert_called_once()
 
 
 def test_webxr_snapshot_shows_shared_pin(tmp_path: Path) -> None:

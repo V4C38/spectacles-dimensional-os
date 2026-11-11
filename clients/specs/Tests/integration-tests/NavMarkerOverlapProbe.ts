@@ -1,6 +1,6 @@
 import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 // Actual native physics hits feed SIK's own target chooser before driving the registered input.
-import { DimOSSpecsClient } from "../Scripts/DimOSSpecsClient/DimOSSpecsClient";
+import { emitReviewEvent, findProductionRoot } from "./IntegrationHost";
 import { createIconButton, SnapOS2Styles } from "../Scripts/DimOSSpecsClient/presentation/UIKit";
 import { specsToClientTrackingPoint } from "../Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
 import TargetProvider, { type InteractableHitInfo } from "SpectaclesInteractionKit.lspkg/Providers/TargetProvider/TargetProvider";
@@ -42,7 +42,7 @@ export class ReviewScenario extends BaseScriptComponent {
     this.createEvent("OnStartEvent").bind(() => this.createEvent("UpdateEvent").bind(() => this.tick()));
     this.createEvent("OnDestroyEvent").bind(() => this.input?.restore());
   }
-  private emit(value: Record<string, unknown>): void { print(`SPECS_REVIEW ${JSON.stringify({ ...value, unixMs: Date.now() })}`); }
+  private emit(value: Record<string, unknown>): void { emitReviewEvent(value); }
   private check(name: string, passed: boolean): void { this.failed ||= !passed; this.emit({ type: "result", name, passed }); }
   private scene(name: string, videoOnly = true): void { this.emit({ type: "scene", name, videoOnly }); }
   private wire(value: unknown): void {
@@ -51,12 +51,7 @@ export class ReviewScenario extends BaseScriptComponent {
       throw new Error("Native fixture frame rejected: " + this.root.session.view().lastError);
   }
   private prepare(): void {
-    const find = (object: SceneObject): any => {
-      const root = object.getComponent(DimOSSpecsClient.getTypeName()); if (root) return root;
-      for (let i = 0; i < object.getChildrenCount(); i++) { const root = find(object.getChild(i)); if (root) return root; }
-      return null;
-    };
-    for (let i = 0; i < global.scene.getRootObjectsCount(); i++) { this.root = find(global.scene.getRootObject(i)); if (this.root) break; }
+    this.root = findProductionRoot();
     if (!this.root) throw new Error("Production composition root missing");
     const root = this.root, camera = root.cameraObject.getTransform(), rotation = camera.getWorldRotation();
     const desired = camera.getWorldPosition().add(rotation.multiplyVec3(new vec3(0, -45, -170)));

@@ -1,15 +1,8 @@
 import type { Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
 
 export const GROUND_NORMAL_MIN_Y = Math.cos((20 * Math.PI) / 180);
-export const DEADZONE_EXIT_MARGIN_M = 0.12;
 export const RAY_LENGTH_M = 20;
 export const FLOOR_AIM_RANGE_M = 5;
-
-export type RobotGroundDeadzone = {
-  radiusM: number;
-  getRobotWorldPosition: () => Vec3 | null;
-  getRobotFloorWorldY: () => number | null;
-};
 
 export type MeshBlockReason = "none" | "wall" | "unscanned";
 
@@ -20,15 +13,12 @@ export type MeshPlacementResult = {
   blockReason: MeshBlockReason;
   probePosition: Vec3;
   goalPosition: Vec3 | null;
-  wasInsideDeadzone: boolean;
 };
 
 export type SolveMeshPlacementArgs = {
   rayFrom: Vec3;
   rayTo: Vec3;
   hits: MeshHit[];
-  deadzone: RobotGroundDeadzone | null;
-  wasInsideDeadzone: boolean;
   fallbackY: number;
 };
 
@@ -40,27 +30,10 @@ export function isGroundNormal(normal: Vec3): boolean {
   return normal[1] / length >= GROUND_NORMAL_MIN_Y;
 }
 
-export function isInsideRobotDeadzone(
-  point: Vec3,
-  deadzone: RobotGroundDeadzone | null,
-  wasInside: boolean,
-  exitMarginM: number = DEADZONE_EXIT_MARGIN_M,
-): boolean {
-  if (!deadzone || !(deadzone.radiusM > 0)) {
-    return false;
-  }
-  const robotPosition = deadzone.getRobotWorldPosition();
-  if (!robotPosition) {
-    return false;
-  }
-  const threshold = wasInside ? deadzone.radiusM + exitMarginM : deadzone.radiusM;
-  return horizontalDistanceXZ(point, robotPosition) < threshold;
-}
-
 export function solveMeshPlacement(args: SolveMeshPlacementArgs): MeshPlacementResult {
   const point = pinchPlanarPoint(args.rayFrom, args.rayTo, args.fallbackY);
   const hit = args.hits[0];
-  const floorY = args.deadzone?.getRobotFloorWorldY() ?? args.fallbackY;
+  const floorY = args.fallbackY;
   const valid = hit
     ? pointIsOnRay(hit.position, args.rayFrom, args.rayTo) && isGroundNormal(hit.normal) && (hit.label === "floor" ||
         (!hit.label && Math.abs(hit.position[1] - floorY) <= FLOOR_HEIGHT_TOLERANCE_M))
@@ -71,7 +44,6 @@ export function solveMeshPlacement(args: SolveMeshPlacementArgs): MeshPlacementR
     blockReason: valid ? "none" : hit?.label === "unscanned" ? "unscanned" : "wall",
     probePosition: position,
     goalPosition: valid ? position : null,
-    wasInsideDeadzone: isInsideRobotDeadzone(position, args.deadzone, args.wasInsideDeadzone),
   };
 }
 
@@ -164,10 +136,6 @@ export function planeNormalFromPose(orientation: [number, number, number, number
     1 - 2 * (x * x + z * z),
     2 * (y * z + x * w),
   ];
-}
-
-function horizontalDistanceXZ(a: Vec3, b: Vec3): number {
-  return Math.hypot(a[0] - b[0], a[2] - b[2]);
 }
 
 function normalizeVec3(value: Vec3): Vec3 | null {

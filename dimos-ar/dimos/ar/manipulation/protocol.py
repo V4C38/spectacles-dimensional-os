@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import math
 from typing import Any
+
+from dimos.ar.numeric import finite_number as number
 
 ACTIONS = frozenset(
     {
@@ -35,12 +36,6 @@ def identifier(value: object, name: str) -> str:
     if not isinstance(value, str) or not value.strip() or len(value) > 128:
         raise ValueError(f"{name} must contain 1 to 128 characters")
     return value
-
-
-def number(value: object, name: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-        raise ValueError(f"{name} must be finite")
-    return float(value)
 
 
 def decode_request(data: dict[str, Any]) -> ManipulationRequest:

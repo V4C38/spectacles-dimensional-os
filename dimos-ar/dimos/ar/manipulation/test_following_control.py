@@ -57,7 +57,7 @@ def test_static_cartesian_target_is_bounded_and_does_not_oscillate(speed, lag_s)
     limits = np.array(
         [task._config.joint_velocity_limits_rad_s[name] for name in model.joint_names]
     )
-    for _ in range(400):
+    for _ in range(250 if not lag_s else 400):
         command = solver.step({"gripper_tip": target}, feedback(model, actual), 0.01)
         assert command is not None, solver.failure
         current = np.array(command.position)

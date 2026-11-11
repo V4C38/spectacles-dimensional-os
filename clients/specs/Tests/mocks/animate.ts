@@ -14,6 +14,11 @@ export default function animate(options: AnimateOptions): void {
 export function flushAnimations(): void {
   const batch = pending.splice(0, pending.length);
   for (const options of batch) {
+    options.update?.(1);
     options.ended?.();
   }
+}
+
+export function advanceAnimations(progress: number): void {
+  for (const options of pending.slice()) options.update?.(Math.max(0, Math.min(1, progress)));
 }

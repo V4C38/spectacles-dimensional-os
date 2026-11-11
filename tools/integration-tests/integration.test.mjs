@@ -8,8 +8,8 @@ import { coverage, numberImages, finishRun, reviewDataRoot, publishGoldenVideo }
 
 test("each client has an explicit golden order including manipulation", () => {
   assert.equal(validateCatalog(), true);
-  assert.equal(goldenChapters("specs").length, 15);
-  assert.equal(goldenChapters("webxr").length, 15);
+  assert.equal(goldenChapters("specs").length, 16);
+  assert.equal(goldenChapters("webxr").length, 16);
   for (const client of ["webxr", "specs"])
     assert.deepEqual(applicableCases(client, "golden").map(row => row.id), goldenChapters(client).map(row => row.id));
   const armIds = ["manipulation_select", "manipulation_preview", "manipulation_execute", "manipulation_following", "manipulation_controls"];
@@ -90,10 +90,10 @@ test("golden-only results cannot imply regression completion", async () => {
   }
 });
 
-test("captured browser clock marker aligns media instead of guessing start time", async () => {
+test("captured browser clock marker aligns media instead of guessing start time", async (context) => {
   const { alignRecording } = await import("./finalize.mjs");
   const { execFileSync, spawnSync } = await import("node:child_process");
-  if (spawnSync("ffmpeg", ["-version"]).status !== 0) return;
+  if (spawnSync("ffmpeg", ["-version"]).status !== 0) { context.skip("ffmpeg unavailable"); return; }
   const root = await mkdtemp(join(tmpdir(), "integration-clock-"));
   try {
     execFileSync("ffmpeg", [
@@ -233,8 +233,8 @@ test("explicit output paths outside the checkout retain source provenance", asyn
 });
 
 test("latest client golden videos replace atomically after complete verification", async () => {
-  const { mkdir, access, readdir } = await import("node:fs/promises");
-  const { sourceIdentity } = await import("./artifacts.mjs");
+  const { mkdir, access, readdir, cp } = await import("node:fs/promises");
+  const { sourceIdentity, nativeProjectFiles, repositoryRoot } = await import("./artifacts.mjs");
   const parent = await mkdtemp(join(tmpdir(), "golden publication with spaces "));
   const output = join(parent, "Review Data"), run = join(parent, "run evidence");
   const result = {
@@ -275,6 +275,17 @@ test("latest client golden videos replace atomically after complete verification
     assert.equal(await readFile(join(output, "specs_golden-path.mp4"), "utf8"), "previous specs");
     native.sourceAuditState = "passed";
     native.checks = [...native.checks, { name: "source_editor_clean", passed: true }];
+    await writeFile(join(run, "results.json"), JSON.stringify(native));
+    assert.equal(await publishGoldenVideo(run, "specs", output), null);
+    const selectedRoot = join(repositoryRoot, "clients/specs"), workspaceRoot = join(parent, "tested workspace");
+    await mkdir(workspaceRoot);
+    await cp(join(selectedRoot, "Assets"), join(workspaceRoot, "Assets"), { recursive: true });
+    for (const file of (await readdir(selectedRoot)).filter(name => name.endsWith(".esproj")))
+      await cp(join(selectedRoot, file), join(workspaceRoot, file));
+    const selectedFiles = nativeProjectFiles(selectedRoot);
+    native.nativeProvenance = { selectedRoot, workspaceRoot, selectedFiles, productionFiles: selectedFiles,
+      workspaceFiles: nativeProjectFiles(workspaceRoot), publicationEligible: true };
+    native.checks.push({ name: "tested_source_matches", passed: true });
     await writeFile(join(run, "results.json"), JSON.stringify(native));
     await writeFile(join(run, "golden-path.mp4"), "verified complete native golden");
     await publishGoldenVideo(run, "specs", output);

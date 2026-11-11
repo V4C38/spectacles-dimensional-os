@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { acceptProfile, evaluateCalibration } from "../src/localization/HmdCalibrationRunner";
+import { acceptProfile, evaluateCalibration } from "./fixtures/HmdCalibrationRunner";
 import { HMD_PROFILES } from "../src/localization/HmdProfiles";
 
 describe("evaluateCalibration", () => {

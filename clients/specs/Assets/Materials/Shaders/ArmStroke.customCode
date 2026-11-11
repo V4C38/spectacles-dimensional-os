@@ -2,6 +2,7 @@ input_float OpacityScale;
 input_float ColorR;
 input_float ColorG;
 input_float ColorB;
+input_float PointOpacity;
 output_vec4 Result;
 void main() {
     vec2 uv0 = system.getSurfaceUVCoord0();
@@ -14,5 +15,5 @@ void main() {
     float sideAA = max(fwidth(uv0.x), 0.0001);
     coverage *= 1.0 - smoothstep(1.0 - sideAA, 1.0, abs(uv0.x));
     if (coverage < 0.001) discard;
-    Result = vec4(vec3(ColorR, ColorG, ColorB), system.getSurfaceColor().a * coverage * OpacityScale);
+    Result = vec4(vec3(ColorR, ColorG, ColorB), PointOpacity * coverage * OpacityScale);
 }

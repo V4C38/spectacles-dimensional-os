@@ -37,19 +37,6 @@ export function exponentialSmoothAlpha(dt: number, rate: number): number {
   return dt > 0 ? 1.0 - Math.exp(-rate * dt) : 1.0;
 }
 
-export function smoothScalar(
-  current: number,
-  target: number,
-  dt: number,
-  rate: number,
-): number {
-  if (dt <= 0) {
-    return target;
-  }
-  const alpha = exponentialSmoothAlpha(dt, rate);
-  return current + (target - current) * alpha;
-}
-
 export function interpolatePose(
   currentPos: vec3,
   targetPos: vec3,
@@ -65,53 +52,6 @@ export function interpolatePose(
     position: vec3.lerp(currentPos, targetPos, alpha),
     rotation: quat.slerp(currentRot, targetRot, rotationAlpha),
   };
-}
-
-export type AnimateEasing = NonNullable<Parameters<typeof animate>[0]["easing"]>;
-
-export type AnimateLocalScaleOptions = {
-  easing?: AnimateEasing;
-  onEnded?: () => void;
-  enableOnStart?: boolean;
-  disableOnEnd?: boolean;
-  fixedVersion?: number;
-};
-
-export function animateLocalScale(
-  object: SceneObject,
-  targetScale: vec3,
-  duration: number,
-  versionStore: object,
-  versionKey: string,
-  options?: AnimateLocalScaleOptions,
-): void {
-  const transform = object.getTransform();
-  const start = transform.getLocalScale();
-  const version =
-    options?.fixedVersion ?? nextAnimationVersion(versionStore, versionKey);
-  if (options?.enableOnStart) {
-    object.enabled = true;
-  }
-  animate({
-    duration,
-    easing: options?.easing ?? "ease-in-out-quad",
-    update: (t: number) => {
-      if (!isLatestAnimationVersion(versionStore, versionKey, version)) {
-        return;
-      }
-      transform.setLocalScale(lerpVec3(start, targetScale, t));
-    },
-    ended: () => {
-      if (!isLatestAnimationVersion(versionStore, versionKey, version)) {
-        return;
-      }
-      transform.setLocalScale(targetScale);
-      if (options?.disableOnEnd) {
-        object.enabled = false;
-      }
-      options?.onEnded?.();
-    },
-  });
 }
 
 export type ScaleInOptions = {
@@ -154,50 +94,6 @@ export function scaleIn(
       },
     });
   });
-}
-
-export function animateScaleTo(
-  sceneObject: SceneObject,
-  target: vec3,
-  duration: number = 0.12,
-): void {
-  animateLocalScale(
-    sceneObject,
-    target,
-    duration,
-    sceneObject,
-    DEFAULT_SCALE_ANIMATION_VERSION_KEY,
-  );
-}
-
-export function slerpRotationToward(
-  current: quat,
-  target: quat,
-  dt: number,
-  rate: number,
-): quat {
-  return quat.slerp(current, target, dt > 0 ? 1 - Math.exp(-rate * dt) : 1);
-}
-
-export function maybeAdvanceDragHeadingTarget(
-  gateOrigin: { x: number; z: number },
-  current: { x: number; z: number },
-  minTravelCm: number,
-): {
-  gateOrigin: { x: number; z: number };
-  headingDirection: { x: number; z: number } | null;
-} {
-  const dx = current.x - gateOrigin.x;
-  const dz = current.z - gateOrigin.z;
-  const travel = Math.sqrt(dx * dx + dz * dz);
-  if (travel < minTravelCm) {
-    return { gateOrigin, headingDirection: null };
-  }
-  const inv = 1 / travel;
-  return {
-    gateOrigin: { x: current.x, z: current.z },
-    headingDirection: { x: dx * inv, z: dz * inv },
-  };
 }
 
 export function scaleOut(

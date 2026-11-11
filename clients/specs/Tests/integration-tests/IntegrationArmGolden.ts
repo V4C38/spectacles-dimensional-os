@@ -101,6 +101,14 @@ export class IntegrationArmGolden {
       const vertices = mesh.visual.mesh.extractVerticesForAttribute("position"), transform = mesh.object.getTransform().getWorldTransform();
       for (let i = 0; i < vertices.length; i += 3) points.push(transform.multiplyPoint(new vec3(vertices[i], vertices[i + 1], vertices[i + 2])));
     }
+    const presenter = this.root.manipulation.renderer.controls.panelPresenter;
+    if (presenter.root.isEnabledInHierarchy) {
+      const size = presenter.frame.totalSize;
+      const panel = presenter.root.getTransform().getWorldTransform();
+      for (const x of [-size.x / 2, size.x / 2])
+        for (const y of [-size.y / 2, size.y / 2])
+          points.push(panel.multiplyPoint(new vec3(x, y, 0)));
+    }
     if (!points.length) throw new Error("Golden arm geometry missing");
     const min = new vec3(Math.min(...points.map(p => p.x)), Math.min(...points.map(p => p.y)), Math.min(...points.map(p => p.z)));
     const max = new vec3(Math.max(...points.map(p => p.x)), Math.max(...points.map(p => p.y)), Math.max(...points.map(p => p.z)));
@@ -118,27 +126,32 @@ export class IntegrationArmGolden {
     const arm = this.root.manipulation, renderer = arm.renderer;
     if (id === "manipulation_select") {
       this.after(.8, () => {
-        this.frame(); const pick = renderer.picks.get("link1"), interactable = pick.getComponent("ScriptComponent");
+        const pick = renderer.picks.get("link1"), interactable = pick.getComponent("ScriptComponent");
         this.input.active = true; this.input.ray(this.root.cameraObject.getTransform().getWorldPosition(), pick.getTransform().getWorldPosition(), interactable);
         this.input.press({ interactable }, () => arm.input.tick(true));
-        this.after(.3, () => this.check(this.root.selection.isSelected() && renderer.panel.isEnabledInHierarchy));
+        // Hidden fills intentionally have no per-frame transform work. Wait for
+        // the selected renderer pose before measuring real mesh/panel bounds.
+        this.after(.3, () => {
+          this.frame();
+          this.check(this.root.selection.isSelected() && renderer.controls.panel.isEnabledInHierarchy);
+        });
       });
     } else if (id === "manipulation_preview") {
       this.handle(); this.input.start(); arm.input.tick(true); this.dragStart = this.input.from;
       move(progress => { if (progress < .45) { this.input.ray(this.dragStart.add(new vec3(progress * 15, 0, 0)), this.input.point, this.input.target); this.input.update(); } });
       this.after(2, () => { this.input.end(); arm.input.tick(true); this.handle(); });
-      this.after(2.6, () => this.press(renderer.buttons.get("plan").button));
+      this.after(2.6, () => this.press(renderer.controls.buttons.get("plan").button));
       this.after(3.2, () => this.check(!!arm.core.interaction.plan && arm.core.presentation.previewRequested && this.state.execution === "idle"));
     } else if (id === "manipulation_execute") {
       const reviewedPlanId = arm.core.interaction.plan?.plan_id;
       this.handle();
       // Native near-EE controls are enabled by the next renderer frame after hover.
       this.after(.4, () => {
-        const button = renderer.buttons.get("execute").button;
-        if (button.inactive || !renderer.previewMenu.isEnabledInHierarchy) {
+        const button = renderer.controls.buttons.get("execute").button;
+        if (button.inactive || !renderer.controls.previewMenu.isEnabledInHierarchy) {
           print(`SPECS_REVIEW ${JSON.stringify({ type: "diagnostic", caseId: id,
             name: "execute-control-not-ready", inactive: button.inactive,
-            visible: renderer.previewMenu.isEnabledInHierarchy,
+            visible: renderer.controls.previewMenu.isEnabledInHierarchy,
             intent: arm.core.interaction.snapshot(), status: arm.core.interaction.status,
             reviewedPlanId, currentPlanId: arm.core.interaction.plan?.plan_id, unixMs: Date.now() })}`);
           throw new Error("Golden Execute control did not become ready after native hover");
@@ -154,10 +167,10 @@ export class IntegrationArmGolden {
       this.after(3.2, () => this.check(this.followSequence > 0 && this.releasedTail && !arm.core.interaction.dragging && this.state.following_tail === null));
     } else if (id === "manipulation_controls") {
       this.handle(); const opening = this.state.observations.arm.gripper;
-      this.press(renderer.gripper.button);
-      this.after(.5, () => { this.check(this.state.observations.arm.gripper !== opening); this.press(renderer.buttons.get("reset").button); });
-      this.after(1.2, () => { this.press(renderer.buttons.get("stop").button); this.press(renderer.buttons.get("estop").button); });
-      this.after(1.8, () => { this.check(this.state.stopped); this.press(renderer.buttons.get("estop").button); });
+      this.press(renderer.controls.gripper.button);
+      this.after(.5, () => { this.check(this.state.observations.arm.gripper !== opening); this.press(renderer.controls.buttons.get("reset").button); });
+      this.after(1.2, () => { this.press(renderer.controls.buttons.get("stop").button); this.press(renderer.controls.buttons.get("estop").button); });
+      this.after(1.8, () => { this.check(this.state.stopped); this.press(renderer.controls.buttons.get("estop").button); });
       this.after(2.5, () => this.check(["gripper", "reset_joints", "cancel", "estop_request", "resume"].every(action => this.actions.has(action)) && !this.state.stopped && !arm.core.interaction.dragging));
     }
   }

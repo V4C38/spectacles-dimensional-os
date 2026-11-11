@@ -16,8 +16,6 @@ describe("WebXRGroundPlacement", () => {
       rayFrom: [0, 1.5, 0],
       rayTo: [0, 0, -2],
       hits: [{ position: [0, 0, -1], normal: [0, 1, 0] }],
-      deadzone: null,
-      wasInsideDeadzone: false,
       fallbackY: 0,
     });
     expect(floor.status).toBe("ok");
@@ -25,8 +23,6 @@ describe("WebXRGroundPlacement", () => {
       rayFrom: [0, 1.5, 0],
       rayTo: [0, 1.5, -2],
       hits: [{ position: [0, 1.5, -1], normal: [0, 0, 1] }],
-      deadzone: null,
-      wasInsideDeadzone: false,
       fallbackY: 0,
     });
     expect(wall.status).toBe("blocked");
@@ -35,8 +31,6 @@ describe("WebXRGroundPlacement", () => {
       rayFrom: [0, 1.5, 0],
       rayTo: [0, 0, -2],
       hits: [],
-      deadzone: null,
-      wasInsideDeadzone: false,
       fallbackY: 0,
     });
     expect(empty.status).toBe("ok");
@@ -69,10 +63,10 @@ it("uses finite floor polygons, accepts unlabelled floors near the robot and rej
   expect(outside[0].label).toBe("unscanned");
   for (const label of ["table", "ceiling", undefined]) {
     const hits = navigationSurfaceHits(from, direction, [{ position: [0, 0.8, 0], normal: [0, 1, 0], label }], 0);
-    expect(solveMeshPlacement({ rayFrom: from, rayTo: [0, -10, -10], hits, deadzone: null, wasInsideDeadzone: false, fallbackY: 0 }).status).toBe("blocked");
+    expect(solveMeshPlacement({ rayFrom: from, rayTo: [0, -10, -10], hits, fallbackY: 0 }).status).toBe("blocked");
   }
   const hits = navigationSurfaceHits(from, direction, [{ position: [0, 0.05, 0], normal: [0, 1, 0] }], 0);
-  expect(solveMeshPlacement({ rayFrom: from, rayTo: [0, -10, -10], hits, deadzone: null, wasInsideDeadzone: false, fallbackY: 0 }).status).toBe("ok");
+  expect(solveMeshPlacement({ rayFrom: from, rayTo: [0, -10, -10], hits, fallbackY: 0 }).status).toBe("ok");
 });
 
 it("honors a wall before detected floors and before the flat-floor fallback, even near the robot", () => {
@@ -81,8 +75,7 @@ it("honors a wall before detected floors and before the flat-floor fallback, eve
     const hits = navigationSurfaceHits([0, 1.5, 0], [0, -1, -1], planes, 0);
     expect(hits[0].label).toBe("wall");
     const result = solveMeshPlacement({ rayFrom: [0, 1.5, 0], rayTo: [0, -10, -10], hits,
-      deadzone: { radiusM: 2, getRobotWorldPosition: () => [0, 0, 0], getRobotFloorWorldY: () => 0 },
-      wasInsideDeadzone: false, fallbackY: 0 });
+      fallbackY: 0 });
     expect(result.status).toBe("blocked");
   }
 });
@@ -91,7 +84,7 @@ it("honors the same five-meter ray limit for detected floors and flat-floor fall
   for (const distance of [4.99, 5.01]) {
     const z = -Math.sqrt(distance * distance - 1);
     const factor = 5 / distance;
-    const args = { rayFrom: [0, 1, 0] as [number, number, number], rayTo: [0, 1 - factor, z * factor] as [number, number, number], deadzone: null, wasInsideDeadzone: false, fallbackY: 0 };
+    const args = { rayFrom: [0, 1, 0] as [number, number, number], rayTo: [0, 1 - factor, z * factor] as [number, number, number], fallbackY: 0 };
     for (const hits of [[], [{ position: [0, 0, z] as [number, number, number], normal: [0, 1, 0] as [number, number, number], label: "floor" }]]) {
       expect(solveMeshPlacement({ ...args, hits }).status).toBe(distance < 5 ? "ok" : "blocked");
     }

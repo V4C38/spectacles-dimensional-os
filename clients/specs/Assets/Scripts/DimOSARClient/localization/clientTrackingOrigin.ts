@@ -1,4 +1,4 @@
-import { normalizeQuat, rotateVecByQuat } from "./clientTrackingTransforms";
+import { normalizeQuat, rotateVecByQuat, requireVec3, multiplyRotation, requireQuat } from "./clientTrackingTransforms";
 import type { LocalizationResult, LocalizationMapTransform, MapAlignment, MapContext, Quat, Vec3 } from "../websocket/protocolTypes";
 
 /** `T_odom_client` — this client's tracking origin in `odom`. */
@@ -41,12 +41,9 @@ export class ClientTrackingOriginStore {
     if (!this.alignment || !this.transform) return;
     const q = normalizeQuat(this.transform.orientation), b = normalizeQuat(this.alignment.orientation);
     const p = rotateVecByQuat(q, this.alignment.position), a = this.transform.position;
-    const [x, y, z, w] = q, [bx, by, bz, bw] = b;
     this.current = {
       position: [a[0] + p[0], a[1] + p[1], a[2] + p[2]],
-      orientation: normalizeQuat([w * bx + x * bw + y * bz - z * by,
-        w * by - x * bz + y * bw + z * bx, w * bz + x * by - y * bx + z * bw,
-        w * bw - x * bx - y * by - z * bz]),
+      orientation: normalizeQuat(multiplyRotation(q, b)),
       confidence: Math.min(this.alignment.confidence, this.transform.confidence), ts: this.alignment.ts,
       mapAlignment: this.alignment, mapTransform: this.transform,
     };
@@ -107,36 +104,8 @@ export class ClientTrackingOriginStore {
   }
 }
 
-function requireVec3(value: Vec3, key: string): Vec3 {
-  if (!Array.isArray(value) || value.length !== 3) {
-    throw new Error(`Field '${key}' must be a 3-element array`);
-  }
-  return [
-    requireFinite(value[0], `${key}[0]`),
-    requireFinite(value[1], `${key}[1]`),
-    requireFinite(value[2], `${key}[2]`),
-  ];
-}
-
-function requireQuat(value: Quat): Quat {
-  if (!Array.isArray(value) || value.length !== 4) {
-    throw new Error("orientation must be a 4-element quaternion [qx, qy, qz, qw]");
-  }
-  const orientation: Quat = [
-    requireFinite(value[0], "orientation[0]"),
-    requireFinite(value[1], "orientation[1]"),
-    requireFinite(value[2], "orientation[2]"),
-    requireFinite(value[3], "orientation[3]"),
-  ];
-  if (Math.hypot(orientation[0], orientation[1], orientation[2], orientation[3]) < 1e-6) {
-    throw new Error("orientation must be a non-zero quaternion");
-  }
-  return orientation;
-}
-
-function requireFinite(value: unknown, key: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`Field '${key}' must be finite`);
-  }
-  return value;
+/** Corrections within one reference preserve interaction ownership. */
+export function sameTrackingReference(a: ClientTrackingOrigin | null, b: ClientTrackingOrigin | null): boolean {
+  return !!a && !!b && a.mapAlignment?.tracking_reference_id === b.mapAlignment?.tracking_reference_id &&
+    a.mapAlignment?.odom_reference_id === b.mapAlignment?.odom_reference_id && a.mapAlignment?.map_code === b.mapAlignment?.map_code;
 }

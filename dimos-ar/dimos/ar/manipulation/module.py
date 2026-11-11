@@ -99,9 +99,7 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
             if self._closing:
                 return
             self._closing = True
-            self._runtime.started = False
-            self._runtime.session.stopped = True
-            self._runtime.retire()
+            self._runtime.retire_for_teardown()
         self._lifecycle_stop.set()
         self._adapter.close_workers()
         for name in ("_lifecycle_thread", "_auxiliary_thread", "_watchdog_thread"):

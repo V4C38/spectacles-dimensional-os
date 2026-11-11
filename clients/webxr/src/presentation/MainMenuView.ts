@@ -1,17 +1,18 @@
+import { label, button, place, rect, surface, setText, clip, cameraIcon, gearIcon, layoutText, iconClose, scrollLabel, messageField, tabs, sectionHeading } from "./PanelWidgets";
 import { panelChrome } from "./RobotPanelFrame";
 import { updatePanelGesture, type PanelGesture } from "./PanelGesture";
+import { PanelPageTransitions } from "./PanelPageTransitions";
 import { SpeedSlider } from "./SpeedSlider";
 import { SETUP_SUCCESS_STYLE, strokeJoints2D, STROKE_JOIN_SEGMENTS } from "@dimos-ar-client/presentation/WorldVisualStyle";
-import { CONTROL_PANEL_COPY as COPY, CONTROL_PANEL_SECTION, CONTROL_PANEL_LAYOUT, CONTROL_PANEL_SCALE, controlPanelTab, robotBadgeText, sensorStatusText } from "@dimos-ar-client/presentation/ControlPanelPresentation";
+import { CONTROL_PANEL_COPY as COPY, CONTROL_PANEL_LAYOUT, CONTROL_PANEL_SCALE, robotBadgeText, sensorStatusText } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 import * as THREE from "three";
 import type { LidarDisplayMode } from "@dimos-ar-client/sensors/lidarSettings";
 import * as xb from "xrblocks";
 import type { Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
 import { markRayPassive, registerRayTarget } from "../input/XRBlocksRayInteraction";
-import { UI_FONT_REGULAR, UI_FONT_SEMIBOLD } from "./UIFonts";
 import { SurfaceText } from "./SurfaceText";
-import { SurfaceButton, type ButtonVariant } from "./SurfaceButton";
-import { DIMOS_AR_DESIGN, cornerRadius } from "./DimOSARDesign";
+import { SurfaceButton } from "./SurfaceButton";
+import { DIMOS_AR_DESIGN } from "./DimOSARDesign";
 import { GlassSurface } from "./GlassSurface";
 import { PANEL_TOP, RUNTIME_LAYOUTS, SETUP_LAYOUTS, panelFooterY, panelProfile, type PanelProfile } from "./PanelLayout";
 import { PanelHeightAnimation } from "@dimos-ar-client/presentation/PanelHeightAnimation";
@@ -33,7 +34,6 @@ export type MainMenuCallbacks = {
   onRobot: () => void;
   manipulationSpeed?: () => number;
   onDebug: () => void;
-  onLidar: () => void;
   onLidarMode?: (mode: LidarDisplayMode) => void;
   onLidarRange?: (direction: number) => void;
   onLidarPoints?: (direction: number) => void;
@@ -65,8 +65,6 @@ const HEADER_Y = 0.286;
 const CLOSE_X = CONTENT / 2 - ICON_SIZE / 2;
 const SETTINGS_X = CLOSE_X - ICON_SIZE - GAP;
 const SENSORS_X = SETTINGS_X - ICON_SIZE - GAP;
-
-type Align = "left" | "center" | "right";
 
 export class MainMenuView {
   readonly panel: xb.SpatialPanel;
@@ -103,7 +101,6 @@ export class MainMenuView {
   private readonly rangeLabel: SurfaceText;
   private readonly pointsValue: SurfaceText;
   private readonly sensorStatus: SurfaceText;
-  private sensorsOpen = false;
   private readonly capabilityBody = new THREE.Group();
   private readonly localizationGroup = new THREE.Group();
   private readonly lidarGroup = new THREE.Group();
@@ -141,9 +138,8 @@ export class MainMenuView {
   private readonly plate: GlassSurface;
   private panelShown = true;
   private panelProgress = 1;
-  private readonly pageTransitions = new Map<THREE.Group, { progress: number; target: boolean }>();
-  private readonly lastPageOpacity = new WeakMap<THREE.Object3D, number>();
-  private readonly materialOpacity = new WeakMap<THREE.Material, { opacity: number; alpha: number | null }>();
+  private readonly transitions = new PanelPageTransitions();
+  get pageTransitions(): ReadonlyMap<THREE.Group, Readonly<{ progress: number; target: boolean }>> { return this.transitions.pages; }
   private readonly bar: THREE.Mesh<THREE.ShapeGeometry, THREE.MeshBasicMaterial>;
   private readonly barZone: THREE.Mesh;
   private readonly cornerArcs: Record<"left" | "right", THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>>;
@@ -152,8 +148,7 @@ export class MainMenuView {
   private draft = "";
   private readonly onDraft: (text: string) => void;
   private agentEnabled = false;
-  private settingsOpen = false;
-  private detailsOpen = false;
+  private page: "main" | "settings" | "sensors" | "diagnostics" = "main";
 
   constructor(handlers: MainMenuCallbacks) {
     this.onDraft = handlers.onDraft;
@@ -220,10 +215,10 @@ export class MainMenuView {
     this.robotDot.userData.followSurface = this.robotButton;
     this.console.add(this.chat, this.manualHelp);
     this.robotName = label(this.console, COPY.appName, LEFT + 0.22, CONTROL_PANEL_LAYOUT.titleY, 0.42, 0.04, 28, C.ink, "left", "semibold");
-    const gear = button(this.console, "", SETTINGS_X, HEADER_Y, ICON_SIZE, ICON_SIZE, () => { this.settingsOpen = true; });
+    const gear = button(this.console, "", SETTINGS_X, HEADER_Y, ICON_SIZE, ICON_SIZE, () => { this.page = "settings"; });
     gear.name = "Global settings";
     gearIcon(this.console, SETTINGS_X, HEADER_Y, gear);
-    const sensorButton = button(this.console, "", SENSORS_X, HEADER_Y, ICON_SIZE, ICON_SIZE, () => { this.sensorsOpen = true; this.settingsOpen = false; });
+    const sensorButton = button(this.console, "", SENSORS_X, HEADER_Y, ICON_SIZE, ICON_SIZE, () => { this.page = "sensors"; });
     sensorButton.name = "Capabilities button";
     cameraIcon(this.console, SENSORS_X, HEADER_Y, sensorButton);
     iconClose(this.console, "Close", handlers.onMenu);
@@ -245,11 +240,11 @@ export class MainMenuView {
     this.estop = button(this.runtimeFooter, COPY.stop, 0, -0.298, CONTENT, ACTION_HEIGHT, handlers.onEstop, "danger");
 
     label(this.settingsPage, COPY.settings, LEFT + 0.29, HEADER_Y, 0.56, 0.04, 28, C.ink, "left", "semibold");
-    iconClose(this.settingsPage, COPY.done, () => { this.settingsOpen = false; });
+    iconClose(this.settingsPage, COPY.done, () => { this.page = "main"; });
     this.sensorsPage.add(this.localizationGroup, this.lidarGroup);
 
     this.localize = button(this.localizationGroup, COPY.relocalize, 0, 0, CONTENT, ACTION_HEIGHT, handlers.onRealign);
-    button(this.settingsPage, COPY.setup, 0, 0.09, CONTENT, ACTION_HEIGHT, handlers.onRestart);
+    button(this.settingsPage, COPY.setup, 0, 0.09, CONTENT, ACTION_HEIGHT, handlers.onRestart).userData.panelRow = "robotActions";
     this.handlersSpeed = handlers.manipulationSpeed ?? (() => 0.2);
     this.speedGroup.position.set(0, 0.025 / HEIGHT, 0);
     this.sensorsPage.add(this.speedGroup);
@@ -258,36 +253,39 @@ export class MainMenuView {
     this.speedGroup.add(this.speedSlider);
     sectionHeading(this.speedGroup, "Movement speed", 0.02);
     this.speedValue = label(this.speedGroup, "50%", CONTENT / 2 - 0.09, 0.02, 0.18, 0.03, 21, C.ink, "right");
-    sectionHeading(this.settingsPage, COPY.headset, -0.014);
+    sectionHeading(this.settingsPage, COPY.headset, -0.014).userData.panelRow = "headset";
     this.debugToggle = button(this.settingsPage, "Debug · Off", 0, -0.084, CONTENT, ACTION_HEIGHT, handlers.onDebug);
-    button(this.settingsPage, COPY.diagnostics, 0, -0.152, CONTENT, ACTION_HEIGHT, () => { this.detailsOpen = true; });
+    button(this.settingsPage, COPY.diagnostics, 0, -0.152, CONTENT, ACTION_HEIGHT, () => { this.page = "diagnostics"; }).userData.panelRow = "diagnostics";
 
     this.soundToggle = button(this.settingsPage, "Sound · On", 0, -0.228, CONTENT, ACTION_HEIGHT, () => handlers.onSound?.());
 
     label(this.sensorsPage, COPY.sensors, LEFT + 0.29, HEADER_Y, 0.56, 0.04, 28, C.ink, "left", "semibold");
-    iconClose(this.sensorsPage, "Back from Sensors", () => { this.sensorsOpen = false; });
-    sectionHeading(this.lidarGroup, "LiDAR", 0);
+    iconClose(this.sensorsPage, "Back from Sensors", () => { this.page = "main"; });
+    sectionHeading(this.lidarGroup, "LiDAR", 0).userData.panelRow = "lidar";
     this.lidarTabs.push(...tabs(this.lidarGroup, ["Off", "Obstacles", "Full"], 0.17,
       [() => handlers.onLidarMode?.("off"), () => handlers.onLidarMode?.("obstacles"), () => handlers.onLidarMode?.("full")]));
     this.rangeLabel = label(this.lidarGroup, "Clearance", LEFT + 0.17, 0.08, 0.34, 0.035, 18, C.muted);
     this.rangeValue = label(this.lidarGroup, "0.6 m", 0.14, 0.08, 0.19, 0.04, 21, C.ink, "center");
     this.pointsValue = label(this.lidarGroup, "4000", 0.14, -0.01, 0.19, 0.04, 21, C.ink, "center");
-    label(this.lidarGroup, "Point limit", LEFT + 0.17, -0.01, 0.34, 0.035, 18, C.muted);
-    for (const [y, action] of [[0.08, handlers.onLidarRange], [-0.01, handlers.onLidarPoints]] as const) {
-      for (const direction of [-1, 1]) this.sensorControls.push(button(this.lidarGroup, direction < 0 ? "−" : "+", direction < 0 ? -0.015 : 0.31, y, 0.064, 0.064, () => action?.(direction)));
+    label(this.lidarGroup, "Point limit", LEFT + 0.17, -0.01, 0.34, 0.035, 18, C.muted).userData.panelRow = "points";
+    for (const [row, y, action] of [["range", 0.08, handlers.onLidarRange], ["points", -0.01, handlers.onLidarPoints]] as const) {
+      for (const direction of [-1, 1]) {
+        const control = button(this.lidarGroup, direction < 0 ? "−" : "+", direction < 0 ? -0.015 : 0.31, y, 0.064, 0.064, () => action?.(direction));
+        control.userData.panelRow = row; this.sensorControls.push(control);
+      }
     }
     this.sensorStatus = label(this.details, "", 0, -0.15, CONTENT, 0.1, 17, C.muted);
     label(this.recoveryPage, COPY.alignmentTitle, 0, HEADER_Y, CONTENT, 0.04, 28, C.ink, "center", "semibold");
-    label(this.recoveryPage, COPY.alignmentGuidance, 0, 0.055, CONTENT - 0.06, 0.07, 22, C.muted, "center");
-    button(this.recoveryPage, COPY.relocalize, -(HALF_WIDTH + GAP) / 2, -0.1, HALF_WIDTH, ACTION_HEIGHT, handlers.onRealign, "primary");
-    button(this.recoveryPage, COPY.dismiss, (HALF_WIDTH + GAP) / 2, -0.1, HALF_WIDTH, ACTION_HEIGHT, () => handlers.onDismissAlignment?.());
+    label(this.recoveryPage, COPY.alignmentGuidance, 0, 0.055, CONTENT - 0.06, 0.07, 22, C.muted, "center").userData.panelRow = "guidance";
+    button(this.recoveryPage, COPY.relocalize, -(HALF_WIDTH + GAP) / 2, -0.1, HALF_WIDTH, ACTION_HEIGHT, handlers.onRealign, "primary").userData.panelRow = "actions";
+    button(this.recoveryPage, COPY.dismiss, (HALF_WIDTH + GAP) / 2, -0.1, HALF_WIDTH, ACTION_HEIGHT, () => handlers.onDismissAlignment?.()).userData.panelRow = "actions";
 
     label(this.details, COPY.diagnostics, LEFT + 0.29, HEADER_Y, 0.56, 0.04, 28, C.ink, "left", "semibold");
-    iconClose(this.details, COPY.done, () => { this.detailsOpen = false; });
-    surface(this.details, 0, -0.03, CONTENT, 0.26, DIMOS_AR_DESIGN.corners.field, C.fill);
+    iconClose(this.details, COPY.done, () => { this.page = "settings"; });
+    surface(this.details, 0, -0.03, CONTENT, 0.26, DIMOS_AR_DESIGN.corners.field, C.fill).userData.panelRow = "logs";
     this.debug = scrollLabel(this.details, "", 0, -0.03, CONTENT - 0.056, 0.22, 18, C.muted);
 
-    const chrome = panelChrome(this.panel, WIDTH/HEIGHT, RADIUS/HEIGHT, 1/HEIGHT);
+    const chrome = panelChrome(this.panel, RADIUS/HEIGHT, 1/HEIGHT);
     this.bar = chrome.bar; this.barZone = chrome.barZone;
     this.cornerArcs = chrome.cornerArcs; this.cornerZones = chrome.cornerZones;
     this.barZone.name = "Window bar";
@@ -298,7 +296,7 @@ export class MainMenuView {
     }
 
     this.console.visible = false;
-    this.detailsOpen = false;
+    this.page = "main";
     this.details.visible = false;
     this.settingsPage.visible = false;
     this.panel.traverse(object => {
@@ -306,6 +304,13 @@ export class MainMenuView {
       const activate = object.onTriggered;
       object.onTriggered = id => { if (handlers.canActivate?.(id, object.mesh!)) { activate(id); if (object.enabled) handlers.onActivate?.(); } };
     });
+    this.agent.parent!.userData.panelRow = "reply";
+    this.inputLabel.parent!.userData.panelRow = "draft";
+    for (const action of [this.type, this.clear]) action.userData.panelRow = "actions";
+    this.debugToggle.userData.panelRow = "debug"; this.soundToggle.userData.panelRow = "sound";
+    this.debug.userData.panelRow = "logs"; this.sensorStatus.userData.panelRow = "statistics";
+    this.rangeLabel.userData.panelRow = this.rangeValue.userData.panelRow = "range";
+    this.pointsValue.userData.panelRow = "points";
     this.layoutRuntime();
     this.panel.scale.multiplyScalar(CONTROL_PANEL_SCALE.setup);
     this.appearanceRoot.name = "Menu appearance";
@@ -349,9 +354,8 @@ export class MainMenuView {
       this.localizationGroup.position.y = (r.localize ?? 0)/HEIGHT;
       this.speedGroup.position.y = (r.speed ?? 0)/HEIGHT;
       for (const node of this.lidarGroup.children) {
-        const original = node.userData.capabilityY ??= node.position.y*HEIGHT;
-        const target = original === 0 ? r.lidar : Math.abs(original-.17)<.001 ? r.tabs : Math.abs(original-.08)<.001 ? r.range : r.points;
-        node.position.y = (target ?? 0)/HEIGHT;
+        const target = r[node.userData.panelRow];
+        if (target !== undefined) node.position.y = target / HEIGHT;
       }
     }
     const speed = this.handlersSpeed();
@@ -377,14 +381,14 @@ export class MainMenuView {
     });
     this.header.visible = !snap.setupCompleted;
     this.robotBadge.visible = this.panelShown;
-    if (!snap.setupCompleted || !this.panelShown) { this.detailsOpen = false; this.settingsOpen = false; this.sensorsOpen = false; }
+    if (!snap.setupCompleted || !this.panelShown) { this.page = "main"; }
     const reviewing = snap.alignmentReview?.pending === true;
     this.recoveryPage.visible = snap.setupCompleted && reviewing;
     this.runtimeFooter.visible = snap.setupCompleted && this.panelShown && !snap.setupCelebrating;
-    this.details.visible = this.detailsOpen && !reviewing;
-    this.console.visible = snap.setupCompleted && this.panelShown && !snap.setupCelebrating && !this.detailsOpen && !this.settingsOpen && !this.sensorsOpen && !reviewing;
-    this.settingsPage.visible = this.settingsOpen && !this.detailsOpen && !this.sensorsOpen && !reviewing;
-    this.sensorsPage.visible = this.sensorsOpen && !reviewing;
+    this.details.visible = this.page === "diagnostics" && !reviewing;
+    this.console.visible = snap.setupCompleted && this.panelShown && !snap.setupCelebrating && this.page === "main" && !reviewing;
+    this.settingsPage.visible = this.page === "settings" && !reviewing;
+    this.sensorsPage.visible = this.page === "sensors" && !reviewing;
     setText(this.robotButton, robotBadgeText(snap.robotName, snap.robotConnectionText ?? "Disconnected", snap.robotSelected ?? false, snap.activity ?? "Idle"));
     this.robotButton.setEnabled(snap.robotSelectable);
     this.robotButton.setActive(snap.robotSelected);
@@ -436,7 +440,7 @@ export class MainMenuView {
     this.hud.color(toneCss(speech?.error ? "warn" : snap.hudTone ?? "muted"));
     const diagnosticsNow = performance.now() / 1000;
     if (this.details.visible && this.panel.visible && diagnosticsNow - this.diagnosticsUpdatedAt >= .2) {
-      this.debug.setContent(snap.debugText);
+      this.debug.setContent(snap.readDebugText?.() ?? snap.debugText);
       this.diagnosticsUpdatedAt = diagnosticsNow;
     }
     const localization = snap.wizardStep === "localization" && !snap.localizationIssue && snap.localizationKind !== "unavailable";
@@ -445,31 +449,23 @@ export class MainMenuView {
     this.markerGuide = snap.localizationKind === "marker" || snap.localizationKind === "mixed";
 
     for (const page of [this.wizard, this.success, this.header, this.robotBadge, this.console, this.chat, this.manualHelp, this.settingsPage, this.sensorsPage, this.recoveryPage, this.runtimeFooter, this.details]) {
-      const target = page.visible;
-      const state = this.pageTransitions.get(page) ?? { progress: 0, target };
-      state.target = target;
-      this.pageTransitions.set(page, state);
-      const fits = (page.userData.panelHeight ?? 0) <= this.heightController.height + 1e-8;
-      page.userData.rayDisabled = !target || !fits;
-      page.visible = (target || state.progress > 0) && fits;
+      this.transitions.request(page, this.heightController.height);
     }
   }
 
   private layoutRuntime(): void {
-    const moveRows = (page: THREE.Group, rows: readonly (readonly [number, number])[]) => {
+    const moveRows = (page: THREE.Group, profile: PanelProfile) => {
       for (const node of page.children) {
-        const match = rows.find(([oldY]) => Math.abs(node.position.y * HEIGHT - oldY) < 1e-6);
-        if (match) node.position.y = match[1] / HEIGHT;
+        const y = profile.rows[node.userData.panelRow];
+        if (y !== undefined) node.position.y = y / HEIGHT;
       }
     };
     const layouts = RUNTIME_LAYOUTS;
     this.manualHelp.position.y = layouts.manual.rows.guidance / HEIGHT;
-    moveRows(this.chat, [[0.052, layouts.agent.rows.reply], [-0.088, layouts.agent.rows.draft], [-0.196, layouts.agent.rows.actions]]);
-    moveRows(this.settingsPage, [[0.09, layouts.settings.rows.robotActions],
-      [-0.014, layouts.settings.rows.headset], [-0.084, layouts.settings.rows.debug], [-0.152, layouts.settings.rows.diagnostics], [-0.228, layouts.settings.rows.sound]]);
-
-    moveRows(this.details, [[-0.03, layouts.diagnostics.rows.logs],[-.15,layouts.diagnostics.rows.statistics]]);
-    moveRows(this.recoveryPage, [[0.055, layouts.alignment.rows.guidance], [-0.1, layouts.alignment.rows.actions]]);
+    moveRows(this.chat, layouts.agent);
+    moveRows(this.settingsPage, layouts.settings);
+    moveRows(this.details, layouts.diagnostics);
+    moveRows(this.recoveryPage, layouts.alignment);
     this.fittedContent.set(this.chat, layouts.agent.height);
     this.fittedContent.set(this.manualHelp, layouts.manual.height);
     this.fittedContent.set(this.wizardBody, HEIGHT);
@@ -497,9 +493,9 @@ export class MainMenuView {
       else if (snap.connectComplete) profile = SETUP_LAYOUTS.connected;
       else profile = snap.connectionTone === "error" || snap.connectionTone === "warn" ? SETUP_LAYOUTS.error : SETUP_LAYOUTS.entry;
     } else if (snap.alignmentReview?.pending) profile = RUNTIME_LAYOUTS.alignment;
-    else if (this.detailsOpen) profile = RUNTIME_LAYOUTS.diagnostics;
-    else if (this.sensorsOpen) profile = this.capabilityProfile;
-    else if (this.settingsOpen) profile = RUNTIME_LAYOUTS.settings;
+    else if (this.page === "diagnostics") profile = RUNTIME_LAYOUTS.diagnostics;
+    else if (this.page === "sensors") profile = this.capabilityProfile;
+    else if (this.page === "settings") profile = RUNTIME_LAYOUTS.settings;
     else profile = RUNTIME_LAYOUTS[snap.operatingMode];
     if (this.layoutProfile !== profile) {
       this.layoutProfile = profile;
@@ -603,7 +599,7 @@ export class MainMenuView {
     });
     for (const geometry of geometries) geometry.dispose();
     for (const material of materials) material.dispose();
-    this.pageTransitions.clear();
+    this.transitions.clear();
     this.panel.removeFromParent();
   }
 
@@ -633,43 +629,7 @@ export class MainMenuView {
     this.speedSlider.syncDepth();
     this.plate.setOpacity(rootOpacity);
     this.plate.setWorldThickness(DIMOS_AR_DESIGN.depth.thickness);
-    for (const child of this.appearanceRoot.children) {
-      if (child !== this.plate && !this.pageTransitions.has(child as THREE.Group)) this.fadePage(child, rootOpacity);
-    }
-    for (const [page, state] of this.pageTransitions) {
-      state.progress = THREE.MathUtils.clamp(state.progress + (state.target ? step : -step), 0, 1);
-      const fits = (page.userData.panelHeight ?? 0) <= this.heightController.height + 1e-8;
-      page.userData.rayDisabled = !state.target || !fits;
-      page.visible = (state.target || state.progress > 0) && fits;
-      page.scale.setScalar(1);
-    }
-    for (const [page, state] of this.pageTransitions) {
-      let opacity = rootOpacity * ease(state.progress);
-      for (let parent = page.parent; parent && parent !== this.panel; parent = parent.parent) {
-        const ancestor = parent instanceof THREE.Group ? this.pageTransitions.get(parent) : undefined;
-        if (ancestor) opacity *= ease(ancestor.progress);
-      }
-      this.fadePage(page, opacity);
-    }
-  }
-
-  private fadePage(page: THREE.Object3D, opacity: number): void {
-    if (this.lastPageOpacity.get(page) === opacity) return;
-    this.lastPageOpacity.set(page, opacity);
-    const visit = (node: THREE.Object3D) => {
-      if (node !== page && node instanceof THREE.Group && this.pageTransitions.has(node)) return;
-      const material = (node as THREE.Mesh).material;
-      for (const item of Array.isArray(material) ? material : material ? [material] : []) {
-        const alpha = (item as THREE.ShaderMaterial).uniforms?.uOpacity ?? (item as THREE.ShaderMaterial).uniforms?.uAlpha;
-        const base = this.materialOpacity.get(item) ?? { opacity: item.opacity, alpha: alpha?.value ?? null };
-        this.materialOpacity.set(item, base);
-        if (!item.transparent) { item.transparent = true; item.needsUpdate = true; }
-        if (alpha && base.alpha !== null) alpha.value = base.alpha * opacity;
-        else item.opacity = base.opacity * opacity;
-      }
-      for (const child of node.children) visit(child);
-    };
-    visit(page);
+    this.transitions.update(this.appearanceRoot, this.panel, this.plate, rootOpacity, this.heightController.height, step);
   }
 
   scrollView(object: THREE.Object3D | undefined): ScrollableTextView | null {
@@ -750,173 +710,4 @@ export class MainMenuView {
 
   endManipulation(): void { this.manipulation = null; }
 
-}
-
-function attach<T extends xb.TextView>(parent: THREE.Object3D, object: T, x: number, y: number): T {
-  object.isRoot = true;
-  object.renderOrder = 12;
-  parent.add(object);
-  object.updateLayouts();
-  object.position.set(x / HEIGHT, y / HEIGHT, DIMOS_AR_DESIGN.depth.text / HEIGHT);
-  return object;
-}
-
-function label(parent: THREE.Object3D, text: string, x: number, y: number, width: number, height: number, fontSize: number, color: string = C.ink, align: Align = "left", weight: "regular" | "semibold" = "regular"): SurfaceText {
-  if (align === "left" && width >= CONTENT - 0.01) width -= 0.02;
-  const target = new SurfaceText({ text, font: weight === "semibold" ? UI_FONT_SEMIBOLD : UI_FONT_REGULAR, fontSize: xb.TextView.dpToMeters(fontSize * 1.35) / height, fontColor: color, selectable: false, mode: "center", anchorX: align, textAlign: align });
-  target.width = width / HEIGHT;
-  target.height = height / HEIGHT;
-  target.userData.depthM = weight === "semibold" && fontSize >= 28 ? DIMOS_AR_DESIGN.depth.primary : DIMOS_AR_DESIGN.depth.secondary + 0.001;
-  return attach(parent, target, x, y);
-}
-
-function button(parent: THREE.Object3D, text: string, x: number, y: number, width: number, height: number, action: () => void, variant: ButtonVariant = "default"): SurfaceButton {
-  const target = attach(parent, new SurfaceButton({ text, font: UI_FONT_SEMIBOLD, width: width / HEIGHT, height: height / HEIGHT, fontSize: xb.TextView.dpToMeters(26) / height, opacity: 1, backgroundColor: C.control, radius: height / 2, hoverColor: C.ink, selectedFontColor: C.ink }), x, y);
-  target.position.z = DIMOS_AR_DESIGN.depth.surface / HEIGHT;
-  target.setSurface(variant);
-  target.onTriggered = () => {
-    if (!target.enabled) return;
-    // XR Blocks also intersects hidden descendants, so check the entire ancestry.
-    let node: THREE.Object3D | null = target;
-    while (node) { if (!node.visible || node.userData.rayDisabled === true) return; node = node.parent; }
-    action();
-  };
-  return target;
-}
-
-function place<T extends THREE.Object3D>(parent: THREE.Object3D, object: T, x: number, y: number, z: number): T {
-  object.position.set(x / HEIGHT, y / HEIGHT, z / HEIGHT);
-  object.scale.setScalar(1 / HEIGHT);
-  parent.add(object);
-  return object;
-}
-
-function surface(parent: THREE.Object3D, x: number, y: number, width: number, height: number, radius: number, color: string): GlassSurface {
-  const mesh = new GlassSurface({ width, height, radius: radius || cornerRadius(width, height), tint: color, alpha: 1, rim: 0.06, rimWidth: 0.002 });
-  mesh.raycast = () => {};
-  mesh.material.depthWrite = false;
-  mesh.renderOrder = 2;
-  return place(parent, mesh, x, y, DIMOS_AR_DESIGN.depth.surface);
-}
-
-function rect(parent: THREE.Object3D, x: number, y: number, width: number, height: number, color: string, radius = 0.001, z = 0.008): THREE.Mesh<THREE.ShapeGeometry, THREE.MeshBasicMaterial> {
-  const mesh = new THREE.Mesh(new THREE.ShapeGeometry(roundedShape(width, height, radius)), new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, transparent: true, depthWrite: false }));
-  mesh.raycast = () => {};
-  mesh.renderOrder = 3;
-  return place(parent, mesh, x, y, z);
-}
-
-function roundedShape(width: number, height: number, radius: number): THREE.Shape {
-  const shape = new THREE.Shape();
-  const w = width / 2, h = height / 2, r = Math.min(radius, w, h);
-  shape.moveTo(-w + r, -h); shape.lineTo(w - r, -h); shape.quadraticCurveTo(w, -h, w, -h + r);
-  shape.lineTo(w, h - r); shape.quadraticCurveTo(w, h, w - r, h);
-  shape.lineTo(-w + r, h); shape.quadraticCurveTo(-w, h, -w, h - r);
-  shape.lineTo(-w, -h + r); shape.quadraticCurveTo(-w, -h, -w + r, -h);
-  return shape;
-}
-
-function setText(target: xb.TextView, value: string): void {
-  if (target.text !== value) target.setText(value);
-}
-function clip(text: string, max: number): string { return text.length > max ? `${text.slice(0, max - 1)}…` : text; }
-
-function cameraIcon(parent: THREE.Object3D, x: number, y: number, surface: SurfaceButton): void {
-  const icon = new THREE.Group();
-  icon.name = "Capabilities robot icon";
-  const material = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthWrite: false, toneMapped: false });
-  const body = new THREE.Shape();
-  body.moveTo(-0.018, -0.012); body.lineTo(0.018, -0.012);
-  body.quadraticCurveTo(0.021, -0.012, 0.021, -0.009); body.lineTo(0.021, 0.009);
-  body.quadraticCurveTo(0.021, 0.012, 0.018, 0.012); body.lineTo(0.008, 0.012);
-  body.lineTo(0.004, 0.018); body.lineTo(-0.009, 0.018); body.lineTo(-0.013, 0.012);
-  body.lineTo(-0.018, 0.012); body.quadraticCurveTo(-0.021, 0.012, -0.021, 0.009);
-  body.lineTo(-0.021, -0.009); body.quadraticCurveTo(-0.021, -0.012, -0.018, -0.012);
-  const opening = new THREE.Path();
-  opening.moveTo(-0.017, -0.008); opening.lineTo(-0.017, 0.008);
-  opening.lineTo(0.017, 0.008); opening.lineTo(0.017, -0.008); opening.closePath();
-  body.holes.push(opening);
-  icon.add(new THREE.Mesh(new THREE.ShapeGeometry(body), material));
-  for (const eye of [-1,1]) { const mesh = new THREE.Mesh(new THREE.CircleGeometry(.003,12), material); mesh.position.set(eye*.008,0,0); icon.add(mesh); }
-  const antenna = new THREE.Mesh(new THREE.PlaneGeometry(.003,.01), material); antenna.position.y=.02; icon.add(antenna);
-  icon.traverse(child => { child.raycast = () => {}; child.renderOrder = 13; });
-  icon.userData.followSurface = surface;
-  place(parent, icon, x, y, DIMOS_AR_DESIGN.depth.text);
-}
-
-function gearIcon(parent: THREE.Object3D, x: number, y: number, surface: SurfaceButton): void {
-  const icon = new THREE.Group();
-  const material = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthWrite: false, toneMapped: false });
-  icon.add(new THREE.Mesh(new THREE.RingGeometry(0.007, 0.013, 32), material));
-  for (let i = 0; i < 8; i++) {
-    const angle = i * Math.PI / 4;
-    const tooth = new THREE.Mesh(new THREE.PlaneGeometry(0.005, 0.006), material);
-    tooth.position.set(Math.sin(angle) * 0.014, Math.cos(angle) * 0.014, 0);
-    tooth.rotation.z = -angle;
-    icon.add(tooth);
-  }
-  icon.traverse(child => { child.raycast = () => {}; child.renderOrder = 13; });
-  icon.userData.followSurface = surface;
-  place(parent, icon, x, y, DIMOS_AR_DESIGN.depth.text);
-}
-
-function layoutText(text: SurfaceText | ScrollableTextView, x: number, y: number, width: number, height: number, size: number): void {
-  text.width = width / HEIGHT; text.height = height / HEIGHT;
-  text.fontSize = xb.TextView.dpToMeters(size * 1.35) / height;
-  text.updateLayouts(); text.position.x = x / HEIGHT; text.position.y = y / HEIGHT;
-}
-
-function iconClose(parent: THREE.Object3D, name: string, action: () => void): SurfaceButton {
-  const target = button(parent, "", CLOSE_X, HEADER_Y, ICON_SIZE, ICON_SIZE, action);
-  target.name = name;
-  const icon = new THREE.Group();
-  for (const angle of [Math.PI / 4, -Math.PI / 4]) {
-    const bar = new THREE.Mesh(new THREE.PlaneGeometry(0.026, 0.0035), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthWrite: false, toneMapped: false }));
-    bar.rotation.z = angle; bar.raycast = () => {}; bar.renderOrder = 13; icon.add(bar);
-  }
-  icon.userData.followSurface = target;
-  icon.renderOrder = 13; place(parent, icon, CLOSE_X, HEADER_Y, DIMOS_AR_DESIGN.depth.text);
-  return target;
-}
-
-function scrollLabel(parent: THREE.Object3D, text: string, x: number, y: number, width: number, height: number, fontSize: number, color: string = C.ink, bodyScrollable = true): ScrollableTextView {
-  const target = new ScrollableTextView({ text, font: UI_FONT_REGULAR, fontSize: xb.TextView.dpToMeters(fontSize * 1.35) / height, fontColor: color, selectable: false, mode: "center", anchorX: "left", textAlign: "left" }, bodyScrollable);
-  target.width = width / HEIGHT; target.height = height / HEIGHT;
-  return attach(parent, target, x, y);
-}
-
-/** Both conversation fields use this exact primitive; only the input behavior differs. */
-function messageField(parent: THREE.Object3D, caption: string, y: number, bodyScrollable: boolean): { surface: SurfaceButton; content: ScrollableTextView } {
-  const block = new THREE.Group();
-  block.position.y = y / HEIGHT; parent.add(block);
-  const height = DIMOS_AR_DESIGN.message.height;
-  const field = button(block, "", 0, 0, CONTENT, height, () => {}, "field");
-  if (bodyScrollable) field.mesh!.userData.interactionEnabled = false;
-  const heading = label(block, caption, LEFT + DIMOS_AR_DESIGN.message.padding + 0.2, DIMOS_AR_DESIGN.message.captionY, 0.4, DIMOS_AR_DESIGN.message.captionHeight, 15, C.muted, "left", "semibold");
-  heading.userData.followSurface = field;
-  heading.position.z = DIMOS_AR_DESIGN.depth.text / HEIGHT; heading.renderOrder = 14;
-  const content = scrollLabel(block, "", 0, DIMOS_AR_DESIGN.message.textY, CONTENT - DIMOS_AR_DESIGN.message.padding * 2, DIMOS_AR_DESIGN.message.textHeight, 20, C.ink, bodyScrollable);
-  content.userData.followSurface = field;
-  content.position.z = DIMOS_AR_DESIGN.depth.text / HEIGHT; content.renderOrder = 14;
-  return { surface: field, content };
-}
-
-function tabs<T extends readonly string[]>(parent: THREE.Object3D, labels: T, y: number, actions: readonly (() => void)[]): { [K in keyof T]: SurfaceButton } {
-  const rail = surface(parent, 0, y, CONTENT, ACTION_HEIGHT + 0.012, (ACTION_HEIGHT + 0.012) / 2, C.field);
-  rail.name = "Segmented control track";
-  rail.position.z = 0.002 / HEIGHT;
-  return labels.map((text, i) => {
-    const { x, width } = controlPanelTab(labels.length, i);
-    const target = button(parent, text, x, y, width, ACTION_HEIGHT, actions[i], "tab");
-    target.userData.supportSurface = rail;
-    return target;
-  }) as { [K in keyof T]: SurfaceButton };
-}
-
-function sectionHeading(parent: THREE.Object3D, text: string, y: number): SurfaceText {
-  const style = CONTROL_PANEL_SECTION;
-  const heading = label(parent, text, style.left + (style.width - 0.02) / 2, y, style.width, style.height, style.fontDp, style.color, "left");
-  heading.userData.depthM = style.depthM;
-  heading.userData.sectionHeading = true;
-  return heading;
 }

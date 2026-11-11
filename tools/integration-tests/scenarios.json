@@ -131,6 +131,20 @@
       ]
     },
     {
+      "id": "relocalization",
+      "label": "Brief re-localization with a visual marker copy",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 4,
+      "assertions": [
+        "relocalization"
+      ]
+    },
+    {
       "id": "navigation_preview",
       "label": "Preview without committing",
       "platforms": [
@@ -536,6 +550,10 @@
         "durationS": 4
       },
       {
+        "id": "relocalization",
+        "durationS": 4
+      },
+      {
         "id": "navigation_preview",
         "durationS": 5
       },
@@ -596,6 +614,10 @@
       {
         "id": "robot_selected",
         "durationS": 2
+      },
+      {
+        "id": "relocalization",
+        "durationS": 4
       },
       {
         "id": "navigation_preview",

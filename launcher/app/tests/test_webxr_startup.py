@@ -130,7 +130,6 @@ async def test_restart_ignores_old_readiness_and_exit(runtime) -> None:
     stale.finish(1)
     await mgr._read_stream(
         cast(asyncio.subprocess.Process, stale),
-        parse_armodule=True,
         ready=mgr._armodule_ready,
     )
     await mgr._finalize_exit("old process failed", expected_proc=old_proc)
@@ -397,7 +396,7 @@ async def test_start_checks_owned_ports_before_spawning(runtime, monkeypatch):
     effects.attach_mock(spawn, "spawn")
     monkeypatch.setattr(mgr, "_clear_before_start", clear)
     await mgr.start_armodule(blueprint="unitree_go2_ar", client="specs")
-    clear.assert_awaited_once_with(client="specs")
+    clear.assert_awaited_once_with()
     assert spawn.await_count == 1
     assert [call[0] for call in effects.mock_calls][:2] == ["clear", "spawn"]
 
@@ -412,7 +411,7 @@ async def test_start_does_not_inspect_or_signal_unrelated_dimos(runtime, monkeyp
     monkeypatch.setattr(mgr, "_pids_listening", AsyncMock(return_value=[]))
     monkeypatch.setattr(mgr, "port_in_use", lambda _port: False)
     monkeypatch.setattr("armodule.os.kill", kill)
-    await mgr._clear_before_start(client="webxr")
+    await mgr._clear_before_start()
     inspect.assert_not_awaited()
     kill.assert_not_called()
 

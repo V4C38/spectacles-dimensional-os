@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+import math
 import time
 from typing import TYPE_CHECKING
 
@@ -11,6 +12,8 @@ from dimos.ar.localization.coordinator import (
     LocalizationOutcome,
 )
 from dimos.ar.localization.policy import EpisodeWork, LocalizationPolicy
+from dimos.ar.localization.types import LocalizationProviderType, Observation
+from dimos.ar.robot.odometry import RobotOdometry
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
@@ -98,7 +101,7 @@ class LocalizationRunner:
 
     async def _poll(self) -> None:
         while True:
-            prompts, _ = self._policy.poll()
+            prompts = self._policy.poll()
             for client_id in prompts:
                 self._on_prompt(client_id)
             await asyncio.sleep(0.25)
@@ -133,3 +136,38 @@ class LocalizationRunner:
         finally:
             if self._tasks.get(work.client_id) is task:
                 self._tasks.pop(work.client_id, None)
+
+
+def prepare_marker_episode(
+    policy: LocalizationPolicy, odometry: RobotOdometry, observations: list[Observation],
+    client_id: str, *, replay: bool,
+) -> EpisodeWork | None:
+    newest = max(observations, key=lambda observation: observation.ts_server)
+    logger.info(
+        "localization capture admitted for validation",
+        client_id=client_id,
+        newest_capture_age_s=round(time.time() - newest.ts_server, 3),
+        jpeg_bytes=sum(len(observation.jpeg) for observation in observations),
+    )
+    pose = odometry.history.at_server_ts(
+        newest.ts_server,
+        fallback_to_latest=(
+            LocalizationProviderType.FIDUCIAL_MARKER in policy.providers
+            and replay
+        ),
+    )
+    return policy.on_observations(
+        client_id,
+        observations,
+        capture_travel_m=None if pose is None else pose.travel_m,
+        capture_heading_rad=None
+        if pose is None
+        else math.atan2(
+            2
+            * (
+                pose.orientation[3] * pose.orientation[2]
+                + pose.orientation[0] * pose.orientation[1]
+            ),
+            1 - 2 * (pose.orientation[1] ** 2 + pose.orientation[2] ** 2),
+        ),
+    )

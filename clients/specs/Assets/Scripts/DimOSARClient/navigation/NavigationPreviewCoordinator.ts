@@ -30,6 +30,17 @@ export class NavigationPreviewCoordinator {
     if (!session.collaboration) throw new Error("Navigation requires interaction authority");
   }
 
+  private displayed: NavGoal["path_poses"] | null = null;
+  private displayOwner = "";
+  displayPath(): NavGoal["path_poses"] | null {
+    const shared = this.session.collaboration.snapshot();
+    const owner = `${this.session.collaboration.raw()?.epoch ?? ""}:${shared.authority?.lease_id ?? ""}`;
+    if (!shared.authority || owner !== this.displayOwner) this.displayed = null;
+    this.displayOwner = owner;
+    if (shared.preview) this.displayed = shared.preview.path_poses ?? null;
+    return this.displayed;
+  }
+
   apply(origin: ClientTrackingOrigin | null): void {
     const view = this.session.view();
     if (view.connection !== "ready") { this.reset(); return; }
@@ -55,6 +66,7 @@ export class NavigationPreviewCoordinator {
   }
 
   clear(): void {
+    this.displayed = null; this.displayOwner = "";
     this.desired = null;
     this.lastAim = null;
     this.requestedTargetRevision = null;

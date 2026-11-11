@@ -4,6 +4,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import math
 import time
+from typing import Literal
 
 from dimos.ar.localization.types import CapturePolicy, LocalizationProviderType, Observation
 
@@ -29,12 +30,19 @@ class EpisodeWork:
 
 @dataclass
 class _ClientEpisode:
-    pending: bool = False
+    phase: Literal["idle", "capturing", "processing", "backoff"] = "idle"
     last_success_travel_m: float | None = None
     last_success_heading: float | None = None
-    in_flight: bool = False
     generation: int = 0
     prompt_due_at: float | None = None
+
+    @property
+    def pending(self) -> bool:
+        return self.phase != "idle"
+
+    @property
+    def in_flight(self) -> bool:
+        return self.phase == "processing"
 
 
 def _canonical_providers(
@@ -100,7 +108,7 @@ class LocalizationPolicy:
         state = self._clients.get(client_id)
         if state is not None and state.pending:
             state.generation += 1
-            state.in_flight = False
+            state.phase = "backoff" if state.prompt_due_at is not None else "capturing"
             if state.prompt_due_at is None:
                 return client_id
             return None
@@ -123,8 +131,8 @@ class LocalizationPolicy:
                 client_ids.append(prompted)
         return client_ids
 
-    def on_odom(self) -> tuple[list[str], list[EpisodeWork]]:
-        prompts, episodes = self.poll()
+    def on_odom(self) -> list[str]:
+        prompts = self.poll()
         # Travel, rather than a planner completion event, makes correction due.
         # The client waits for the robot to enter its geometric capture gate.
         for client_id, state in self._clients.items():
@@ -147,18 +155,18 @@ class LocalizationPolicy:
                 prompted = self._open_episode(client_id)
                 if prompted is not None:
                     prompts.append(prompted)
-        return prompts, episodes
+        return prompts
 
-    def poll(self) -> tuple[list[str], list[EpisodeWork]]:
+    def poll(self) -> list[str]:
         now = self._clock()
         client_ids: list[str] = []
-        episodes: list[EpisodeWork] = []
         for client_id, state in self._clients.items():
             if state.prompt_due_at is not None and now >= state.prompt_due_at:
                 state.prompt_due_at = None
+                state.phase = "capturing"
                 if self._capture_spec is not None:
                     client_ids.append(client_id)
-        return client_ids, episodes
+        return client_ids
 
     def on_observations(
         self,
@@ -173,7 +181,7 @@ class LocalizationPolicy:
             return None
         if not observations:
             return None
-        state.in_flight = True
+        state.phase = "processing"
         return EpisodeWork(
             client_id=client_id,
             observations=tuple(observations),
@@ -201,8 +209,7 @@ class LocalizationPolicy:
         state = self._clients.get(client_id)
         if state is None:
             return
-        state.pending = False
-        state.in_flight = False
+        state.phase = "idle"
         state.prompt_due_at = None
         state.last_success_heading = (
             self._heading() if capture_heading_rad is None else capture_heading_rad
@@ -215,8 +222,7 @@ class LocalizationPolicy:
         state = self._clients.get(client_id)
         if state is None:
             return
-        state.pending = False
-        state.in_flight = False
+        state.phase = "idle"
         state.prompt_due_at = None
 
     def on_disconnect(self, client_id: str) -> None:
@@ -232,6 +238,7 @@ class LocalizationPolicy:
         self.on_failure(client_id)
         prompted = self._open_episode(client_id)
         if prompted is not None and backoff_s > 0:
+            self._clients[client_id].phase = "backoff"
             self._clients[client_id].prompt_due_at = self._clock() + backoff_s
             return None
         return prompted
@@ -242,7 +249,6 @@ class LocalizationPolicy:
         state = self._clients.setdefault(client_id, _ClientEpisode())
         if state.pending:
             return None
-        state.pending = True
-        state.in_flight = False
+        state.phase = "capturing"
         state.generation += 1
         return client_id

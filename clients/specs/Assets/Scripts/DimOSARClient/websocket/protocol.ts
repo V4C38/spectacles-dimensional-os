@@ -32,6 +32,7 @@ import {
   type Vec3,
   type YawPose,
   type Hello,
+  type HelloRequest,
   type AgentMessage,
   type AgentSkill,
   type NavigationCapability,
@@ -68,13 +69,13 @@ export class TextFramer {
   }
 }
 
-export function encodeHelloRequest(request: { ts_client: number; resume_token?: string }): string {
+export function encodeHelloRequest(request: Omit<HelloRequest, "type" | "protocol_version">): string {
   return encodeText({
     type: "hello_request",
     ...(request.resume_token ? { resume_token: request.resume_token } : {}),
     protocol_version: 2,
     ts_client: finiteNumber(request.ts_client, "ts_client"),
-  });
+  } satisfies HelloRequest);
 }
 
 export function encodeStateRequest(): string {
@@ -676,7 +677,8 @@ function decodeNavState(data: Record<string, unknown>): NavState {
 function decodeLocalizationObservationsRequest(
   data: Record<string, unknown>,
 ): LocalizationObservationsRequest {
-  // The server can request a replacement batch when the previous scan missed.
+  // Mixed-mode robot/tag batches can also align directly in odom after a VPS
+  // miss; episode purpose does not imply that a map anchor already exists.
   const capturePolicy = requireString(data, "capture_policy");
   if (!isCapturePolicy(capturePolicy)) {
     throw new Error("capture_policy must be robot_los_required, robot_los_preferred, or any_angle");

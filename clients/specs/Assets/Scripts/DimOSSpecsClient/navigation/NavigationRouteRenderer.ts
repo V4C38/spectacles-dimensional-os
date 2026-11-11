@@ -1,14 +1,14 @@
 import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
 import { odomToClientTrackingYawPose } from "../../DimOSARClient/localization/clientTrackingTransforms";
-import type { NavGoal } from "../../DimOSARClient/websocket/protocolTypes";
-import { clientTrackingToSpecsYawPose } from "../utilities/SpecsCoordinates";
-import { AdaptiveStrokeRenderer, WorldMeshRenderer } from "../presentation/WorldMeshRenderer";
+import { anchorPathStart,clipPathToCircles,routeRibbon,filletPathCorners as sharedFilletPathCorners,rangePathY as sharedRangePathY } from "../../DimOSARClient/presentation/RoutePathGeometry";
 import { ROUTE_STYLE } from "../../DimOSARClient/presentation/WorldVisualStyle";
-import { anchorPathStart, clipPathToCircles, routeRibbon, rangePathY as sharedRangePathY, filletPathCorners as sharedFilletPathCorners } from "../../DimOSARClient/presentation/RoutePathGeometry";
+import type { NavGoal } from "../../DimOSARClient/websocket/protocolTypes";
+import { AdaptiveStrokeRenderer,WorldMeshRenderer } from "../presentation/WorldMeshRenderer";
+import { clientTrackingToSpecsYawPose } from "../utilities/SpecsCoordinates";
 
 export type RouteCircle = { center: [number, number, number]; radius: number };
 
-export class NavGoalPresenter {
+export class NavigationRouteRenderer {
   private readonly dots: AdaptiveStrokeRenderer;
   private readonly ribbon: WorldMeshRenderer;
   private lastPath: import("../../DimOSARClient/websocket/protocolTypes").YawPose[] | null = null;

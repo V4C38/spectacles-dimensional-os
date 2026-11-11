@@ -9,6 +9,8 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
+    "allowJs": true,
+    "checkJs": false,
     "noEmit": true,
     "skipLibCheck": true,
     "isolatedModules": true,
@@ -34,7 +36,6 @@
     "tests"
   ],
   "exclude": [
-    "tests/integration-tests",
-    "src/dimos"
+    "tests/integration-tests"
   ]
 }

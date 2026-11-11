@@ -2,17 +2,8 @@ import { URL as FileURL } from "node:url";
 import { readFileSync } from "node:fs";
 // @vitest-environment jsdom
 import { beforeEach, expect, it, vi } from "vitest";
-vi.hoisted(() => {
-  Object.defineProperty(window, "AudioContext", {
-    value: class {
-      destination = {};
-      createGain() {
-        return { connect() {}, gain: { value: 1 } };
-      }
-    },
-    configurable: true,
-  });
-});
+import "./fixtures/xrEnvironment";
+
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { ManipulationRenderer } from "../src/manipulation/ManipulationRenderer";
@@ -22,6 +13,33 @@ const pose = {
   orientation: [0, 0, 0, 1] as [number, number, number, number],
 };
 const origin = { ...pose, confidence: 1, ts: 0 };
+
+it("keeps the real EE placement while a visual copy catches its moving destination", () => {
+  const renderer = new ManipulationRenderer();
+  try {
+    applyRenderer(renderer, { now: 1 });
+    const trail = renderer.handle.object.getObjectByName("MarkerCorrectionTrail")!;
+    expect(trail.visible).toBe(false);
+    const shifted = { ...origin, position: [0, 0.4, 0] as [number, number, number] };
+    applyRenderer(renderer, { origin: shifted, now: 2 });
+    expect(renderer.handle.object.position.x).toBeCloseTo(0.4);
+    expect(trail.getWorldPosition(new THREE.Vector3()).x).toBeCloseTo(0);
+    const target = { ...pose, position: [0, -0.2, 0] as [number, number, number] };
+    applyRenderer(renderer, { origin: shifted, target, now: 2.25 });
+    expect(renderer.handle.object.position.x).toBeCloseTo(0.6);
+    expect(trail.getWorldPosition(new THREE.Vector3()).x).toBeCloseTo(0);
+    expect(renderer.handle.visual.getWorldPosition(new THREE.Vector3()).x).toBeCloseTo(0.3);
+    expect(trail.children).toHaveLength(1);
+    const sphere = trail.children[0] as THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
+    expect(sphere.material.uniforms.uOpacity.value).toBeCloseTo(0.75 * 0.3);
+    expect(renderer.owns(sphere)).toBe(false);
+    applyRenderer(renderer, { origin: shifted, target, now: 2.65 });
+    expect(trail.visible).toBe(false);
+    applyRenderer(renderer, { origin, now: 3 });
+    applyRenderer(renderer, { origin: null, now: 3.1 });
+    expect(trail.visible).toBe(false);
+  } finally { renderer.dispose(); }
+});
 const state: ManipulationState = {
   type: "manipulation_state",
   available: true,
@@ -127,6 +145,20 @@ it("keeps robot status on one line and includes the arm speed", () => {
 
 const readyIntent = { targetOffset: true, hasDraft: true, dragging: false, planning: false,
   executing: false, resetting: false, stopped: false, fresh: true, canPreview: true, canExecute: true, canReset: true };
+
+it("shows a remote planning target and connector without selecting the arm locally", () => {
+  const r = new ManipulationRenderer();
+  const target = { ...pose, position: [.2, 0, .3] as [number, number, number] };
+  try {
+    applyRenderer(r, { selected: false, target, now: 1, snapshot: { ...readyIntent, sharedDraft: true, blocked: true } });
+    expect(r.handle.object.position.distanceTo(r.measuredHandle.object.position)).toBeGreaterThan(.1);
+    expect(r.path.visible).toBe(true);
+    applyRenderer(r, { selected: false, target, now: 1.1, snapshot: { ...readyIntent, sharedDraft: true, blocked: false } });
+    expect(r.handle.object.position.distanceTo(r.measuredHandle.object.position)).toBeGreaterThan(.1);
+    applyRenderer(r, { selected: false, target, now: 1.2, snapshot: { ...readyIntent, sharedDraft: false } });
+    expect(r.handle.object.position.distanceTo(r.measuredHandle.object.position)).toBe(0);
+  } finally { r.dispose(); }
+});
 
 it("shows measured and dragged spheres and a full-opacity connector in unselected following", () => {
   const r = new ManipulationRenderer();
@@ -338,7 +370,7 @@ it("shows movement-weighted 3D links without arm boxes", () => {
       (moving.children.find(c => c.userData.armOutline) as THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>).material.uniforms.uColor.value.getHex(),
     ).toBe(0xffcc00);
     applyRenderer(r, { state: arm, selected: false, target, solution, now: 3, status: "IK failed", robotTitle: "OpenYAM", snapshot: intent });
-    expect(r.warning.object.visible).toBe(true);
+    expect(r.statusView.object.visible).toBe(true);
   } finally {
     r.dispose();
     load.mockRestore();
@@ -350,10 +382,10 @@ import {
   targetIsOffset,
   type ManipulationSnapshot,
 } from "@dimos-ar-client/manipulation/ManipulationInteraction";
-import type { ManipulationPresentation } from "../src/manipulation/ManipulationRenderer";
+import type { ManipulationRenderInput } from "../src/manipulation/ManipulationRenderer";
 let speedScale = 0.2;
-let rejection: ManipulationPresentation["rejection"] = null;
-type RendererFixture = Partial<Pick<ManipulationPresentation,
+let rejection: ManipulationRenderInput["rejection"] = null;
+type RendererFixture = Partial<Pick<ManipulationRenderInput,
   "origin" | "groupId" | "selected" | "target" | "solution" | "plan" | "now" | "robotTitle"
 >> & { state?: ManipulationState; status?: string; fresh?: boolean; snapshot?: Partial<ManipulationSnapshot> };
 function applyRenderer(renderer: ManipulationRenderer, input: RendererFixture = {}): void {
@@ -712,24 +744,30 @@ for (const selected of [false, true]) it(`keeps rendered model and picking conti
   } finally { r.dispose(); load.mockRestore(); }
 });
 
-it("retains both EE handles, arm transforms, and Preview through a short feedback gap",()=> {
-  const r=new ManipulationRenderer();
-  const target={...pose,position:[.2,0,.3] as [number,number,number]};
+it("retains loaded arm meshes, handles and Preview through feedback loss", () => {
+  const scene = new THREE.Group(), mesh = new THREE.Mesh(new THREE.BoxGeometry(.03,.03,.03), new THREE.MeshBasicMaterial());
+  mesh.name = "tool"; scene.add(mesh);
+  const load = vi.spyOn(GLTFLoader.prototype, "load").mockImplementation((_url, done) => { done({ scene } as never); return undefined as never; });
+  const r = new ManipulationRenderer(), current = structuredClone(state);
+  current.model!.asset_url = "/retention.glb";
+  const target = { ...pose, position: [.2,0,.3] as [number,number,number] };
+  const plan = { plan_id: "retained", duration: 10, joint_names: [], trajectory: [{ time: 0, positions: [] }, { time: 10, positions: [] }] } as unknown as import("@dimos-ar-client/manipulation/ManipulationTypes").ManipulationPlan;
   try {
-    applyRenderer(r, { target, solution: {}, now: 1 });
-    const model=(r as any).modelRenderer;
-    const snapshot=()=>[...model.previewMeshes.values()].map((o:any)=>[o.visible,...o.position.toArray(),...o.quaternion.toArray()]);
-    const before=snapshot(), measured=r.measuredHandle.object.position.toArray();
-    const moved={...target,position:[.3,0,.3] as [number,number,number]};
-    for(const now of [1.1,1.5,2.9]) applyRenderer(r, { state: {...state,available:false}, target: moved, now, status: "No feedback", fresh: false, snapshot: {retainingFeedback:true} });
-    expect(snapshot()).toEqual(before);
+    applyRenderer(r, { state: current, target, solution: {}, plan, now: 1 });
+    r.previewRequested = true;
+    applyRenderer(r, { state: current, target, solution: {}, plan, now: 1.1 });
+    const model = (r as unknown as { modelRenderer: { previewMeshes: Map<string, THREE.Object3D> } }).modelRenderer;
+    expect(model.previewMeshes.size).toBeGreaterThan(0);
+    expect(r.previewRequested).toBe(true);
+    const snapshot = () => [...model.previewMeshes.values()].map(o => [o.visible, ...o.position.toArray(), ...o.quaternion.toArray()]);
+    const before = snapshot(), measured = r.measuredHandle.object.position.toArray();
+    for (const now of [1.2,1.5,2.9]) applyRenderer(r, { state: { ...current, available: false }, target, plan, now, fresh: false, snapshot: { retainingFeedback: true } });
+    expect(snapshot()).toEqual(before); expect(r.previewRequested).toBe(true);
     expect(r.measuredHandle.object.position.toArray()).toEqual(measured);
-    expect(r.measuredHandle.object.visible).toBe(true); expect(r.handle.object.visible).toBe(true);
     expect(r.controlsView.buttons.get("execute")!.enabled).toBe(false);
-    expect(r.handle.object.position.toArray()).not.toEqual(measured);
-    applyRenderer(r, { state: {...state,available:false}, now: 3.1, status: "No feedback", fresh: false });
+    applyRenderer(r, { state: { ...current, available: false }, now: 3.1, fresh: false });
     expect(r.handle.object.visible).toBe(false); expect(r.measuredHandle.object.visible).toBe(false);
-  } finally {r.dispose();}
+  } finally { r.dispose(); load.mockRestore(); }
 });
 
 
@@ -740,7 +778,7 @@ it("owns the visible handle's rejection, stale and blocked center colors", () =>
   applyRenderer(renderer, { selected: false, target: pose, now: 1 });
   expect(color()).toBe(0xffcc00);
   applyRenderer(renderer, { selected: false, target: pose, now: 2, snapshot: { blocked: true } });
-  expect(color()).toBe(0x8e969e);
+  expect(color()).toBe(0xffcc00);
   rejection = null;
   applyRenderer(renderer, { selected: false, target: pose, now: 3, fresh: false });
   expect(color()).toBe(0xffcc00);

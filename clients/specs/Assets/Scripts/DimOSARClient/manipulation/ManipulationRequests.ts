@@ -15,10 +15,9 @@ export interface ManipulationRequest {
   deadline: number;
 }
 
-/** Owns RPC correlation, transfer-aware deadlines and late acquisition cleanup. */
+/** Owns RPC correlation, transfer-aware deadlines and acquisition retirement. */
 export class ManipulationRequests {
   private readonly pending = new Map<string, ManipulationRequest>();
-  private readonly retiredAcquisitions = new Map<string, string>();
   private readonly timing = { requests: 0, completions: 0, failures: 0, timeouts: 0, maximumDurationS: 0 };
 
   constructor(private readonly now: () => number,
@@ -54,7 +53,6 @@ export class ManipulationRequests {
     for (const [id, request] of this.pending) {
       if (this.now() < Math.max(request.deadline, this.transferDeadline(id) ?? 0)) continue;
       this.pending.delete(id);
-      if (request.action === "acquire") this.retiredAcquisitions.set(id, request.group);
       if (request.action === "evaluate") { this.timing.timeouts++; this.recordDuration(request); }
       expired.push(request);
     }
@@ -63,7 +61,6 @@ export class ManipulationRequests {
 
   retireAcquisitions(): void {
     for (const [id, request] of this.pending) if (request.action === "acquire") {
-      this.retiredAcquisitions.set(id, request.group);
       this.pending.delete(id);
     }
   }
@@ -73,13 +70,7 @@ export class ManipulationRequests {
     for (const [id, request] of this.pending) if (request.action !== "release") this.pending.delete(id);
   }
 
-  takeRetiredGroup(id: string): string | null {
-    const group = this.retiredAcquisitions.get(id) ?? null;
-    this.retiredAcquisitions.delete(id);
-    return group;
-  }
-
-  clear(): void { this.pending.clear(); this.retiredAcquisitions.clear(); }
+  clear(): void { this.pending.clear(); }
 
   diagnostics() {
     let pendingAgeS = 0;

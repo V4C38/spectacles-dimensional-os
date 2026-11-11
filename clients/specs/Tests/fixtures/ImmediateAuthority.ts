@@ -27,6 +27,7 @@ export function immediateAuthority(options: {
         if (state.authority) status = "busy";
         else {
           lease = `test-lease-${++serial}`;
+          state.following_tail = null;
           state.authority = { client_id: "test-client", source_id: request.source_id,
             acquisition_id: request.acquisition_id, lease_id: lease, kind: request.kind,
             group_id: request.group_id, held: true, expires_at: now() + 1, sequence: -1 };

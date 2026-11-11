@@ -78,3 +78,32 @@ def test_rejects_repeated_viewpoints_and_nonfinite_data() -> None:
     data["validation"][0]["corners2d"][0][0] = float("nan")
     with pytest.raises(ValueError, match="invalid"):
         fit(data)
+
+
+def test_projection_matches_hand_computed_rotated_world_axes() -> None:
+    quarter_turn_component = np.sqrt(0.5)
+    parameters = np.array([100, 200, 320, 240, 0.5, -0.25, 0.75, 0, 0, 0])
+    observation = {
+        "viewerPose": {
+            "position": [1, 2, 3],
+            "orientation": [0, 0, quarter_turn_component, quarter_turn_component],
+        },
+        "expectedOrigin": {
+            "position": [10, 20, 30],
+            "orientation": [0, 0, quarter_turn_component, quarter_turn_component],
+        },
+        # Optical origin is (11.25, 16.25, 32.5); its x/y/z axes are +Z/-X/-Y.
+        # These fixed world points are optical (0,0,2), (1,0,2), (0,1,2), (-1,-1,4).
+        "corners3d": [
+            [11.25, 14.25, 32.5],
+            [11.25, 14.25, 33.5],
+            [10.25, 14.25, 32.5],
+            [12.25, 12.25, 31.5],
+        ],
+    }
+    np.testing.assert_allclose(
+        project(parameters, observation),
+        [[320, 240], [370, 240], [320, 340], [295, 190]],
+        atol=1e-10,
+        rtol=0,
+    )

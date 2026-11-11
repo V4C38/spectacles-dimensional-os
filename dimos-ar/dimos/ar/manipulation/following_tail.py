@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import math
 from typing import Any
 
+from dimos.ar.manipulation.frames import pose_error
+
 
 @dataclass
 class FollowingTail:
@@ -66,19 +68,7 @@ class FollowingTail:
         stationary = bool(actual) and all(math.isfinite(v) for v in actual.values()) and stationary
         pose = getattr(observation, "end_effector_pose", None)
         if pose is not None and self.target_pose is not None:
-            distance = math.sqrt(
-                sum(
-                    (getattr(pose.position, axis) - getattr(self.target_pose.position, axis)) ** 2
-                    for axis in ("x", "y", "z")
-                )
-            )
-            dot = abs(
-                sum(
-                    getattr(pose.orientation, axis) * getattr(self.target_pose.orientation, axis)
-                    for axis in ("x", "y", "z", "w")
-                )
-            )
-            angle = 2 * math.acos(min(1, dot)) if math.isfinite(dot) else float("inf")
+            distance, angle = pose_error(pose, self.target_pose)
             close = distance <= 0.01 and angle <= math.radians(3)
             error = (distance, angle)
         else:

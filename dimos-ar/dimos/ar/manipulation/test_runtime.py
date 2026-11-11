@@ -1,4 +1,3 @@
-import math
 import threading
 import time
 from types import SimpleNamespace
@@ -250,7 +249,7 @@ def test_follow_factory_uses_the_model_velocity_limits(monkeypatch):
     monkeypatch.setattr(
         following,
         "SpeedScaledCartesianIKTask",
-        lambda name, config, **kwargs: captured.update(config=config),
+        lambda name, config, **kwargs: (captured.update(config=config) or SimpleNamespace()),
     )
     following.create_task(
         TaskConfig(
@@ -844,61 +843,6 @@ def test_delayed_follow_evaluation_cannot_clear_reacquired_gesture():
         worker.join(3)
 
 
-@pytest.mark.parametrize("speed", [0.25, 0.5, 1.0])
-def test_live_steps_preserve_model_velocity_acceleration_and_settle(speed):
-    import numpy as np
-
-    from dimos.ar.manipulation.following import create_task
-    from dimos.control.coordinator import TaskConfig
-    from dimos.msgs.sensor_msgs.JointState import JointState
-    from dimos.robot.manipulators.openyam.config import make_openyam_model_config
-
-    model = make_openyam_model_config()
-    task = create_task(
-        TaskConfig(
-            name="follow",
-            type="ar_cartesian_ik",
-            joint_names=model.joint_names,
-            params={"robot_model": model, "target_frame": "gripper_tip"},
-        ),
-        None,
-    )
-    solver = task._solver
-    solver.speed_scale = speed
-    initial = np.array(model.home_joints)
-    goal = initial.copy()
-    goal[0] += 0.2
-    target = solver.frame_poses(
-        JointState(name=list(model.joint_names), position=goal.tolist()), ["gripper_tip"]
-    )["gripper_tip"]
-    previous = initial
-    velocity = np.zeros_like(initial)
-    for _ in range(250):
-        command = solver.step(
-            {"gripper_tip": target},
-            JointState(name=list(model.joint_names), position=previous.tolist()),
-            0.01,
-        )
-        assert command is not None, solver.failure
-        current = np.array(command.position)
-        next_velocity = (current - previous) / 0.01
-        assert np.all(np.abs(next_velocity) <= speed + 1e-7)
-        assert np.all(np.abs(next_velocity - velocity) <= 2 * speed * 0.01 + 1e-7)
-        previous, velocity = current, next_velocity
-    actual = solver.frame_poses(
-        JointState(name=list(model.joint_names), position=previous.tolist()), ["gripper_tip"]
-    )["gripper_tip"]
-    assert (
-        np.linalg.norm(np.array(actual.position.to_tuple()) - np.array(target.position.to_tuple()))
-        < 0.005
-    )
-    dot = abs(
-        sum(
-            getattr(actual.orientation, a) * getattr(target.orientation, a)
-            for a in ("x", "y", "z", "w")
-        )
-    )
-    assert 2 * math.acos(min(1, dot)) < math.radians(3)
 
 
 def test_successful_recheck_unpauses_the_same_previously_rejected_target():

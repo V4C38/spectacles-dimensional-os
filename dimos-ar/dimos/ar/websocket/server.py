@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 import json
 import logging
 import secrets
@@ -53,6 +53,7 @@ from dimos.ar.websocket.protocol import (
     encode_hello,
 )
 from dimos.ar.websocket.send_queue import ClientSendQueue, peek_frame_type
+from dimos.ar.worker import BoundedWorker
 from dimos.core.global_config import global_config
 from dimos.utils.logging_config import setup_logger
 
@@ -173,10 +174,8 @@ class WebSocketServer:
         self._bulk_budget = TokenBucket(BULK_BYTES_PER_SECOND, MAX_BULK_RECORD_BYTES)
         self._ingress: dict[str, TokenBucket] = {}
         self._ingress_timing: dict[str, TimingSummary] = {}
-        self._encoder = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ar-bulk-encode")
-        self._encoder_permit = asyncio.Semaphore(1)
-        self._hello_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ar-hello")
-        self._hello_permit = asyncio.Semaphore(2)
+        self._encoder = BoundedWorker("ar-bulk-encode")
+        self._hello_worker = BoundedWorker("ar-hello", parallelism=2)
         self._pending_handshakes = 0
         self._bridge_lock = threading.Lock()
         self._bridge_fifo: deque[tuple[ws_server.ServerConnection | None, str]] = deque()
@@ -286,8 +285,8 @@ class WebSocketServer:
             for task in tasks:
                 task.cancel()
             await asyncio.gather(monitor, *tasks, return_exceptions=True)
-            self._encoder.shutdown(wait=False, cancel_futures=True)
-            self._hello_executor.shutdown(wait=False, cancel_futures=True)
+            self._encoder.close()
+            self._hello_worker.close()
 
     async def _monitor_loop(self) -> None:
         histogram = LatencyHistogram()
@@ -373,7 +372,7 @@ class WebSocketServer:
                             # ingress. Then retire the flooding peer before more work.
                             self._retire_connection(websocket, client_id, "control rate exceeded")
                             break
-                except (TypeError, ValueError) as exc:
+                except (TypeError, ValueError, OverflowError, RecursionError) as exc:
                     logger.warning("Invalid inbound WebSocket frame", error=str(exc))
                     if isinstance(exc, ControlBudgetError) or not self._ingress[client_id].take():
                         self._retire_connection(websocket, client_id, "invalid control frame budget")
@@ -387,7 +386,7 @@ class WebSocketServer:
                 client_id=client_id,
                 code=exc.rcvd.code if exc.rcvd is not None else None,
             )
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, OverflowError, RecursionError) as exc:
             logger.warning("Invalid WebSocket handshake", error=str(exc))
             await websocket.close(1008, "Invalid hello_request")
         except TimeoutError:
@@ -397,14 +396,7 @@ class WebSocketServer:
             if handshake_pending:
                 self._pending_handshakes -= 1
             owns_session = self._connections.get(client_id) is websocket
-            peer = None
-            if owns_session:
-                self._bulk_tokens.pop(client_id, None)
-                self._capture_ids.pop(client_id, None)
-                self._ingress.pop(client_id, None)
-                self._ingress_timing.pop(client_id, None)
-                peer = self._bulk_peers.pop(client_id, None)
-                self._connections.pop(client_id, None)
+            peer = self._detach_session(websocket, client_id)
             self._client_ids.pop(websocket, None)
             self._time_sync.pop(websocket, None)
             queued = self._outbound.pop(websocket, None)
@@ -447,6 +439,22 @@ class WebSocketServer:
                 finally:
                     self._retired_connections.discard(websocket)
 
+    def _detach_session(
+        self, websocket: ws_server.ServerConnection, client_id: str
+    ) -> BulkPeer | None:
+        # An old socket must never detach a resumed identity's resources.
+        if self._connections.get(client_id) is not websocket:
+            return None
+        self._connections.pop(client_id)
+        self._bulk_tokens.pop(client_id, None)
+        self._capture_ids.pop(client_id, None)
+        self._ingress.pop(client_id, None)
+        self._ingress_timing.pop(client_id, None)
+        peer = self._bulk_peers.pop(client_id, None)
+        if peer is not None and peer.task is not None:
+            peer.task.cancel()
+        return peer
+
     def _retire_connection(
         self,
         websocket: ws_server.ServerConnection,
@@ -455,25 +463,29 @@ class WebSocketServer:
     ) -> None:
         if websocket in self._retired_connections:
             return
-        self._resume_tokens.pop(client_id, None)
+        owns_session = self._connections.get(client_id) is websocket
         self._retired_connections.add(websocket)
-        self._bulk_tokens.pop(client_id, None)
-        self._capture_ids.pop(client_id, None)
-        if self._connections.get(client_id) is websocket:
-            self._connections.pop(client_id, None)
-        if self._on_disconnect is not None:
-            self._on_disconnect(websocket, client_id)
+        peer = self._detach_session(websocket, client_id)
+        if owns_session:
+            self._resume_tokens.pop(client_id, None)
 
         async def close() -> None:
             try:
                 async with asyncio.timeout(2.0):
-                    await websocket.close(1011, reason[:120])
+                    await asyncio.gather(
+                        websocket.close(1011, reason[:120]),
+                        *([peer.websocket.close(1001, "control session retired")]
+                          if peer is not None else []),
+                        return_exceptions=True,
+                    )
             except Exception:
                 logger.exception("Failed to close retired client", client_id=client_id)
 
         task = asyncio.create_task(close())
         self._closing_tasks.add(task)
         task.add_done_callback(self._closing_tasks.discard)
+        if owns_session and self._on_disconnect is not None:
+            self._on_disconnect(websocket, client_id)
 
     async def _complete_handshake(
         self,
@@ -508,11 +520,7 @@ class WebSocketServer:
             ts_server = time.time()
             time_sync = TimeSync(ts_client=hello_request.ts_client, ts_server=ts_server)
             self._time_sync[websocket] = time_sync
-            await self._hello_permit.acquire()
-            work = self._loop.run_in_executor(self._hello_executor, self._hello_supplier, client_id)
-            work.add_done_callback(lambda _work: self._hello_permit.release())
-            work.add_done_callback(lambda done: None if done.cancelled() else done.exception())
-            body = await asyncio.shield(work)
+            body = await self._hello_worker.run(lambda: self._hello_supplier(client_id))
             token = secrets.token_hex(32)
             req = getattr(websocket, "request", None)
             hello = Hello(
@@ -772,12 +780,7 @@ class WebSocketServer:
         return self.prepare_outbound(payload)
 
     async def _encode_bulk(self, operation: Callable[..., dict[str, Any]], value: Any) -> dict[str, Any]:
-        # A cancelled waiter never releases a native encoder's admission slot.
-        await self._encoder_permit.acquire()
-        future = self._loop.run_in_executor(self._encoder, operation, value)
-        future.add_done_callback(lambda _future: self._encoder_permit.release())
-        future.add_done_callback(lambda done: None if done.cancelled() else done.exception())
-        result: dict[str, Any] = await asyncio.shield(future)
+        result = await self._encoder.run(lambda: operation(value))
         self._publish_refs(result)
         return result
 

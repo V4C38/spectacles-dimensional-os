@@ -57,7 +57,6 @@ class _RecordedPost:
     headers: dict[str, str] | None
     data: dict[str, str] | None
     files: dict[str, tuple[str, bytes, str]] | None
-    timeout: float
 
 
 class _FakeClock:
@@ -83,7 +82,7 @@ class _FakeSession:
                     files[options["name"]] = (options["filename"], value, metadata["Content-Type"])
                 else:
                     fields[options["name"]] = value
-        self.calls.append(_RecordedPost(url, headers, fields, files, 12.0))
+        self.calls.append(_RecordedPost(url, headers, fields, files))
         if not self._responses:
             raise AssertionError(f"unexpected HTTP POST to {url}")
         return self._responses.pop(0)
@@ -275,7 +274,6 @@ async def test_query_sends_form_fields_and_converts_found_pose(
     assert query.files is not None
     assert query.files["queryImage"][0] == "query.jpg"
     assert query.files["queryImage"][2] == "image/jpeg"
-    assert query.timeout == pytest.approx(12.0)
 
 
 async def test_vps_localizer_accepts_multiset_client_result(
@@ -387,6 +385,27 @@ async def test_http_error_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(MultisetVpsError, match="HTTP 400"):
         await _client(session, monkeypatch).query(jpeg=_jpeg(), intrinsics=_intrinsics())
+
+
+async def test_map_failure_logs_dispatch_and_safe_http_diagnostics(monkeypatch) -> None:
+    from unittest.mock import Mock
+
+    import dimos.ar.localization.vps.multiset_client as module
+
+    logger = Mock()
+    monkeypatch.setattr(module, "logger", logger)
+    session = _FakeSession([
+        _token_response(),
+        _FakeResponse(status_code=404, body_text='{"message":"Map not found"}'),
+    ])
+    with pytest.raises(MultisetVpsError, match="HTTP 404"):
+        await _client(session, monkeypatch).query(jpeg=_jpeg(), intrinsics=_intrinsics())
+    logger.info.assert_called_once_with(
+        "VPS query dispatched", map_code="MAP_TEST", endpoint="/vps/map/query-form",
+    )
+    logger.warning.assert_called_once_with(
+        "VPS query rejected", http_status=404, reason="map_not_found", map_code="MAP_TEST",
+    )
 
 
 async def test_auth_error_body_raises(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,6 +1,7 @@
 import re
+from typing import Any
 
-RECOVERABLE_CODES = {"ik_failed", "joint_limit", "collision"}
+RECOVERABLE_CODES = frozenset({"ik_failed", "joint_limit", "collision"})
 
 
 def spatial_error_code(message: str | None, default: str = "rejected") -> str:
@@ -26,3 +27,19 @@ class ManipulationError(ValueError):
 
 class ExecutionNotStartedError(ManipulationError):
     """A checked admission failure that guarantees no motion was dispatched."""
+
+
+def rejection_result(action: object, error: Exception, *, transport: bool = False) -> dict[str, Any]:
+    code = error.code if isinstance(error, ManipulationError) else spatial_error_code(str(error))
+    recoverable = (isinstance(action, str) and action in {"update", "evaluate", "plan"}
+                   and code in RECOVERABLE_CODES)
+    uncertain = (transport and isinstance(action, str)
+                 and action in {"execute", "reset_joints", "prepare_shutdown"})
+    result: dict[str, Any] = {
+        "status": "uncertain" if uncertain else "infeasible" if recoverable else "rejected",
+        "code": "rpc_uncertain" if uncertain else code,
+        "message": str(error),
+    }
+    if isinstance(error, ManipulationError) and error.failed_joints:
+        result["failed_joints"] = error.failed_joints
+    return result

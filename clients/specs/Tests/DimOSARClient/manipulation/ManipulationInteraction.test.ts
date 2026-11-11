@@ -89,6 +89,8 @@ function fixture() {
     view,
     tail: (position = pose, joints = { joint: 0.3 }) => {
       view.manipulation.following_tail = { generation: 1, group_id: "arm", status: "finishing", target_revision: 1, ...position, joints };
+      authority.state.following_tail = view.manipulation.following_tail;
+      authority.publish();
       pump();
     },
     advance: (seconds: number, fresh = true) => {
@@ -704,7 +706,8 @@ it("validates explicit visual profiles and gripper joint mappings at the wire bo
 
 it("retains the arm IK preview when only the selected gripper draft changes", () => {
   const f = fixture(); f.interaction.setSelected(true);
-  f.interaction.solution = { joint: 0.2 };
+  f.interaction.begin(); f.interaction.aim(pose); f.advance(.1);
+  f.reply(f.sent.at(-1), { status: "feasible", joints: { joint: .2 }, pose });
   f.interaction.setGripper(1);
   expect(f.interaction.solution).toEqual({ joint: 0.2 });
   expect(f.sent.some(c => c.action === "execute" || c.action === "gripper")).toBe(false);
@@ -763,7 +766,8 @@ it("regrabs a released follow goal with a fresh lease and interrupts on feedback
   f.advance(2.01, false);
   expect(f.interaction.dragging).toBe(false);
   expect(f.authority.state.authority).toBeNull();
-  f.view.manipulation.following_tail = null; f.advance(0);
+  f.view.manipulation.following_tail = null;
+  f.authority.state.following_tail = null; f.authority.publish(); f.advance(0);
   expect(f.interaction.following).toBe(false);
 });
 
@@ -1139,4 +1143,34 @@ it("fails before subscribing when the required authority port is absent", () => 
     subscribeOutbound: () => { subscribed = true; return () => {}; },
   } as never, () => 0)).toThrow("Manipulation requires interaction authority");
   expect(subscribed).toBe(false);
+});
+
+it("retains recorded EOF observations without refreshing measurement age or acquiring control", () => {
+  const f = fixture();
+  f.view.manipulation.read_only = true;
+  f.view.hello = { source: { kind: "recording", read_only: true, name: "arm.db" } };
+  const observed = f.view.manipulation.observations.arm;
+  f.advance(10, false);
+  expect(f.interaction.available).toBe(true);
+  expect(f.interaction.feedbackFresh).toBe(false);
+  expect(f.view.manipulation.observations.arm).toBe(observed);
+  expect(observed.measured_at).toBe(100);
+  expect(f.interaction.snapshot()).toMatchObject({ activity: "Recording", fresh: false,
+    canExecute: false, canManipulate: false, canReset: false, canResume: false });
+  expect(f.interaction.begin()).toBe(false);
+  f.interaction.setSpeedScale(.7); f.interaction.setGripper(1); f.interaction.execute();
+  expect(f.sent).toEqual([]); expect(f.authority.commands).toEqual([]);
+});
+
+it("retires rejection and old replies on reset before a fresh grab of the same pose", () => {
+  const f = fixture(); f.interaction.setSelected(true); expect(f.interaction.begin()).toBe(true);
+  f.interaction.aim(pose); f.advance(.1);
+  const old = f.sent.findLast(command => command.action === "evaluate");
+  f.reply(old, { status: "infeasible", code: "ik_failed" });
+  expect(f.interaction.rejection).not.toBeNull();
+  f.interaction.reset(); f.advance(0);
+  expect(f.interaction.begin()).toBe(true); f.interaction.aim(pose);
+  expect(f.interaction.target).toEqual(pose); expect(f.interaction.rejection).toBeNull();
+  f.reply(old, { status: "infeasible", code: "ik_failed" });
+  expect(f.interaction.target).toEqual(pose); expect(f.interaction.rejection).toBeNull();
 });

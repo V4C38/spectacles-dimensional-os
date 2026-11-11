@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import numpy as np
 from pydantic import BaseModel, model_validator
@@ -32,3 +33,13 @@ class ReferencePose(BaseModel):
         return (rotation.apply(position) + self.position).tolist(), (
             rotation * Rotation.from_quat(orientation)
         ).as_quat().tolist()
+
+
+def pose_error(pose: Any, target: Any) -> tuple[float, float]:
+    position = [getattr(pose.position, axis) for axis in ("x", "y", "z")]
+    expected = [getattr(target.position, axis) for axis in ("x", "y", "z")]
+    dot = abs(sum(getattr(pose.orientation, axis) * getattr(target.orientation, axis)
+                  for axis in ("x", "y", "z", "w")))
+    if not all(math.isfinite(value) for value in (*position, *expected, dot)):
+        return float("inf"), float("inf")
+    return math.dist(position, expected), 2 * math.acos(min(1.0, dot))

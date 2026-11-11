@@ -1,11 +1,10 @@
 import { describe, it, expect } from "vitest";
+import { scaleIn, scaleOut, nextAnimationVersion, DEFAULT_SCALE_ANIMATION_VERSION_KEY } from "../../Assets/Scripts/DimOSSpecsClient/utilities/AnimationUtilities";
+import { advanceAnimations, flushAnimations } from "../mocks/animate";
 import {
   exponentialSmoothAlpha,
   interpolatePose,
   lerpVec3,
-  maybeAdvanceDragHeadingTarget,
-  slerpRotationToward,
-  smoothScalar,
 } from "../../Assets/Scripts/DimOSSpecsClient/utilities/AnimationUtilities";
 
 describe("lerpVec3", () => {
@@ -33,56 +32,6 @@ describe("exponentialSmoothAlpha", () => {
   });
 });
 
-describe("smoothScalar", () => {
-  it("snaps to target when dt is zero", () => {
-    expect(smoothScalar(1, 5, 0, 10)).toBe(5);
-  });
-
-  it("moves toward target when dt is positive", () => {
-    const result = smoothScalar(0, 10, 0.016, 10);
-    expect(result).toBeGreaterThan(0);
-    expect(result).toBeLessThan(10);
-  });
-});
-
-describe("maybeAdvanceDragHeadingTarget", () => {
-  it("does not update target below minimum travel", () => {
-    const result = maybeAdvanceDragHeadingTarget({ x: 0, z: 0 }, { x: 1, z: 0 }, 3);
-    expect(result.headingDirection).toBeNull();
-    expect(result.gateOrigin).toEqual({ x: 0, z: 0 });
-  });
-
-  it("updates target once travel reaches the gate", () => {
-    const result = maybeAdvanceDragHeadingTarget({ x: 0, z: 0 }, { x: 4, z: 0 }, 3);
-    expect(result.headingDirection).toEqual({ x: 1, z: 0 });
-    expect(result.gateOrigin).toEqual({ x: 4, z: 0 });
-  });
-});
-
-describe("slerpRotationToward", () => {
-  it("converges toward target over repeated steps", () => {
-    const target = new quat(0.924, 0, 0.383, 0);
-    target.normalize();
-    let current = quat.quatIdentity();
-    for (let i = 0; i < 60; i++) {
-      current = slerpRotationToward(current, target, 0.016, 8);
-    }
-    expect(quat.angleBetween(current, target)).toBeLessThan(0.1);
-  });
-
-  it("is frame-rate independent within tolerance", () => {
-    const target = new quat(0.707, 0, 0.707, 0);
-    let oneStep = quat.quatIdentity();
-    oneStep = slerpRotationToward(oneStep, target, 0.032, 8);
-
-    let twoSteps = quat.quatIdentity();
-    twoSteps = slerpRotationToward(twoSteps, target, 0.016, 8);
-    twoSteps = slerpRotationToward(twoSteps, target, 0.016, 8);
-
-    expect(quat.angleBetween(oneStep, twoSteps)).toBeLessThan(0.02);
-  });
-});
-
 describe("interpolatePose", () => {
   it("returns target when dt is zero", () => {
     const pos = new vec3(0, 0, 0);
@@ -93,4 +42,21 @@ describe("interpolatePose", () => {
     expect(result.position).toEqual(targetPos);
     expect(result.rotation.w).toBeCloseTo(targetRot.w, 5);
   });
+});
+
+it("retired interpolation and completion cannot change a restarted panel", async () => {
+  flushAnimations();
+  let scale = vec3.zero();
+  const panel = { enabled: false, getTransform: () => ({
+    getLocalScale: () => scale, setLocalScale: (value: vec3) => { scale = value; },
+  }) } as unknown as SceneObject;
+  const opening = scaleIn(panel, .5);
+  advanceAnimations(.4); expect(scale.x).toBeCloseTo(.4);
+  const closing = scaleOut(panel, .5);
+  advanceAnimations(.5); expect(scale.x).toBeCloseTo(.2);
+  nextAnimationVersion(panel, DEFAULT_SCALE_ANIMATION_VERSION_KEY);
+  panel.getTransform().setLocalScale(vec3.one().uniformScale(.75));
+  advanceAnimations(.9); expect(scale.x).toBe(.75);
+  flushAnimations(); await Promise.all([opening, closing]);
+  expect(panel.enabled).toBe(true); expect(scale.x).toBe(.75);
 });

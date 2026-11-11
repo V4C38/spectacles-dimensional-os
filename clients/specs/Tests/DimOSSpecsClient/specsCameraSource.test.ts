@@ -95,18 +95,10 @@ import { SpecsCameraSource } from "../../Assets/Scripts/DimOSSpecsClient/localiz
 import { setMockTime } from "../setup/lens-globals";
 afterEach(() => vi.unstubAllGlobals());
 it("settles capture on stop during JPEG encoding and ignores the retired native callback", async () => {
-  let encoded = (_value: string) => {};
-  vi.stubGlobal("Base64", { encodeTextureAsync: (_texture: unknown, success: typeof encoded) => { encoded = success; }, decode: () => new Uint8Array([1]) });
-  vi.stubGlobal("CompressionQuality", { IntermediateQuality: 1 }); vi.stubGlobal("EncodingType", { Jpg: 1 });
-  const texture = { getWidth: () => 100, getHeight: () => 100 };
-  const stream = { start: vi.fn(), stop: vi.fn(), requestNextFrame: async () => ({ texture, timestampSeconds: 10 }),
-    deviceCamera: { pose: null, resolution: { x: 100, y: 100 }, focalLength: { x: 50, y: 50 }, principalPoint: { x: 50, y: 50 } } };
-  const source = new SpecsCameraSource({ stream: stream as any,
-    cameraObject: { getTransform: () => ({ getWorldPosition: () => vec3.zero(), getWorldRotation: () => quat.quatIdentity() }) } as any });
-  setMockTime(10); source.samplePose(); source.start();
+  const { source, stream, callbacks } = encodingFixture();
   const capture = source.capture(), result = vi.fn(); capture.then(result, () => {}); await Promise.resolve();
   const rejected = expect(capture).rejects.toThrow("stopped"); source.stop(); await rejected;
-  encoded("jpeg"); await Promise.resolve(); await Promise.resolve();
+  callbacks[0]("jpeg"); await Promise.resolve(); await Promise.resolve();
   expect(result).not.toHaveBeenCalled(); expect(stream.stop).toHaveBeenCalledOnce();
 });
 

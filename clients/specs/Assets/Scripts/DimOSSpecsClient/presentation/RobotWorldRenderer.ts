@@ -4,12 +4,16 @@ import type { StatusTone } from "../../DimOSARClient/websocket/sessionLinkStatus
 import type { RobotDescription } from "../../DimOSARClient/websocket/protocolTypes";
 import { AdaptiveStrokeRenderer, WorldMeshRenderer, circleMesh, sphereMesh } from "./WorldMeshRenderer";
 import { createRobotLabelText, COLOR_WHITE } from "./UIKit";
+import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
+import { MarkerCorrectionRenderer } from "./MarkerCorrectionRenderer";
 
 const POSE_MATERIAL = requireAsset("../../../Materials/PoseIndicator.mat") as Material;
 
 /** Body picking stays fixed while the visible outline unfolds from the floor. */
 export class RobotWorldRenderer {
   private readonly root: SceneObject;
+  private readonly correction: MarkerCorrectionRenderer;
+  private readonly indicator: WorldMeshRenderer;
   private readonly markerRoot: SceneObject;
   readonly colliderRoot: SceneObject;
   readonly interactable: Interactable;
@@ -33,9 +37,10 @@ export class RobotWorldRenderer {
 
   constructor(private readonly parent: SceneObject, toggle: (sourceId: string) => void) {
     this.root = global.scene.createSceneObject("RobotWorldVisuals"); this.root.setParent(parent);
-    const sphere = new WorldMeshRenderer(this.root, "RobotIndicator", POSE_MATERIAL);
+    const sphere = this.indicator = new WorldMeshRenderer(this.root, "RobotIndicator", POSE_MATERIAL);
     const mesh = sphereMesh(3, 24, 16);
     sphere.triangles(mesh.positions, mesh.indices, [1, 1, 1, 1], undefined, mesh.normals);
+    this.correction = new MarkerCorrectionRenderer(this.root, sphere, true);
     this.colliderRoot = global.scene.createSceneObject("RobotSelectionCollider"); this.colliderRoot.setParent(this.root);
     this.collider = this.colliderRoot.createComponent("Physics.ColliderComponent") as ColliderComponent;
     this.collider.shape = Shape.createBoxShape();
@@ -133,5 +138,15 @@ export class RobotWorldRenderer {
     }
   }
   floorCircleBounds(floor: vec3) { return { center: [floor.x, floor.y + 0.1, floor.z] as [number, number, number], radius: 6 }; }
-  reset(): void { this.progress = this.selectionProgress = 0; this.selected = this.hovered = false; this.outline.hide(); this.circle.hide(); }
+  updateCorrection(origin: ClientTrackingOrigin | null, floorY: number | null, viewportHeight: number): void {
+    this.correction.update(origin, getTime(), floorY ?? undefined, viewportHeight);
+    const position = this.indicator.object.getTransform().getWorldPosition();
+    this.connector.object.getTransform().setWorldPosition(position);
+    if (floorY !== null) {
+      const bottom = Math.max(3, position.y - floorY - 2);
+      if (bottom > 3) this.connector.segments([[0, -3, 0], [0, -bottom, 0]], 0.275, 0.8);
+      else this.connector.hide();
+    }
+  }
+  reset(): void { this.correction.reset(); this.progress = this.selectionProgress = 0; this.selected = this.hovered = false; this.outline.hide(); this.circle.hide(); }
 }

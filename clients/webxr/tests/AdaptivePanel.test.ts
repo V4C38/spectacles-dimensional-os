@@ -1,12 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
-vi.hoisted(() => {
-  class AudioContextStub {
-    destination = {};
-    createGain() { return { connect() {}, gain: { value: 1 } }; }
-  }
-  Object.defineProperty(window, "AudioContext", { value: AudioContextStub, configurable: true });
-});
+import "./fixtures/xrEnvironment";
+
 import * as THREE from "three";
 import * as xb from "xrblocks";
 import { MainMenuView } from "../src/presentation/MainMenuView";
@@ -21,7 +16,7 @@ function harness() {
   const noop = () => {};
   const estop = vi.fn();
   const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop,
-    onRobot: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: estop, onDraft: noop, onAgentText: () => true });
+    onRobot: noop, onDebug: noop, onLocalize: noop, onRealign: noop, onEstop: estop, onDraft: noop, onAgentText: () => true });
   views.push(view);
   const snap: WebXRUISnapshot = {
     setupCompleted: true, menuOpen: true, wizardStep: "connect", robotName: "Go2", robotSelected: true, robotSelectable: true,
@@ -32,7 +27,7 @@ function harness() {
   };
   const internals = view as unknown as { heightController: PanelHeightAnimation; plate: GlassSurface; hud: xb.TextView; cardTitle: xb.TextView; chat: THREE.Group;
     manualHelp: THREE.Group; wizardBody: THREE.Group; wizardFooter: THREE.Group; header: THREE.Group; estop: xb.TextButton;
-    settingsOpen: boolean; sensorsOpen: boolean; detailsOpen: boolean; appearanceRoot: THREE.Group };
+    page: "main" | "settings" | "sensors" | "diagnostics"; appearanceRoot: THREE.Group };
   const apply = (overrides: Partial<WebXRUISnapshot> = {}) => view.apply({ ...snap, ...overrides });
   const settle = () => view.updateHover([], 0.28);
   const top = () => internals.plate.localToWorld(new THREE.Vector3(0, internals.heightController.height / 2, 0));
@@ -126,9 +121,7 @@ it.each([
 
 it.each(["settings", "sensors", "diagnostics", "alignment"] as const)("fits the runtime %s body and footer", name => {
   const f = harness(); f.apply(); f.settle();
-  f.internals.settingsOpen = name === "settings";
-  f.internals.sensorsOpen = name === "sensors";
-  f.internals.detailsOpen = name === "diagnostics";
+  f.internals.page = name === "settings" || name === "sensors" || name === "diagnostics" ? name : "main";
   f.apply(name === "alignment" ? { alignmentReview: { reason: "Tracking resumed", pending: true } } : {}); f.settle();
   expect(f.internals.heightController.height).toBe(name === "sensors" ? (f.view as any).capabilityProfile.height : RUNTIME_LAYOUTS[name].height);
   const bottom = 0.38 - f.internals.heightController.height;
@@ -143,9 +136,7 @@ it.each(["settings", "sensors", "diagnostics", "alignment"] as const)("fits the 
 it("keeps space above Emergency Stop through every runtime page resize", () => {
   const f = harness(); f.apply(); f.settle();
   for (const page of ["agent", "settings", "sensors", "diagnostics", "alignment", "manual", "agent"] as const) {
-    f.internals.settingsOpen = page === "settings";
-    f.internals.sensorsOpen = page === "sensors";
-    f.internals.detailsOpen = page === "diagnostics";
+    f.internals.page = page === "settings" || page === "sensors" || page === "diagnostics" ? page : "main";
     f.apply({ operatingMode: page === "agent" ? "agent" : "manual",
       alignmentReview: page === "alignment" ? { reason: "Tracking resumed", pending: true } : null });
     for (let frame = 0; frame < 10; frame++) {

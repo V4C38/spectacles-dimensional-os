@@ -15,9 +15,8 @@ def load_catalog() -> dict[str, Any]:
     return catalog
 
 
-def applicable_cases(group: str | None = None) -> list[dict[str, Any]]:
-    return [row for row in load_catalog()["cases"] if "specs" in row["platforms"]
-            and (group is None or (row["group"] == "golden") == (group == "golden"))]
+def applicable_cases() -> list[dict[str, Any]]:
+    return [row for row in load_catalog()["cases"] if "specs" in row["platforms"]]
 
 
 def write_lens_catalog(directory: Path) -> None:

@@ -6,6 +6,8 @@ import os
 import stat
 from pathlib import Path
 
+import pytest
+
 from config import merge_env, normalize_log_level, read_env
 
 
@@ -42,3 +44,18 @@ def test_normalize_log_level_defaults_and_uppercases() -> None:
     assert normalize_log_level("") == "INFO"
     assert normalize_log_level("debug") == "DEBUG"
     assert normalize_log_level("TRACE") == "INFO"
+
+
+@pytest.mark.parametrize("separator", ["\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029", "\0"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_merge_rejects_record_separators_before_writing(tmp_path, separator, existing):
+    path = tmp_path / ".env"
+    original = b"OPENAI_API_KEY=unchanged\nOTHER=keep\n" if existing else b""
+    if existing:
+        path.write_bytes(original)
+    with pytest.raises(ValueError, match="one line"):
+        merge_env({"OTHER": "new", "OPENAI_API_KEY": f"abc{separator}MULTISET_CLIENT_ID=changed"}, path)
+    if existing:
+        assert path.read_bytes() == original
+    else:
+        assert not path.exists()

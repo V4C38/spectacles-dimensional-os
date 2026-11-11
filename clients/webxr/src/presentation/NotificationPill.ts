@@ -28,6 +28,10 @@ export class NotificationPill {
         }),
       ),
   );
+  private readonly dots = [0, 1, 2].map(() => new THREE.Mesh(
+    new THREE.CircleGeometry(0.002, 16),
+    new THREE.MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false }),
+  ));
   private lastText = "";
   private readonly triangle = new THREE.Line(
     new THREE.BufferGeometry().setFromPoints([
@@ -55,6 +59,7 @@ export class NotificationPill {
       this.text,
       this.ring,
       ...this.strokes,
+      ...this.dots,
       this.triangle,
       this.bang,
     );
@@ -117,7 +122,13 @@ export class NotificationPill {
           : current.tone === "warning"
             ? 0xff9f0a
             : 0xffffff;
-    this.ring.visible = current.glyph === "stop";
+    this.ring.visible = current.glyph === "stop" || current.glyph === "busy";
+    this.dots.forEach((dot, i) => {
+      dot.visible = current.glyph === "busy" && i <= Math.floor(Math.max(0, elapsed) / 0.35) % 3;
+      dot.position.set(this.iconX + (i - 1) * 0.0065, 0, 0.009);
+      dot.material.color.setHex(color);
+      dot.material.opacity = opacity;
+    });
     this.ring.geometry.setDrawRange(
       0,
       Math.floor(Math.min(1, elapsed / 0.18) * 64) * 6,
@@ -138,7 +149,7 @@ export class NotificationPill {
             ];
     this.strokes.forEach((stroke, i) => {
       stroke.visible =
-        current.glyph !== "warning" && !!current.glyph && i < segments.length;
+        current.glyph !== "warning" && current.glyph !== "busy" && !!current.glyph && i < segments.length;
       if (!stroke.visible) return;
       const [x, y, ex, ey] = segments[i];
       const progress = THREE.MathUtils.clamp(
@@ -166,7 +177,7 @@ export class NotificationPill {
     disposeTextResources(this.bang);
     this.plate.dispose();
     disposeTextResources(this.text);
-    for (const mesh of [this.ring, ...this.strokes]) {
+    for (const mesh of [this.ring, ...this.strokes, ...this.dots]) {
       mesh.geometry.dispose();
       mesh.material.dispose();
     }

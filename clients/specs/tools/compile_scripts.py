@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 
 from native_project import prepare_harness
+from ls_awake import KeepAwake
 
 
 def main() -> int:
@@ -55,4 +56,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    with KeepAwake():
+        raise SystemExit(main())

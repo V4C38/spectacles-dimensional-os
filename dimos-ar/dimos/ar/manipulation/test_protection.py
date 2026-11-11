@@ -208,7 +208,7 @@ def test_real_trajectory_status_survives_rpc_and_applies_deferred_gripper_after_
         end_effector_pose=None,
         gripper_position=0,
     )
-    backend = SimpleNamespace(
+    backend = SimpleNamespace(endpoint_holding=False, gripper_target=None,
         get_state=lambda: SimpleNamespace(
             execution_status=task.get_status(1).state, groups={"arm": observed}
         ),

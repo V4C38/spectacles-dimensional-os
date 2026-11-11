@@ -1,12 +1,13 @@
 import { endEffectorAngles, endEffectorDisplayPose } from "@dimos-ar-client/manipulation/ManipulationVisuals";
 import { ARM_PANEL_STYLE } from "@dimos-ar-client/presentation/PanelFrameStyle";
-import { armMotionContext } from "@dimos-ar-client/manipulation/ArmJointFilter";
+import { ArmPresentationSampler } from "@dimos-ar-client/manipulation/ArmPresentationSampler";
 import { Text } from "troika-three-text";
+import { disposeTextResources } from "../presentation/TextResources";
 import { UI_FONT_REGULAR } from "../presentation/UIFonts";
 import { ROBOT_LABEL_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
 import { webxrToClientTrackingPoint } from "../utilities/WebXRCoordinates";
 import { ARM_VISUAL_STYLE, armPointDisplacement, armLinkWeight, armLinkPresentation, ArmMeshFade } from "@dimos-ar-client/manipulation/ManipulationVisuals";
-import { manipulationObservedJoints, manipulationProposedJoints, manipulationActivePlan, manipulationPathOpacity, ManipulationPresentation as PreviewPresentation } from "@dimos-ar-client/manipulation/ManipulationPresentation";
+import { manipulationActivePlan, manipulationPathOpacity, ManipulationPreviewPlayback } from "@dimos-ar-client/manipulation/ManipulationPresentation";
 import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/clientTrackingOrigin";
 import { odomToClientTrackingPose } from "@dimos-ar-client/localization/clientTrackingTransforms";
 import { type ManipulationSnapshot } from "@dimos-ar-client/manipulation/ManipulationInteraction";
@@ -28,14 +29,14 @@ import { syncText } from "../presentation/UIFonts";
 import {
   clientTrackingToWebxrPose,
 } from "../utilities/WebXRCoordinates";
-import { ArmJointFilter } from "@dimos-ar-client/manipulation/ArmJointFilter";
 import { ArmTrajectoryProgress } from "@dimos-ar-client/manipulation/ArmTrajectoryProgress";
 import { EndEffectorHandleRenderer } from "./EndEffectorHandleRenderer";
 import { ManipulationControlsView } from "./ManipulationControlsView";
 import { ManipulationModelRenderer } from "./ManipulationModelRenderer";
-import { TargetWarning } from "./TargetWarning";
+import { EndEffectorStatusView } from "./EndEffectorStatusView";
+import { MarkerCorrectionRenderer } from "../presentation/MarkerCorrectionRenderer";
 
-export interface ManipulationPresentation {
+export interface ManipulationRenderInput {
   state: ManipulationState | null | undefined;
   origin: ClientTrackingOrigin | null;
   groupId: string | null;
@@ -68,6 +69,7 @@ export class ManipulationRenderer {
   readonly previewMenu = this.controlsView.previewMenu;
   readonly speedSlider = this.controlsView.speedSlider;
   readonly handle = new EndEffectorHandleRenderer();
+  private readonly correction = new MarkerCorrectionRenderer(this.handle.visual);
   private readonly pathStroke = new AdaptiveDashedLineRenderer(
     WORLD_DASH_STYLE.widthM * 0.65,
     WORLD_DASH_STYLE.dashM,
@@ -100,23 +102,19 @@ export class ManipulationRenderer {
   readonly viewerPosition = new THREE.Vector3();
   handDragging = false;
   private readonly basePosition = new THREE.Vector3();
-  private readonly jointFilter = new ArmJointFilter();
-  private previousSolution: object | null = null;
-  private solutionSequence = 0;
-  private readonly previewFilter = new ArmJointFilter(0.15, 0.25);
+  private readonly sampler = new ArmPresentationSampler();
   private readonly trajectoryProgress = new ArmTrajectoryProgress();
-  private filterContext = "";
-  readonly warning = new TargetWarning();
+  readonly statusView = new EndEffectorStatusView();
   private selectedBefore = false;
   pinned = false;
   eeHovered = false;
   hoveredAction: string | null = null;
   hoveredLink: string | null = null;
-  constructor(private readonly preview = new PreviewPresentation()) {
+  constructor(private readonly preview = new ManipulationPreviewPlayback()) {
     this.object.name = "Manipulation";
     this.path.userData.environmentDepth = true;
     this.path.raycast = () => {};
-    this.object.add(this.warning.object);
+    this.object.add(this.statusView.object);
     (this.handle.visual.material as THREE.Material).transparent = true;
     (this.handle.visual.material as THREE.Material).depthWrite = false;
     this.handle.collider.scale.setScalar(1.04);
@@ -146,7 +144,7 @@ export class ManipulationRenderer {
   faceViewer(position: THREE.Vector3): void {
     this.viewerPosition.copy(position);
     this.controlsView.faceViewer(position);
-    this.warning.faceViewer(position);
+    this.statusView.faceViewer(position);
     for (const { label } of this.debugNodes.values()) label.lookAt(position);
   }
   resetPanel(): void {
@@ -167,7 +165,7 @@ export class ManipulationRenderer {
       !!object.userData.manipulationAction
     );
   }
-  apply(input: ManipulationPresentation): void {
+  apply(input: ManipulationRenderInput): void {
     const {
       state,
       origin,
@@ -181,16 +179,18 @@ export class ManipulationRenderer {
       intent,
     } = input;
     const fresh = intent.fresh;
-    this.modelRenderer.tick(now, fresh && !!state?.available && !!origin);
-    if (intent.retainingFeedback && origin) {
+    const recorded = state?.read_only === true;
+    this.modelRenderer.tick(now, (fresh || recorded) && !!state?.available && !!origin);
+    if (intent.retainingFeedback && origin && !recorded) {
       this.preview.hold(now);
-      this.jointFilter.hold(now); this.previewFilter.hold(now);
+      this.sampler.hold(now);
       for (const [key, button] of this.controlsView.buttons) button.setEnabled(key === "estop" || key === "stop");
       this.speedSlider.hit.userData.interactionEnabled = false;
       if(target) this.place(this.handle.object,target,origin);
-      this.warning.update(this.handle.object.position, now, { blocked: false, fresh: false,
+      this.correction.update(this.handle.object.visible ? origin : null, now);
+      this.statusView.update(this.handle.object.position, now, { blocked: false, fresh: false,
         stopped: intent.stopped, moving: false, rejection: null });
-      this.warning.faceViewer(this.viewerPosition);
+      this.statusView.faceViewer(this.viewerPosition);
       this.controlsView.baseLabel.setFeedback(robotTitle,"No feedback",`Movement speed ${Math.round(input.speedScale*100)}%`,0xff9f0a);
       return;
     }
@@ -201,43 +201,31 @@ export class ManipulationRenderer {
       this.meshFade.reset();
       this.measuredHandle.object.visible = false;
       this.handle.object.visible = false; this.handle.collider.userData.interactionEnabled = false;
+      this.correction.reset();
       this.gripperMenu.visible = this.previewMenu.visible = this.path.visible = false;
       for (const node of this.modelRenderer.previewMeshes.values()) node.visible = false;
       for (const node of this.modelRenderer.ghosts.values()) node.visible = false;
       this.controlsView.baseLabel.setFeedback(robotTitle, "No feedback", `Movement speed ${Math.round(input.speedScale * 100)}%`, 0xff9f0a);
       for (const [key, button] of this.controlsView.buttons) button.setEnabled(key === "estop" ? intent.canStop || intent.canResume : key === "stop" && intent.canStop);
       this.speedSlider.hit.userData.interactionEnabled = false;
-      this.warning.update(this.handle.object.position, now, { blocked: false, fresh: false,
+      this.statusView.update(this.handle.object.position, now, { blocked: false, fresh: false,
         stopped: intent.stopped, moving: false, rejection: null });
-      this.warning.faceViewer(this.viewerPosition);
+      this.statusView.faceViewer(this.viewerPosition);
       return;
     }
     if (this.modelRenderer.model?.revision !== state.model.revision) {
       this.modelRenderer.rebuild(state.model);
       this.pathKey = "";
-      this.jointFilter.reset(); this.previewFilter.reset();
+      this.sampler.reset();
       this.trajectoryProgress.reset();
     }
     const model = state.model,
       observed = groupId ? state.observations?.[groupId] : null;
     const activeGroup = state.groups?.find(group => group.id === groupId);
-    const all = manipulationObservedJoints(model, state, activeGroup);
     const rootPose = state.root_pose ?? { position: [0, 0, 0], orientation: [0, 0, 0, 1] } as ManipulationPose;
-    const motionContext = armMotionContext(model.revision, groupId, origin);
-    if (motionContext !== this.filterContext) {
-      this.jointFilter.reset(); this.previewFilter.reset(); this.trajectoryProgress.reset();
-      this.filterContext = motionContext;
-    }
-    const filtered = this.jointFilter.sample(
-      model,
-      all,
-      motionContext,
-      now, .1, observed?.measured_at ?? undefined, observed?.joint_velocities,
-    );
-    const measured = linkPoses(model, filtered);
     const targetVisible =
-      !!target &&
-      (selected || state.following === true || intent.dragging === true || intent.finishing === true);
+      !recorded && !!target &&
+      (selected || state.following === true || intent.dragging === true || intent.finishing === true || intent.sharedDraft === true);
     const offset = intent.targetOffset;
     const displaced = targetVisible && offset;
     const dragging = intent.dragging === true;
@@ -260,20 +248,16 @@ export class ManipulationRenderer {
     );
     const dtOutline = Math.max(0, Math.min(0.1, now - this.lastFrameTime));
     this.lastFrameTime = now;
-    const activePlan = manipulationActivePlan(state, plan, executing);
+    const activePlan = recorded ? null : manipulationActivePlan(state, plan, executing);
     if (dragging || state.stopped || (!activePlan && !intent.planning))
       this.previewRequested = false;
     const playback = this.preview.sample(activePlan, now);
-    const playbackTime = playback.time;
     const playing = playback.playing;
-    const proposedValues = manipulationProposedJoints(model, activeGroup, all, {
-      plan: activePlan, playback, selected, dragging, rejected: !!input.rejection, solution,
-      opening: selected ? input.desiredGripper ?? observed?.gripper : observed?.gripper,
-    });
-    if (solution !== this.previousSolution) { this.previousSolution = solution; this.solutionSequence++; }
-    const source = selected ? `${activePlan?.plan_id ?? this.solutionSequence}` : `${this.solutionSequence}`;
-    const targetValues = playing ? this.previewFilter.playback(model,proposedValues,motionContext,now,playbackTime) : this.previewFilter.sample(model, proposedValues, motionContext, now, .1, source);
-    const preview = linkPoses(model, targetValues);
+    const sampled = this.sampler.sample({ model, state, group: activeGroup, origin, now,
+      selected, dragging, rejected: !!input.rejection, solution: recorded ? null : solution, plan: activePlan, playback,
+      opening: selected ? input.desiredGripper ?? observed?.gripper : observed?.gripper });
+    if (sampled.contextChanged) this.trajectoryProgress.reset();
+    const { measured, proposed: preview, observedValues: all } = sampled;
     for (const [name, ghost] of this.modelRenderer.ghosts) {
       ghost.visible = fresh;
       this.place(ghost, composePose(rootPose, preview[name]), origin);
@@ -282,7 +266,7 @@ export class ManipulationRenderer {
     this.pointFade.beginFrame(now, `${model.revision}:${groupId}`);
     this.fillFade.beginFrame(now, `${model.revision}:${groupId}`);
     for (const [name, ghost] of this.modelRenderer.previewMeshes) {
-      const style = armLinkPresentation({ selected, hovered: this.hoveredLink !== null, dragging,
+      const style = armLinkPresentation({ selected: selected || recorded, hovered: this.hoveredLink !== null, dragging,
         finishing: intent.finishing === true, displaced, playing, weight: displaced ? 1 : armLinkWeight(measured[name], preview[name]),
         failed: input.rejection !== null, failedLink: model.joints.some(j => j.child === name && input.rejection?.failedJoints?.includes(j.name)) });
       const alpha = this.meshFade.sample(name, style.visible ? style.alpha : 0);
@@ -394,8 +378,8 @@ export class ManipulationRenderer {
       );
     }
     const targetMaterial = this.handle.visual.material as THREE.ShaderMaterial;
-    targetMaterial.uniforms.uCenterColor.value.setHex(intent.blocked ? 0x8e969e : !fresh || input.rejection ? ARM_VISUAL_STYLE.warningColor : 0xb3b3b3);
-    targetMaterial.uniforms.uRimColor.value.setHex(input.rejection ? ARM_VISUAL_STYLE.warningColor : 0xffffff);
+    targetMaterial.uniforms.uCenterColor.value.setHex(intent.blocked || !fresh || input.rejection ? ARM_VISUAL_STYLE.warningColor : 0xb3b3b3);
+    targetMaterial.uniforms.uRimColor.value.setHex(intent.blocked || input.rejection ? ARM_VISUAL_STYLE.warningColor : 0xffffff);
     this.measuredHandle.object.visible = !!observed?.pose;
     if (observed?.pose)
       this.place(this.measuredHandle.object, observed.pose, origin);
@@ -408,11 +392,12 @@ export class ManipulationRenderer {
         this.handle.object,
         endEffectorDisplayPose(observed.pose, target, {
           selected, following: state.following === true, dragging,
-          finishing: intent.finishing === true, offset,
+          finishing: intent.finishing === true, offset, sharedDraft: intent.sharedDraft,
         })!,
         origin,
       );
 
+    this.correction.update(this.handle.object.visible ? origin : null, now);
     for (const {node} of this.debugNodes.values()) node.visible = false;
     if (this.debugEnabled) {
       const debug = (name: string, pose: ManipulationPose | null | undefined, angle?: number | string) => {
@@ -460,18 +445,14 @@ export class ManipulationRenderer {
       now,
       delta: dtOutline,
     });
-    this.warning.update(
+    this.statusView.update(
       this.handle.object.position,
       now,
       { blocked: intent.blocked === true, fresh, stopped: intent.stopped,
         moving: intent.executing || intent.resetting, rejection: input.rejection },
     );
-    this.warning.faceViewer(this.viewerPosition);
-    const copy = `${robotTitle} · ${!fresh ? "Feedback unavailable" : stateText}${this.modelRenderer.assetMessage}`;
-    if (this.controlsView.status.text !== copy) {
-      this.controlsView.status.text = copy;
-      syncText(this.controlsView.status);
-    }
+    this.statusView.faceViewer(this.viewerPosition);
+
   }
   private place(
     object: THREE.Object3D,
@@ -489,14 +470,15 @@ export class ManipulationRenderer {
     object.quaternion.fromArray(converted.orientation);
   }
   dispose(): void {
-    for (const {node, label} of this.debugNodes.values()) { label.dispose(); node.traverse(n => { if (n instanceof THREE.LineSegments) {n.geometry.dispose(); for (const m of Array.isArray(n.material) ? n.material : [n.material]) m.dispose();} }); node.removeFromParent(); }
+    this.correction.dispose();
+    for (const {node, label} of this.debugNodes.values()) { disposeTextResources(label); node.traverse(n => { if (n instanceof THREE.LineSegments) {n.geometry.dispose(); for (const m of Array.isArray(n.material) ? n.material : [n.material]) m.dispose();} }); node.removeFromParent(); }
     this.debugNodes.clear();
     this.modelRenderer.dispose();
     this.controlsView.dispose();
     this.pathStroke.dispose();
     this.handle.dispose();
     this.measuredHandle.dispose();
-    this.warning.dispose();
+    this.statusView.dispose();
     this.object.removeFromParent();
   }
 }

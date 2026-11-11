@@ -1,19 +1,16 @@
-import { RobotWorldRenderer } from "./RobotWorldRenderer";
-import { odomToClientTrackingPose, rotateVecByQuat } from "../../DimOSARClient/localization/clientTrackingTransforms";
+import { odomToClientTrackingPose,rotateVecByQuat } from "../../DimOSARClient/localization/clientTrackingTransforms";
+import { getRobotActivityState,robotTitleText,type RobotMarkerApplyInput } from "../../DimOSARClient/robot/RobotMarkerState";
 import type { ARModuleSessionState } from "../../DimOSARClient/websocket/arModuleSession";
-import type { Quat, RobotDescription, Vec3 } from "../../DimOSARClient/websocket/protocolTypes";
+import type { Quat,RobotDescription,Vec3 } from "../../DimOSARClient/websocket/protocolTypes";
 import { sessionLinkStatus } from "../../DimOSARClient/websocket/sessionLinkStatus";
-import { clientTrackingToSpecsPoint, clientTrackingToSpecsPose } from "../utilities/SpecsCoordinates";
 import { RuntimePoseSmoothing } from "../utilities/RuntimePoseSmoothing";
+import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
+import { clientTrackingToSpecsPoint,clientTrackingToSpecsPose } from "../utilities/SpecsCoordinates";
 import { yawRotationFromPlanarDirection } from "../utilities/SpecsUtilities";
-import {
-  AppState,
-  getRobotActivityState,
-  robotTitleText,
-  type RobotActivityVoice,
-  type RobotMarkerApplyInput,
-} from "./AppState";
+import type { AppState } from "./AppState";
+import { RobotWorldRenderer } from "./RobotWorldRenderer";
 import { findChildRecursive } from "./UIKit";
+type RobotActivityVoice = { asrRunning: boolean; ttsPlaying: boolean };
 
 export interface RobotMarkerApplyContext {
   mainUi: SceneObject;
@@ -76,6 +73,8 @@ export class RobotPresenter extends BaseScriptComponent {
   }
 
   private readonly poseSmoothing = new RuntimePoseSmoothing();
+  private origin: ClientTrackingOrigin | null = null;
+  private placedOrigin: ClientTrackingOrigin | null = null;
   private robot: RobotDescription | null = null;
   private presented = false;
   private referenceFloorHeight: number | null = null;
@@ -98,6 +97,7 @@ export class RobotPresenter extends BaseScriptComponent {
   }
 
   apply(input: RobotMarkerApplyInput, ctx: RobotMarkerApplyContext): void {
+    this.origin = input.mode === "localizedOdom" ? input.origin : null;
     switch (input.mode) {
       case "hidden":
         this.applyHidden();
@@ -121,6 +121,7 @@ export class RobotPresenter extends BaseScriptComponent {
   }
 
   reset(): void {
+    this.origin = null;
     this.referenceFloorHeight = null;
     this.presented = false;
     this.cancelUnlocalizedAnchor();
@@ -155,7 +156,9 @@ export class RobotPresenter extends BaseScriptComponent {
       if (toggle) toggle.enabled = false;
     }
     this.worldVisuals?.tick(dt, this.floorPose(), this.eye?.getTransform().getWorldPosition() ?? null, this.viewportHeight);
+    // The copy follows the displayed position after the existing pose smoothing.
     if (this.unlocalizedAnchorCommitted || !this.presented || !this.motionRoot || !this.poseSmoothing.isTracking) {
+      this.worldVisuals?.updateCorrection(null, null, this.viewportHeight);
       return;
     }
     const transform = this.motionRoot.getTransform();
@@ -169,6 +172,7 @@ export class RobotPresenter extends BaseScriptComponent {
     }
     transform.setWorldPosition(smoothed.position);
     transform.setWorldRotation(smoothed.rotation);
+    this.worldVisuals?.updateCorrection(this.origin, this.floorWorldY(), this.viewportHeight);
   }
 
   worldPosition(): vec3 | null {
@@ -314,7 +318,8 @@ export class RobotPresenter extends BaseScriptComponent {
     );
     const position = toVec3(specs.position);
     const rotation = toQuat(specs.orientation);
-    const snap = !this.presented;
+    const snap = !this.presented || this.placedOrigin !== input.origin;
+    this.placedOrigin = input.origin;
     this.poseSmoothing.setTarget({ position, rotation }, snap);
     if (snap) {
       this.motionRoot.getTransform().setWorldPosition(position);

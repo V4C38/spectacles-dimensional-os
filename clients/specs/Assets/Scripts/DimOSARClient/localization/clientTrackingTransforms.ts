@@ -47,19 +47,6 @@ export function odomToClientTrackingYawPose(
   ];
 }
 
-export function clientTrackingToOdomYawPose(
-  pose: YawPose,
-  origin: ClientTrackingOrigin,
-): YawPose {
-  const applied = applyOriginPose(poseFromYaw(pose), origin);
-  return [
-    applied.position[0],
-    applied.position[1],
-    applied.position[2],
-    quatYaw(applied.orientation),
-  ];
-}
-
 function relativePoseInOdom(
   pose: PositionOrientation,
   origin: ClientTrackingOrigin,
@@ -67,7 +54,7 @@ function relativePoseInOdom(
   const qInv = quatConjugate(requireOrigin(origin));
   return {
     position: rotateVecByQuat(qInv, sub(requireVec3(pose.position, "position"), origin.position)),
-    orientation: quatMultiply(qInv, normalizeQuat(pose.orientation)),
+    orientation: multiplyRotation(qInv, normalizeQuat(pose.orientation)),
   };
 }
 
@@ -78,7 +65,7 @@ function applyOriginPose(
   const q = requireOrigin(origin);
   return {
     position: applyOriginPoint(requireVec3(pose.position, "position"), origin),
-    orientation: quatMultiply(q, normalizeQuat(pose.orientation)),
+    orientation: multiplyRotation(q, normalizeQuat(pose.orientation)),
   };
 }
 
@@ -115,7 +102,7 @@ function requireOrigin(origin: ClientTrackingOrigin): Quat {
   return normalizeQuat(origin.orientation);
 }
 
-function requireVec3(value: Vec3, key: string): Vec3 {
+export function requireVec3(value: Vec3, key: string): Vec3 {
   if (!Array.isArray(value) || value.length !== 3) {
     throw new Error(`${key} must be a 3-element array`);
   }
@@ -126,7 +113,7 @@ function requireVec3(value: Vec3, key: string): Vec3 {
   ];
 }
 
-function requireFinite(value: unknown, key: string): number {
+export function requireFinite(value: unknown, key: string): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new Error(`${key} must be finite`);
   }
@@ -147,7 +134,7 @@ function quatYaw(q: Quat): number {
   return Math.atan2(forward[1], forward[0]);
 }
 
-export function normalizeQuat(q: Quat): Quat {
+export function requireQuat(q: Quat): Quat {
   if (!Array.isArray(q) || q.length !== 4) {
     throw new Error("orientation must be a 4-element quaternion [qx, qy, qz, qw]");
   }
@@ -161,14 +148,19 @@ export function normalizeQuat(q: Quat): Quat {
   if (length < 1e-6) {
     throw new Error("orientation must be a non-zero quaternion");
   }
-  return [orientation[0] / length, orientation[1] / length, orientation[2] / length, orientation[3] / length];
+  return orientation;
+}
+
+export function normalizeQuat(q: Quat): Quat {
+  const orientation = requireQuat(q), length = Math.hypot(...orientation);
+  return orientation.map(value => value / length) as Quat;
 }
 
 function quatConjugate(q: Quat): Quat {
   return [-q[0], -q[1], -q[2], q[3]];
 }
 
-function quatMultiply(a: Quat, b: Quat): Quat {
+export function multiplyRotation(a: Quat, b: Quat): Quat {
   const [ax, ay, az, aw] = a;
   const [bx, by, bz, bw] = b;
   return [

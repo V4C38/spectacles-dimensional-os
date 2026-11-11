@@ -34,6 +34,65 @@ class ReviewEvidenceTests(unittest.TestCase):
                     "if (!integrationTestsEnabled(this.getSceneObject())) return;"))
         self.assertIn("autoRun = true", review.script_attach_code(Path("/tmp/review"), 5))
 
+    def test_disposable_harness_includes_shared_host_with_rebased_production_import(self) -> None:
+        from native_project import prepare_harness
+
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            (destination / "Assets").mkdir()
+            prepare_harness(destination, Path(__file__).with_name("IntegrationScenario.ts"))
+            review_dir = destination / "Assets/Review"
+            self.assertIn('from "./IntegrationHost"', (review_dir / "ReviewScenario.ts").read_text())
+            host = (review_dir / "IntegrationHost.ts").read_text()
+            self.assertIn('from "../Scripts/DimOSSpecsClient/DimOSSpecsClient"', host)
+            self.assertNotIn("../../Assets/", host)
+
+    def test_reused_native_project_scopes_helpers_to_selected_harness(self) -> None:
+        from native_project import prepare_harness
+
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            (destination / "Assets").mkdir()
+            review_dir = destination / "Assets/Review"
+            main = Path(__file__).with_name("IntegrationScenario.ts")
+            prepare_harness(destination, main)
+            main_helpers = {path.name for path in review_dir.glob("Integration*.ts")}
+            self.assertIn("IntegrationRegressionCases.ts", main_helpers)
+            self.assertIn("IntegrationArmFixture.ts", main_helpers)  # Transitive dependency.
+            self.assertIn('from "./ReviewScenario"',
+                          (review_dir / "IntegrationRegressionCases.ts").read_text())
+            self.assertNotIn("IntegrationScenario.ts", main_helpers)
+
+            prepare_harness(destination, main.with_name("ManipulationProbe.ts"))
+            self.assertEqual({path.name for path in review_dir.glob("Integration*.ts")}, {
+                "IntegrationHost.ts", "IntegrationArmFixture.ts", "IntegrationInput.ts",
+                "IntegrationV2Fixture.ts", "IntegrationCatalog.ts",
+            })
+            self.assertIn('from "../Scripts/DimOSSpecsClient/DimOSSpecsClient"',
+                          (review_dir / "IntegrationHost.ts").read_text())
+            self.assertTrue((review_dir / "CameraFixture.png").is_file())
+            prepare_harness(destination, main)
+            self.assertEqual({path.name for path in review_dir.glob("Integration*.ts")},
+                             main_helpers)
+
+    def test_probe_preserves_a_real_main_scenario_dependency(self) -> None:
+        from native_project import prepare_harness
+
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            (destination / "Assets").mkdir()
+            harness = destination / "StandaloneProbe.ts"
+            harness.write_text('import { helper } from "./IntegrationHelper";')
+            (destination / "IntegrationHelper.ts").write_text(
+                'import type { ReviewScenario } from "./IntegrationScenario";')
+            (destination / "IntegrationScenario.ts").write_text(
+                'export class ReviewScenario {}')
+            prepare_harness(destination, harness)
+            review_dir = destination / "Assets/Review"
+            self.assertTrue((review_dir / "IntegrationScenario.ts").is_file())
+            self.assertIn('from "./IntegrationScenario"',
+                          (review_dir / "IntegrationHelper.ts").read_text())
+
     def test_native_errors_and_sik_caught_errors_cannot_pass_a_review(self) -> None:
         lines = [
             'I Preview UpdateDispatcher: Error in event "SpecsLaserUpdate": InternalError: pass',
@@ -132,8 +191,12 @@ class ReviewEvidenceTests(unittest.TestCase):
             (source / "Assets/Scene.scene").write_bytes(b"native scene: untouched")
             (source / "Cache/local").write_text("not portable")
             (source / "example.esproj").write_text("project")
-            harness = root / "ReviewScenario.ts"
-            harness.write_text('import { X } from "../../Assets/Scripts/X";')
+            harness = root / "IntegrationScenario.ts"
+            harness.write_text('import { X } from "../../Assets/Scripts/X";\n'
+                               'import { run } from "./IntegrationGoldenCases";')
+            (root / "IntegrationGoldenCases.ts").write_text(
+                'import type { ReviewScenario } from "./IntegrationScenario";\n'
+                'import { X } from "../../Assets/Scripts/X";')
             (root / "CameraFixture.png").write_bytes(b"fixture-texture")
             target = root / "disposable"
             project = review.copy_project(source, target, harness)
@@ -141,6 +204,9 @@ class ReviewEvidenceTests(unittest.TestCase):
             self.assertEqual((target / "Assets/Scene.scene").read_bytes(), b"native scene: untouched")
             self.assertFalse((target / "Cache").exists())
             self.assertIn('"../Scripts/X"', (target / "Assets/Review/ReviewScenario.ts").read_text())
+            helper = (target / "Assets/Review/IntegrationGoldenCases.ts").read_text()
+            self.assertIn('"./ReviewScenario"', helper)
+            self.assertIn('"../Scripts/X"', helper)
             self.assertEqual((target / "Assets/Review/CameraFixture.png").read_bytes(), b"fixture-texture")
             self.assertFalse((source / "Assets/Review").exists())
             with self.assertRaises(review.ReviewError):
@@ -294,13 +360,17 @@ class IntegrationHandoffTests(unittest.IsolatedAsyncioTestCase):
     async def test_every_native_catalog_case_has_a_scenario_handler(self) -> None:
         import re
         from integration_catalog import applicable_cases
-        source = Path(__file__).with_name("IntegrationScenario.ts").read_text()
-        handlers = re.findall(r'case "([a-z_]+)":', source)
+        entry = Path(__file__).with_name("IntegrationScenario.ts").read_text()
+        golden = Path(__file__).with_name("IntegrationGoldenCases.ts").read_text()
+        regression = Path(__file__).with_name("IntegrationRegressionCases.ts").read_text()
+        handlers = re.findall(r'case "([a-z_]+)":', golden + regression)
         self.assertEqual(len(handlers), len(set(handlers)), "Duplicate integration handlers")
         arm_source = Path(__file__).with_name("IntegrationArmGolden.ts").read_text()
         arm_handlers = re.findall(r'id === "([a-z_]+)"', arm_source)
         self.assertEqual(len(arm_handlers), len(set(arm_handlers)), "Duplicate arm handlers")
-        self.assertIn('this.armGolden.chapter(id', source)
+        self.assertIn('runGoldenCase(this, step.id)', entry)
+        self.assertIn('runRegressionCase(this, step.id)', entry)
+        self.assertIn('scenario.armGolden.chapter(id', golden)
         # Some UI handlers are reused as prerequisites inside compact chapters.
         required = {row["id"] for row in applicable_cases()}
         self.assertFalse(required - set(handlers) - set(arm_handlers), "Missing catalog handler")
@@ -312,7 +382,7 @@ class IntegrationHandoffTests(unittest.IsolatedAsyncioTestCase):
             text = (Path(directory) / "IntegrationCatalog.ts").read_text()
             value = json.loads(text.split(" = ", 1)[1].removesuffix(";\n"))
             self.assertEqual(value, load_catalog())
-            self.assertEqual(len(value["golden"]["chapters"]), 15)
+            self.assertEqual(len(value["golden"]["chapters"]), 16)
 
 
 class LegacyGraphTests(unittest.TestCase):

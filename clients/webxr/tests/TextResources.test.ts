@@ -18,3 +18,17 @@ it("releases Troika's instance-owned base without disposing externally shared ma
   expect(text.dispose).toHaveBeenCalledOnce(); expect(ownDisposed).toHaveBeenCalledOnce();
   expect(sharedDisposed).not.toHaveBeenCalled();
 });
+
+import { Text } from "troika-three-text";
+import { disposeObjectTrees } from "../src/manipulation/ObjectResources";
+it("uses the same instance-material cleanup for text inside an object tree", () => {
+  const root = new THREE.Group(), text = new Text(); root.add(text);
+  // Force Troika to allocate its per-instance default material, as rendering does.
+  void text.material;
+  const owned = (text as unknown as { _defaultMaterial: THREE.Material })._defaultMaterial;
+  const materialDispose = vi.spyOn(owned, "dispose"), textDispose = vi.spyOn(text, "dispose");
+  disposeObjectTrees([root]);
+  expect(textDispose).toHaveBeenCalledOnce();
+  // The derived material invokes the base dispose function with a different receiver.
+  expect(materialDispose.mock.contexts.filter(receiver => receiver === owned)).toHaveLength(1);
+});

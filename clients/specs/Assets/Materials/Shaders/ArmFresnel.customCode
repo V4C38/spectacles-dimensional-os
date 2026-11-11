@@ -18,7 +18,7 @@ void main() {
     float period = DashM + GapM;
     float pixel = max(length(dFdx(position)), length(dFdy(position)));
     float aa = max(fwidth(along), 0.00001);
-    float phase = mod(along, period);
+    float phase = mod(along, max(period, 0.00001));
     float distance = min(phase, period - phase);
     float dash = 1.0 - smoothstep(DashM * 0.5 - aa, DashM * 0.5 + aa, distance);
     float solid = 1.0 - smoothstep(6.0, 10.0, period / max(pixel, 0.00001));

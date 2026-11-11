@@ -177,7 +177,7 @@ async function boot(): Promise<void> {
     const landingTick = window.setInterval(() => {
       if (document.visibilityState !== "visible" || xb.core.renderer.xr.isPresenting) return;
       if (client.session.view().connection === "disconnected") client.session.start();
-      client.session.tick();
+      client.pumpSession();
     }, 100);
     let cameraReady = false;
     const onStarted = () => {

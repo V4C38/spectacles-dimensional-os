@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import atexit
+import os
 import sys
+import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -11,6 +14,21 @@ import pytest
 import pytest_asyncio
 
 ROOT = Path(__file__).resolve().parents[1]
+# App globals are constructed during test collection, before autouse fixtures.
+_collection_config = tempfile.TemporaryDirectory(prefix="dimos-launcher-tests-")
+_prior_config_home = os.environ.get("XDG_CONFIG_HOME")
+os.environ["XDG_CONFIG_HOME"] = _collection_config.name
+
+
+def _cleanup_collection_config() -> None:
+    if _prior_config_home is None:
+        os.environ.pop("XDG_CONFIG_HOME", None)
+    else:
+        os.environ["XDG_CONFIG_HOME"] = _prior_config_home
+    _collection_config.cleanup()
+
+
+atexit.register(_cleanup_collection_config)
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -21,6 +39,14 @@ from tests.processes import Child
 @pytest.fixture(autouse=True)
 def isolate_dimos_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+    import app
+    import config
+    from robot_profiles import RobotProfiles
+
+    # Isolate globals already imported by collection, and the repository .env too.
+    monkeypatch.setattr(config, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(app, "manager", ProcessManager(root=tmp_path))
+    monkeypatch.setattr(app, "robot_profiles", RobotProfiles())
 
 
 @pytest.fixture(autouse=True)
@@ -28,7 +54,7 @@ def skip_real_dimos_cleanup(monkeypatch: pytest.MonkeyPatch, request: pytest.Fix
     if request.node.get_closest_marker("real_clear"):
         return
 
-    async def _noop(self: object, *, client: str) -> None:
+    async def _noop(self: object) -> None:
         return None
 
     monkeypatch.setattr("armodule.ProcessManager._clear_before_start", _noop)

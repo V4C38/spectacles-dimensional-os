@@ -31,9 +31,8 @@ export function localizationCaptureStatus(
     case "waiting_for_retry":
       return { text: "Localized — correction retry pending", color: "muted" };
     case "capturing":
-    case "sending":
     case "awaiting_result":
-      return { text: `Scanning ${".".repeat(1 + Math.floor(nowS / 0.4) % 3)}\nLook at the marker`, color: "neutral" };
+      return { text: `Scanning ${".".repeat(1 + Math.floor(nowS / 0.4) % 3)}\n${episodeView.capturePolicy === "any_angle" ? "Look around the mapped room" : "Look at the marker"}`, color: "neutral" };
     case "failed":
       return {
         text: episodeView.lastError ? `Capture failed — ${episodeView.lastError}` : "Capture failed",

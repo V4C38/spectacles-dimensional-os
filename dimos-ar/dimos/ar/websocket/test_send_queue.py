@@ -19,6 +19,7 @@ class _FakeWebSocket:
         self.sent_text: list[str] = []
         self.sent_binary: list[bytes] = []
         self.closed = False
+        self.sent = asyncio.Event()
 
     async def send(self, payload: str | bytes) -> None:
         if self.closed:
@@ -27,6 +28,13 @@ class _FakeWebSocket:
             self.sent_binary.append(payload)
         else:
             self.sent_text.append(payload)
+        self.sent.set()
+
+    async def wait_for_sent(self, count: int) -> None:
+        async with asyncio.timeout(3):
+            while len(self.sent_text) + len(self.sent_binary) < count:
+                self.sent.clear()
+                await self.sent.wait()
 
 
 @pytest.mark.asyncio
@@ -89,7 +97,7 @@ async def test_outbound_coalesces_pose_interaction_state() -> None:
     outbound.enqueue('{"type":"pose","position":[4,5,6]}\n')
     outbound.enqueue('{"type":"interaction_state","active_goal":{"pose":[0,0,0,0],"path_poses":[[0,0,0,0]]}}\n')
 
-    await asyncio.sleep(0.05)
+    await ws.wait_for_sent(1)
     await outbound.stop()
 
     assert len(ws.sent_text) == 1
@@ -110,7 +118,7 @@ async def test_outbound_interleaves_fifo_before_coalesced() -> None:
     outbound.enqueue('{"type":"hello","client_id":"b"}\n')
     outbound.enqueue('{"type":"interaction_state","active_goal":{"pose":[1,2,3,0],"path_poses":[[1,2,3,0]]}}\n')
 
-    await asyncio.sleep(0.05)
+    await ws.wait_for_sent(3)
     await outbound.stop()
 
     messages = _messages_from_sent(ws.sent_text)
@@ -179,7 +187,7 @@ async def test_interaction_snapshots_coalesce_but_decisions_remain_fifo(domain: 
         outbound.enqueue(json.dumps({"type": f"{domain}_state", "revision": revision}) + "\n")
         outbound.enqueue(json.dumps({"type": f"{domain}_result", "request_id": str(revision)}) + "\n")
     outbound.start()
-    await asyncio.sleep(0.01)
+    await ws.wait_for_sent(4)
     await outbound.stop()
     frames = _messages_from_sent(ws.sent_text)
     assert [f["request_id"] for f in frames if f["type"] == f"{domain}_result"] == ["1", "2", "3"]
@@ -214,7 +222,7 @@ async def test_latest_navigation_snapshot_keeps_preview_and_active_goal_together
     latest = {"type": "interaction_state", "revision": 2, "active_goal": active, "preview": preview}
     queue.enqueue(json.dumps(latest) + "\n")
     queue.start()
-    await asyncio.sleep(0)
+    await websocket.wait_for_sent(1)
     await queue.stop()
     assert _messages_from_sent(websocket.sent_text) == [latest]
 
@@ -228,10 +236,7 @@ async def test_essential_reply_preempts_snapshot_bandwidth_pressure():
     queue.enqueue('{"type":"interaction_result","code":"acquired"}\n')
     queue.start()
     try:
-        for _ in range(100):
-            if ws.sent_text:
-                break
-            await asyncio.sleep(0.001)
+        await ws.wait_for_sent(1)
         assert json.loads(ws.sent_text[0])["type"] == "interaction_result"
         assert queue.failure_reason is None
     finally:

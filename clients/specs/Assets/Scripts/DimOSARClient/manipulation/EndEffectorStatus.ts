@@ -16,8 +16,8 @@ export interface EndEffectorStatusInput {
 function notification(input: EndEffectorStatusInput): ClientNotification | null {
   if (!input.fresh) return { key: "feedback", text: "No feedback", tone: "warning", glyph: "warning" };
   if (input.stopped) return null;
-  if (input.blocked) return { key: input.moving ? "moving" : "in-use",
-    text: input.moving ? "Executing" : "Arm in use", tone: "neutral", glyph: "stop" };
+  if (input.moving) return { key: "moving", text: "Executing", tone: "neutral", glyph: "busy" };
+  if (input.blocked) return { key: "in-use", text: "Arm in use", tone: "neutral", glyph: "stop" };
   if (input.rejection) return { key: `ik:${input.rejection.message}`, text: input.rejection.message,
     tone: "warning", glyph: "warning" };
   return null;

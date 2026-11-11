@@ -42,3 +42,24 @@ def test_decode_rejects_image_without_marker() -> None:
     assert ok
     with pytest.raises(ValueError, match="no AprilTag"):
         decode_marker_id(buffer.tobytes())
+
+
+@pytest.mark.parametrize("size,total,black", [(70, "70", "56"), (100, "100", "80")])
+def test_pdf_print_measurements_match_requested_size(tmp_path, monkeypatch, size, total, black):
+    from PIL import ImageDraw
+
+    from apriltag_assets import _marker_api, ensure_pdf
+
+    # Observe the actual rendered label without relying on PDF text extraction from raster pages.
+    _marker_api()
+    labels = []
+    original = ImageDraw.ImageDraw.text
+
+    def draw_text(self, xy, text, *args, **kwargs):
+        labels.append(text)
+        return original(self, xy, text, *args, **kwargs)
+
+    monkeypatch.setattr(ImageDraw.ImageDraw, "text", draw_text)
+    path = ensure_pdf(7, print_size_mm=size, root=tmp_path)
+    assert path.read_bytes().startswith(b"%PDF-")
+    assert f"{total} mm total / {black} mm black square - print at 100% scale" in labels

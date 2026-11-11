@@ -1,5 +1,7 @@
 """Production gateway regression tests for canonical native command admission."""
 
+import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -289,7 +291,7 @@ def test_reset_rejection_preserves_the_canonical_draft(rejection):
     elif rejection == "epoch":
         payload["epoch"] = "old-epoch"
     else:
-        module._interaction.set_motion_busy(True)
+        module._interaction.observe_manipulation_snapshot({"available": True, "execution": "executing"})
     module._on_manipulation_request(
         ManipulationRequest("reset", "reset_joints", "arm", payload), client, 0
     )
@@ -357,3 +359,268 @@ def test_released_target_motion_reserves_revision_after_revoke(action):
     assert admission.deadline > time.monotonic()
     assert not fence.revoke(epoch, lease, retired_revision)
     assert fence.current(admission)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("epoch", [None, "retired-source"])
+async def test_stale_manual_mode_never_reaches_native(epoch):
+    module = _module_with_policy([], agent_available=True)
+    module._interaction.connect("owner")
+    module._interaction.confirm_native_mode("agent")
+    native = Mock(return_value=True)
+    module._agent_control = SimpleNamespace(ar_agent_set_manual=native)
+    module._on_interaction_request(
+        InteractionRequest("manual", "mode", epoch, mode="manual"), "owner"
+    )
+    assert module._mode_task is None
+    native.assert_not_called()
+    assert module._interaction.mode == "agent"
+    assert not module._interaction.agent_busy
+    reply = json.loads(module._ws_server.interaction_sent[-1][1])
+    assert (reply["status"], reply["code"]) == ("stale", "epoch_changed")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retirement", ["disconnect", "source"])
+@pytest.mark.parametrize("mode", ["manual", "agent"])
+async def test_native_mode_acknowledgement_survives_requester_retirement(retirement, mode):
+    module = _module_with_policy([], agent_available=True)
+    module._interaction.connect("owner")
+    module._interaction.confirm_native_mode("agent" if mode == "manual" else "manual")
+    module._agent_control = SimpleNamespace()
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+
+    async def call(method, manual, **kwargs):
+        calls.append((method, manual))
+        entered.set()
+        await release.wait()
+        return True
+
+    module._agent_mode_rpc = SimpleNamespace(call=call)
+    request = InteractionRequest("change", "mode", module._interaction.epoch, mode=mode)
+    module._on_interaction_request(request, "owner")
+    task = module._mode_task
+    assert task is not None
+    await asyncio.wait_for(entered.wait(), 1)
+    assert module._interaction.mode != mode  # No optimistic native acknowledgement.
+    module._on_interaction_request(request, "owner")
+    assert len(calls) == 1
+    if retirement == "disconnect":
+        module._on_client_disconnect(None, "owner")
+    else:
+        module._localization_runner = SimpleNamespace(cancel_all=Mock())
+        module._odom_map_transform = SimpleNamespace(clear=Mock())
+        module._robot_observations = SimpleNamespace(clear=Mock())
+        module._ws_server.schedule_disconnect_all = Mock()
+        module._retire_robot_source()
+    release.set()
+    await task
+    assert len(calls) == (2 if retirement == "source" and mode == "agent" else 1)
+    if retirement == "source" and mode == "agent":
+        assert calls[-1] == ("ar_agent_set_manual", True)
+    expected_mode = "manual" if retirement == "source" else mode
+    assert module._interaction.mode == expected_mode
+    assert not module._native_mode_uncertain
+    assert not module._interaction.agent_busy
+    reply = json.loads(module._ws_server.interaction_sent[-1][1])
+    assert reply["code"] == ("connection_retired" if retirement == "disconnect" else "epoch_changed")
+
+
+@pytest.mark.asyncio
+async def test_completed_mode_request_replays_without_native_side_effect():
+    module = _module_with_policy([], agent_available=True)
+    module._interaction.connect("owner")
+    module._agent_control = SimpleNamespace()
+    calls = []
+
+    async def call(*args, **kwargs):
+        calls.append(args)
+        return True
+
+    module._agent_mode_rpc = SimpleNamespace(call=call)
+    request = InteractionRequest("change", "mode", module._interaction.epoch, mode="agent")
+    module._on_interaction_request(request, "owner")
+    await module._mode_task
+    module._interaction.confirm_native_manual()
+    module._on_interaction_request(request, "owner")
+    assert len(calls) == 1
+    assert module._interaction.mode == "manual"
+    assert module._mode_task is None
+    reply = json.loads(module._ws_server.interaction_sent[-1][1])
+    assert reply["status"] == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_refused_agent_resume_does_not_cache_optimistic_success():
+    module = _module_with_policy([], agent_available=True)
+    module._interaction.connect("owner")
+    module._agent_control = SimpleNamespace()
+    outcomes = iter([False, True])
+    calls = []
+
+    async def call(*args, **kwargs):
+        calls.append(args)
+        return next(outcomes)
+
+    module._agent_mode_rpc = SimpleNamespace(call=call)
+    request = InteractionRequest("change", "mode", module._interaction.epoch, mode="agent")
+    module._on_interaction_request(request, "owner")
+    await module._mode_task
+    assert module._interaction.mode == "manual"
+    assert json.loads(module._ws_server.interaction_sent[-1][1])["status"] == "busy"
+    module._on_interaction_request(request, "owner")
+    await module._mode_task
+    assert len(calls) == 2
+    assert module._interaction.mode == "agent"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pause_outcome", [False, TimeoutError()])
+async def test_retired_source_resume_stays_fenced_until_pause_is_confirmed(pause_outcome):
+    module = _module_with_policy([], agent_available=True)
+    module._interaction.connect("owner")
+    module._agent_control = SimpleNamespace()
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+
+    async def call(method, manual, **kwargs):
+        calls.append(manual)
+        if not manual:
+            entered.set()
+            await release.wait()
+            return True
+        if isinstance(pause_outcome, Exception):
+            raise pause_outcome
+        return pause_outcome
+
+    module._agent_mode_rpc = SimpleNamespace(call=call)
+    request = InteractionRequest("change", "mode", module._interaction.epoch, mode="agent")
+    module._on_interaction_request(request, "owner")
+    task = module._mode_task
+    await asyncio.wait_for(entered.wait(), 1)
+    module._interaction.reset()
+    release.set()
+    await task
+    assert calls == [False, True]
+    assert module._interaction.mode == "manual"
+    assert module._native_mode_uncertain
+    assert module._mode_task is None
+
+
+@pytest.mark.asyncio
+async def test_retired_manual_requester_never_reaches_native():
+    module = _module_with_policy([], agent_available=True)
+    module._interaction.confirm_native_mode("agent")
+    module._agent_control = SimpleNamespace(ar_agent_set_manual=Mock(return_value=True))
+    module._on_interaction_request(
+        InteractionRequest("manual", "mode", module._interaction.epoch, mode="manual"), "retired"
+    )
+    assert module._mode_task is None
+    module._agent_control.ar_agent_set_manual.assert_not_called()
+    assert module._interaction.mode == "agent"
+    assert json.loads(module._ws_server.interaction_sent[-1][1])["code"] == "connection_retired"
+
+
+@pytest.mark.asyncio
+async def test_positive_agent_acknowledgement_is_cached_even_if_a_turn_starts():
+    module = _module_with_policy([], agent_available=True)
+    module._interaction.connect("owner")
+    module._agent_control = SimpleNamespace()
+    calls = []
+
+    async def call(*args, **kwargs):
+        calls.append(args)
+        module._agent_service.update_idle(False)
+        return True
+
+    module._agent_mode_rpc = SimpleNamespace(call=call)
+    request = InteractionRequest("change", "mode", module._interaction.epoch, mode="agent")
+    module._on_interaction_request(request, "owner")
+    await module._mode_task
+    assert module._interaction.mode == "agent"
+    assert module._interaction.agent_busy
+    assert json.loads(module._ws_server.interaction_sent[-1][1])["status"] == "accepted"
+    module._on_interaction_request(request, "owner")
+    assert len(calls) == 1
+    assert json.loads(module._ws_server.interaction_sent[-1][1])["status"] == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_unknown_agent_resume_does_not_cache_success_or_clear_uncertainty():
+    module = _module_with_policy([], agent_available=True)
+    module._interaction.connect("owner")
+    module._agent_control = SimpleNamespace()
+    outcomes = iter([TimeoutError(), False, True])
+
+    async def call(*args, **kwargs):
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    module._agent_mode_rpc = SimpleNamespace(call=call)
+    request = InteractionRequest("change", "mode", module._interaction.epoch, mode="agent")
+    module._on_interaction_request(request, "owner")
+    await module._mode_task
+    assert module._interaction.mode == "manual"
+    assert module._native_mode_uncertain
+    assert json.loads(module._ws_server.interaction_sent[-1][1])["code"] == "native_mode_timeout"
+    module._on_interaction_request(
+        InteractionRequest("grab", "acquire", module._interaction.epoch, kind="live"), "owner"
+    )
+    assert json.loads(module._ws_server.interaction_sent[-1][1])["code"] == "robot_busy"
+    module._manipulation_service = Mock()
+    module._on_manipulation_request(
+        ManipulationRequest("plan", "plan", "arm", {"epoch": module._interaction.epoch}), "owner", 0
+    )
+    module._manipulation_service.submit.assert_not_called()
+    assert json.loads(module._ws_server.sent[-1][1])["code"] == "busy"
+    module._on_interaction_request(request, "owner")
+    await module._mode_task
+    assert module._interaction.mode == "manual"
+    assert module._native_mode_uncertain
+    assert json.loads(module._ws_server.interaction_sent[-1][1])["code"] == "native_motion_active"
+    module._on_interaction_request(request, "owner")
+    await module._mode_task
+    assert module._interaction.mode == "agent"
+    assert not module._native_mode_uncertain
+
+
+@pytest.mark.asyncio
+async def test_compensating_pause_keeps_motion_admission_busy_during_idle_notification():
+    module = _module_with_policy([], agent_available=True)
+    module._interaction.connect("owner")
+    module._agent_control = SimpleNamespace()
+    resumed, release_resume = asyncio.Event(), asyncio.Event()
+    pausing, release_pause = asyncio.Event(), asyncio.Event()
+
+    async def call(method, manual, **kwargs):
+        if not manual:
+            resumed.set()
+            await release_resume.wait()
+        else:
+            pausing.set()
+            await release_pause.wait()
+        return True
+
+    module._agent_mode_rpc = SimpleNamespace(call=call)
+    module._on_interaction_request(
+        InteractionRequest("agent", "mode", module._interaction.epoch, mode="agent"), "owner"
+    )
+    task = module._mode_task
+    await asyncio.wait_for(resumed.wait(), 1)
+    module._interaction.reset()
+    release_resume.set()
+    await asyncio.wait_for(pausing.wait(), 1)
+    await module.handle_agent_idle(True)
+    assert module._interaction.agent_busy
+    module._on_interaction_request(
+        InteractionRequest("grab", "acquire", module._interaction.epoch, kind="live"), "owner"
+    )
+    assert json.loads(module._ws_server.interaction_sent[-1][1])["code"] == "robot_busy"
+    release_pause.set()
+    await task
+    assert not module._interaction.agent_busy
+    assert module._interaction.mode == "manual"
+    assert not module._native_mode_uncertain

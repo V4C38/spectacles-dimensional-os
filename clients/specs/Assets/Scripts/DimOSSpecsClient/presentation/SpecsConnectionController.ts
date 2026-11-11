@@ -1,7 +1,7 @@
 import type { ARModuleSession } from "../../DimOSARClient/websocket/arModuleSession";
+import { buildModuleWebSocketUrl,isValidHost,saveModuleHost,type ModuleHostStore } from "../../DimOSARClient/websocket/hostNormalization";
 import { AR_MODULE_CLIENT_CONFIG } from "../../DimOSARClient/websocket/hostPorts";
-import { buildModuleWebSocketUrl, isValidHost, saveModuleHost, type ModuleHostStore } from "../../DimOSARClient/websocket/hostNormalization";
-import { routeConnectionField, type ConnectionMethod, type ResolvedPin } from "../IpRelayClient";
+import { routeConnectionField,type ConnectionMethod,type ResolvedPin } from "../IpRelayClient";
 
 const PIN_STORAGE_KEY = "dimos_ar_module_pin";
 
@@ -12,7 +12,6 @@ export interface SpecsConnectionDependencies {
   hostStore: ModuleHostStore;
   ipRelayClient: { resolve(pin: string): Promise<ResolvedPin | null> };
   onChanged(): void;
-  onPinConsumed?(): void;
   onConnectionTargetChanged?(): void;
 }
 
@@ -21,10 +20,10 @@ export class SpecsConnectionController {
   private generation = 0;
   private disposed = false;
   private started = false;
-  private connecting = false;
   private resolving = false;
   private error: string | null = null;
-  private attempt: { method: ConnectionMethod; field: string; loadedPin: boolean; retries: number } | null = null;
+  private target: { method: ConnectionMethod; field: string } | null = null;
+  private attempt: { method: ConnectionMethod; field: string; retries: number } | null = null;
   private readonly retryEvent: DelayedCallbackEvent;
   private readonly unsubscribe: () => void;
   private readonly resolutionTimeoutEvent: DelayedCallbackEvent;
@@ -37,7 +36,7 @@ export class SpecsConnectionController {
   }
 
   snapshot(): Readonly<{ connecting: boolean; resolvingPin: boolean; error: string | null }> {
-    return { connecting: this.connecting, resolvingPin: this.resolving, error: this.error };
+    return { connecting: this.attempt !== null, resolvingPin: this.resolving, error: this.error };
   }
 
   storedPin(): string {
@@ -46,16 +45,25 @@ export class SpecsConnectionController {
     return routed?.kind === "pin" ? routed.pin : "";
   }
 
-  start(method: ConnectionMethod, field: string, loadedPin = false): void {
+  start(method: ConnectionMethod, field: string): void {
     if (this.disposed) return;
-    this.cancel(true);
     const routed = routeConnectionField(method, field);
     if (!routed || routed.kind === "ip" && !isValidHost(routed.host)) {
       this.error = method === "pin" ? "Enter a 6-digit PIN" : "Enter a valid IP address";
       this.changed(); return;
     }
-    if (routed.kind === "pin" && !loadedPin) this.deps.hostStore.putString(PIN_STORAGE_KEY, routed.pin);
-    this.attempt = { method, field: field.trim(), loadedPin, retries: 3 };
+    const normalized = field.trim();
+    // Return and keyboard dismissal can report the same submission at different times,
+    // including after hello. Keep the current setup or established reconnect owner.
+    if (this.target?.method === method && this.target.field === normalized &&
+        (this.attempt || this.started)) {
+      if (this.error) { this.error = null; this.changed(); }
+      return;
+    }
+    this.cancel(true);
+    if (routed.kind === "pin") this.deps.hostStore.putString(PIN_STORAGE_KEY, routed.pin);
+    this.target = { method, field: normalized };
+    this.attempt = { ...this.target, retries: 3 };
     this.beginAttempt();
   }
 
@@ -63,7 +71,7 @@ export class SpecsConnectionController {
     const attempt = this.attempt;
     if (!attempt || this.disposed) return;
     const generation = ++this.generation;
-    this.error = null; this.connecting = true;
+    this.error = null;
     if (attempt.method === "pin") {
       this.resolving = true; this.changed();
       void this.resolve(attempt.field, generation);
@@ -84,11 +92,7 @@ export class SpecsConnectionController {
     if (attempt.retries > 0) {
       attempt.retries--; this.retryEvent.reset(1);
     } else {
-      this.connecting = false; this.attempt = null;
-      if (attempt.loadedPin && attempt.method === "pin") {
-        if (this.storedPin() === attempt.field) this.deps.hostStore.remove(PIN_STORAGE_KEY);
-        this.deps.onPinConsumed?.();
-      }
+      this.attempt = null;
     }
     this.changed();
   }
@@ -97,10 +101,11 @@ export class SpecsConnectionController {
     this.generation++;
     this.attempt = null; this.retryEvent.cancel();
     this.resolutionTimeoutEvent.cancel();
-    this.connecting = false; this.resolving = false; this.error = null;
+    this.resolving = false; this.error = null;
     if (disconnect || this.started && this.deps.session.view().connection !== "ready") {
       this.deps.session.stop(); this.started = false;
     }
+    if (!this.started) this.target = null;
   }
 
   dispose(): void {

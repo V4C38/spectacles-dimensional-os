@@ -135,7 +135,6 @@ class InteractionCoordinator:
         self._arm_native_busy = False
         self._arm_retired_motion: tuple[str, int] | None = None
         self._agent_busy = False
-        self._motion_busy = False
         self.following_tail: dict[str, Any] | None = None
         self._tail_floor = 0
         self._clients: set[str] = set()
@@ -165,7 +164,7 @@ class InteractionCoordinator:
 
     @property
     def motion_busy(self) -> bool:
-        return self._motion_busy
+        return bool(self._pending_arm_motion) or self._arm_native_busy or self._arm_uncertain or self._arm_stop_pending
 
     @property
     def authority(self) -> Authority | None:
@@ -174,7 +173,7 @@ class InteractionCoordinator:
     @property
     def mode_change_available(self) -> bool:
         return not (self._authority is not None or self._agent_busy
-                    or self._motion_busy or self.following_tail is not None)
+                    or self.motion_busy or self.following_tail is not None)
 
     def connect(self, client_id: str) -> None:
         self._clients.add(client_id)
@@ -198,7 +197,7 @@ class InteractionCoordinator:
             "type": "interaction_state",
             "epoch": self.epoch,
             "revision": self._revision,
-            "motion_busy": self._motion_busy,
+            "motion_busy": self.motion_busy,
             "following_tail": copy.deepcopy(self.following_tail),
             "mode": self._mode,
             "authority": self._authority.wire() if self._authority is not None else None,
@@ -373,6 +372,7 @@ class InteractionCoordinator:
         self._revision += 1
 
     def observe_manipulation_snapshot(self, snapshot: dict[str, Any]) -> None:
+        previous_busy = self.motion_busy
         if snapshot.get("available") is not True:
             return
         execution = snapshot.get("execution")
@@ -396,21 +396,23 @@ class InteractionCoordinator:
         )
         if stopped:
             self._arm_uncertain = self._arm_stop_pending = False
-        self._update_manipulation_busy()
+        self._update_manipulation_busy(previous_busy)
 
     def observe_manipulation_result(self, request: ManipulationRequest, result: dict[str, Any]) -> None:
+        previous_busy = self.motion_busy
         retired = self._arm_retired_motion
         revision = request.payload.get("authority_revision", -1)
         if (retired is not None and request.payload.get("authority_epoch") == retired[0]
                 and revision <= retired[1]):
             self._pending_arm_motion.discard(request.request_id)
+            self._update_manipulation_busy(previous_busy)
             return
         if (request.action == "cancel" and request.request_id in self._pending_arm_motion
                 and result.get("status") in {"cancelled", "completed", "aborted", "no_execution", "succeeded"}):
             self._arm_retired_motion = (self.epoch, revision)
             self._pending_arm_motion.clear()
             self._arm_native_busy = self._arm_uncertain = self._arm_stop_pending = False
-            self.set_motion_busy(False)
+            self._update_manipulation_busy(previous_busy)
             return
         if request.action == "gripper" and result.get("status") == "completed":
             authority = self._authority
@@ -422,35 +424,52 @@ class InteractionCoordinator:
             if (result.get("status") in {"uncertain", "fault"}
                     or (request.action == "cancel" and result.get("status") not in {"cancelled", "completed", "aborted", "no_execution", "succeeded"})):
                 self._arm_uncertain = True
-            self._update_manipulation_busy(accepted=result.get("status") == "accepted")
+            if result.get("status") == "accepted":
+                self._arm_native_busy = True
+            self._update_manipulation_busy(previous_busy)
 
-    def _update_manipulation_busy(self, *, accepted: bool = False) -> None:
-        self.set_motion_busy(bool(self._pending_arm_motion) or self._arm_native_busy
-                             or self._arm_uncertain or self._arm_stop_pending or accepted)
+    def _update_manipulation_busy(self, previous: bool) -> None:
+        if previous != self.motion_busy:
+            self._revision += 1
 
     def begin_manipulation_motion(self, request_id: str) -> None:
         if request_id in self._pending_arm_motion:
             return
+        previous_busy = self.motion_busy
         self._pending_arm_motion.add(request_id)
         # A released lease is revoked through its last revision. Reserve a new
         # admission even if native busy facts have not changed since release.
         self._revision += 1
-        self._update_manipulation_busy()
+        self._update_manipulation_busy(previous_busy)
 
     def manipulation_motion_pending(self, request_id: str) -> bool:
         return request_id in self._pending_arm_motion
 
     def request_manipulation_stop(self) -> None:
+        previous_busy = self.motion_busy
         self._arm_stop_pending = True
-        self._update_manipulation_busy()
+        self._update_manipulation_busy(previous_busy)
 
     def set_agent_busy(self, busy: bool) -> None:
         self._agent_busy = busy
 
-    def confirm_native_manual(self) -> None:
-        if self._mode != "manual":
-            self._mode = "manual"
+    def confirm_native_mode(self, mode: InteractionMode) -> None:
+        if self._mode != mode:
+            self._mode = mode
             self._revision += 1
+
+    def complete_native_mode(
+        self, client_id: str, request: InteractionRequest
+    ) -> InteractionResult:
+        previous = self.preflight(client_id, request)
+        if previous is not None:
+            return previous
+        result = self._result(request, "accepted", "mode_changed")
+        self._remember(self._requests[client_id], request.request_id, result)
+        return result
+
+    def confirm_native_manual(self) -> None:
+        self.confirm_native_mode("manual")
 
     def suspend(self, client_id: str, deadline: float) -> bool:
         if not math.isfinite(deadline):
@@ -466,25 +485,15 @@ class InteractionCoordinator:
         # Cancellation must outrank revocation even when no draft remains.
         self._revision += 1
 
-    def set_motion_busy(self, busy: bool) -> None:
-        if busy != self._motion_busy:
-            self._motion_busy = busy
-            self._revision += 1
-
     def set_active_goal(self, frame: dict[str, Any] | None) -> None:
         import copy
 
         self.active_goal = copy.deepcopy(frame)
         self._revision += 1
 
-    def handle(
-        self,
-        client_id: str,
-        request: InteractionRequest,
-        *,
-        commit: Callable[[SharedTarget, InteractionKind], bool] | None = None,
-    ) -> InteractionResult:
-        self.poll()
+    def preflight(
+        self, client_id: str, request: InteractionRequest
+    ) -> InteractionResult | None:
         if client_id not in self._clients:
             return self._result(request, "rejected", "connection_retired")
         cache = self._requests[client_id]
@@ -496,10 +505,26 @@ class InteractionCoordinator:
             ):
                 return self._result(request, "stale", "lease_retired")
             return replace(previous, revision=self._revision)
+        if request.action != "snapshot" and request.epoch != self.epoch:
+            return self._result(request, "stale", "epoch_changed")
+        if request.action == "mode" and request.mode not in ("manual", "agent"):
+            return self._result(request, "rejected", "invalid_mode")
+        return None
+
+    def handle(
+        self,
+        client_id: str,
+        request: InteractionRequest,
+        *,
+        commit: Callable[[SharedTarget, InteractionKind], bool] | None = None,
+    ) -> InteractionResult:
+        self.poll()
+        previous = self.preflight(client_id, request)
+        if previous is not None:
+            return previous
+        cache = self._requests[client_id]
         if request.action == "snapshot":
             result = self._result(request, "accepted", "snapshot")
-        elif request.epoch != self.epoch:
-            result = self._result(request, "stale", "epoch_changed")
         elif request.action == "cancel_acquire":
             acquisition = request.acquisition_id or request.request_id
             self._remember(self._cancelled[client_id], acquisition, None)
@@ -543,7 +568,7 @@ class InteractionCoordinator:
         if (
             self._mode != "manual"
             or self._agent_busy
-            or self._motion_busy
+            or self.motion_busy
             or self._authority is not None
         ):
             return self._result(request, "busy", "robot_busy")

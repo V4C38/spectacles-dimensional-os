@@ -9,10 +9,15 @@ import logging
 import time
 from typing import Any
 
-from dimos.ar.manipulation.errors import ManipulationError, spatial_error_code
+from dimos.ar.manipulation.errors import rejection_result, spatial_error_code
 from dimos.ar.manipulation.protocol import ManipulationRequest
 from dimos.ar.manipulation.spec import ARManipulationSpec
-from dimos.ar.native_rpc import NativeRPC
+from dimos.ar.native_rpc import (
+    CONTROL_LEASE_S,
+    HEARTBEAT_INTERVAL_S,
+    HEARTBEAT_TIMEOUT_S,
+    NativeRPC,
+)
 from dimos.ar.timing_diagnostics import TimingSummary
 from dimos.ar.websocket.protocol import encode_text
 
@@ -185,7 +190,7 @@ class ManipulationService:
                 {**request.payload, "group_id": request.group_id},
                 timeout=20,
             )
-        except Exception as exc:  # noqa: BLE001 — RPC/native errors are protocol replies
+        except Exception as exc:  # noqa: BLE001 — remote native errors are advisory wire results
             code = spatial_error_code(str(exc), "ik_failed")
             result = {"status": "infeasible", "code": code, "message": str(exc)}
         if result.get("status") == "following":
@@ -229,35 +234,13 @@ class ManipulationService:
             if request.action == "prepare_shutdown":
                 self._quiescent = result.get("quiescent") is True
         except ValueError as exc:
-            code = exc.code if isinstance(exc, ManipulationError) else spatial_error_code(str(exc))
-            recoverable = request.action in {"update", "evaluate", "plan"} and code in {
-                "ik_failed",
-                "joint_limit",
-                "collision",
-            }
-            result = {
-                "status": "infeasible" if recoverable else "rejected",
-                "code": code,
-                "message": str(exc),
-            }
-            if isinstance(exc, ManipulationError) and exc.failed_joints:
-                result["failed_joints"] = exc.failed_joints
+            result = rejection_result(request.action, exc)
             logger.info("Manipulation request rejected: %s: %s", request.action, str(exc))
         except Exception as exc:
             if request.action == "evaluate" and isinstance(exc, TimeoutError):
                 self._advisory_timing.record(counts={"timeouts": 1}, maxima={})
             logger.exception("Manipulation command failed")
-            code = spatial_error_code(str(exc))
-            recoverable = request.action in {"update", "evaluate", "plan"} and code in {
-                "ik_failed",
-                "joint_limit",
-                "collision",
-            }
-            result = {
-                "status": "uncertain" if request.action in {"execute", "reset_joints", "prepare_shutdown"} else "infeasible" if recoverable else "rejected",
-                "code": "rpc_uncertain" if request.action in {"execute", "reset_joints", "prepare_shutdown"} else code,
-                "message": str(exc),
-            }
+            result = rejection_result(request.action, exc, transport=True)
         if request.action == "update":
             result.setdefault("sequence", request.payload["sequence"])
         if request.action != "update" or result.get("status") in {
@@ -326,13 +309,13 @@ class ManipulationService:
                     "ar_manipulation_heartbeat",
                     epoch,
                     revision,
-                    time.monotonic() + 0.5,
-                    timeout=0.3,
+                    time.monotonic() + CONTROL_LEASE_S,
+                    timeout=HEARTBEAT_TIMEOUT_S,
                 )
             except Exception:
                 logger.exception("Manipulation control-plane heartbeat unavailable")
                 await self._rpc.wait_idle("ar_manipulation_heartbeat")
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(HEARTBEAT_INTERVAL_S)
 
     async def _materialize(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         result = dict(snapshot)

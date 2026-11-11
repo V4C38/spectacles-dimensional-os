@@ -8,7 +8,12 @@ import logging
 import time
 from typing import Any
 
-from dimos.ar.native_rpc import NativeRPC
+from dimos.ar.native_rpc import (
+    CONTROL_LEASE_S,
+    HEARTBEAT_INTERVAL_S,
+    HEARTBEAT_TIMEOUT_S,
+    NativeRPC,
+)
 from dimos.ar.navigation.control_spec import ARNavigationControlSpec
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
@@ -51,13 +56,13 @@ class NavigationControlService:
                         "ar_navigation_heartbeat",
                         epoch,
                         revision,
-                        time.monotonic() + 0.5,
-                        timeout=0.3,
+                        time.monotonic() + CONTROL_LEASE_S,
+                        timeout=HEARTBEAT_TIMEOUT_S,
                     )
                 except Exception:
                     logger.exception("Native navigation heartbeat unavailable")
                     await self._rpc.wait_idle("ar_navigation_heartbeat")
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(HEARTBEAT_INTERVAL_S)
 
     def submit(self, goal: PoseStamped, epoch: str, revision: int) -> bool:
         if self._closed or self._fault:

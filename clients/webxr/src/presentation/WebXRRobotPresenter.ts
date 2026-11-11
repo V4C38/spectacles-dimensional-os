@@ -17,6 +17,7 @@ import {
 import { registerRayTarget } from "../input/XRBlocksRayInteraction";
 import { disposeTextResources } from "./TextResources";
 import { indicatorMaterial } from "./PoseIndicatorMaterial";
+import { MarkerCorrectionRenderer } from "./MarkerCorrectionRenderer";
 import { toneHex } from "./StatusTones";
 import {
   deriveRobotMarkerApplyInput,
@@ -27,9 +28,7 @@ import {
 
 export type RobotFeedback = {
   tone: StatusTone;
-  aligned: boolean;
   activity: string;
-  message: string | null;
 };
 
 export class WebXRRobotPresenter {
@@ -42,13 +41,10 @@ export class WebXRRobotPresenter {
   private readonly labelGroup: THREE.Group;
   readonly markerCollider: THREE.Mesh;
   readonly collider: THREE.Mesh<THREE.BoxGeometry, THREE.MeshBasicMaterial>;
-  private readonly outline: THREE.LineSegments<
-    THREE.EdgesGeometry,
-    THREE.LineDashedMaterial
-  >;
   private readonly floorCircle: THREE.Mesh;
   private readonly connectorRenderer = new AdaptiveDashedLineRenderer();
   private readonly outlineRenderer = new AdaptiveDashedLineRenderer();
+  private readonly outline = this.outlineRenderer.object;
   private readonly connector = this.connectorRenderer.object;
   private circleOpacity = FLOOR_MARKER_STYLE.idleOpacity as number;
   private connectorFloorY: number | null = null;
@@ -67,6 +63,8 @@ export class WebXRRobotPresenter {
   private readonly targetPosition = new THREE.Vector3();
   private readonly targetRotation = new THREE.Quaternion();
   private lastOrigin: ClientTrackingOrigin | null = null;
+  private readonly correction: MarkerCorrectionRenderer;
+  private correctionTime = 0;
   private floorOffset: Vec3 = [0, 0, 0];
   private unlocalizedCommitted = false;
 
@@ -124,23 +122,8 @@ export class WebXRRobotPresenter {
     this.collider.name = "Robot selection collider";
     this.collider.userData.rayPriority = 20;
     registerRayTarget(this.collider);
-    this.outline = new THREE.LineSegments(
-      new THREE.EdgesGeometry(this.collider.geometry),
-      new THREE.LineDashedMaterial({
-        color: 0xffffff,
-        transparent: true,
-        opacity: 0,
-        depthWrite: false,
-        dashSize: ROBOT_LINE_STYLE.dashM,
-        gapSize: ROBOT_LINE_STYLE.gapM,
-      }),
-    );
-    this.outline.material.visible = false;
-    this.outline.add(this.outlineRenderer.object);
-    this.outline.traverse((part) => {
-      part.userData.environmentDepth = true;
-    });
-    this.outline.computeLineDistances();
+    this.outlineRenderer.setStyle(ROBOT_LINE_STYLE.selectedWidthM, 0);
+    this.outline.userData.environmentDepth = true;
     this.outline.name = "Robot selection outline";
     this.outline.raycast = () => {};
     this.outline.scale.setScalar(0);
@@ -175,6 +158,7 @@ export class WebXRRobotPresenter {
     this.tagStatus = label.tagStatus;
     this.tagMessage = label.tagMessage;
     this.object.add(this.labelGroup);
+    this.correction = new MarkerCorrectionRenderer(this.indicator, true);
     this.object.visible = false;
   }
 
@@ -190,6 +174,7 @@ export class WebXRRobotPresenter {
       return;
     }
     if (input.mode === "localizedPending") {
+      this.correction.reset();
       this.collider.userData.interactionEnabled = this.markerCollider.userData.interactionEnabled = false;
       return;
     }
@@ -233,6 +218,7 @@ export class WebXRRobotPresenter {
   }
 
   tick(deltaS: number): void {
+    this.correctionTime += Math.max(0, deltaS);
     const animation = this.boundsAnimation.update(
       this.selected,
       this.hovered,
@@ -262,6 +248,7 @@ export class WebXRRobotPresenter {
     );
     this.updateFloorOffset();
     this.updateLabelPosition();
+    this.updateCorrection();
   }
 
   feedback(info: RobotFeedback): void {
@@ -331,6 +318,7 @@ export class WebXRRobotPresenter {
   }
 
   reset(): void {
+    this.correction.reset();
     this.object.visible = false;
     this.selected = this.hovered = false;
     this.boundsAnimation.reset();
@@ -346,6 +334,7 @@ export class WebXRRobotPresenter {
   }
 
   dispose(): void {
+    this.correction.dispose();
     this.object.removeFromParent();
     this.connectorRenderer.dispose();
     this.outlineRenderer.dispose();
@@ -390,6 +379,7 @@ export class WebXRRobotPresenter {
     this.object.userData.title = robotTitleText(input.view);
     this.object.userData.activity = getRobotActivityState(input.view);
     this.object.visible = true;
+    this.updateCorrection();
   }
 
   private applyUnlocalized(
@@ -399,6 +389,7 @@ export class WebXRRobotPresenter {
     >,
     fallbackPosition: Vec3 | null,
   ): void {
+    this.correction.reset();
     this.lastOrigin = null;
     if (!this.unlocalizedCommitted) {
       if (!fallbackPosition) {
@@ -437,20 +428,25 @@ export class WebXRRobotPresenter {
     this.boundsKey = key;
     this.collider.scale.set(bounds[1], bounds[2], bounds[0]);
     this.collider.position.set(0, bounds[2] / 2 - baseHeight, 0);
-    this.outline.geometry.dispose();
     const box = new THREE.BoxGeometry(bounds[1], bounds[2], bounds[0]);
-    this.outline.geometry = new THREE.EdgesGeometry(box);
+    const edgeGeometry = new THREE.EdgesGeometry(box);
     box.dispose();
-    this.outline.computeLineDistances();
     this.outline.position.copy(this.collider.position);
-    const edges = this.outline.geometry.getAttribute("position");
+    const edges = edgeGeometry.getAttribute("position");
     this.outlineRenderer.setSegments(
       Array.from(
         { length: edges.count },
         (_, i) => [edges.getX(i), edges.getY(i), edges.getZ(i)] as Vec3,
       ),
     );
+    edgeGeometry.dispose();
     this.floorCircle.position.set(0, -baseHeight + 0.001, 0);
+  }
+
+  private updateCorrection(): void {
+    const floorY = Math.max(this.object.position.y + this.floorOffset[1] + 0.001, this.connectorFloorY ?? -Infinity);
+    this.correction.update(this.object.visible ? this.lastOrigin : null, this.correctionTime, floorY);
+    this.updateLabelPosition();
   }
 
   private updateFloorOffset(): void {
@@ -489,8 +485,8 @@ export class WebXRRobotPresenter {
       0,
     ).applyQuaternion(inverse);
     this.connectorRenderer.setSegments([
-      top.toArray() as Vec3,
-      bottom.toArray() as Vec3,
+      top.add(this.indicator.position).toArray() as Vec3,
+      bottom.add(this.indicator.position).toArray() as Vec3,
     ]);
     this.connectorRenderer.setStyle(
       ROBOT_LINE_STYLE.selectedWidthM,

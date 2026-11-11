@@ -114,6 +114,13 @@ test("comparable hand golden path", async ({ page }, info) => {
       await setSelection(page, 1);
       await setSelection(page, 0);
     }, async () => !!(await snapshot(page)).robotSelected);
+    await flow.step("relocalization", async () => {
+      await appValue(page, "app.client.episode.requestCorrection()");
+      await runtime.completeLocalization([0, 0.25, 0]);
+    }, async () => await appValue(page,
+      "app.client.robot.object.getObjectByName('MarkerCorrectionTrail').visible && Math.abs(app.client.robot.object.position.x - 0.25) < 0.001"),
+    { screenshotOffsetS: 0.05 });
+    expect(await appValue(page, "app.client.robot.object.getObjectByName('MarkerCorrectionTrail').visible")).toBe(false);
     const goals = runtime.commands.filter(isNavigationCommit).length;
     await flow.step("navigation_preview", async () => {
       await aimFloor(page);
@@ -157,7 +164,7 @@ test("comparable hand golden path", async ({ page }, info) => {
       await setSelection(page, 1); await setSelection(page, 0);
     }
     await flow.step("manipulation_select", async () => {
-      runtime.enableManipulation();
+      await runtime.enableManipulation();
       await expect.poll(() => armValue("interaction.snapshot().canManipulate")).toBe(true);
       await expect.poll(() => armValue("renderer.modelRenderer.ghosts.size")).toBeGreaterThan(0);
       await frameArm(page);

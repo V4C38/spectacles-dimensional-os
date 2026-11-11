@@ -1,0 +1,29 @@
+input_float PointDelta00;
+input_float PointDelta01;
+input_float PointDelta02;
+input_float PointDelta10;
+input_float PointDelta11;
+input_float PointDelta12;
+input_float PointDelta20;
+input_float PointDelta21;
+input_float PointDelta22;
+input_float PointDeltaX;
+input_float PointDeltaY;
+input_float PointDeltaZ;
+input_float PointFloor;
+input_float PointBoost;
+input_float PointVisibility;
+output_float PointOpacity;
+// Static local points and transform differences are in Specs centimetres.
+float armPointOpacity(vec3 p) {
+    vec3 displacement = vec3(
+        dot(vec3(PointDelta00, PointDelta01, PointDelta02), p) + PointDeltaX,
+        dot(vec3(PointDelta10, PointDelta11, PointDelta12), p) + PointDeltaY,
+        dot(vec3(PointDelta20, PointDelta21, PointDelta22), p) + PointDeltaZ);
+    float t = clamp((length(displacement) - 0.5) / 9.5, 0.0, 1.0);
+    float weight = t * t * (3.0 - 2.0 * t);
+    return PointVisibility * (PointFloor + max(0.0, weight - PointFloor) * PointBoost);
+}
+void main() {
+    PointOpacity = armPointOpacity(system.getSurfacePositionObjectSpace());
+}

@@ -102,7 +102,7 @@ class FiducialMarkerLocalizer(SnapshotLocalizer):
     def snapshot(self) -> FiducialMarkerLocalizer:
         """Freeze pose history on the owning loop before dispatching CPU work.
 
-        Detector access is serialized by the shared LocalizationWorker.
+        Detector access is serialized by the shared BoundedWorker.
         """
         result = copy.copy(self)
         result._pose_buffer = self._pose_buffer.snapshot()

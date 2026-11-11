@@ -38,7 +38,7 @@ async def test_start_reports_conflicting_listeners_without_signalling(tmp_path: 
         patch("armodule.os.killpg") as killpg,
         pytest.raises(RuntimeError, match=r"8787.*4242"),
     ):
-        await mgr._clear_before_start(client="specs")
+        await mgr._clear_before_start()
     kill.assert_not_called()
     killpg.assert_not_called()
 
@@ -53,7 +53,7 @@ async def test_explicit_takeover_signals_only_selected_listener_pid(tmp_path: Pa
         patch("armodule.os.kill") as kill,
         patch("armodule.os.killpg") as killpg,
     ):
-        await mgr._clear_before_start(client="specs", takeover_pids=[4242])
+        await mgr._clear_before_start(takeover_pids=[4242])
     kill.assert_called_once_with(4242, signal.SIGINT)
     killpg.assert_not_called()
     assert not mgr._stopping_pids
@@ -69,9 +69,9 @@ async def test_takeover_refuses_partial_or_unrelated_pid_selection(tmp_path: Pat
         patch("armodule.os.kill") as kill,
     ):
         with pytest.raises(RuntimeError, match="Required ports"):
-            await mgr._clear_before_start(client="specs", takeover_pids=[4242])
+            await mgr._clear_before_start(takeover_pids=[4242])
         with pytest.raises(ValueError, match="no longer listening"):
-            await mgr._clear_before_start(client="specs", takeover_pids=[9999])
+            await mgr._clear_before_start(takeover_pids=[9999])
     kill.assert_not_called()
 
 
@@ -85,7 +85,7 @@ async def test_unidentified_port_conflict_cannot_be_taken_over(tmp_path: Path) -
         patch("armodule.os.kill") as kill,
         pytest.raises(RuntimeError, match="unknown"),
     ):
-        await mgr._clear_before_start(client="specs")
+        await mgr._clear_before_start()
     kill.assert_not_called()
 
 
@@ -101,7 +101,7 @@ async def test_takeover_never_signals_replacement_listener(tmp_path: Path, monke
         patch("armodule.asyncio.sleep", new=AsyncMock()),
         pytest.raises(RuntimeError, match="remain in use"),
     ):
-        await mgr._clear_before_start(client="specs", takeover_pids=[4242])
+        await mgr._clear_before_start(takeover_pids=[4242])
     assert [call.args for call in kill.call_args_list] == [
         (4242, signal.SIGINT), (4242, signal.SIGKILL),
     ]

@@ -125,8 +125,10 @@ pending in the physical acceptance table. The detailed local run log is `/tmp/we
 The async backend and capture/result lifecycle checks do not establish physical
 accuracy. For each Quest model, retain JPEG dimensions, camera label, profile,
 browser/OS version, exposure/presentation timestamp provenance, and surveyed origin
-errors with the acceptance record. Measure decode/transport delay before treating the
-backend's provisional ±0.5-second robot stillness window as a measured bound.
+errors with the acceptance record. Measure decode/transport delay and camera/odometry skew against the
+[protocol timestamp-pairing rules](../../dimos-ar/PROTOCOL.md#localization-qualification-and-coordinate-correction).
+Moving robot-camera captures require surrounding odometry samples at most 200 ms
+apart; no stillness or speed gate substitutes for timestamp correspondence.
 Test robot translation and rotation, camera stalls, delayed responses, reference resets,
 and emergency stop during a deliberately delayed VPS query.
 

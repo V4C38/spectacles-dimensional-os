@@ -15,8 +15,9 @@ python3 clients/specs/tools/review.py
 
 The default `--suite all` runs the golden and regression suites plus the manipulation
 and navigation-overlap probes. Use `--suite golden` or
-`--suite regression` for diagnosis. The golden path follows all 25 shared
-chapters in about 103 seconds at normal speed. It records continuous rendered
+`--suite regression` for diagnosis. The golden path follows the shared
+chapters with 87 seconds of declared holds at normal speed, including one brief re-localization. The shared catalog
+owns chapter order and duration limits. It records continuous rendered
 footage and performs **no screenshot exports during the flow**. The shared
 finalizer extracts its stills after capture finishes. The 18 regression/platform cases run
 separately and export native Preview PNGs after their assertions. Brief outcome
@@ -24,7 +25,7 @@ animations use frames from the continuous recording.
 
 Results default to `Review Data/specs/<runId>/`:
 
-- `golden-path.mp4`: readable 1280×900, 30 fps, 90–120 second continuous walkthrough, produced by default.
+- `golden-path.mp4`: readable 1280×900, 30 fps, 75–105 second continuous walkthrough, produced by default.
 - `01_setup_entry.png`, etc.: catalog-ordered case evidence, matching WebXR names.
 - `results.json`: catalog coverage, assertion results and source identity.
 - `golden/` and `regression/`: per-suite manifests, events, native logs and evidence.
@@ -36,8 +37,27 @@ audit, the latest video is atomically published as **`Review Data/specs_golden-p
 Failed, incomplete, focused-probe and `--keep-open` runs preserve the prior video.
 This stable publication path also applies when `--output-root` changes run storage.
 
+Publication requires matching production and tested-workspace input manifests,
+covering production `Assets/` and `.esproj` files. Harness scene changes
+are recorded as editor-owned overlays. A stale or modified prepared workspace may
+still be inspected diagnostically but cannot publish a current-source golden video.
+
 The raw recording contains only Preview content, including aspect-preserving
 padding when needed. Chapter framing uses camera-projected UI/world bounds.
+The review runner holds renewable macOS idle-display and user-active assertions
+from startup through the final production handoff and media publication. It releases
+only its own assertions on exit, including failures; a crashed owner releases them
+too. Source-audit, editor-launch and offline compilation commands also guard their
+execution. No screen-saver/password preferences are changed.
+
+For queued LS work, follow [AGENTS.md](../../../AGENTS.md#lens-studio-queued-work-and-automatic-screen-locking):
+start a unique `ls_awake.py` lease as soon as LS work is requested, retain it during
+preparation, and stop it in final cleanup after the last LS action. Detached leases
+expire after four hours by default or on owner exit. Replace an expiring lease
+before releasing it if work remains. Other tasks' guards are independent.
+These guards prevent automatic idle locking; an existing/manual/managed lock still
+requires an unlocked session before visual verification.
+
 The recorder uses the display compositor, prevents idle sleep and allows bounded attempts to keep Lens
 Studio foreground under the focus limit below. It finds the Preview viewport through macOS Accessibility,
 refreshes its bounds during window resizing, and reframes chapters without
@@ -71,8 +91,13 @@ following use injected pose ports; callbacks are not replaced with fake motion.
 
 `--prepare-only` makes a copy without connecting. `--prepared-project` retries a
 runner-created disposable project and refreshes the test harness; it does not
-refresh production scripts. Use a fresh default run to validate changed source.
+refresh production scripts, assets or packages. This diagnostic reuse preserves
+the original tested-input identity. Use a fresh default run to validate changed source.
 Do not hot reload during recording; duplicate chapter names fail the run.
+When retrying after an ordinary test failure, pass `--focus-budget` with the prior
+run's `focus-budget` path so restoration attempts remain cumulative. An aborted
+budget still refuses to resume; only explicit user authorization permits a new
+budget after a focus-limit abort.
 
 Canonical full golden video and all functional/failure evidence remain enabled by
 default. Pass `--extra-media` for edited probe and supplemental review clips. A
@@ -175,7 +200,7 @@ budget tests cannot establish headset thermal, memory or stereo behavior.
 
 ## Native execution policy
 
-[AGENTS.md](../../../AGENTS.md#lens-studio-integration-test-focus-limit) owns the focus-restoration budget, abort/resume rules, editor-only harness requirements and production handoff checks. Follow that policy for every run. The runner shares one budget across suites, disables the disposable harness on exit, and gates success on restored production source with Auto Run false and matching compiler bytes. Never deploy a disposable test copy.
+[AGENTS.md](../../../AGENTS.md#lens-studio-integration-test-focus-limit) owns the focus-restoration budget, abort/resume rules, editor-only harness requirements and production handoff checks. Follow that policy for every run. The runner persists one focus budget across recorder processes and suites through `FocusPolicy.swift`. It disables the disposable harness on exit and gates success on restored production source with Auto Run false, matching compiler bytes and matching source/workspace manifests. Never deploy a disposable test copy.
 
 ## Specs arm rendering
 
@@ -184,8 +209,13 @@ and fixed local-length dashes; rigid motion updates pose uniforms, not vertex bu
 Only the vertex shader projects outlines. Its fragment shader performs dash masking
 and simple antialiasing without projection or distance-dependent dash merging.
 ArmSurface provides flat color/opacity; end-effector indicators retain Fresnel.
-Per-point displacement opacity samples the latest state at 10 Hz with no catch-up
-queue. Global fades, poses and warning colors remain at display rate.
+Surface and outline buffers upload once per model revision. Per-link displacement uses 15 opacity uniforms whose
+coefficients sample the latest state at 10 Hz with no catch-up queue, then smooth
+over 0.12 seconds. The vertex shaders evaluate point opacity and send it through a
+native Interpolate node to the fragment shaders. This retains spatial fading without
+rebuilding meshes for alpha changes. Zero-opacity fills are disabled independently
+of visible outlines. Global fades, poses and warning colors remain at display rate.
+Automated upload and shader-graph checks do not establish headset FPS or power use.
 
 SpecsArmPanelPresenter owns the native Frame, attached/pinned state and placement.
 Controls live under Frame.content; the frame's top center attaches 13 cm below the

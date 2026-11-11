@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from review import DEFAULT_CLAD, SPECS_ROOT, LensMcp, capture, runtime_error_lines, write_json
+from ls_awake import KeepAwake
 
 FIXTURES = ("ReviewScenario", "ReviewCompileTrigger", "ColorProbe", "InterFontProbe", "CameraFixture",
             "IntegrationScenario", "IntegrationInput", "IntegrationCatalog", "HeaderProbe")
@@ -111,7 +112,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     args.source = args.source.expanduser().resolve()
-    return 0 if asyncio.run(audit(args)) else 1
+    with KeepAwake():
+        return 0 if asyncio.run(audit(args)) else 1
 
 
 if __name__ == "__main__":

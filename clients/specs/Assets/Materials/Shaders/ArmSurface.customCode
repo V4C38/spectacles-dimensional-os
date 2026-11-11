@@ -2,5 +2,6 @@ input_float OpacityScale;
 input_float ColorR;
 input_float ColorG;
 input_float ColorB;
+input_float PointOpacity;
 output_vec4 Result;
-void main() { Result = vec4(vec3(ColorR, ColorG, ColorB), system.getSurfaceColor().a * OpacityScale); }
+void main() { Result = vec4(vec3(ColorR, ColorG, ColorB), PointOpacity * OpacityScale); }

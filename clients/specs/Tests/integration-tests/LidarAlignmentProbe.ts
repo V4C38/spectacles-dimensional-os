@@ -1,7 +1,7 @@
 import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 // Disposable-project diagnostic. GPU dot centers must coincide with the hollow
 // native reference brackets at 1, 2 and 3 metres, before and after moving the camera.
-import { DimOSSpecsClient } from "../Scripts/DimOSSpecsClient/DimOSSpecsClient";
+import { emitReviewEvent, findProductionRoot } from "./IntegrationHost";
 import { PointCloudRenderer } from "../Scripts/DimOSSpecsClient/sensors/PointCloudRenderer";
 import { specsToClientTrackingPoint } from "../Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
 import { WorldMeshRenderer } from "../Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer";
@@ -27,14 +27,9 @@ export class ReviewScenario extends BaseScriptComponent {
       if (this.tracking) this.tracking.enabled = this.trackingEnabled;
     });
   }
-  private emit(value: Record<string, unknown>): void { print(`SPECS_REVIEW ${JSON.stringify({ ...value, unixMs: Date.now() })}`); }
+  private emit(value: Record<string, unknown>): void { emitReviewEvent(value); }
   private prepare(): void {
-    const find = (object: SceneObject): any => {
-      const root = object.getComponent(DimOSSpecsClient.getTypeName()); if (root) return root;
-      for (let i = 0; i < object.getChildrenCount(); i++) { const root = find(object.getChild(i)); if (root) return root; }
-      return null;
-    };
-    for (let i = 0; i < global.scene.getRootObjectsCount(); i++) { this.root = find(global.scene.getRootObject(i)); if (this.root) break; }
+    this.root = findProductionRoot();
     if (!this.root) throw new Error("Production root missing");
     this.root.uiPresenter.setupWizardController.invalidatePending(); this.root.enabled = false;
     this.root.uiPresenter.setupWizardPanel.enabled = false; this.root.uiPresenter.mainUIFrame.enabled = false;

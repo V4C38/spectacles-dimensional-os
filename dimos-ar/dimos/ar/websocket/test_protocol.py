@@ -385,6 +385,8 @@ def test_decode_client_pose_rejects_non_finite_and_zero_quat() -> None:
         decode_inbound(json.dumps({**base, "orientation": [0.0, 0.0, 0.0, 0.0]}))
 
 
+
+
 def test_encode_client_pose() -> None:
     payload = _parse_json_line(
         encode_client_pose(
@@ -730,3 +732,16 @@ def test_client_decode_error_is_a_bounded_diagnostic():
                        ("suppressed_count", -1), ("request_id", "")):
         with pytest.raises((ValueError, TypeError)):
             decode_inbound(json.dumps({**body, key: value}))
+
+
+@pytest.mark.parametrize("payload", [
+    {"type": "client_pose", "position": [10**400, 0, 0], "orientation": [0, 0, 0, 1], "ts": 1},
+    {"type": "client_pose", "position": [0, 0, 0], "orientation": [0, 0, 0, 10**400], "ts": 1},
+    {"type": "interaction_request", "request_id": "huge", "action": "update", "speed_scale": 10**400},
+    {"type": "interaction_request", "request_id": "huge", "action": "update", "position": [10**400, 0, 0], "orientation": [0, 0, 0, 1]},
+    {"type": "manipulation_request", "request_id": "huge", "group_id": "arm", "action": "evaluate", "position": [10**400, 0, 0], "orientation": [0, 0, 0, 1]},
+    {"type": "localization_tracking", "tracking_reference_id": "track", "travel_m": 10**400, "active": True},
+])
+def test_oversized_json_integers_are_ordinary_validation_errors(payload):
+    with pytest.raises(ValueError):
+        decode_inbound(json.dumps(payload))

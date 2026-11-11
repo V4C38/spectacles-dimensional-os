@@ -339,8 +339,8 @@ async def test_failed_localization_requests_next_batch_without_result_timeout(
     )
     assert module._ws_server.sent == []
     if not disconnected:
-        prompts, episodes = module._policy.poll()
-        assert prompts == [] and episodes == []  # Retry waits for backoff.
+        prompts = module._policy.poll()
+        assert prompts == []  # Retry waits for backoff.
 
 
 def test_state_snapshot_has_no_alignment() -> None:
@@ -984,8 +984,8 @@ async def test_robot_image_pairing_preserves_producer_time_and_encodes_off_loop(
 ) -> None:
     from dimos.ar.localization.pose_buffer import PoseBuffer
     from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
-    from dimos.ar.localization.worker import LocalizationWorker
     import dimos.ar.module as ar_module
+    from dimos.ar.worker import BoundedWorker
     from test_support.localization import _camera_info
 
     module = _module_with_policy(["vps"])
@@ -998,7 +998,7 @@ async def test_robot_image_pairing_preserves_producer_time_and_encodes_off_loop(
         T_base_camera_optical=np.eye(4),
     )
     module._robot_observations.set_camera_info(_camera_info())
-    module._localization_worker = LocalizationWorker()
+    module._localization_worker = BoundedWorker()
     monkeypatch.setattr(ar_module.time, "time", lambda: 100.8)
     loop_thread = threading.get_ident()
     encode_threads = []

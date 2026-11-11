@@ -6,7 +6,7 @@ import {
   TextFramer,
   decodeLidar,
   decodeLocalizationObservations,
-  decodeOutbound as decodeWireOutbound,
+  decodeOutbound,
   encodeEstopRequest,
   encodeNavGoalRequest,
   encodeClientPose,
@@ -21,13 +21,11 @@ import {
 } from "../../Assets/Scripts/DimOSARClient/websocket/protocol";
 import type { LocalizationObservation } from "../../Assets/Scripts/DimOSARClient/websocket/protocolTypes";
 
-// Route codec fixtures are embedded in their current revisioned publication.
-function decodeOutbound(text: string): ReturnType<typeof decodeWireOutbound> | import("../../Assets/Scripts/DimOSARClient/websocket/protocolTypes").NavGoal {
-  const value = JSON.parse(text);
-  if (value.type !== "nav_goal") return decodeWireOutbound(text);
-  const state = decodeWireOutbound(JSON.stringify(navigationSnapshot(null, value)));
-  if (state.type !== "interaction_state") throw new Error("Missing navigation snapshot");
-  return (value.preview ? state.preview : state.active_goal)!;
+function decodeNavigation(value: Record<string, unknown>) {
+  const snapshot = navigationSnapshot(null, value as unknown as import("../../Assets/Scripts/DimOSARClient/websocket/protocolTypes").NavGoal);
+  const decoded = decodeOutbound(JSON.stringify(snapshot));
+  if (decoded.type !== "interaction_state") throw new Error("Missing navigation snapshot");
+  return (value.preview ? decoded.preview : decoded.active_goal)!;
 }
 
 const HELLO_FIXTURE = { ...helloAt(1234.567), time_sync: { ts_client: 1234.567, ts_server: 5678.901 } };
@@ -153,9 +151,8 @@ describe("decodeOutbound fixtures", () => {
     expect(state).toEqual(STATE_FIXTURE);
   });
 
-  it("decodes both nav_goal shapes", () => {
-    const active = decodeOutbound(
-      JSON.stringify({
+  it("decodes navigation endpoints from canonical interaction snapshots", () => {
+    const active = decodeNavigation({
         type: "nav_goal",
         pose: [1.0, 2.0, 0.0, 0.7854],
         path_poses: [
@@ -163,8 +160,7 @@ describe("decodeOutbound fixtures", () => {
           [1.0, 2.0, 0.0, 0.7854],
         ],
         ts: 5.0,
-      }),
-    );
+      });
     expect(active).toEqual({
       type: "nav_goal",
       pose: [1.0, 2.0, 0.0, 0.7854],
@@ -175,9 +171,7 @@ describe("decodeOutbound fixtures", () => {
       ts: 5.0,
     });
 
-    const cleared = decodeOutbound(
-      JSON.stringify({ type: "nav_goal", path_poses: [], ts: 6.0 }),
-    );
+    const cleared = decodeNavigation({ type: "nav_goal", path_poses: [], ts: 6.0 });
     expect(cleared).toEqual({
       type: "nav_goal",
       pose: null,
@@ -185,10 +179,10 @@ describe("decodeOutbound fixtures", () => {
       ts: 6.0,
     });
 
-    expect(decodeOutbound(JSON.stringify({ type: "nav_goal", pose: [1, 0, 0, 0], path_poses: [], ts: 1 })))
+    expect(decodeNavigation({ type: "nav_goal", pose: [1, 0, 0, 0], path_poses: [], ts: 1 }))
       .toMatchObject({ pose: [1, 0, 0, 0], path_poses: [] });
     expect(() =>
-      decodeOutbound(JSON.stringify({ type: "nav_goal", path_poses: [[0, 0, 0, 0]], ts: 1 })),
+      decodeNavigation({ type: "nav_goal", path_poses: [[0, 0, 0, 0]], ts: 1 }),
     ).toThrow(/nav_goal.pose is required/);
   });
 
@@ -625,18 +619,18 @@ it("decodes explicit preview support and ordinary goals", () => {
   expect(decoded.type === "hello" && decoded.capabilities.navigation.nav_goal.preview).toBe(true);
   expect(JSON.parse(encodeNavGoalRequest({ epoch: "test", lease_id: "test", sequence: 1, position: [1, 2, 0], orientation: [0, 0, 0, 1], preview: true })).preview).toBe(true);
   expect(JSON.parse(encodeNavGoalRequest({ epoch: "test", lease_id: "test", sequence: 1, position: [1, 2, 0], orientation: [0, 0, 0, 1] })).preview).toBeUndefined();
-  expect(decodeOutbound(JSON.stringify({ type: "nav_goal", preview: true, path_poses: [], ts: 1 }))).toEqual({ type: "nav_goal", preview: true, pose: null, path_poses: [], ts: 1 });
-  expect(() => decodeOutbound(JSON.stringify({ type: "nav_goal", preview: "true", path_poses: [], ts: 1 }))).toThrow(/boolean/);
+  expect(decodeNavigation({ type: "nav_goal", preview: true, path_poses: [], ts: 1 })).toEqual({ type: "nav_goal", preview: true, pose: null, path_poses: [], ts: 1 });
+  expect(() => decodeNavigation({ type: "nav_goal", preview: "true", path_poses: [], ts: 1 })).toThrow(/boolean/);
 });
 
 it("preserves preview correlation and rejects malformed identities without changing normal goals", () => {
   const pose = { position: [1, 2, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number] };
   const request = JSON.parse(encodeNavGoalRequest({ epoch: "test", lease_id: "test", sequence: 1, ...pose, preview: true, preview_id: "aim-1" }));
   expect(request.preview_id).toBe("aim-1");
-  expect(decodeOutbound(JSON.stringify({ type: "nav_goal", preview: true, preview_id: "aim-1", path_poses: [], ts: 1 }))).toMatchObject({ preview_id: "aim-1", preview: true });
+  expect(decodeNavigation({ type: "nav_goal", preview: true, preview_id: "aim-1", path_poses: [], ts: 1 })).toMatchObject({ preview_id: "aim-1", preview: true });
   expect(() => encodeNavGoalRequest({ epoch: "test", lease_id: "test", sequence: 1, ...pose, preview_id: "aim-1" })).toThrow(/requires preview/);
   expect(() => encodeNavGoalRequest({ epoch: "test", lease_id: "test", sequence: 1, ...pose, preview: true, preview_id: "" })).toThrow(/preview_id/);
-  expect(() => decodeOutbound(JSON.stringify({ type: "nav_goal", preview: true, preview_id: 7, path_poses: [], ts: 1 }))).toThrow(/preview_id/);
+  expect(() => decodeNavigation({ type: "nav_goal", preview: true, preview_id: 7, path_poses: [], ts: 1 })).toThrow(/preview_id/);
 });
 
 it("decodes optional server display metadata", () => {
@@ -751,5 +745,5 @@ it("requires authority credentials on every navigation command", () => {
 });
 
 it("rejects standalone navigation publications", () => {
-  expect(() => decodeWireOutbound(JSON.stringify({ type: "nav_goal", ts: 1, path_poses: [] }))).toThrow(/Unknown outbound/);
+  expect(() => decodeOutbound(JSON.stringify({ type: "nav_goal", ts: 1, path_poses: [] }))).toThrow(/Unknown outbound/);
 });

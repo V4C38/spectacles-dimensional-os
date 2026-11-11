@@ -9,12 +9,6 @@ export function lidarHeightColor(t: number): Vec3 {
   return a.map((value, axis) => (value + (b[axis] - value) * mix) / 255) as Vec3;
 }
 
-/** Near obstacles are red, fading to white at the configured ground-plane distance from the robot pose. */
-export function lidarObstacleIntensity(point: Vec3, robot: Vec3, rangeM: number, odomScaleCorrectionFactor = 1): number {
-  const scale = requireScale(odomScaleCorrectionFactor);
-  return Math.max(0, Math.min(1, Math.hypot(point[0] - robot[0], point[1] - robot[1]) / scale / Math.max(0.001, rangeM)));
-}
-
 /** Native sensor metres from a physical body box, undoing only the wire XY heuristic. */
 export function lidarBodyClearance(point: Vec3, robot: Vec3, orientation: Quat, bounds: Vec3, odomScaleCorrectionFactor = 1): number {
   const scale = requireScale(odomScaleCorrectionFactor);

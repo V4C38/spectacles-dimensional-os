@@ -209,7 +209,7 @@ describe("WebXR complete ARModule session", () => {
     expect(f.client.navigation.marker.pose().position[2]).toBeCloseTo(-2.8);
     expect(f.client.markers.object.children[0].position.z).toBeCloseTo(-2.8);
     expect(f.client.lidar.object.geometry.getAttribute("position").getZ(0)).toBeCloseTo(-2.8);
-    expect(f.client.route.object.geometry.getAttribute("instanceStart").getZ(0)).toBeCloseTo(-1.865);
+    expect((f.client.route.object.getObjectByName("Executing route ribbon") as THREE.Mesh).geometry.getAttribute("position").getZ(0)).toBeCloseTo(-1.865);
     socket.receive({ type: "nav_goal", ts: 10, path_poses: [] });
     socket.receive({ ...state, nav: { state: "resolved", outcome: "succeeded" } });
     f.tick(); expect(f.client.navigation.marker.cancelVisible()).toBe(false);
@@ -262,12 +262,10 @@ describe("WebXR complete ARModule session", () => {
     socket.receive({ type: "nav_goal", ts: 11, pose: [5, 0, 0, 0], path_poses: [[3, 1, 0, 0], [5, 0, 0, 0]] });
     socket.receive({ ...state, nav: { state: "following_path", outcome: null } });
     expect(marker.pose().position[2]).toBeCloseTo(-5);
-    const routeMaterial = f.client.route.object.material;
-    expect(routeMaterial.color.getHex()).toBe(0xffffff);
-    expect(routeMaterial.worldUnits).toBe(true);
-    expect(routeMaterial.linewidth).toBe(0.008);
-    expect(routeMaterial.dashed).toBe(false);
-    expect(routeMaterial.opacity).toBe(0.85);
+    const ribbon = f.client.route.object.getObjectByName("Executing route ribbon") as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+    expect(ribbon.visible).toBe(true);
+    expect(ribbon.material.color.getHex()).toBe(0xffffff);
+    expect(ribbon.material.opacity).toBe(0.85);
     socket.receive({ type: "nav_goal", ts: 12, path_poses: [] });
     socket.receive({ ...state, nav: { state: "resolved", outcome: "succeeded" } });
     expect(f.client.navigation.flash()).toBe("succeeded");

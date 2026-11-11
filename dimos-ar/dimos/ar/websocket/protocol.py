@@ -22,6 +22,7 @@ from dimos.ar.localization.types import (
 )
 from dimos.ar.manipulation.protocol import ManipulationRequest, decode_request
 from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavJoystickRequest, NavState
+from dimos.ar.numeric import finite_number
 from dimos.ar.replication.interaction import InteractionRequest
 from dimos.ar.replication.protocol import decode_interaction_request, identifier, sequence
 from dimos.ar.robot.capabilities import (
@@ -97,27 +98,13 @@ def _quat(data: dict[str, Any], key: str) -> tuple[float, float, float, float]:
 
 
 def _finite_vec3(data: dict[str, Any], key: str) -> tuple[float, float, float]:
-    values = _vec3(data, key)
-    if not all(math.isfinite(value) for value in values):
-        raise ValueError(f"Field {key!r} must be finite")
-    return values
+    return _vec3(data, key)
 
 
 def _strict_finite_number(value: object, key: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError(f"Field {key!r} must be a number")
-    out = float(value)
-    if not math.isfinite(out):
-        raise ValueError(f"Field {key!r} must be finite")
-    return out
-
-
-def _strict_finite_float(data: dict[str, Any], key: str) -> float:
-    return _finite_float(data, key)
-
-
-def _strict_finite_vec3(data: dict[str, Any], key: str) -> tuple[float, float, float]:
-    return _finite_vec3(data, key)
+    return finite_number(value, f"Field {key!r}")
 
 
 def _finite_quat(data: dict[str, Any], key: str) -> tuple[float, float, float, float]:
@@ -371,15 +358,15 @@ def decode_inbound(text: str) -> Inbound:
 
 
 def _decode_nav_joystick_request(data: dict[str, Any]) -> NavJoystickRequest:
-    linear = _strict_finite_vec3(data, "linear")
-    angular = _strict_finite_vec3(data, "angular")
+    linear = _finite_vec3(data, "linear")
+    angular = _finite_vec3(data, "angular")
     if linear[2] != 0.0:
         raise ValueError("linear.z must be 0")
     if angular[0] != 0.0 or angular[1] != 0.0:
         raise ValueError("angular.x and angular.y must be 0")
     duration: float | None = None
     if "duration" in data:
-        duration = _strict_finite_float(data, "duration")
+        duration = _finite_float(data, "duration")
         if duration < 0.0 or duration > NAV_JOYSTICK_MAX_DURATION_S:
             raise ValueError(
                 f"duration must be in [0, {NAV_JOYSTICK_MAX_DURATION_S}], got {duration}"
@@ -624,7 +611,11 @@ def encode_hello(hello: Hello) -> str:
 
 @dataclass(frozen=True)
 class LocalizationObservationsRequest:
-    """Capture a batch, including a replacement batch after an unsuccessful scan."""
+    """Capture a batch, including a replacement after an unsuccessful scan.
+
+    MapLocalization adds episode/purpose context. A robot tag batch can provide
+    relative odometry alignment after a VPS miss without a map anchor.
+    """
 
     capture_policy: CapturePolicy
     observation_count: int
@@ -807,20 +798,3 @@ def encode_lidar_binary(
     )
     body = b"".join(struct.pack("<3f", *point) for point in points)
     return header + body
-
-
-# Manipulation commands use the shared codec. Shutdown quiescence receipts and
-# explicit model visual metadata are encoded by the service; see PROTOCOL.md.
-
-# Manipulation results may carry optional failed_joints identifiers for segment feedback.
-
-# Optional manipulation_state.protection reports normal/derated/paused/fault,
-# reason, joints, effective_speed_scale (0..1), and resumable; see PROTOCOL.md.
-
-# Optional manipulation_state following_at_target (bool) and following_goal (pose)
-# correlate measured live holding with the client target; see PROTOCOL.md.
-
-# Optional manipulation observations include joint_velocities (finite rad/s or m/s
-# keyed by joint) and gripper_target (accepted normalized command, distinct from
-# measured opening). execution_phase is motion/gripper; terminal execution is
-# published only after the whole operation resolves. See PROTOCOL.md.

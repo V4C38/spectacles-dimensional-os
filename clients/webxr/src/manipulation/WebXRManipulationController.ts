@@ -1,4 +1,4 @@
-import { sameArmTrackingOrigin } from "@dimos-ar-client/manipulation/ArmJointFilter";
+import { sameTrackingReference } from "@dimos-ar-client/localization/clientTrackingOrigin";
 import { ARM_PANEL_STYLE } from "@dimos-ar-client/presentation/PanelFrameStyle";
 import {updatePanelGesture, type PanelGesture} from "../presentation/PanelGesture";
 import * as THREE from "three";
@@ -48,7 +48,7 @@ export class WebXRManipulationController {
     this.object = this.renderer.object;
   }
   setSelected(selected: boolean): void {
-    if (this.selected !== selected) this.interrupt();
+    if (this.selected !== selected) { this.panelGesture = null; this.gesture.end(); }
     this.selected = selected;
     this.core.setSelected(selected);
   }
@@ -88,12 +88,11 @@ export class WebXRManipulationController {
     this.interaction.end();
   }
   suspend(): void { this.end(); this.core.suspend(); }
-  interrupt(): void { this.panelGesture = null; this.gesture.end(); this.interaction.interrupt(); this.core.suspend(); }
+  interrupt(): void { this.panelGesture = null; this.gesture.end(); this.core.suspend(); }
   action(action: ManipulationControlAction | "pin" | "recalibrate"): void {
     if (action === "recalibrate") { if (this.renderer.controlsView.buttons.get(action)?.enabled) this.renderer.controlsView.onRecalibrate?.(); return; }
     if (action === "pin") { this.panelGesture = null; this.renderer.resetPanel(); return; }
     this.core.action(action);
-    this.renderer.previewRequested = this.core.presentation.previewRequested;
   }
   tick(enabled: boolean): void {
     const view = this.session.view();
@@ -101,7 +100,8 @@ export class WebXRManipulationController {
       view.connection !== "ready" && view.capabilities === null && this.interaction.retainingFeedback;
     const retained = supported && this.interaction.retainingFeedback;
     const origin = this.origin() ?? (retained ? this.lastOrigin : null);
-    if (!supported || (!enabled && !retained) || !sameArmTrackingOrigin(origin, this.lastOrigin)) { this.end(); this.core.suspend(); }
+    if (!supported || (!enabled && !retained) || !sameTrackingReference(origin, this.lastOrigin)) { this.end(); this.core.suspend(); }
+    if (origin && this.lastOrigin && origin !== this.lastOrigin && sameTrackingReference(origin, this.lastOrigin)) this.gesture.rebase(this.lastOrigin, origin);
     this.lastOrigin = origin;
     this.core.tick(supported && enabled && !!origin && this.interaction.available);
     this.renderer.controlsView.localizationAvailable = this.session.view().capabilities?.localization.available === true;

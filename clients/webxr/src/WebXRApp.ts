@@ -74,12 +74,13 @@ export class WebXRApp extends xb.Script {
   override onXRSessionStarted(session?: XRSession): void { this.sessions.start(session); }
   override onXRSessionEnded(): void { this.environmentDepth?.reset(); this.sessions.end(); }
   override update(time = performance.now(), frame?: XRFrame): void {
+    this.client.pumpSession();
     const current = this.sessions.sample(time, frame);
     if (!current || !frame) return;
     const { viewer, reference, deltaS } = current;
     this.environmentDepth?.update(frame, viewer, [this.client.robot.object, this.client.route.object, this.client.previewRoute.object, this.client.manipulation.object]);
     const { position: p, orientation: q } = viewer.transform;
-    this.client.tick({ position: [p.x, p.y, p.z], orientation: [q.x, q.y, q.z, q.w] }, this.inputController.readJoystick());
+    this.client.tick({ position: [p.x, p.y, p.z], orientation: [q.x, q.y, q.z, q.w] }, this.inputController.readJoystick(), false);
     this.client.robot.orientFeedback(new THREE.Vector3(p.x, p.y, p.z));
     this.client.manipulation.renderer.faceViewer(new THREE.Vector3(p.x, p.y, p.z));
     this.client.notifications.tick([p.x, p.y, p.z], [q.x, q.y, q.z, q.w], viewer.views?.[0]?.projectionMatrix[5] ?? 1, deltaS);

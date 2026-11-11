@@ -1,35 +1,6 @@
+import { object, text, finite, vector, pose } from "./ManipulationValidation";
 import { linkPoses } from "./ModelKinematics";
 import type { ManipulationModel } from "./ManipulationTypes";
-
-function object(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new Error("Expected manipulation object");
-  return value as Record<string, unknown>;
-}
-function text(value: unknown): string {
-  if (typeof value !== "string" || !value.trim() || value.length > 128)
-    throw new Error("Invalid manipulation identifier");
-  return value;
-}
-function finite(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value))
-    throw new Error("Invalid manipulation number");
-  return value;
-}
-function vector(value: unknown, count: number): number[] {
-  if (!Array.isArray(value) || value.length !== count)
-    throw new Error("Invalid manipulation vector");
-  return value.map(finite);
-}
-function pose(value: unknown, path = "pose"): void {
-  try {
-    const p = object(value);
-    vector(p.position, 3);
-    const q = vector(p.orientation, 4);
-    if (Math.abs(q.reduce((s, v) => s + v * v, 0) - 1) > 1e-4)
-      throw new Error("Expected unit quaternion");
-  } catch (error) { throw new Error(`${path}: ${error instanceof Error ? error.message : String(error)}`); }
-}
 
 /** The same semantic checks apply to inline and completed bulk models. */
 export function validateManipulationModel(model: Record<string, unknown>): void {

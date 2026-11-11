@@ -45,7 +45,7 @@ it.each(["stop", undefined] as const)("tilts %s popups upward without shifting t
 
 it("releases the single pill visual owner", () => {
   const view = new ViewerNotificationPresenter();
-  expect(view.object.children).toHaveLength(7);
+  expect(view.object.children).toHaveLength(10); // Includes the three busy dots.
   const resources = new Set<{ dispose(): void }>();
   view.object.traverse(child => {
     if ("text" in child) { resources.add(child as unknown as { dispose(): void }); return; }

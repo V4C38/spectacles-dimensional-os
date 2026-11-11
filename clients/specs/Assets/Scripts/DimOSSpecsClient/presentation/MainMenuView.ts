@@ -1,16 +1,26 @@
-import { Slider } from "SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider";
-import type { StateName } from "SpectaclesUIKit.lspkg/Scripts/Components/Element";
-import { PanelHeightController } from "./PanelHeightController";
-import { RUNTIME_LAYOUTS, RUNTIME_PANEL_SCALE, panelFooterY, panelProfile, type PanelProfile } from "./PanelLayout";
 import type { CapsuleButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/CapsuleButton";
+import type { StateName } from "SpectaclesUIKit.lspkg/Scripts/Components/Element";
+import { Slider } from "SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider";
+import { CONTROL_PANEL_LAYOUT,CONTROL_PANEL_SECTION,CONTROL_PANEL_COPY as COPY,controlPanelTab,robotBadgeText,sensorStatusText } from "../../DimOSARClient/presentation/ControlPanelPresentation";
 import type { LidarDisplayMode } from "../../DimOSARClient/sensors/lidarSettings";
-import { CONTROL_PANEL_COPY as COPY, CONTROL_PANEL_SECTION, CONTROL_PANEL_LAYOUT, controlPanelTab, robotBadgeText, sensorStatusText } from "../../DimOSARClient/presentation/ControlPanelPresentation";
 import type { OperatingMode } from "./AppState";
-import type { SpecsUISnapshot } from "./SpecsUISnapshot";
 import { NativeTextField } from "./NativeTextField";
+import { PanelHeightController } from "./PanelHeightController";
+import { RUNTIME_LAYOUTS,RUNTIME_PANEL_SCALE,panelFooterY,panelProfile,type PanelProfile } from "./PanelLayout";
+import type { SpecsUISnapshot } from "./SpecsUISnapshot";
+import {
+COLOR_WHITE,SnapOS2Styles,
+configureControlPanelFrame,configurePanelText,
+createIconButton,
+createPanelSurface,
+createText,getFrameComponent,isFrameInitialized,
+panelButtonLayer,panelFontSize,
+setButtonSelected,
+setPanelFollowing,
+uiMaterialLayer,
+type IconButtonResult
+} from "./UIKit";
 import { WorldMeshRenderer } from "./WorldMeshRenderer";
-import { createPanelSurface, createIconButton, createText, getFrameComponent, isFrameInitialized,
-  configureControlPanelFrame, configurePanelText, setPanelFollowing, setButtonSelected, panelButtonLayer, panelFontSize, uiMaterialLayer, COLOR_WHITE, SnapOS2Styles, type IconButtonResult } from "./UIKit";
 
 interface MainMenuCallbacks {
   onSpeed?: (value: number) => void;
@@ -54,6 +64,7 @@ export class MainMenuView {
   private speedValue: Text;
   private syncingSpeed = false;
   private disposed = false;
+  private visible = false;
   private readonly subscriptions: (() => void)[] = [];
   private retain(subscription: unknown): void {
     if (typeof subscription === "function") this.subscriptions.push(subscription as () => void);
@@ -256,7 +267,8 @@ export class MainMenuView {
     this.stop.getSceneObject().getTransform().setLocalPosition(new vec3(0, panelFooterY(this.heightController.height), 1.5));
     this.bodies.get(this.page)!.enabled = this.heightController.height + 0.01 >= this.heightController.target;
   }
-  setVisible(visible: boolean): void { this.heightController.setVisible(visible); }
+  setVisible(visible: boolean): void { this.visible = visible; this.heightController.setVisible(visible); }
+  isDiagnosticsVisible(): boolean { return this.visible && this.page === "diagnostics"; }
   placed(): void { this.heightController.placed(); }
   showPage(page: Page): void {
     if (page !== this.page && page !== "main") this.callbacks.onRecordEnd(true);

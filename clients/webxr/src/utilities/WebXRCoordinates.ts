@@ -1,4 +1,4 @@
-import type { Quat, Vec3, YawPose } from "@dimos-ar-client/websocket/protocolTypes";
+import type { Quat, Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
 import { normalizeQuat, rotateVecByQuat } from "@dimos-ar-client/localization/clientTrackingTransforms";
 
 type Mat3 = readonly [
@@ -69,18 +69,6 @@ export function webxrOpticalToClientTrackingPose(pose: PositionOrientation): Pos
     position: webxrToClientTrackingPoint(pose.position),
     orientation: remapPoseQuat(normalizeQuat(pose.orientation), WEBXR_BASIS.P),
   };
-}
-
-export function clientTrackingToWebxrYawPose(pose: YawPose): YawPose {
-  const p = requireYawPose(pose);
-  const position = clientTrackingToWebxrPoint([p[0], p[1], p[2]]);
-  // Arrow local forward is -Z; positive protocol yaw turns toward WebXR -X.
-  return [...position, p[3]];
-}
-
-export function webxrToClientTrackingYawPose(pose: YawPose): YawPose {
-  const p = requireYawPose(pose);
-  return [...webxrToClientTrackingPoint([p[0], p[1], p[2]]), p[3]];
 }
 
 export function webxrHeadingToClientTrackingPose(pose: PositionOrientation): PositionOrientation {
@@ -183,18 +171,6 @@ function normalizeVec3(value: Vec3): Vec3 {
     throw new Error("orientation must be a non-zero quaternion");
   }
   return [value[0] / length, value[1] / length, value[2] / length];
-}
-
-function requireYawPose(value: YawPose): YawPose {
-  if (!Array.isArray(value) || value.length !== 4) {
-    throw new Error("yaw pose must be a 4-element [x, y, z, yaw]");
-  }
-  return [
-    requireFinite(value[0], "position[0]"),
-    requireFinite(value[1], "position[1]"),
-    requireFinite(value[2], "position[2]"),
-    requireFinite(value[3], "yaw"),
-  ];
 }
 
 function requireVec3(value: Vec3, key: string): Vec3 {

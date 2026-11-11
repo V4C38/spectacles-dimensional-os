@@ -188,12 +188,12 @@ When adding lifecycle, wire handlers, coordinators, or presentation logic:
 
 ## Pre-commit CI (agent commits)
 
-[AGENTS.md](AGENTS.md#commit--pull-request-guidelines) owns the exact-code gate before commits, amends and pushes. Run `./launcher/scripts/run-ci.sh` in an unrestricted terminal and require every job to pass; focused tests and prior snapshots do not replace it. Follow the contributor guide for Python 3.12, Node 22 and the pinned DimOS source revision.
+[AGENTS.md](AGENTS.md#commit--pull-request-guidelines) owns validation frequency, the final change-set checkpoint, and focused follow-up exceptions. Follow it rather than repeating the full gate for each Git command. The contributor guide owns Python 3.12, Node 22 and pinned DimOS setup prerequisites.
 
 ## Dev quick reference
 
 ```bash
-# Local CI (matches GitHub Actions — run before committing)
+# Local CI (matches GitHub Actions — final checkpoint per AGENTS.md)
 # Must NOT run inside the Cursor agent sandbox — needs write access outside the repo
 # (DimOS logs under ~/.local/state/dimos/logs/). Use a normal terminal or all perms.
 ./launcher/scripts/run-ci.sh

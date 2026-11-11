@@ -23,13 +23,18 @@ from dimos.ar.localization.fiducial_marker.localizer import FiducialMarkerLocali
 from dimos.ar.localization.map_localization import MapLocalization
 from dimos.ar.localization.odom_map_transform import OdomMapTransform
 from dimos.ar.localization.policy import EpisodeWork, LocalizationPolicy
-from dimos.ar.localization.runner import EPISODE_TIMEOUT_S, RESULT_TIMEOUT_S, LocalizationRunner
+from dimos.ar.localization.runner import (
+    EPISODE_TIMEOUT_S,
+    RESULT_TIMEOUT_S,
+    LocalizationRunner,
+    prepare_marker_episode,
+)
 from dimos.ar.localization.types import LocalizationProviderType, SnapshotLocalizer
 from dimos.ar.localization.vps.admission import VpsAdmission
 from dimos.ar.localization.vps.localizer import VpsLocalizer
 from dimos.ar.localization.vps.multiset_client import MultisetVpsClient, MultisetVpsClientConfig
 from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
-from dimos.ar.localization.worker import LocalizationWorker
+from dimos.ar.manipulation.admission import admit_manipulation
 from dimos.ar.manipulation.frames import ReferencePose
 from dimos.ar.manipulation.protocol import ManipulationRequest
 from dimos.ar.manipulation.service import ManipulationService
@@ -93,6 +98,7 @@ from dimos.ar.websocket.protocol import (
 )
 from dimos.ar.websocket.server import WebSocketServer
 from dimos.ar.websocket.server_info import server_info
+from dimos.ar.worker import BoundedWorker
 from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
@@ -119,7 +125,7 @@ class LocalizationConfig(BaseModel):
     providers: list[LocalizationProviderConfig] = Field(default_factory=list)
     travel_threshold_m: float = Field(default=0.75, gt=0, allow_inf_nan=False)
     heading_threshold_deg: float = Field(default=30.0, gt=0, le=180, allow_inf_nan=False)
-    marker_preference_s: float = Field(default=1.5, ge=0, allow_inf_nan=False)
+    marker_preference_s: float = Field(default=3.0, ge=0, allow_inf_nan=False)
     headset_travel_threshold_m: float = Field(default=10.0, gt=0, allow_inf_nan=False)
     episode_timeout_s: float = Field(default=EPISODE_TIMEOUT_S, gt=0, allow_inf_nan=False)
 
@@ -193,6 +199,7 @@ def profile_for_config(config: ARModuleConfig) -> RobotProfile:
 
 class ARModule(Module):  # type: ignore[misc]
     dedicated_worker: ClassVar[bool] = True
+    _recording_source: ClassVar[bool] = False
 
     lidar: In[PointCloud2]
     odom: In[PoseStamped]
@@ -261,14 +268,15 @@ class ARModule(Module):  # type: ignore[misc]
                 )
             self._lidar_settings = DEFAULT_LIDAR_SETTINGS
             self._lidar_subscriptions: dict[str, LidarSettings] = {}
-            self._localization_worker = LocalizationWorker()
+            self._localization_worker = BoundedWorker()
             self._vps_admission = VpsAdmission()
             self._pairing_log_at = 0.0
             self._pairing_rejected = 0
             self._pairing_accepted = 0
             self._map_localization: MapLocalization | None = None
             self._replay_mode = (
-                bool(getattr(global_config, "replay", False))
+                self._recording_source
+                or bool(getattr(global_config, "replay", False))
                 or getattr(global_config, "unitree_connection_type", None) == "replay"
                 or global_config.robot_ip in ("fake", "mock", "replay")
             )
@@ -504,6 +512,9 @@ class ARModule(Module):  # type: ignore[misc]
                 logger.exception(
                     "AR service shutdown failed", service=name, error=type(exc).__name__
                 )
+        worker = getattr(self, "_localization_worker", None)
+        if worker is not None:
+            worker.close()
         ws_server_obj = getattr(self, "_ws_server", None)
         if ws_server_obj is not None:
             ws_server_obj.stop()
@@ -583,12 +594,9 @@ class ARModule(Module):  # type: ignore[misc]
     def _flush_localization(
         self,
         client_ids: list[str],
-        episodes: list[EpisodeWork],
     ) -> None:
         for client_id in client_ids:
             self._send_observations_request(client_id)
-        for work in episodes:
-            self._localization_runner.submit(work)
 
     def _on_client_connect(
         self,
@@ -713,6 +721,11 @@ class ARModule(Module):  # type: ignore[misc]
     def _on_interaction_request(self, request: InteractionRequest, client_id: str) -> None:
         self._interaction.poll()
         self._drain_interaction_retirements()
+        if request.action == "mode":
+            previous = self._interaction.preflight(client_id, request)
+            if previous is not None:
+                self._ws_server.schedule_send_to_client(client_id, encode_text(previous.wire()))
+                return
         if (
             request.action == "mode"
             and (request.mode != self._interaction.mode or self._native_mode_uncertain)
@@ -729,14 +742,13 @@ class ARModule(Module):  # type: ignore[misc]
                     request, client_id, "rejected", "native_quiescence_unavailable"
                 )
                 return
-            if request.mode == "agent":
-                result = self._interaction.handle(client_id, request)
-                if result.status != "accepted":
-                    self._ws_server.schedule_send_to_client(client_id, encode_text(result.wire()))
-                    return
-                self._broadcast_interaction(force=True)
             self._interaction.set_agent_busy(True)
             self._mode_task = asyncio.create_task(self._change_native_mode(request, client_id))
+            return
+        if request.action == "acquire" and (
+            self._mode_task is not None or self._native_mode_uncertain
+        ):
+            self._interaction_reply(request, client_id, "busy", "robot_busy")
             return
         if (
             request.action == "mode"
@@ -854,22 +866,31 @@ class ARModule(Module):  # type: ignore[misc]
                 request.mode == "manual",
                 timeout=2,
             )
+            if (accepted and request.mode == "agent"
+                    and request.epoch != self._interaction.epoch):
+                # A source reset invalidates a pending resume. Confirm a native
+                # pause before publishing manual; unknown outcomes stay fenced.
+                paused = await self._agent_mode_rpc.call("ar_agent_set_manual", True, timeout=2)
+                if paused:
+                    self._interaction.confirm_native_manual()
+                self._native_mode_uncertain = not paused
+                self._interaction_reply(request, client_id, "stale", "epoch_changed")
+                self._broadcast_interaction(force=True)
+                return
             self._interaction.set_agent_busy(not self._agent_service.idle)
+            # Native acknowledgement is a fact even if the requester or source
+            # retired during the RPC. Reconcile before rejecting the old request.
+            if accepted:
+                assert request.mode is not None
+                self._interaction.confirm_native_mode(request.mode)
+            self._native_mode_uncertain = self._native_mode_uncertain and not accepted
             if request.epoch != self._interaction.epoch:
                 self._interaction_reply(request, client_id, "stale", "epoch_changed")
             elif not accepted:
-                self._native_mode_uncertain = False
-                if request.mode == "agent":
-                    # Native refused to resume, so manual is still its positive state.
-                    self._interaction.confirm_native_manual()
                 self._interaction_reply(request, client_id, "busy", "native_motion_active")
-            elif request.mode == "manual":
-                self._native_mode_uncertain = False
-                result = self._interaction.handle(client_id, request)
-                self._ws_server.schedule_send_to_client(client_id, encode_text(result.wire()))
             else:
-                self._native_mode_uncertain = False
-                self._interaction_reply(request, client_id, "accepted", "mode_changed")
+                result = self._interaction.complete_native_mode(client_id, request)
+                self._ws_server.schedule_send_to_client(client_id, encode_text(result.wire()))
             self._broadcast_interaction(force=True)
         except TimeoutError:
             self._native_mode_uncertain = True
@@ -993,113 +1014,20 @@ class ARModule(Module):  # type: ignore[misc]
             return
         self._interaction.poll()
         self._drain_interaction_retirements()
-        payload = request.payload
-        authority = self._interaction.authority
-        epoch = payload.get("epoch")
-        lease_id = payload.get("lease_id")
-        owns = (
-            authority is not None
-            and authority.client_id == client_id
-            and authority.lease_id == lease_id
-            and authority.kind.startswith("manipulation_")
-            and authority.group_id == request.group_id
-        )
-        # Discrete commands can use a released shared target; they do not acquire
-        # a persistent creator-client lock. Native operation admission stays atomic.
-        target = self._interaction.target_for("manipulation", request.group_id)
-        valid_target = target is not None and payload.get("target_revision") == target.revision
-        allowed = (
-            epoch == self._interaction.epoch
-            and self._interaction.mode == "manual"
-            and (owns or authority is None)
-        )
-        if request.action in {"acquire", "update"}:
-            allowed = (
-                allowed
-                and owns
-                and authority is not None
-                and authority.kind == "manipulation_following"
-            )
-        elif request.action == "evaluate":
-            allowed = allowed and owns and target is not None
-        elif request.action in {"plan", "execute"}:
-            allowed = allowed and valid_target
-        elif request.action == "gripper":
-            allowed = allowed and owns
-        if not allowed:
-            self._ws_server.schedule_send_to_client(
-                client_id,
-                encode_text(
-                    {
-                        "type": "manipulation_result",
-                        "request_id": request.request_id,
-                        "action": request.action,
-                        "group_id": request.group_id,
-                        "status": "rejected",
-                        "code": "ownership",
-                        "message": "Robot interaction is owned or target changed",
-                    }
-                ),
-            )
-            return
-        advisory_current = False
-        if request.action == "evaluate" and target is not None:
-            advisory_current = bool(
-                math.dist(payload["position"], target.position) < 1e-6
-                and abs(sum(a * b for a, b in zip(
-                    payload["orientation"], target.orientation, strict=True
-                ))) > 1 - 1e-10
-            )
-        if request.action in {"update", "plan"} and target is not None:
-            payload = {
-                **payload,
-                "position": list(target.position),
-                "orientation": list(target.orientation),
-                "speed_scale": target.speed_scale,
-            }
-            payload.pop("final_gripper", None)
-            if request.action == "plan" and target.gripper is not None:
-                payload["final_gripper"] = target.gripper
-        if request.action == "cancel":
-            self._interaction.cancel_manipulation_target(request.group_id)
-        trusted = {
-            **payload,
-            "authority_epoch": self._interaction.epoch,
-            "authority_lease": authority.lease_id if owns and authority is not None else None,
-            "authority_revision": self._interaction.revision,
-            "authority_deadline": authority.expires_at
-            if request.action != "cancel" and owns and authority is not None
-            else time.monotonic() + 0.5,
-            "target_revision": target.revision if target is not None else 0,
-        }
-        if request.action == "evaluate":
-            trusted["advisory_target_revision"] = (
-                target.revision if advisory_current and target is not None
-                else payload.get("target_revision")
-            )
-            trusted["advisory_current"] = advisory_current
-        if request.action in {"execute", "reset_joints", "prepare_shutdown", "cancel"}:
-            if request.action != "cancel" and self._interaction.motion_busy:
-                self._ws_server.schedule_send_to_client(
-                    client_id,
-                    encode_text(
-                        {
-                            "type": "manipulation_result",
-                            "request_id": request.request_id,
-                            "action": request.action,
-                            "group_id": request.group_id,
-                            "status": "rejected",
-                            "code": "busy",
-                        }
-                    ),
-                )
-                return
-            if request.action == "reset_joints":
-                self._interaction.clear_manipulation_target(request.group_id)
-                trusted["authority_revision"] = self._interaction.revision
-            self._interaction.begin_manipulation_motion(request.request_id)
-            trusted["authority_revision"] = self._interaction.revision
-        service.submit(replace(request, payload=trusted), client_id, clock_offset)
+        admitted: ManipulationRequest | dict[str, Any]
+        if request.action != "cancel" and (
+            self._mode_task is not None or self._native_mode_uncertain
+        ):
+            admitted = {"status": "rejected", "code": "busy"}
+        else:
+            admitted = admit_manipulation(request, client_id, self._interaction)
+        if isinstance(admitted, ManipulationRequest):
+            service.submit(admitted, client_id, clock_offset)
+        else:
+            self._ws_server.schedule_send_to_client(client_id, encode_text({
+                "type": "manipulation_result", "request_id": request.request_id,
+                "action": request.action, "group_id": request.group_id, **admitted,
+            }))
 
     async def handle_global_costmap(self, msg: OccupancyGrid) -> None:
         await self._previews.update_costmap(msg)
@@ -1265,40 +1193,11 @@ class ARModule(Module):  # type: ignore[misc]
         if self._map_localization is not None:
             self._map_localization.observations(domain, client_id)
             return
-        newest = max(domain, key=lambda observation: observation.ts_server)
-        logger.info(
-            "localization capture admitted for validation",
-            client_id=client_id,
-            newest_capture_age_s=round(time.time() - newest.ts_server, 3),
-            jpeg_bytes=sum(len(observation.jpeg) for observation in observations),
-        )
-        pose = self._odometry.history.at_server_ts(
-            newest.ts_server,
-            fallback_to_latest=(
-                LocalizationProviderType.FIDUCIAL_MARKER in self._policy.providers
-                and self._replay_mode
-            ),
-        )
-        work = self._policy.on_observations(
-            client_id,
-            domain,
-            capture_travel_m=None if pose is None else pose.travel_m,
-            capture_heading_rad=None
-            if pose is None
-            else math.atan2(
-                2
-                * (
-                    pose.orientation[3] * pose.orientation[2]
-                    + pose.orientation[0] * pose.orientation[1]
-                ),
-                1 - 2 * (pose.orientation[1] ** 2 + pose.orientation[2] ** 2),
-            ),
+        work = prepare_marker_episode(
+            self._policy, self._odometry, domain, client_id, replay=self._replay_mode
         )
         if work is None:
-            logger.warning(
-                "localization_observations ignored — no pending episode",
-                client_id=client_id,
-            )
+            logger.warning("localization_observations ignored — no pending episode", client_id=client_id)
             return
         self._localization_runner.submit(work)
 
@@ -1357,9 +1256,9 @@ class ARModule(Module):  # type: ignore[misc]
         if accepted is None:
             return
         self._state_publisher.publish_odom(accepted.corrected)
-        prompts, episodes = self._policy.on_odom()
+        prompts = self._policy.on_odom()
         self._robot_observations.expire(self._policy.travel_m)
-        self._flush_localization(prompts, episodes)
+        self._flush_localization(prompts)
 
     def _retire_robot_source(self) -> None:
         # Retire native work against the old reference before replacing its epoch.
@@ -1508,7 +1407,7 @@ class ARModule(Module):  # type: ignore[misc]
         if not self._capabilities.supports(CapabilityName.AGENT):
             return
         changed = self._agent_service.update_idle(bool(msg))
-        self._interaction.set_agent_busy(not self._agent_service.idle)
+        self._interaction.set_agent_busy(self._mode_task is not None or not self._agent_service.idle)
         if changed:
             self._broadcast_state()
 

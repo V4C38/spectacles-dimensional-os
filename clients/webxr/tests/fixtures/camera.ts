@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import { HmdCameraSource, type VideoFrameMetadata } from "../../src/localization/HmdCameraSource";
-import { acceptProfile } from "../../src/localization/HmdCalibrationRunner";
+import { acceptProfile } from "./HmdCalibrationRunner";
 import { HMD_PROFILES } from "../../src/localization/HmdProfiles";
 import type { HmdCalibrationProfile } from "../../src/localization/HmdCalibration";
 

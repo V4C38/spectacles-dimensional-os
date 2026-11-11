@@ -28,6 +28,7 @@ export async function bootstrap(
   const commands: any[] = [];
   const bulk = new V2BulkPeer(); await bulk.install(page);
   let socket: WebSocketRoute | undefined;
+  let armIdentity = false;
   const peer = new InteractionPeer("fixture-epoch", "integration");
   const arm = options.manipulation ? new GoldenArmPeer(
     JSON.parse(readFileSync(new URL("./OpenYAM.json", import.meta.url), "utf8")), peer, value => send(value)) : null;
@@ -101,7 +102,7 @@ export async function bootstrap(
             dimos_version: "0.4.0",
             armodule_version: "0.2.0",
           },
-          robot: { odom_scale_correction_factor: 1, ...shared.fixtures.robot },
+          robot: { odom_scale_correction_factor: 1, ...shared.fixtures.robot, ...(armIdentity ? { display_name: "OpenYAM" } : {}) },
           capabilities: {
             manipulation: options.manipulation ? available : { available: false, reason: "No arm" },
             object_detection: { available: false, reason: "No detector" },
@@ -287,12 +288,12 @@ export async function bootstrap(
       ),
     );
   });
-  const completeLocalization = async () => {
+  const completeLocalization = async (position: [number, number, number] = [0, 0, 0]) => {
     await expect.poll(() => captureTs).toBeGreaterThan(acceptedCaptureTs);
     acceptedCaptureTs = captureTs;
     send({
       type: "localization_result",
-      position: [0, 0, 0],
+      position,
       orientation: [0, 0, 0, 1],
       confidence: 1,
       ts: captureTs,
@@ -328,8 +329,21 @@ export async function bootstrap(
     localized,
     completeLocalization,
     lidar,
-    enableManipulation: () => {
+    enableManipulation: async () => {
       if (!arm) throw new Error("Bootstrap must opt into manipulation before the hello handshake");
+      armIdentity = true;
+      await page.evaluate(() => {
+        const app = (window as any).xb.core.scene.children.find((o: any) => o.client?.manipulation);
+        app.client.session.stop();
+        app.client.session.start();
+      });
+      await expect.poll(() => snapshot(page).then(s => s.robotName)).toBe("OpenYAM");
+      await page.evaluate(() => {
+        const app = (window as any).xb.core.scene.children.find((o: any) => o.client?.manipulation);
+        app.client.realign();
+      });
+      await completeLocalization();
+      await expect.poll(() => snapshot(page).then(s => s.setupCompleted && !s.setupCelebrating)).toBe(true);
       arm.enable();
     },
     armSnapshot: () => arm?.snapshot() ?? null,

@@ -24,23 +24,37 @@ type WebXRInputClient = Pick<DimOSWebXRClient,
   "controlsEnabled" | "isRobotSelected" | "toggleRobotSelection" | "holdNavigation" |
   "releaseNavigation" | "aimNavigation" | "loseInput" | "emergencyStop" | "cancelNavigation">;
 
+type InputSource = xb.SelectEvent["target"];
+type PrimaryGesture =
+  | { kind: "navigation"; source: InputSource; fromMarker: boolean }
+  | { kind: "arm"; source: InputSource }
+  | { kind: "armPanel"; source: InputSource; grip: boolean }
+  | { kind: "panel"; source: InputSource; grip: boolean }
+  | { kind: "slider"; source: InputSource; object: THREE.Object3D; drag: xb.FreestandingSlider }
+  | { kind: "scroll"; source: InputSource; view: ScrollableTextView; startY: number; offset: number; bar: boolean }
+  | { kind: "ui"; source: InputSource };
+
 export class WebXRInputController {
   readonly sound = new InteractionSoundController();
   private disposed = false;
   private mainMenu: MainMenuView | null = null;
-  private worldHold: xb.SelectEvent["target"] | null = null;
-  private holdFromMarker = false;
+  private primary: PrimaryGesture | null = null;
+  private get worldHold() { return this.primary?.kind === "navigation" ? this.primary.source : null; }
+  private get holdFromMarker() { return this.primary?.kind === "navigation" && this.primary.fromMarker; }
+  private get panelHold() { return this.primary?.kind === "panel" ? this.primary.source : null; }
+  private get panelGrip() { return this.primary?.kind === "panel" && this.primary.grip; }
+  private get manipulationHold() { return this.primary?.kind === "arm" || this.primary?.kind === "armPanel" ? this.primary.source : null; }
+  private get robotPanelGrip() { return this.primary?.kind === "armPanel" && this.primary.grip; }
+  private get speedHold() { return this.primary?.kind === "slider" ? this.primary.object : null; }
+  private get speedDrag() { return this.primary?.kind === "slider" ? this.primary.drag : null; }
+  private get scrollHold() { return this.primary?.kind === "scroll" ? this.primary : null; }
+  private get uiGrab() { return !!this.primary && ["ui", "slider", "scroll", "panel"].includes(this.primary.kind); }
   private secondaryPressed = false;
   private readonly pressEdges = new ManipulationPressEdges();
   private readonly manipulationCapture = new ManipulationInputCapture();
-  private robotPanelGrip = false;
   private readonly gripperPresses = new Set<xb.SelectEvent["target"]>();
-  private speedHold: THREE.Object3D | null = null;
-  private speedDrag: xb.FreestandingSlider | null = null;
-  private manipulationHold: xb.SelectEvent["target"] | null = null;
   private detectedSurfaces: FloorPlane[] = [];
   private readonly placementBlocker = new THREE.Object3D();
-  private uiGrab = false;
   private touchDispatch = false;
   private readonly physicalPinches = new Set<xb.SelectEvent["target"]>();
   private readonly touches = new FingertipButtons<xb.SelectEvent["target"]>({
@@ -48,9 +62,6 @@ export class WebXRInputController {
     end: (source, contact, cancelled) => this.dispatchTouch(source, contact, false, cancelled),
   });
   private readonly capture = new InteractionCapture<xb.SelectEvent["target"]>();
-  private scrollHold: { view: ScrollableTextView; startY: number; offset: number; bar: boolean } | null = null;
-  private panelGrip = false;
-  private panelHold: xb.SelectEvent["target"] | null = null;
   private menuWasPressed = false;
   private reviewWasVisible = false;
   private setupWasVisible = false;
@@ -112,7 +123,7 @@ export class WebXRInputController {
       const surfaces = navigationSurfaceHits(from, dir, this.detectedSurfaces, floorY);
       const result = solveMeshPlacement({ rayFrom: from,
         rayTo: raycaster.ray.at(FLOOR_AIM_RANGE_M, new THREE.Vector3()).toArray() as [number, number, number],
-        hits: surfaces, deadzone: null, wasInsideDeadzone: false, fallbackY: floorY });
+        hits: surfaces, fallbackY: floorY });
       const point = new THREE.Vector3(...result.probePosition);
       const distance = point.distanceTo(raycaster.ray.origin);
       if (distance > FLOOR_AIM_RANGE_M || distance > raycaster.far || distance < raycaster.near) return;
@@ -136,7 +147,6 @@ export class WebXRInputController {
       onRobot: () => client.toggleRobotSelection(),
       manipulationSpeed: () => client.manipulation.interaction.speedScale,
       onDebug: () => { client.ui.debugEnabled = !client.ui.debugEnabled; },
-      onLidar: () => { client.ui.cycleLidar(); },
       onLidarMode: mode => client.ui.setLidarMode(mode),
       onLidarRange: direction => client.ui.adjustLidarRange(direction),
       onLidarPoints: direction => client.ui.adjustLidarPoints(direction),
@@ -208,7 +218,7 @@ export class WebXRInputController {
     this.navigationFloor.position.y = this.client.robot.floorWorldY() ?? 0;
     if (!this.client.controlsEnabled()) {
       if (this.worldHold) this.capture.cancel();
-      this.worldHold = null;
+      if (this.primary?.kind === "navigation") this.primary = null;
       this.client.navigation.cancelDrag();
       this.client.joystick.loseInput();
     }
@@ -375,41 +385,42 @@ export class WebXRInputController {
     if (hit.object.userData.manipulationSpeedSlider) {
       const thumb = hit.object.userData.sliderThumb as THREE.Object3D | undefined;
       if (thumb) this.interaction.capture(event.target, thumb, thumb.getWorldPosition(new THREE.Vector3()));
-      this.speedHold=hit.object;this.uiGrab=true;const half=hit.object.userData.sliderHalfWidth as number;
+      const half=hit.object.userData.sliderHalfWidth as number;
       const start=.05+THREE.MathUtils.clamp((hit.object.worldToLocal(hit.point.clone()).x+half)/(2*half),0,1)*.95;
       this.client.manipulation.interaction.setSpeedScale(start);
       const width=2*half*hit.object.getWorldScale(new THREE.Vector3()).x;
-      this.speedDrag=new xb.FreestandingSlider(start,.05,1,.95/width);
-      this.speedDrag.setInitialPose(event.target.getWorldPosition(new THREE.Vector3()),hit.object.getWorldQuaternion(new THREE.Quaternion()));
+      const drag = new xb.FreestandingSlider(start,.05,1,.95/width);
+      drag.setInitialPose(event.target.getWorldPosition(new THREE.Vector3()),hit.object.getWorldQuaternion(new THREE.Quaternion()));
+      this.primary = { kind: "slider", source: event.target, object: hit.object, drag };
       return;
     }
     if (hit.object.userData.manipulationPanel) {
       this.client.manipulation.beginPanel(event.target.getWorldPosition(new THREE.Vector3()).toArray() as [number, number, number], event.target.getWorldQuaternion(new THREE.Quaternion()).toArray() as [number, number, number, number], hit.object.userData.panelHandle ?? "bar", this.gestureRay(event.target));
-      this.manipulationHold = event.target; return;
+      this.primary = { kind: "armPanel", source: event.target, grip: false }; return;
     }
     if (this.client.manipulation.owns(hit.object) && this.client.controlsEnabled()) {
       const action = hit.object.userData.manipulationAction;
-      if (action) { this.client.manipulation.action(action); this.uiGrab = true; }
-      else if (hit.object.userData.manipulationLink) { this.client.toggleRobotSelection(); this.uiGrab = true; }
-      else if (this.client.manipulation.begin(event.target.getWorldPosition(new THREE.Vector3()).toArray() as [number, number, number], event.target.getWorldQuaternion(new THREE.Quaternion()).toArray() as [number, number, number, number])) { this.manipulationHold = event.target; this.manipulationCapture.begin(this.navigationSourceId(event.target)); }
+      if (action) { this.client.manipulation.action(action); this.primary = { kind: "ui", source: event.target }; }
+      else if (hit.object.userData.manipulationLink) { this.client.toggleRobotSelection(); this.primary = { kind: "ui", source: event.target }; }
+      else if (this.client.manipulation.begin(event.target.getWorldPosition(new THREE.Vector3()).toArray() as [number, number, number], event.target.getWorldQuaternion(new THREE.Quaternion()).toArray() as [number, number, number, number])) { this.primary = { kind: "arm", source: event.target }; this.manipulationCapture.begin(this.navigationSourceId(event.target)); }
       return;
     }
     const ray = this.mainMenu?.ownsTarget(hit.object) ? this.panelRay(event.target) : this.gestureRay(event.target);
     reportDiagnostic("ray-select", { hand: event.target.inputSource?.handedness, surface: hit?.object.name, distanceM: hit?.distance });
     if (this.mainMenu?.ownsTarget(hit?.object)) {
-      this.uiGrab = true;
+      this.primary = { kind: "ui", source: event.target };
       this.client.navigation.clearAim(this.navigationSourceId(event.target));
       this.client.joystick.loseInput();
       const scroll = this.mainMenu.scrollView(hit?.object);
       if (scroll && (hit?.object.userData.scrollbar || hit?.object.userData.bodyScrollable)) {
         const y = this.scrollPointerY(scroll, ray.origin, ray.direction);
-        if (y !== null) this.scrollHold = { view: scroll, startY: y, offset: scroll.scrollOffset, bar: hit.object.userData.scrollbar === true };
+        if (y !== null) this.primary = { kind: "scroll", source: event.target, view: scroll, startY: y, offset: scroll.scrollOffset, bar: hit.object.userData.scrollbar === true };
         return;
       }
       if (this.mainMenu.isSpeechTarget(hit?.object)) this.client.speech.beginRecording();
       if (!this.mainMenu.isControl(hit?.object) && this.mainMenu.beginManipulation(ray.origin, ray.direction, event.target.getWorldQuaternion(new THREE.Quaternion()))) {
         this.setupPlacement.pin();
-        this.panelHold = event.target;
+        this.primary = { kind: "panel", source: event.target, grip: false };
         this.menuAnchor.detach();
         this.palmOpened = false;
       }
@@ -417,19 +428,18 @@ export class WebXRInputController {
     }
     if (hit?.object === this.client.navigation.marker.cancelObject) {
       this.client.cancelNavigation();
-      this.uiGrab = true;
+      this.primary = { kind: "ui", source: event.target };
       return;
     }
     if (hit && this.client.robot.ownsTarget(hit.object) && this.client.ui.setupCompleted) {
       this.client.toggleRobotSelection();
-      this.uiGrab = true;
+      this.primary = { kind: "ui", source: event.target };
       return;
     }
     if (!this.client.controlsEnabled() || !hit || hit.object === this.placementBlocker) return;
     const fromMarker = isDescendant(hit.object, this.client.navigation.marker.object);
     if (!fromMarker && (hit.object !== this.navigationFloor || !this.client.isRobotSelected())) return;
-    this.worldHold = event.target;
-    this.holdFromMarker = fromMarker;
+    this.primary = { kind: "navigation", source: event.target, fromMarker };
     const smoothed = this.gestureRay(event.target);
     this.client.holdNavigation(smoothed.origin, smoothed.direction, this.navigationFloorPlanes(), this.holdFromMarker, this.navigationSourceId(event.target));
   }
@@ -441,7 +451,7 @@ export class WebXRInputController {
       this.clearInput();
       this.client.manipulation.beginPanel(event.target.getWorldPosition(new THREE.Vector3()).toArray() as [number,number,number],event.target.getWorldQuaternion(new THREE.Quaternion()).toArray() as [number,number,number,number],"body",this.gestureRay(event.target));
       this.capture.press(event.target,armContact.object);
-      this.manipulationHold=event.target; this.robotPanelGrip=true; return;
+      this.primary = { kind: "armPanel", source: event.target, grip: true }; return;
     }
     if (!this.mainMenu?.ownsTarget(this.interaction.hit(event.target)?.object)) return;
     const ray = this.panelRay(event.target);
@@ -452,10 +462,8 @@ export class WebXRInputController {
     if (contact) this.interaction.capture(event.target, contact.object, contact.point);
     this.interaction.direct.capture(event.target, this.interaction.hit(event.target)!.object);
     this.setupPlacement.pin();
-    this.panelHold = event.target;
-    this.panelGrip = true;
+    this.primary = { kind: "panel", source: event.target, grip: true };
     this.menuAnchor.detach();
-    this.uiGrab = true;
     this.palmOpened = false;
   }
 
@@ -487,7 +495,7 @@ export class WebXRInputController {
     this.disposed = true;
     this.touches.cancel();
     this.sound.dispose();
-    this.interaction.dispose();
+    this.interaction?.dispose();
     this.handStyle.dispose();
     this.navigationFloor.geometry.dispose();
     this.navigationFloor.material.dispose();
@@ -531,37 +539,27 @@ export class WebXRInputController {
     return this.interaction.direct.ray(controller) ?? this.interaction.smoothedRay(controller);
   }
 
+  private hostCleanupOnly = false;
   private clearInput(completeDictation = false): void {
     this.physicalPinches.clear();
-    this.robotPanelGrip=false;
     this.gripperPresses.clear(); this.manipulationCapture.reset();
-    if (this.manipulationHold) {
-      if (completeDictation) this.client.manipulation.end();
-      else this.client.manipulation.interrupt();
-    }
-    this.manipulationHold = null;
-    this.speedHold = null;
-    this.speedDrag = null;
+    this.primary = null;
     this.secondaryPressed = false;
     this.interaction.direct.cancel();
     this.interaction.releaseCaptures();
     if (completeDictation && this.capture.owner) this.capture.release(this.capture.owner);
     else this.capture.cancel();
-    this.worldHold = null;
-    this.scrollHold = null;
-    this.panelHold = null;
-    this.panelGrip = false;
     this.mainMenu?.endManipulation();
-    this.uiGrab = false;
-    this.client.loseInput(completeDictation);
+    if (!this.hostCleanupOnly) this.client.loseInput(completeDictation);
   }
 
   suspend(): void {
-    this.touches.cancel();
+    this.hostCleanupOnly = true;
+    try { this.touches.cancel(); this.clearInput(); }
+    finally { this.hostCleanupOnly = false; }
     this.client.robot.setHovered(false);
     this.client.navigation.marker.setHovered(false);
     this.sound.setActive(false);
-    this.clearInput();
     this.navigationFloor.visible = false;
     this.interaction.setEnabled(false);
   }
@@ -569,10 +567,7 @@ export class WebXRInputController {
   reset(): void {
     this.reviewWasVisible = false;
     this.setupWasVisible = false;
-    this.sound.setActive(false);
-    this.clearInput();
-    this.navigationFloor.visible = false;
-    this.interaction.setEnabled(false);
+    this.suspend();
     for (const gate of this.palmGates.values()) gate.reset();
     this.menuAnchor.detach();
     this.palmOpened = false;

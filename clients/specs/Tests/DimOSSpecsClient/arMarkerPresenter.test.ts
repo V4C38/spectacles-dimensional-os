@@ -100,3 +100,17 @@ describe("ARMarkerPresenter", () => {
     expect(instances[0].worldPosition.z).toBeCloseTo(moved[2]);
   });
 });
+
+it("uploads marker geometry only while entrance opacity changes", () => {
+  const triangles = vi.fn(), title = { text: "", textFill: {} }, caption = { textFill: {} };
+  const transform = { setLocalScale: vi.fn(), getWorldPosition: () => vec3.zero(), setWorldRotation: vi.fn() };
+  const root = { getTransform: () => transform };
+  const entry = { root, args: { title: "Kitchen" }, progress: 0,
+    visual: { orb: { triangles }, title, caption, plate: {}, label: root } };
+  const presenter = Object.assign(Object.create(ARMarkerPresenter.prototype), { _entries: new Map([["marker", entry]]) }) as ARMarkerPresenter;
+  for (let frame = 0; frame < 30; frame++) presenter.update(vec3.zero(), 1 / 60);
+  expect(triangles).toHaveBeenCalled();
+  triangles.mockClear();
+  for (let frame = 0; frame < 60; frame++) presenter.update(vec3.zero(), 1 / 60);
+  expect(triangles).not.toHaveBeenCalled(); expect(title.text).toBe("Kitchen");
+});

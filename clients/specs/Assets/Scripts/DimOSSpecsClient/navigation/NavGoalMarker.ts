@@ -1,8 +1,10 @@
-import { NAVIGATION_CANCEL_STYLE, navigationCancelReveal } from "../../DimOSARClient/presentation/WorldVisualStyle";
-import { NavigationMarkerRenderer, type NavigationMarkerStyle } from "./NavigationMarkerRenderer";
 import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable";
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
-import { WorldMeshRenderer, strokeMesh2D } from "../presentation/WorldMeshRenderer";
+import { NAVIGATION_CANCEL_STYLE,navigationCancelReveal } from "../../DimOSARClient/presentation/WorldVisualStyle";
+import { findChildRecursive } from "../presentation/UIKit";
+import { WorldMeshRenderer,strokeMesh2D } from "../presentation/WorldMeshRenderer";
+import { yawRotationFromWorldRotation } from "../utilities/SpecsUtilities";
+import { NavigationMarkerRenderer,type NavigationMarkerStyle } from "./NavigationMarkerRenderer";
 
 export type NavGoalMarkerEvents = {
   onDragTriggerStart?: (interactor: { startPoint?: vec3; endPoint?: vec3 } | null) => void;
@@ -39,8 +41,8 @@ export class NavGoalMarker extends BaseScriptComponent {
       return;
     }
     this.root = this.getSceneObject();
-    this.headingRoot = findChild(this.root, "NavigationHeadingRoot");
-    const dragObject = findChild(this.root, "DragInteractable");
+    this.headingRoot = findChildRecursive(this.root, "NavigationHeadingRoot");
+    const dragObject = findChildRecursive(this.root, "DragInteractable");
     if (!dragObject) {
       throw new Error("DragInteractable is required");
     }
@@ -50,7 +52,7 @@ export class NavGoalMarker extends BaseScriptComponent {
     if (!this.dragInteractable) {
       throw new Error("DragInteractable is required");
     }
-    const cancelObject = findChild(this.root, "button_cancel");
+    const cancelObject = findChildRecursive(this.root, "button_cancel");
     if (!cancelObject) {
       throw new Error("NavigationTargetMarker.button_cancel is required");
     }
@@ -63,7 +65,7 @@ export class NavGoalMarker extends BaseScriptComponent {
     // Prefab buttons defer SDK initialization to OnStart; resize its live visual and collider together.
     this.cancelButton.initialize();
     this.cancelButton.width = NAVIGATION_CANCEL_STYLE.diameterM * 100;
-    const cancelLabelObject = findChild(cancelObject, "Text_Title");
+    const cancelLabelObject = findChildRecursive(cancelObject, "Text_Title");
     if (cancelLabelObject) {
       const label = cancelLabelObject.getComponent("Component.Text") as Text | null;
       if (label) { label.text = ""; label.enabled = false; }
@@ -253,34 +255,4 @@ export class NavGoalMarker extends BaseScriptComponent {
       this.events.onCancel?.();
     });
   }
-}
-
-function findChild(parent: SceneObject, name: string): SceneObject | null {
-  const count = parent.getChildrenCount();
-  for (let i = 0; i < count; i++) {
-    const child = parent.getChild(i);
-    if (child.name === name) {
-      return child;
-    }
-    const nested = findChild(child, name);
-    if (nested) {
-      return nested;
-    }
-  }
-  return null;
-}
-
-function yawRotationFromPlanarDirection(x: number, z: number): quat {
-  const yaw = Math.atan2(-z, x);
-  const halfYaw = yaw * 0.5;
-  return new quat(Math.cos(halfYaw), 0, Math.sin(halfYaw), 0);
-}
-
-function yawRotationFromWorldRotation(rotation: quat): quat {
-  const forward = rotation.multiplyVec3(new vec3(1, 0, 0));
-  const planarLength = Math.sqrt(forward.x * forward.x + forward.z * forward.z);
-  if (planarLength <= 1e-6) {
-    return quat.quatIdentity();
-  }
-  return yawRotationFromPlanarDirection(forward.x, forward.z);
 }

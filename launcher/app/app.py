@@ -22,7 +22,14 @@ from pydantic import BaseModel, Field
 
 from apriltag_assets import decode_marker_id, ensure_pdf, ensure_png
 from armodule import ProcessManager
-from config import env_path, merge_env, normalize_log_level, read_env, repo_root
+from config import (
+    env_path,
+    merge_env,
+    normalize_log_level,
+    read_env,
+    repo_root,
+    validate_env_value,
+)
 from discovery import discover_devices, validate_replay
 from robot_profiles import RobotProfiles
 from robot_sources import SourceBody, SourceSelectionRequired, resolve_robot_source
@@ -104,23 +111,31 @@ class StartBody(BaseModel):
 class MountBody(BaseModel):
     model_config = {"extra": "forbid"}
 
-    marker_id: int = 0
-    print_size_mm: float = 70.0
-    forward_m: float = 0.18
-    lateral_m: float = 0.0
-    up_m: float = 0.06
-    yaw_deg: float = -90.0
-    pitch_deg: float = -15.0
-    roll_deg: float = 0.0
+    marker_id: int = DEFAULT_MOUNT["marker_id"]
+    print_size_mm: float = DEFAULT_MOUNT["print_size_mm"]
+    forward_m: float = DEFAULT_MOUNT["forward_m"]
+    lateral_m: float = DEFAULT_MOUNT["lateral_m"]
+    up_m: float = DEFAULT_MOUNT["up_m"]
+    yaw_deg: float = DEFAULT_MOUNT["yaw_deg"]
+    pitch_deg: float = DEFAULT_MOUNT["pitch_deg"]
+    roll_deg: float = DEFAULT_MOUNT["roll_deg"]
 
 
 class SettingsBody(BaseModel):
     model_config = {"extra": "forbid"}
 
-    travel_threshold_m: float = Field(default=0.75, gt=0, allow_inf_nan=False)
-    heading_threshold_deg: float = Field(default=30, gt=0, le=180, allow_inf_nan=False)
-    marker_preference_s: float = Field(default=1.5, ge=0, allow_inf_nan=False)
-    headset_travel_threshold_m: float = Field(default=10, gt=0, allow_inf_nan=False)
+    travel_threshold_m: float = Field(
+        default=LOCALIZATION_POLICY_DEFAULTS["travel_threshold_m"], gt=0, allow_inf_nan=False
+    )
+    heading_threshold_deg: float = Field(
+        default=LOCALIZATION_POLICY_DEFAULTS["heading_threshold_deg"], gt=0, le=180, allow_inf_nan=False
+    )
+    marker_preference_s: float = Field(
+        default=LOCALIZATION_POLICY_DEFAULTS["marker_preference_s"], ge=0, allow_inf_nan=False
+    )
+    headset_travel_threshold_m: float = Field(
+        default=LOCALIZATION_POLICY_DEFAULTS["headset_travel_threshold_m"], gt=0, allow_inf_nan=False
+    )
     profile_id: str | None = None
     openai_api_key: str | None = None
     multiset_client_id: str | None = None
@@ -159,6 +174,7 @@ def settings_payload(profile_id: str | None = None) -> dict[str, Any]:
         "defaults": {
             "mounts": [dict(DEFAULT_MOUNT)],
             "preset_marker_ids": list(PRESET_MARKER_IDS),
+            "localization": dict(LOCALIZATION_POLICY_DEFAULTS),
         },
     }
 
@@ -393,6 +409,19 @@ async def api_settings_put(body: SettingsBody) -> dict[str, Any]:
             status_code=409, detail="stop ARModule before editing settings"
         )
     try:
+        env_updates = {
+            key: _blank_to_none(getattr(body, field))
+            for field, key in (
+                ("openai_api_key", "OPENAI_API_KEY"),
+                ("multiset_client_id", "MULTISET_CLIENT_ID"),
+                ("multiset_client_secret", "MULTISET_CLIENT_SECRET"),
+            )
+            if field in body.model_fields_set
+        }
+        if "dimos_log_level" in body.model_fields_set:
+            env_updates["DIMOS_LOG_LEVEL"] = normalize_log_level(body.dimos_log_level)
+        for value in env_updates.values():
+            validate_env_value(value)
         mounts = normalize_ui_mounts(
             [item.model_dump() for item in body.mounts]
             if body.mounts is not None
@@ -410,17 +439,6 @@ async def api_settings_put(body: SettingsBody) -> dict[str, Any]:
             raise ValueError("Calibration settings require a robot profile")
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    env_updates = {
-        key: _blank_to_none(getattr(body, field))
-        for field, key in (
-            ("openai_api_key", "OPENAI_API_KEY"),
-            ("multiset_client_id", "MULTISET_CLIENT_ID"),
-            ("multiset_client_secret", "MULTISET_CLIENT_SECRET"),
-        )
-        if field in body.model_fields_set
-    }
-    if "dimos_log_level" in body.model_fields_set:
-        env_updates["DIMOS_LOG_LEVEL"] = normalize_log_level(body.dimos_log_level)
     merge_env(
         env_updates,
         env_path(),
@@ -497,6 +515,8 @@ async def api_armodule_start(body: StartBody) -> dict[str, Any]:
             **({"can_port": can_port} if can_port else {}),
             **({"replay": replay, "replay_streams": body.source.streams} if replay else {}),
         )
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not start ARModule: {exc}") from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (TypeError, ValueError) as exc:

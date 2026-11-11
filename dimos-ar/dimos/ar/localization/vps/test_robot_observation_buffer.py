@@ -40,7 +40,13 @@ def _buffer() -> tuple[RobotObservationBuffer, PoseBuffer]:
     return robot_buffer, pose_buffer
 
 
-def test_push_image_without_camera_extrinsic_is_noop() -> None:
+
+def _prepare_and_commit(buffer, image, **kwargs):
+    sample = buffer.prepare_image(image, **kwargs)
+    if sample is not None:
+        buffer.add_sample(sample)
+
+def test_preparation_without_camera_extrinsic_is_noop() -> None:
     pose_buffer = PoseBuffer()
     robot_buffer = RobotObservationBuffer(
         pose_buffer=pose_buffer,
@@ -48,15 +54,15 @@ def test_push_image_without_camera_extrinsic_is_noop() -> None:
     )
     robot_buffer.set_camera_info(_camera_info())
     _push_pose(pose_buffer, ts_server=100.0, position=(1.0, 0.0, 0.0))
-    robot_buffer.push_image(_image(), ts_server=100.0, speed_mps=0.0, travel_m=0.0)  # type: ignore[arg-type]
+    _prepare_and_commit(robot_buffer, _image(), ts_server=100.0, travel_m=0.0)  # type: ignore[arg-type]
 
     assert robot_buffer.newest(now_server=100.0) is None
 
 
-def test_push_image_while_stationary() -> None:
+def test_prepare_and_commit_frame() -> None:
     robot_buffer, pose_buffer = _buffer()
     _push_pose(pose_buffer, ts_server=100.0, position=(1.0, 0.0, 0.0))
-    robot_buffer.push_image(_image(), ts_server=100.0, speed_mps=0.0, travel_m=0.0)  # type: ignore[arg-type]
+    _prepare_and_commit(robot_buffer, _image(), ts_server=100.0, travel_m=0.0)  # type: ignore[arg-type]
 
     sample = robot_buffer.newest(now_server=100.0)
     assert sample is not None
@@ -67,7 +73,7 @@ def test_push_image_while_stationary() -> None:
 def test_accepts_frames_while_moving() -> None:
     robot_buffer, pose_buffer = _buffer()
     _push_pose(pose_buffer, ts_server=100.0, position=(1.0, 0.0, 0.0))
-    robot_buffer.push_image(_image(), ts_server=100.0, speed_mps=0.2, travel_m=0.0)  # type: ignore[arg-type]
+    _prepare_and_commit(robot_buffer, _image(), ts_server=100.0, travel_m=0.0)  # type: ignore[arg-type]
 
     sample = robot_buffer.newest(now_server=100.0)
     assert sample is not None
@@ -77,7 +83,7 @@ def test_accepts_frames_while_moving() -> None:
 def test_retains_frames_after_movement_starts() -> None:
     robot_buffer, pose_buffer = _buffer()
     _push_pose(pose_buffer, ts_server=100.0, position=(0.0, 0.0, 0.0))
-    robot_buffer.push_image(_image(), ts_server=100.0, speed_mps=0.0, travel_m=0.0)  # type: ignore[arg-type]
+    _prepare_and_commit(robot_buffer, _image(), ts_server=100.0, travel_m=0.0)  # type: ignore[arg-type]
     robot_buffer.expire(travel_m=0.2)
 
     sample = robot_buffer.newest(now_server=100.0)
@@ -88,7 +94,7 @@ def test_retains_frames_after_movement_starts() -> None:
 def test_drops_frames_after_travel_threshold() -> None:
     robot_buffer, pose_buffer = _buffer()
     _push_pose(pose_buffer, ts_server=100.0, position=(0.0, 0.0, 0.0))
-    robot_buffer.push_image(_image(), ts_server=100.0, speed_mps=0.0, travel_m=0.0)  # type: ignore[arg-type]
+    _prepare_and_commit(robot_buffer, _image(), ts_server=100.0, travel_m=0.0)  # type: ignore[arg-type]
     robot_buffer.expire(travel_m=1.01)
 
     assert robot_buffer.newest(now_server=100.0) is None
@@ -99,10 +105,9 @@ def test_keeps_three_recent_samples() -> None:
     for index in range(5):
         ts = 100.0 + index
         _push_pose(pose_buffer, ts_server=ts, position=(0.0, 0.0, 0.0))
-        robot_buffer.push_image(
+        _prepare_and_commit(robot_buffer,
             _image(ts),  # type: ignore[arg-type]
             ts_server=ts,
-            speed_mps=0.0,
             travel_m=float(index) * 0.01,
         )
 

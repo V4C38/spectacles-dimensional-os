@@ -46,11 +46,11 @@ it("retires acquisition replies during feedback loss while retaining release cor
   f.owner.track("acquire", f.request("acquire")); f.owner.track("release", f.request("release"));
   f.owner.track("plan", f.request("plan")); f.owner.retainRelease();
   expect(f.owner.has("acquire", "plan")).toBe(false); expect(f.owner.has("release")).toBe(true);
-  expect(f.owner.takeRetiredGroup("acquire")).toBe("arm");
-  expect(f.owner.takeRetiredGroup("acquire")).toBeNull();
+  expect(f.owner.take(f.result("acquire", "acquire", "acquired"))).toBeNull();
+  expect(f.owner.has("acquire")).toBe(false);
   expect(f.owner.take(f.result("release", "release", "released"))).not.toBeNull();
   f.owner.track("late", f.request("acquire")); f.at(5); f.owner.expired();
-  expect(f.owner.takeRetiredGroup("late")).toBe("arm");
+  expect(f.owner.take(f.result("late", "acquire", "acquired"))).toBeNull();
   f.owner.track("clear", f.request("acquire")); f.owner.retireAcquisitions(); f.owner.clear();
-  expect(f.owner.takeRetiredGroup("clear")).toBeNull();
+  expect(f.owner.has("acquire")).toBe(false);
 });

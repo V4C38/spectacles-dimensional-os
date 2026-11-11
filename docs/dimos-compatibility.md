@@ -50,3 +50,38 @@ this is an outstanding performance diagnostic, not a passing timing guarantee.
 Tuning, the assertion, and the 500 ms input/feedback safety deadlines remain unchanged.
 These host-dependent mock measurements do not establish hardware arrival timing;
 record following and Execute separately during device validation.
+
+## Recorded Go2 registration check
+
+The 1.25 heuristic now consistently covers all outbound odometry-space points,
+including LiDAR, with inverse conversion for native navigation and agent inputs.
+This is a fixed AR coordinate mapping, not an upstream sensor/map migration. The
+installed Go2 WebRTC source is `rt/utlidar/voxel_map_compressed`; individual scan
+provenance is unavailable on this port. A proposed robot-relative packet shift
+`point + (corrected_robot - raw_robot)` was rejected because its offset changes
+with robot motion. The implemented mapping is instead `XY *= factor` about a
+fixed origin for every packet, which preserves registration between packets.
+
+A read-only check is available using the installed DimOS environment:
+
+```sh
+python dimos-ar/tools/check_go2_registration.py /path/to/go2_short.db --factor 1.25 --output report.json
+```
+
+It returns exit code 2 when repeated geometry rejects the robot-relative packet
+translation. Fixed XY scaling is measured separately in the report; neither
+comparison qualifies absolute physical scale. On the existing
+`go2_short.db` recording (461 frames), frames 31 and 38 are 0.918 m apart: 91.7% of
+non-floor points overlap within 2 cm before translation and 0% afterward. This
+rejects the time-varying translation, not the fixed scale heuristic. Applying
+1.25 to both clouds about the fixed origin retains the same 91.7% overlap and
+zero median registration residual for this pair. The tool opens the recording read-only and does
+not publish goals, alter maps, or modify upstream DimOS.
+
+Replacing the heuristic with a calibrated metric sensor migration requires either individually timestamped
+scans plus their generating poses, or a validated registration strategy for the
+vendor map. Use surveyed distances and repeated stationary obstacles across
+translation/rotation. Rebuild accumulated maps and retire active goals, previews,
+and client alignment together when changing the coordinate model; never mix old
+and new map generations. Physical Quest camera calibration and VPS alignment
+acceptance remain separate device tests documented in `clients/webxr/CALIBRATION.md`.

@@ -13,25 +13,17 @@ it("uses the gesture plane despite small scan noise, gaps and non-floor surfaces
   expect(plane.solve(from, new vec3(1, -1, -1), [], 1 / 60)).toEqual(new vec3(100, 0, -100));
 });
 
-it.each([20, -20])("smoothly approaches a mesh step at %s cm without snapping", height => {
+it.each([20, -20])("adapts to nearby mesh height %s cm", height => {
   const plane = new DragPlacementPlane(vec3.zero());
-  const first = plane.solve(from, ray, floor(height), 1 / 60)!;
-  expect(Math.abs(first.y)).toBeGreaterThan(0);
-  expect(Math.abs(first.y)).toBeLessThan(Math.abs(height) / 4);
-  const duringGap = plane.solve(from, ray, [], 1 / 60)!;
-  expect(Math.abs(duringGap.y)).toBeGreaterThan(0);
-  expect(Math.abs(duringGap.y)).toBeLessThan(Math.abs(height));
-  for (let i = 0; i < 300; i++) plane.solve(from, ray, floor(height), 1 / 60);
-  expect(plane.solve(from, ray, [], 1 / 60)!.y).toBeCloseTo(height, 1);
+  for (let i = 0; i < 100; i++) plane.solve(from, ray, floor(height), 1 / 60, 0);
+  expect(plane.solve(from, ray, [], 0, 0)!.y).toBeCloseTo(height);
 });
-
-it("keeps the plane flat after adapting height to a sloped mesh", () => {
+it("clamps downward mesh adaptation beyond 2.5 metres from the headset, but allows raised surfaces", () => {
   const plane = new DragPlacementPlane(vec3.zero());
-  const normal = new vec3(0.3, 1, 0);
-  for (let i = 0; i < 300; i++) plane.solve(from, ray, floor(20, normal), 1 / 60);
-  for (const x of [-2, -1, 0, 1, 2]) {
-    expect(plane.solve(from, new vec3(x, -1, -1), [], 0)!.y).toBeCloseTo(20, 1);
-  }
+  for (let i = 0; i < 100; i++) plane.solve(from, new vec3(0, -1, -4), floor(-50), 1 / 60, 0);
+  expect(plane.solve(from, new vec3(0, -1, -4), [], 0, 0)!.y).toBe(0);
+  for (let i = 0; i < 100; i++) plane.solve(from, new vec3(0, -1, -4), floor(30), 1 / 60, 0);
+  expect(plane.solve(from, new vec3(0, -1, -4), [], 0, 0)!.y).toBeCloseTo(30);
 });
 
 it("starts each gesture at its own marker height and rejects backward or parallel rays", () => {

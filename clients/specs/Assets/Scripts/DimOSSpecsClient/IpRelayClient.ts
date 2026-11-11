@@ -1,4 +1,4 @@
-import { validPin } from "../DimOSARClient/websocket/ConnectionResolution";
+import { validPin } from "../DimOSARClient/websocket/connectionPin";
 import { isValidHost } from "../DimOSARClient/websocket/hostNormalization";
 // Looks up a six-digit PIN on the IP relay and returns the LAN address.
 
@@ -28,7 +28,7 @@ export function routeConnectionField(
 
 export class IpRelayClient {
   private readonly relayUrl: string;
-  private lookupPending = false;
+  private pendingLookup: { pin: string; result: Promise<ResolvedPin | null> } | null = null;
 
   constructor(
     private internetModule: InternetModule,
@@ -40,10 +40,11 @@ export class IpRelayClient {
   resolve(pin: string): Promise<ResolvedPin | null> {
     // Native fetch has no portable cancellation API. Never accumulate outstanding requests
     // if a platform request stalls past the UI/connection discovery deadline.
-    if (this.lookupPending) return Promise.resolve(null);
-    this.lookupPending = true;
+    if (this.pendingLookup) {
+      return this.pendingLookup.pin === pin ? this.pendingLookup.result : Promise.resolve(null);
+    }
     const request = new Request(this.relayUrl + "/v1/pins/" + pin, { method: "GET" });
-    return this.internetModule
+    const result = this.internetModule
       .fetch(request)
       .then((response: Response) => {
         if (response.status !== 200) {
@@ -58,6 +59,8 @@ export class IpRelayClient {
         });
       })
       .catch(() => null)
-      .finally(() => { this.lookupPending = false; });
+      .finally(() => { this.pendingLookup = null; });
+    this.pendingLookup = { pin, result };
+    return result;
   }
 }

@@ -360,3 +360,14 @@ it("rejects a navigation composition without the required authority port", () =>
   expect(() => new NavigationInteraction({ sendGoal: () => {}, cancel: () => {} },
     {} as never, undefined, undefined as never)).toThrow("Navigation requires interaction authority");
 });
+
+it("preserves a held navigation draft and its robot target through a correction", () => {
+  const f = fixture(); f.core.setSelected(true);
+  f.core.hold(0, f.point(), false);
+  const before = f.authority.collaboration.snapshot().rawTarget!.position;
+  f.core.applyView(f.view, { ...f.origin, position: [1, 0, 0], ts: 1 }, null, 0.1);
+  expect(f.core.snapshot().draft?.held).toBe(true);
+  expect(f.core.snapshot().draft?.position[0]).toBeCloseTo(1);
+  expect(f.authority.collaboration.snapshot().rawTarget!.position).toEqual(before);
+  expect(f.commands.cancel).not.toHaveBeenCalled();
+});

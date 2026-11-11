@@ -113,6 +113,8 @@ class ServerHarness:
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._server: WebSocketServer | None = None
         self.nav_goal_requests: list[NavGoalRequest] = []
+        self.nav_goal_received = threading.Event()
+        self.localization_start_received = threading.Event()
         self.localization_start_requests: list[str] = []
         self.disconnected_client_ids: list[str] = []
         self._handler_kwargs = handler_kwargs
@@ -127,11 +129,13 @@ class ServerHarness:
         self, msg: NavGoalRequest, _websocket: object, _client_id: str
     ) -> None:
         self.nav_goal_requests.append(msg)
+        self.nav_goal_received.set()
 
     def _on_localization_start_request(
         self, _msg: LocalizationStartRequest, client_id: str
     ) -> None:
         self.localization_start_requests.append(client_id)
+        self.localization_start_received.set()
 
     def _on_disconnect(self, _websocket: object, client_id: str) -> None:
         self.disconnected_client_ids.append(client_id)

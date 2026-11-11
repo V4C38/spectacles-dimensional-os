@@ -1,5 +1,5 @@
-import type { InteractionCredentials, InteractionKind, InteractionPose, InteractionResult, InteractionState, InteractionSettings, InteractionTarget } from "./CollaborationTypes";
-import type { Quat } from "../websocket/protocolTypes";
+import type { InteractionCredentials, InteractionKind, InteractionPose, InteractionResult, InteractionState, InteractionSettings, InteractionTarget, InteractionSnapshot, InteractionDomain } from "./CollaborationTypes";
+import type { Quat, ReadonlyFacts } from "../websocket/protocolTypes";
 
 export const TARGET_SEND_INTERVAL_S = 0.05;
 export const AUTHORITY_RENEW_INTERVAL_S = 0.1;
@@ -32,7 +32,7 @@ export class CollaborationController {
   private settling: { acceptedRevision?: number; settings: InteractionSettings; pose: InteractionPose; sequence: number; key: string; requestId: string; epoch: string } | null = null;
   constructor(private readonly port: CollaborationPort) {}
 
-  raw(): InteractionState | null { return this.state ? { ...this.state } : null; }
+  raw(): ReadonlyFacts<InteractionState> | null { return this.state ? { ...this.state } : null; }
   navigation(): Readonly<Pick<InteractionState, "preview" | "active_goal">> {
     return { preview: this.state?.preview ?? null, active_goal: this.state?.active_goal ?? null };
   }
@@ -43,9 +43,7 @@ export class CollaborationController {
     return true;
   }
   get denialRevision(): number { return this.denial; }
-  snapshot(nowOrDomain: number | "navigation" | "manipulation" = this.port.now(), groupId?: string) {
-    const domain = typeof nowOrDomain === "string" ? nowOrDomain : "navigation";
-    const now = typeof nowOrDomain === "number" ? nowOrDomain : this.port.now();
+  snapshot(domain: InteractionDomain = "navigation", groupId?: string, now = this.port.now()): InteractionSnapshot {
     const rawTarget = this.targetFor(domain, groupId);
     const key = this.targetKey(domain, groupId);
     const predicting = this.domain() === domain && (domain === "navigation" || this.settings.group_id === groupId);

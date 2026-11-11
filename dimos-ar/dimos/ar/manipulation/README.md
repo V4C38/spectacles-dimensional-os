@@ -1,38 +1,29 @@
 # AR manipulation
 
-The `openyam-ar-planner` installed blueprint composes one official OpenYAM
-hardware owner, one pose-capable control coordinator, the official manipulation
-module with narrow AR RPC adapters, and ARModule. Navigation and manipulation
-capabilities are independent. Both WebXR and Specs consume the shared ClientCore manipulation owners. Grasping,
-pick/place, agentic manipulation, and mobile manipulation are outside this feature.
+The `openyam-ar-planner` blueprint composes one official OpenYAM hardware owner,
+a pose-capable coordinator, installed DimOS manipulation with narrow AR RPC adapters,
+and ARModule. Both clients consume portable manipulation intent and presentation.
+Navigation and manipulation capabilities are independent. Grasping, pick/place,
+agentic manipulation and mobile manipulation are outside this interface.
 
-## Runtime and development
+## Runtime and setup
 
-The selected DimOS checkout must provide the planning-group APIs (execute by plan
-ID and nonmoving IK), and its installed RoboPlan version must match that checkout's
-planning extra. The launcher verifies dependency compatibility and constructs a
-small planning world without contacting hardware. A DimOS import alone does not
-establish readiness.
+Use a selected DimOS environment with execute-by-plan-ID and nonmoving IK APIs.
+Install its planning extra together with `dimos-ar[manipulation,dev]`; the launcher
+checks planner construction without contacting hardware. A successful import alone
+does not establish readiness. The [compatibility notes](../../../../docs/dimos-compatibility.md)
+own the pinned source/dependency requirements and collision-model limitations.
+Import installed DimOS; do not patch upstream source.
 
-The OpenYAM checkout `f2945fad060082dae0023f4f00cade270b097c13` reports DimOS
-0.0.14 and requires RoboPlan `>=0.6,<0.7`; it has been validated with RoboPlan
-0.6.1. Source revisions matter more than the package version. Installing RoboPlan
-0.7 into that checkout fails during scene construction. Setup preserves selected
-editable DimOS installations and resolves their planning dependencies together,
-removing incompatible split RoboPlan packages before a downgrade. No upstream
-source patches are required.
+Select an OpenYAM profile and WebXR or Specs in the launcher. Use Simulated for
+software development. Named profiles live in `~/.config/dimos/ar-profiles.json`;
+renaming retains stable identity. New OpenYAM profiles copy the bundled bench preset;
+existing profiles remain independent. The launcher creates a mode-0600 native config
+snapshot per run, replacing its AR section and preserving unrelated configuration.
+Editing a saved profile does not mutate a running process. Credentials remain in
+`launcher/.env`.
 
-For the launcher, select **openyam_ar_planner**, **WebXR** or **Specs**, a named **OpenYAM**
-profile, and **Simulated** for software development. Profiles are stored in
-`~/.config/dimos/ar-profiles.json`. Calibration belongs to named profiles. Names are editable; stable profile IDs are retained on rename.
-New OpenYAM profiles copy the bundled OpenYAM Bench preset, including its enabled
-fiducial provider and configured tag mount. Calibration belongs to the selected
-robot instance and can be edited independently for each saved profile. The tag
-rotation preserves Go2's existing convention and adds roll:
-`R = Ry(pitch) Rx(roll) Rz(yaw)`. Print size includes the border; the existing
-8/10 conversion supplies the black-square fitting size.
-
-Equivalent mock CLI (replace the interpreter path with your isolated environment):
+Equivalent mock commands from the repository root:
 
 ```sh
 DIMOS_PYTHON=/path/to/isolated/.venv/bin/python3 \
@@ -40,416 +31,216 @@ DIMOS_AR_SIMULATION=1 \
 ./launcher/scripts/start.sh --blueprint openyam_ar_planner
 ```
 
-This chooses official in-memory hardware, including the configured home pose.
-It does not contact arm hardware. For direct DimOS CLI use,
-`dimos --simulation=mock run dimos-ar.openyam-ar-planner`.
-The launcher writes a mode-0600 temporary native `--config` file for each run,
-preserving non-AR configuration and replacing the AR section with the selected
-profile. Editing a saved profile does not modify an existing process. API keys remain in the existing credential settings.
+```sh
+dimos --simulation=mock run dimos-ar.openyam-ar-planner
+```
 
-## Ownership and interactions
+These select official in-memory hardware. Physical OpenYAM requires Linux CAN
+readiness: `can0` UP at 1 Mbit/s, transmit queue 1000 and not bus-off. ERROR-ACTIVE
+is normal. Launcher checks are read-only; Set up CAN explicitly invokes the selected
+environment's `dimos hardware can setup can0` with `pkexec`, refuses setup while
+DimOS runs, and does not ask for a browser password. Simulation bypasses CAN setup
+but still requires the planner. Start checks readiness before touching processes.
 
-Selecting the arm makes its end effector handle a full-pose planning target.
-Dragging requests seeded nonmoving IK at most every 50 ms. One evaluation/planning
-request is allowed in flight; new targets replace the queued target. Release,
-Preview and Execute request a collision-checked timed path for the exact target. Outdated replies cannot restore a
-curve or authorize execution. Preview plays the trajectory once. Execute names
-that exact reviewed plan; replacement or invalid start state rejects execution.
+### Calibration and frames
 
-Servers advertising `independent_ik` evaluate the latest local aim without waiting
-for its canonical snapshot acknowledgement. Results identify their sampled pose;
-older results may advance the visual preview but never authorize a newer Execute.
-An IK failure preserves the grab. User release restores the sphere to the latest
-validated pose, or the measured grab-start pose if none was validated. This visual
-reconciliation does not command a return movement.
+Follow the [OpenYAM bench profile](../../../../launcher/app/profiles/README.md):
+the default tag center is **60 mm right of the arm axis**, measured center to center.
+The profile guide owns print size, orientation and mounting procedure; the bundled
+profile is the machine-readable default. Saved profiles require their own measurements.
+Do not substitute the printed edge or add a renderer offset. Re-localize after changing
+calibration. Physical registration remains an attended check.
 
-With the arm unselected, grabbing the end effector handle acquires following.
-Targets use absolute localized poses with a preserved grab offset. Normal release
-frees editing authority immediately and hands the last validated target to a
-server-owned finishing tail. Any new grab supersedes that generation. Input loss,
-tracking loss, realignment, or disconnect before release terminates owned following;
-disconnect after release cannot cancel the detached tail or a newer client's work. The default watchdog and feedback freshness limit
-are 500 ms; targets are sent at up to 30 Hz. These are software settings, not
-measured physical latency guarantees. Following uses official bounded Cartesian
-IK; it has no claim to the planner's checked-path world-collision guarantee.
-Advisory joint solutions do not replace Cartesian control direction. Released
-following completes from fresh, settled measured TCP feedback; joint-space arrival
-is used only when TCP feedback is unavailable. A stationary unreachable endpoint
-reports failure instead of remaining in Moving until the absolute deadline.
+Base `pose` and measured arm observations are independent. The adapter converts
+planning `world` to wire `odom` through `wire_from_world`; `stationary_base` provides
+`T_odom_base`. OpenYAM's initial world/base/odom frames coincide. Configure their
+composition consistently if the actual base changes. Tag mounts are relative to that
+base. Mount rotation is `Ry(pitch) Rx(roll) Rz(yaw)`. Hosts perform their basis
+conversion once; visual FK never authorizes motion.
 
-Ordinary Stop retires the target, plans, and tokens, clears following, and cancels
-trajectories or reset. A confirmed ordinary stop permits a new gesture. Emergency
-Stop additionally latches manipulation stopped while preserving the gripper
-setting. Resume operation is explicit, requires fresh feedback and confirmed stop
-handling, and restores no old motion.
-A timed-out execution response is reconciled through observed state, never retried.
+Mixed tag/VPS fallback can accept a relative tag origin after an initial VPS miss
+when the configured runtime is admitted. It does not fabricate a VPS registration.
+VPS still requires a map code and configured robot-camera extrinsic at startup;
+this does not establish mixed OpenYAM support without those prerequisites. The
+[protocol](../../../PROTOCOL.md#independent-map-localization) owns the three-second
+preference deadline and map-versus-relative result distinction.
 
-## Frames and visual assets
+## Select, Preview and Execute
 
-Base `pose` retains its existing meaning. Manipulation observations have independent
-measurement timestamps, joint names, TCP poses, and outcomes. The optional adapter
-converts between planning `world` and wire `odom` using `wire_from_world`;
-`stationary_base` explicitly supplies `T_odom_base` for localization. The initial
-OpenYAM composition uses coincident world/base/odom frames. If those transforms are
-changed, configure their composition consistently with the actual model base.
-Tag mounts are relative to that base. Host basis conversion happens once.
+Select the mesh/root sphere to edit a full-pose end-effector target. Preserve its
+grab offset. While dragging, Core coalesces seeded nonmoving IK at most every 50 ms.
+Advisory IK and checked full planning have independent single-request lanes, each
+retaining newest intent. Release, Preview and Execute request a checked timed path;
+obsolete replies cannot restore intent or authorize Execute. Execute names the exact
+reviewed plan and target revision; invalid start state or changed pose/speed/gripper
+intent invalidates it. Preview animates once from time zero and retains its endpoint.
+The immediate dotted guide is advisory, not a checked trajectory.
 
-The arm preview uses articulated mesh geometry in the shared world-line style.
-The planning ghost is a bundled 251 KB simplified model; see the WebXR model
-NOTICE for source and license. Geometry preparation happens once outside this repo.
-The explicit `openyam` visual profile retains its existing root-mesh orientation correction. Joint topology and bounds come from the configured official model, and a
-numerically normalized visual signature prevents using the bundled ghost with a
-mismatched model. ClientCore FK is visual only and supports revolute, continuous,
-prismatic, fixed, and mimic joints. It is never used to authorize motion.
+An IK failure preserves the grab and latest valid model pose. Only manual release
+reconciles a failed handle to the last validated pose, or measured grab-start pose
+if none was validated. This changes the draft without commanding a return movement.
+A selected displaced target remains Planning between requests. Execution stays active
+until its authoritative terminal outcome; reconcile a timed-out response instead of
+retrying motion.
 
-WebXR's environment-depth renderer attaches only to bounds and path visuals.
-Markers, end effector handles, controls, and mesh ghosts are excluded. Depth is an
-optional host-local projected GPU texture; unsupported or missing depth leaves
-visuals unoccluded. No model-based occlusion or server depth stream exists.
-Quest Browser device validation is still required for actual depth quality.
+## Follow and release
+
+With the arm unselected, hold and drag the end-effector sphere for live following.
+Canonical shared targets feed the native stream; clients do not send a second stream.
+Unreachable input holds motion while preserving capture so reachable input can recover
+within the same gesture. Following uses bounded Cartesian IK and does not provide the
+planner's checked-path collision guarantee.
+
+Normal release frees editing authority and starts a server-owned tail toward the last
+validated endpoint. A new grab supersedes that generation. Former-owner disconnect
+cannot cancel the detached tail or a successor. Input/tracking loss before release
+retires owned following. Last-client loss, Stop, stale feedback, faults and native
+control-plane expiry retain their stop semantics. See the single normative
+[motion lifecycle](../../../PROTOCOL.md#motion-ownership-and-completion) and
+[connection recovery](../../../PROTOCOL.md#connection-identity-and-recovery)
+for arrival thresholds, timeouts, takeover and bounded recovery.
+
+Short feedback/connection loss retains local capture and displayed intent for up to
+one second while pausing Preview and motion requests. Recovery revalidates plans and
+reacquires native following only under current shared authority. It never clears Stop.
+Rendered interpolation is not measured feedback or authority.
+
+### Gripper and speed
+
+Both clients use 5–100% speed controls with 50% default. Speed scales checked motion
+and the live IK velocity envelope. Unselected Open/Close is immediate, including an
+independent second-hand action during following; WebXR retains its controller shortcut.
+Selected gripper edits at a displaced target are deferred plan intent. Execute applies
+that intent once after measured arrival; gripper acknowledgement precedes terminal
+success. A rejected gripper action fails the operation. At the measured pose, the
+control can actuate directly. Cancel, failure, replacement and Stop discard deferred
+intent. Measured opening and accepted gripper target remain separate facts.
+
+## Stop, Resume, Reset and shutdown
+
+Ordinary Stop retires target/plans/tokens and cancels following, trajectory or reset.
+Confirmed ordinary stop permits a new gesture. Emergency Stop additionally latches
+manipulation stopped, preserving the gripper. Explicit Resume requires fresh feedback,
+confirmed stopping and healthy protection state; it restores no prior motion.
+Every client retains Emergency Stop independently of editing authority.
+
+Reset plans a collision-checked safe-zero joint move, preserving the gripper. OpenYAM
+uses its configured 0.05 rad zero tolerance and 0.5 seconds of fresh settled feedback.
+Already-zero settling does not dispatch another trajectory. Otherwise nominal duration
+and a three-second settling window remain within the 55-second operation budget.
+Failure releases ownership only after confirmed stopping; uncertainty remains latched.
+Late workers cannot dispatch motion or clean up a successor's operation.
+
+Orderly shutdown attempts parking at no more than 20% speed, never clears emergency
+stop, and uses the supervisor's 60-second response deadline. Shutdown proceeds with
+an explicit failure log if parking fails or times out. Only a `quiescent:true` receipt
+confirms the native teardown handshake; successful parking alone is insufficient.
+Forced stop, power loss and SIGKILL cannot supply orderly parking. Physical shutdown
+must be validated in an attended session.
+
+## Runtime owners
+
+| Owner | Responsibility |
+|---|---|
+| `ARManipulationModule` | DimOS lifecycle/update thread and joined teardown |
+| `DimOSManipulationAdapter` | Installed native API boundary, planning workers and observations |
+| `ManipulationRuntime` | Typed backend admission and owned lifecycle transitions |
+| `ManipulationSession` / `FollowingTail` | Held native tokens / detached release completion |
+| `ManipulationOperation` / `JointZeroOperation` | Reviewed-plan/deferred-gripper outcomes / reset and parking settling |
+| `ManipulationService` / `NativeRPC` | Async delivery, Stop/heartbeat lanes and timeout quarantine |
+| `InteractionCoordinator` | Robot-wide editing lease and canonical targets |
+| Core `ManipulationInteraction` / `ManipulationPolicy` | Portable intent, hysteresis and one derived action snapshot |
+| Host renderers/views | Coordinates, input, articulated geometry, controls and resource disposal |
+
+Native lease expiry and completion advance without snapshot polling. Measurement time
+comes from source feedback; publication does not refresh it. Timed-out native work
+holds its admission slot until actual completion. Planning workers receive authoritative
+scene snapshots; scene changes retire checked plans. A failed transport retires its
+worker and a replacement receives the current scene. Shutdown permanently closes the
+owner, including replacements still starting. Stop/heartbeat remain independent.
+
+## Visual assets and platform presentation
+
+The bundled planning ghost derives from canonical per-link OpenYAM visuals, with source
+revision and license in the [model notice](../../../../clients/webxr/public/models/NOTICE.md).
+Configured topology/bounds and a normalized visual signature prevent incompatible
+models from using it. Core supports revolute, continuous, prismatic, fixed and mimic
+joints. The `openyam` visual profile and explicit gripper metadata are independent of
+asset URLs. Gripper articulation affects its subtree, never controlled arm joints.
+
+Specs generates native geometry from the same GLB. After replacing it, run
+`python3 clients/specs/tools/export_manipulation_mesh.py` from the repository root.
+Preserve the GLB notice/license and source-generated parity. Native arm GPU opacity
+and buffers are documented in the [native guide](../../../../clients/specs/tools/README.md#specs-arm-rendering).
+WebXR optionally applies environment depth to bounds/paths; controls, handles and
+mesh ghosts remain excluded. Specs depth occlusion is deferred.
+
+Shared visual policy lives in `ManipulationVisuals.ts`, `ManipulationPresentation.ts`
+and `PanelFrameStyle.ts`. Selection/picking is independent of mesh fade. Selected
+meshes remain visible; unselected visibility follows displacement/hover policy.
+Invalid meshes retain validated joints with warning tint and attributed failed links.
+The measured translucent tip, draft handle, advisory guide and checked path represent
+different facts. Execution trims paths from raw measured progress, never animation time.
+Hermite interpolation, bounded visual prediction and hover effects never affect
+control/completion. Keep numeric style values in these owners rather than prose copies.
+
+The arm panel is independently movable/scalable from its badge. Pin restores the
+anchored pose/default scale. Specs `SpecsArmPanelPresenter` owns its native Frame,
+attached/pinned state and arm-base anchoring; missing base pose hides it. Controls
+remain under Frame.content. See the architecture's
+[Frame construction invariant](../../../../docs/architecture.md#lens-architecture-and-scene-wiring).
+
+## Protection and continuity
+
+The protected adapter intersects planning and physical joint limits, reserving a
+three-degree command buffer. Measured feedback uses physical limits; valid starting
+poses in the buffer can recover inward. Recovery trajectories enter monotonically
+and cannot leave the buffer later. Safe-zero resolves against these command limits.
+Collision geometry derived from missing native collision assets preserves exact visual
+origins/scales; only opposing finger self-contact is excepted. Environment collisions
+remain checked. See [compatibility](../../../../docs/dimos-compatibility.md#openyam-collision-geometry).
+
+Physical writes remain bounded. A stationary tracking error above five degrees derates
+after 200 ms; tracking error alone does not latch Stop. Thermal defaults derate at
+60°C for 500 ms and pause at 70°C or after a five-second thermal warning. The command
+lead envelope is ten degrees in direct following and the hardware boundary. Derating
+halves live speed/execution clock and clears after one second below three degrees
+tracking error. Pausing holds fresh measured positions with gravity compensation.
+Explicit Stop captures measured position before task cancellation and bypasses margin
+adjustment, avoiding a new inward stop target. Resume requires two healthy seconds,
+tracking error below two degrees and temperatures below 55°C. Hard motor faults require
+reconnection and never automatically enable motors. These defaults require hardware sign-off.
+
+Following retains a continuity seed per control episode; separate grabs do not share it.
+Its hold/exit bands and acceleration limits differ from detached-tail and Execute
+arrival. Keep those distinct. The protocol owns operation-specific completion criteria.
 
 ## Verification
 
-Python tests cover codec validation, transformed tool poses, ownership, exact-plan
-binding, uncertain cancellation, and stop dispatch during pending planning.
-ClientCore tests cover delayed/obsolete replies, gesture modes, and visual FK on
-an alternate prismatic/mimic fixture. WebXR tests cover selective depth injection;
-the Playwright manipulation scenario exercises controller selection, target dragging,
-mesh loading, planning, exact execution binding, following, and release. Its server
-is a fixture, so it is separate from official-runtime mock-hardware evidence.
+Follow [AGENTS validation policy](../../../../AGENTS.md#commit--pull-request-guidelines).
+Python/Core tests cover authority, exact IDs, stale replies, cancellation, completion,
+gripper, reset/parking and continuity. Host tests cover input/rendering/resource ownership.
+Browser/native fixtures remain distinct from installed DimOS mock planning evidence.
 
-Run `./launcher/scripts/run-ci.sh` before implementation PRs. Keep physical
-registration, release latency, tracking error, and hardware outcomes separate from
-software evidence. This feature's software tests start no physical robot.
-
-Run the maintained official mock contract in the selected Python 3.12 planning environment:
+Run the official contract in the selected Python 3.12 planning environment:
 
 ```sh
 python dimos-ar/tools/run_mock_manipulation_contract.py
 ```
 
-The runner isolates configuration, selects localhost and official mock hardware,
-and verifies the simulated flag before dispatching motion. It covers exact checked
-execution, held unreachable-target recovery, repeated reset, parking, and real native
-scene changes. Use `--python /path/to/isolated/.venv/bin/python3` to select a different
-planning environment. See the [compatibility baseline](../../../../docs/dimos-compatibility.md)
-for supported DimOS and RoboPlan versions. On macOS, the Open3D wheel may additionally
-require Homebrew `libusb`.
-
-### WebXR controls
-
-Select the robot to edit an end-effector target. The dotted target guide appears
-immediately; **Execute** computes a checked trajectory and executes that exact
-plan. **Preview** computes and animates the trajectory without moving hardware.
-Changing the target or speed invalidates the previous preview. Deselecting drops
-the target and returns the handle to the measured tool pose.
-
-With the robot unselected, hold and drag the tool sphere to follow live; normal release
-lets the arm finish reaching the final valid target. Grab capture persists outside the robot bounds. The controller's
-secondary face button toggles the gripper during a drag. The tool's floating
-Open/Close button appears below the marker while hovering either the sphere or the
-button, with a short grace period for moving between them. It hides immediately
-during an end-effector grab. Preview appears above a selected displaced marker and
-also hides during the grab.
-
-Robot settings and the arm base panel share a 5–100% manipulation speed slider, default 50%. It scales
-planned motion and the live IK joint velocity envelope. Reset plans a checked
-joint-zero arm move and leaves the gripper unchanged. The base panel stacks Execute (selected mode), Reset, speed, Stop, and the wider
-E-stop control. Once stopped, the bottom control becomes the white Resume operation
-button in the same slot. It is available independently of selection.
-
-Orderly OpenYAM shutdown through the launcher or `start.sh` first requests a
-checked return to zero at no more than 20% speed. Fresh joint feedback must remain
-within 0.02 radians of zero for 0.5 seconds to confirm parking. After a failed
-attempt or a 60-second timeout, shutdown proceeds and logs that parking was not
-confirmed. An active emergency stop skips automatic parking. A forced kill or
-power loss cannot perform this sequence. Hardware parking must be validated in
-an attended session; automated shutdown tests use simulated processes and joints.
-
-### Shared presentation and target intent
-
-WebXR robot types share the robot label, bounding-box animation, marker Fresnel
-material, styled buttons, slider capture policy, and notification pill. Hovering
-one arm bound reveals all linked bounds using the same timing and widths as Go2.
-Full-arm meshes appear only for a displaced selected target or during Preview.
-Preview is a separate, single-play animation starting at trajectory time zero. Its
-button turns off on completion. A gripper-only mesh stays anchored to the displaced
-target pose in either mode. Measured mesh/bounds joints use a 50 ms visual filter;
-raw feedback remains authoritative. Localization, model/group changes, reconnect,
-and feedback gaps reset the filter.
-
-Both modes show a smaller, translucent, noninteractive measured tip sphere while
-the target is displaced. The fallback dotted connector uses 25% opacity; checked
-planner paths use 70%, including genuinely straight planned paths. Execution trims
-the completed portion using a forward-only measured joint-space projection, rather
-than a wall-clock timer. The arm label shows name, state, and a smaller 50%-opacity
-speed percentage on three separate lines. Gripper edits on that target are deferred intent, bound to the checked
-plan and applied only after success and endpoint confirmation. Unselected
-following retains immediate gripper control. Tool geometry includes only the
-model's gripper subtree and derives finger articulation from joint limits.
-
-Only rejected targets create the warning pill. One pill and one small rejected
-position marker are shown at a time, for 1.5 seconds while the handle returns to
-the last valid pose. Positive feasibility results do not generate warnings.
-
-### Target controls and calibration
-
-The arm menu stays below its marker and shares the runtime panel resize animation.
-Selected dragging edits a target and requests checked trajectories continuously and on
-release. Preview plays that trajectory once and leaves the model at its target.
-Execute moves the hardware; its selected gripper opening is sent through the
-coordinator only after successful arrival. Unselected dragging follows directly;
-the controller squeeze button toggles the gripper. Both modes scale the model's
-joint velocity limits with the same speed percentage.
-
-The checked-in bench profile measures 120 mm from the arm axis to the tag center,
-not the printed edge. The model root uses the configured planning base pose,
-converted into wire odometry once. No tag offset belongs in the renderer. After
-changing calibration, re-localize; an earlier tracking origin retains its earlier
-calibration. With `DIMOS_LOG_LEVEL=DEBUG`, `Fiducial transform chain` records the
-base, mount, camera, observed tag and solved tracking-origin translations to
-separate a mounting error from camera calibration or model placement. Physical
-alignment must be checked against the actual bench; browser fixtures cannot
-establish that measurement.
-
-### Specs and shared client behavior
-
-Specs uses the existing PIN/IP setup and measured robot-profile calibration.
-Select the arm through its mesh, root sphere, or menu. Selected dragging edits a full-pose
-target; release requests a checked plan. Preview plays the articulated trajectory
-once and retains its endpoint. Execute binds to that plan. Unselected dragging
-follows while held and finishes toward its retained target after normal release;
-input loss or tracking/session invalidation interrupts it. Both hosts
-use ClientCore for grab offsets, pose smoothing, action dispatch, preview timing,
-visual kinematics, trajectory sampling, and control-state derivation.
-
-In hand-tracking mode, the Open/Close control stays beside the end-effector marker
-during dragging. The other hand can press it without taking the dragging hand's
-capture or ending following. Selected gripper edits with a displaced target remain deferred plan intent;
-edits at the measured pose and unselected edits use immediate gripper control. WebXR retains its controller
-shortcut. Specs exposes the same 5–100% speed range with a native SUK slider.
-
-Specs draws the bundled arm using native MeshBuilder geometry generated from the
-same canonical WebXR GLB and checks its visual signature before displaying meshes.
-Run `python3 clients/specs/tools/export_manipulation_mesh.py` from the repository
-root after updating that GLB. The generated geometry is visual only; measured
-transforms and planning still come from ARModule. Attribution and MIT license are
-in `clients/webxr/public/models/NOTICE.md` and `LICENSE.i2rt`.
-
-Specs environment-depth occlusion is deferred. Its arm bounds and trajectories
-remain unoccluded; WebXR retains its optional selective environment-depth adapter.
-Neither desktop fixtures nor native Preview establish physical robot registration,
-hand-tracking quality, stereo alignment, or on-device performance.
-
-### Shared interaction state and reset completion
-
-ClientCore's ManipulationInteraction snapshot owns target-offset hysteresis,
-dragging, planning, execution, reset, stopped state, freshness, and action
-availability. Position changes above 1 cm or orientation changes above 3 degrees
-enter the displaced state; changes below 5 mm and 1.5 degrees return to idle.
-Open/Close actuates directly at the measured pose; with a displaced selected target
-it executes the matching plan before actuating. Navigation
-and arms use the same request-coalescing pattern and shared host controls, while
-keeping their distinct motion/ownership lifecycles.
-
-Reset waits until the planned nominal duration has elapsed, then requires newly
-measured samples within 0.02 radians of zero for 0.5 seconds. It confirms stopping
-and returns to idle through DimOS's reset API without waiting for the trajectory
-executor to declare its exact endpoint complete. A settling deadline three seconds after nominal completion (within a 55-second
-operation budget), or stale feedback, reports failure and releases ownership after a confirmed stop. An
-unconfirmed stop remains latched. Stop/E-stop retire the reset operation; late
-workers cannot dispatch motion or clean up a newer owner's operation. Shutdown
-parking retains its 20% speed cap and never clears an active emergency stop.
-
-### Launcher hardware readiness
-
-Selecting OpenYAM shows a CAN setup card. The launcher checks Linux `can0` every
-five seconds while visible: the interface must be UP at 1 Mbit/s, use a transmit
-queue of 1000, and not be bus-off. `ERROR-ACTIVE` is CAN's normal operational
-state. Simulated connection bypasses CAN setup but still needs a working planner.
-
-Set up CAN invokes the selected environment's official `dimos hardware can setup
-can0` CLI directly, using the Linux native administrator prompt through `pkexec`.
-There is no browser password field or implicit `uv run` environment synchronization.
-Setup is a no-op if already ready and is refused while DimOS is running. Checks
-never configure CAN, and neither setup nor dependency installation stops DimOS.
-Start verifies CAN and planner readiness again before touching any processes.
-
-The launcher waits for both the WebSocket listener and manipulation initialization
-before building WebXR. A child failure or Stop can cancel an in-progress build;
-a stale build cannot start Preview or publish a URL for a replacement runtime.
-Expected cleanup exits do not overwrite the primary startup error. Loading these
-backend changes requires restarting the launcher, which remains user-controlled.
-
-
-### Continuous previews and live IK guides
-
-Selected dragging retains the last valid arm configuration while one seeded IK
-evaluation runs, with a 50 ms minimum interval and newest-target coalescing.
-Only the exact current intent can execute. Activity labels are compact and derive
-from shared interaction state; an offset selected target remains Planning between
-requests. Execution remains latched until authoritative terminal feedback arrives.
-
-Unselected dragging renders a movement-weighted articulated 3D mesh. Unreachable input preserves capture and the following lease,
-holds motion, and can recover within the same gesture. Normal release retains the valid final target and completes motion toward it; an
-invalid target returns to the last validated pose, and motion completes there. Joint-limit warnings use the last 5% of bounded joint ranges.
-
-OpenYAM finger pads open as the independent prismatic joints move toward their
-lower URDF limits (the meshes cross their joint origins). Selection uses mesh triangles,
-including the gripper. When the installed OpenYAM model lacks collision elements,
-the compatibility adapter supplies collision meshes from its exact visual geometry.
-Only mutual finger self contact is excluded; fingers retain environment collision checks.
-The GLB visual signature remains unchanged. No arm selection boxes are drawn.
-
-The mini-menu uses the shared labeled speed slider. Ray capture follows its thumb
-in either menu, independently of the ray-plane calculation that changes its value.
-Orderly shutdown checks already-zero settling without another move, quiesces motion,
-and drains cancellable RPC callbacks before services stop. Native source feedback
-clocks establish freshness; snapshot publication does not count as a new measurement.
-
-### Runtime and presentation owners
-
-`ARManipulationModule` owns DimOS lifecycle and the lifecycle update thread.
-`DimOSManipulationAdapter` is the installed-DimOS boundary; private upstream
-collaborators and the quiesced teardown receipt stay there. It owns both planning
-worker lifecycles. A transport failure fails that request and retires its process;
-the next request builds a fresh worker and supplies the current scene. Shutdown
-closes this owner permanently, including replacements still starting. `ManipulationRuntime`
-uses the typed `ManipulationBackend` port and coordinates commands.
-`InteractionCoordinator` owns the robot-wide editing lease and canonical targets.
-`ManipulationSession` owns native following tokens and retirement generations;
-`FollowingTail` owns detached completion of the last validated target;
-`ManipulationOperation` owns reviewed-plan correlation and deferred gripper
-completion; `JointZeroOperation` owns reset/parking settling. Official DimOS
-continues to own measured joints and execution status. The lifecycle thread
-expires leases and advances completion independently of snapshot polling and is
-joined before native teardown. `ManipulationService` owns asynchronous delivery,
-including emergency-stop dispatch. `NativeRPC` keeps timed-out native work
-quarantined until actual completion, so polling cannot accumulate blocked native
-calls. Stop and heartbeat use separate admission lanes.
-
-`ManipulationInteraction` owns portable intent and hysteresis transitions. Its
-immutable snapshot is read-only, and `deriveManipulationSnapshot` is the one
-activity/action derivation. WebXR supplies that snapshot through a named
-`ManipulationPresentation` input. `ManipulationRenderer` composes world visuals,
-`ManipulationControlsView` owns controls and hover/layout animation, and
-`ManipulationModelRenderer` owns model loading, bounds, ghosts and tool geometry.
-Shared cloned resources are disposed once; late loads are retired by generation.
-OpenYAM corrections live under WebXR `manipulation/profiles/`. Explicit model
-metadata supplies gripper articulation and profile identity independently of URLs.
-
-### Feature preservation checks
-
-| Behavior | Automated evidence |
-|---|---|
-| Ownership, exact plan IDs, stale replies, cancellation and uncertain stops | Python `test_runtime.py`, ClientCore `ManipulationInteraction.test.ts` |
-| Live coalesced planning, exact release target, retained valid previews | ClientCore interaction tests |
-| Following, IK recovery, lease expiry without polling, input interruption | Python runtime tests, ClientCore interaction tests, browser manipulation scenarios |
-| Immediate/deferred gripper actions and fresh endpoint confirmation | Python runtime tests, ClientCore interaction tests, WebXR kinematics tests |
-| Reset/parking timing, already-zero settling, E-stop preservation and shutdown receipts | Python runtime/service tests and supervisor tests |
-| Bounds, ghosts, measured/target handles, IK guides, preview playback and measured path trimming | WebXR renderer/motion tests and browser manipulation scenarios |
-| Menu controls, speed, capture, selection and Stop/Resume | WebXR input/renderer tests and browser manipulation scenarios |
-| Asset identity, relocation, signature validation and resource disposal | Python model tests, ClientCore codec tests, WebXR model/kinematics tests |
-| Coordinate frames, calibration, depth and optional integrations | Frame tests, launcher suites, depth tests, opt-in official-runtime mock test |
-
-Full repository CI includes browser integration and production build checks.
-Physical registration, stopping latency, CAN hardware, headset input and depth
-quality remain attended hardware checks; fixture and mock passes do not establish
-their physical performance.
-
-
-### Arm presentation and selection feedback
-
-The complete selected outlined mesh stays at normal strength independently of hover,
-even at the measured pose. Displacement weighting controls only the unselected mesh. Hover and
-selection visibility transitions fade smoothly using the shared presentation owner;
-mesh picking remains enabled independently of opacity. Shape edges use 6 mm dashes
-and 9 mm gaps. The small translucent sphere always marks the measured EE pose.
-Following and execution paths use full opacity, while planning paths remain faint.
-Below the hovered EE marker, selected mode offers Execute after release; unselected
-mode offers Open/Close, including the independent second-hand action. Hover never
-toggles selection: selecting a mesh/root sphere or pressing the near-EE action
-requires a new pinch/press after release.
-
-## Protection and continuity
-
-OpenYAM AR intersects planning limits with the physical adapter's kinematic limits,
-then reserves three degrees at each end for commanded goals. Measured feedback
-continues to use the physical limits: a valid starting pose inside the command
-buffer may recover inward without being declared invalid. Recovery trajectories
-are checked for monotonic entry into the buffer; later points may not leave it.
-Reset/parking resolve zeros to these safe
-limits and log the applied joint angles. The local protected adapter bounds every
-physical write and reads motor enabled/fault state and MOS/rotor temperatures.
-A stationary tracking error above five degrees derates after 200 ms; tracking
-error alone does not latch an emergency stop. A loaded PD controller can retain
-this offset without a motor fault. 60°C for 500 ms derates, 70°C or a five-second
-thermal warning pauses. Command lead uses the coordinator’s ten-degree tracking envelope in both direct
-follow and the hardware boundary. Derating clears after a full second below three
-degrees of tracking error. The physical joint limits and three-degree command
-buffer remain separate from this tracking envelope.
-Derating halves live speed and execution's virtual clock. Pausing holds fresh
-measured positions with gravity compensation, independently of task activity.
-Explicit Stop captures fresh feedback at the hardware boundary before cancelling
-tasks; its held position bypasses command-margin adjustment so stopping cannot
-introduce a new inward target. Resume explicitly releases this hardware hold.
-Resume requires two healthy seconds, tracking error below two degrees and
-temperatures below 55°C. Hard motor faults require reconnecting; they never clear
-automatically. These configurable software defaults require physical sign-off.
-
-Following retains one continuity-seeded validated joint endpoint across ordinary
-hand samples. Continuity seeds are scoped to the control episode, not shared
-between separate grabs. Arrival uses a 2 mm / 1° hold band with a 4 mm / 2° exit
-band, and preserves acceleration limits while braking into the hold.
-
-Selected and idle-hovered meshes share a 25% point-opacity floor. Selected hover
-retains the inner fill and adds 10% opacity; unselected hover shows only the
-outline with a 5% opacity boost. Hover leaves line thickness unchanged. Maximum displacement opacity occurs at 100 mm, with
-a 5 mm dead zone. Failure tint remains yellow until the current request validates.
-Both hosts use velocity-preserving Hermite interpolation; interval limits and
-bounded prediction are specified in the protocol. Selection, plan
-updates, and rejection/recovery do not reset this motion. Debug frames
-use raw measured joint angles; preview interpolation is never control feedback.
-
-Parallel runtime probes must use a private discovery bus as well as a private
-WebSocket port. For example:
+It chooses official mock hardware, localhost and temporary configuration, validates
+simulation before motion, and owns cleanup. It covers unreachable-target recovery,
+exact checked execution, reset/parking and scene changes. Native compilation/review
+and the mock contract run sequentially to avoid desktop contention triggering valid
+control lease failure. Parallel probes also require a private discovery bus:
 
 ```sh
 dimos --simulation=mock --zenoh-scout-addr=224.0.0.225:17446 run dimos-ar.openyam-ar-planner --armodule.port=8799 --armodule.ip-relay-url=null
 ```
 
-The arm controls panel moves and scales independently of the robot name/state/
-speed badge. Its default scale is 0.7, with a 0.525 minimum and 1.4 maximum; Pin
-restores its anchored position, rotation and default scale. A dedicated header
-keeps Pin separate from the control rows.
-
-Short feedback loss retains capture and the displayed arm for one second while
-pausing Preview and all motion requests. The target still follows the hand. Recovery
-revalidates plans and reacquires following leases without automatically clearing Stop.
-The mini panel defaults to scale 0.875 (25% larger), bounded to 0.65625–1.75; its
-separately anchored robot badge does not scale with it. Presentation uses Hermite
-interpolation, finite measured velocities when available, and visual prediction
-bounded to 30 ms. Execution uses raw feedback, with 30 mm / 8° arrival
-settled for 500 ms; the deferred gripper must acknowledge before terminal completion.
-
-## Multi-client protocol v2
-
-Editing uses a 500 ms robot-wide lease, renewed every 100 ms. Selected checked
-plans remain robot-owned after editing release and bind to the exact canonical
-target revision. Ordinary following release starts a takeoverable server tail;
-accepted execute/reset/parking remains non-takeoverable. The tail refreshes the
-cached validated target at 10 Hz for at most 55 seconds and requires distinct,
-fresh endpoint observations spanning 0.5 seconds to declare arrival. Failed or
-stale feedback aborts it. Losing the last connected client stops native motion.
-
-A separate native per-robot heartbeat gives ARModule a 500 ms control-plane lease.
-Its expiry stops admitted arm motion even if the AR server process disappears.
-The native Cartesian task watchdog stays enabled. This is software admission and
-watchdog behavior; physical controller hangs and upstream agent continuations
-still require their own backend guarantees.
-
-Control snapshots contain model/plan references and compact operation facts.
-Topology, checked trajectories, route points, LiDAR, and camera uploads use the
-paired, byte-bounded bulk WebSocket. Native arm snapshots also transmit revisions
-rather than repeating complete model/trajectory arrays at 10 Hz. See
-[`PROTOCOL.md`](../../../PROTOCOL.md) for the wire contract and failure handling.
+The maintained mock timing benchmark currently fails its 10% arrival-parity assertion;
+see [measurements](../../../../docs/dimos-compatibility.md#mock-arm-arrival-timing).
+No tuning or deadlines are loosened by documentation cleanup. Physical registration,
+CAN, stopping distance/latency, hand input, stereo, depth and sustained performance
+remain [hardware acceptance](../../../../docs/hardware-validation.md) work. Software
+fixtures and mock passes do not establish those outcomes.

@@ -72,6 +72,16 @@ export class WorldMeshRenderer {
     this.triangles(input.positions, input.indices, color, input.uvs, input.normals);
   }
 
+  visualCopy(parent: SceneObject, name: string, opacity: number): WorldMeshRenderer {
+    const copy = new WorldMeshRenderer(parent, name, this.material);
+    const input = this.triangleInput;
+    if (input) copy.triangles(input.positions, input.indices,
+      [input.color[0], input.color[1], input.color[2], input.color[3] * opacity], input.uvs, input.normals);
+    return copy;
+  }
+
+  get color(): WorldColor | null { return this.triangleInput?.color ?? null; }
+
   setViewportHeight(height: number): void {
     (this.material.mainPass as Pass & { viewportHeightPx: number }).viewportHeightPx = Math.max(1, height);
   }

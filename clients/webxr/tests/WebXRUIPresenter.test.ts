@@ -21,7 +21,8 @@ const capabilities: Capabilities = {
   },
 };
 
-function view(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionState {
+type MutableFacts<T> = T extends readonly unknown[] ? T : T extends object ? { -readonly [K in keyof T]: MutableFacts<T[K]> } : T;
+function view(overrides: Partial<ARModuleSessionState> = {}): MutableFacts<ARModuleSessionState> {
   return {
     connection: "ready",
     hasTrackingOrigin: true,
@@ -85,7 +86,7 @@ it("marks connection complete only after hello and identifies the robot and tele
   expect(f.ui.snapshot().connectComplete).toBe(true);
   expect(f.ui.snapshot().nextLabel).toBe("Continue");
   expect(f.ui.snapshot().robotName).toContain("Go2");
-  expect(f.ui.snapshot().wizardCardBody).toContain("WebSocket connected");
+  expect(f.ui.snapshot().wizardCardBody).not.toContain("WebSocket connected");
 });
 
 it.each([
@@ -173,4 +174,14 @@ it("reads selection eligibility from its owner and derives voice activity with w
   expect(ui.snapshot().activity).toBe("Following Path");
   selection.setEligible(false);
   expect(ui.snapshot()).toMatchObject({ robotSelected: false, robotSelectable: false });
+});
+
+it("derives celebration without serializing diagnostics and only formats diagnostic text on demand", () => {
+  const { ui } = setupFixture();
+  const diagnostics = vi.fn(() => "arm details"); ui.manipulationDiagnostics = diagnostics;
+  expect(ui.setupCelebrating).toBe(false);
+  const snapshot = ui.snapshot(); ui.snapshot();
+  expect(diagnostics).not.toHaveBeenCalled();
+  expect(snapshot.readDebugText!()).toContain("arm details");
+  expect(diagnostics).toHaveBeenCalledOnce();
 });

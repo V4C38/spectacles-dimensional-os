@@ -13,7 +13,6 @@ export class BrowserWebSocketTransport implements WebSocketTransport {
   private handlers: BrowserWebSocketTransportHandlers | null = null;
   private socket: WebSocket | null = null;
   private timeoutId: ReturnType<typeof setTimeout> | null = null;
-  private hostClosing = false;
 
   constructor(deps: {
     url: string;
@@ -112,17 +111,10 @@ export class BrowserWebSocketTransport implements WebSocketTransport {
   }
 
   close(): void {
-    this.hostClosing = true;
-    try {
-      this.clearTimeout();
-      const socket = this.socket;
-      this.socket = null;
-      if (socket) {
-        this.retire(socket);
-      }
-    } finally {
-      this.hostClosing = false;
-    }
+    this.clearTimeout();
+    const socket = this.socket;
+    this.socket = null;
+    if (socket) this.retire(socket);
   }
 
   sendText(text: string): void {
@@ -145,9 +137,7 @@ export class BrowserWebSocketTransport implements WebSocketTransport {
       this.socket = null;
     }
     this.retire(socket);
-    if (!this.hostClosing) {
-      this.handlers?.onTransportClose();
-    }
+    this.handlers?.onTransportClose();
   }
 
   private retire(socket: WebSocket): void {

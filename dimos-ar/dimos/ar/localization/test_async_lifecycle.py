@@ -15,7 +15,7 @@ from dimos.ar.localization.runner import LocalizationRunner
 from dimos.ar.localization.vps.robot_observation_buffer import (
     RobotObservationBuffer,
 )
-from dimos.ar.localization.worker import LocalizationWorker
+from dimos.ar.worker import BoundedWorker
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from test_support.localization import _advance, _camera_info, _image, _observation
 
@@ -86,7 +86,7 @@ def test_robot_capture_rejects_pose_brackets_over_200ms() -> None:
 
 
 async def test_cancelled_cpu_work_keeps_actual_worker_admission_bounded() -> None:
-    worker = LocalizationWorker()
+    worker = BoundedWorker()
     started = threading.Event()
     release = threading.Event()
     calls = []
@@ -175,7 +175,7 @@ def test_success_uses_capture_travel_not_http_completion_travel() -> None:
     _advance(policy, 0, 0)
     _advance(policy, 0.8, 0)
     policy.on_success("client", capture_travel_m=0)
-    assert _advance(policy, 0.8, 0) == (["client"], [])
+    assert _advance(policy, 0.8, 0) == ["client"]
 
 
 def test_exact_pose_remains_usable_beside_a_history_gap() -> None:
@@ -195,7 +195,7 @@ async def test_camera_stream_drops_replaceable_work_while_native_worker_is_busy(
     import threading
 
     entered, release = threading.Event(), threading.Event()
-    worker = LocalizationWorker()
+    worker = BoundedWorker()
     called = []
 
     def native():
@@ -232,3 +232,31 @@ async def test_map_workflow_closes_shared_resources_after_jobs():
     assert order == ["map", "vps", "worker"]
     coordinator.close.assert_awaited_once()
     vps.close.assert_awaited_once()
+
+
+async def test_closing_worker_rejects_queued_replacement_after_cancelled_native_error():
+    worker = BoundedWorker()
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    def native():
+        entered.set()
+        assert release.wait(2)
+        raise ValueError("late native failure")
+
+    running = asyncio.create_task(worker.run(native))
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        queued = asyncio.create_task(worker.run(lambda: calls.append("replacement")))
+        await asyncio.sleep(0)
+        worker.close()
+        release.set()
+        with pytest.raises(RuntimeError, match="closed"):
+            await asyncio.wait_for(queued, 1)
+        assert calls == []
+    finally:
+        release.set()
+        worker.close()

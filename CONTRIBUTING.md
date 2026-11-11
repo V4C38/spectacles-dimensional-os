@@ -20,7 +20,7 @@ The [DimOS compatibility boundary](docs/dimos-compatibility.md) records native o
 
 ## Validation
 
-Run `./launcher/scripts/run-ci.sh` before every commit, amend, or push, on the exact code involved. All jobs must pass: Python lint/type/unit checks, launcher checks, Specs/Core tests, WebXR tests/build, tooling tests, the official mock manipulation contract, and complete browser integration. Use an unrestricted terminal because DimOS logs outside the repository. Focused checks and previous runs do not replace this gate.
+Follow [AGENTS.md](AGENTS.md#commit--pull-request-guidelines) for validation frequency and follow-up exceptions. Run `./launcher/scripts/run-ci.sh` once at the final checkpoint for the completed change set. It includes Python lint/type/unit checks, launcher checks, Specs/Core tests, WebXR tests/build, tooling tests, the official mock manipulation contract, and complete browser integration. Use an unrestricted terminal because DimOS logs outside the repository. Report the checks actually completed and any remaining limits.
 
 For native changes, follow [native testing](clients/specs/tools/README.md). TypeScript compilation does not prove Preview rendering or scene wiring. Browser transport shims do not prove native Specs input. Keep evidence provenance intact and distinguish simulated results from physical tests. Restore production source, verify Auto Run false and no Review fixtures, and check compiler-cache correspondence before handing back for hardware validation.
 

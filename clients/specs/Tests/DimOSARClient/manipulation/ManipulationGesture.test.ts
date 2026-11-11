@@ -17,3 +17,13 @@ it("rotates the grab offset with the hand", () => {
   expect(result.position[0]).toBeCloseTo(-1);
   expect(Math.hypot(...result.orientation)).toBeCloseTo(1);
 });
+
+it("rebases a held target across corrections without changing its robot coordinates", () => {
+  const gesture = new ManipulationGesture();
+  const previous = { ...pose(0), confidence: 1, ts: 1 };
+  const next = { ...pose(1), confidence: 1, ts: 2 };
+  gesture.begin(pose(0), pose(2), 0);
+  gesture.rebase(previous, next);
+  expect(gesture.hold(pose(0), 1)?.position[0]).toBeCloseTo(1);
+  expect(gesture.hold(pose(0.2), 1.1)?.position[0]).toBeCloseTo(1.2);
+});

@@ -27,7 +27,6 @@ export class ManipulationControlsView {
   readonly previewMenu = new THREE.Group();
   readonly speedSlider = new SpeedSlider(0.14);
   readonly frame = new RobotPanelFrame(this.controls);
-  readonly status = new Text();
   readonly title = new Text();
   localizationAvailable = false;
   onRecalibrate: (() => void) | null = null;
@@ -142,17 +141,6 @@ export class ManipulationControlsView {
     this.speedLabel.position.y = 0.012;
     const eeAction = addButton("gripper", this.gripperMenu, "Open", "gripper", 0, 0, 0.095);
     eeAction.traverse(node => { node.userData.endEffectorAction = true; });
-    this.status.font = UI_FONT_REGULAR;
-    this.status.fontSize = 0.014;
-    this.status.maxWidth = 0.34;
-    this.status.position.set(-0.115, -0.045, 0.012);
-    this.status.fontSize = 0.011;
-    this.status.maxWidth = 0.23;
-    this.status.renderOrder = 64;
-    (this.status.material as THREE.Material).depthWrite = false;
-    this.status.raycast = () => {};
-    (this.status.material as THREE.Material).depthTest = false;
-    this.controls.add(this.status);
     this.baseMarker.add(this.controls);
     this.controls.scale.setScalar(ARM_PANEL_STYLE.defaultScale);
     this.controls.position.set(0, -0.13, 0);
@@ -187,7 +175,6 @@ export class ManipulationControlsView {
     const { dragging, stopped } = intent;
     const state = { stopped };
     this.controls.visible = true;
-    this.status.visible = false;
     this.speedSlider.setValue(input.speedScale);
     const speedText = `Speed · ${Math.round(input.speedScale * 100)}%`;
     if (this.speedLabel.text !== speedText) {
@@ -195,7 +182,7 @@ export class ManipulationControlsView {
       syncText(this.speedLabel);
     }
     this.speedSlider.hit.userData.interactionEnabled = intent.canManipulate;
-    const rows = manipulationMenuRows(selected, stopped);
+    const rows = manipulationMenuRows();
     this.menuHeight.request((rows.length - 1) * ARM_PANEL_STYLE.rowM + ARM_PANEL_STYLE.paddingM + ARM_PANEL_STYLE.headerM);
     this.menuHeight.tick(dtOutline);
     this.menuPlate.resize(0.224, this.menuHeight.height, ARM_PANEL_STYLE.cornerM);
@@ -230,7 +217,7 @@ export class ManipulationControlsView {
       });
     }
     const opening = selected ? input.desiredGripper ?? observed?.gripper_target ?? observed?.gripper : observed?.gripper_target ?? observed?.gripper;
-    const markerAction = endEffectorAction(selected, intent, opening, group?.has_gripper === true);
+    const markerAction = endEffectorAction(intent, opening, group?.has_gripper === true);
     for (const [key, button] of this.buttons) {
       button.setEnabled(key === "pin" || (key === "recalibrate" ? this.localizationAvailable && !!this.onRecalibrate && !intent.executing && !intent.dragging && !intent.resetting : manipulationButtonEnabled(key, intent)));
       if (key === "plan") {

@@ -50,7 +50,7 @@ async def test_successful_setup_remembers_selected_environment(tmp_path, monkeyp
     monkeypatch.setattr(manager, "_running_dimos_pids", AsyncMock(return_value=[]))
     monkeypatch.setattr(manager, "_run_tracked", AsyncMock(return_value=0))
     check = AsyncMock()
-    monkeypatch.setattr(manager, "run_check", check)
+    monkeypatch.setattr(manager, "_check_dependencies", check)
     interpreter = str(tmp_path / "chosen" / ".venv" / "bin" / "python3")
     await manager.run_setup(dimos_python=interpreter)
     assert read_env(env_path(tmp_path))["DIMOS_PYTHON"] == interpreter

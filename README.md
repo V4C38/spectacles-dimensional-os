@@ -96,8 +96,6 @@ Double-click [Start Launcher.command](launcher/Start%20Launcher.command), or run
 
 Keep the host, headset, and physical robot on the same reachable network. Setup applies the required macOS network settings and may request administrator access. Agent mode also needs an `OPENAI_API_KEY` and internet access on the host.
 
-<img src="assets/specs_dimos_launcher.png" alt="Local launcher for robot, client, source, and localization setup" width="640" />
-
 ### Localization — AprilTags / VPS
 
 - **AprilTags:** print a [36h11 marker](assets/markers/) at 100% scale: the supplied sticker is 70 mm overall with a 56 mm black square. Mount it rigidly on the robot and configure its ID, size, and pose in the launcher. Go2 includes a default mount profile.
@@ -136,11 +134,11 @@ npm ci
 npm run dev
 ```
 
-Run ARModule on the same host for the default `/ar` proxy, or join a LAN backend using its PIN. See the [WebXR guide](clients/webxr/README.md).
+Run ARModule on the same host for the default `/ar` proxy. The shipped WebXR page connects to that same-origin backend; it has no remote PIN entry flow. See the [WebXR guide](clients/webxr/README.md).
 
 ### SPECS
 
-A native Lens Studio client for Spectacles, using hand interaction, spatial panels, camera capture, and speech. Open [the Lens project](clients/specs/spectacles-dimensional-os.esproj) in **Lens Studio 5.15**, send it to Spectacles, and follow the setup wizard using the launcher's PIN or Host IP. The left-palm wrist menu opens runtime controls and settings.
+A native Lens Studio client for Spectacles, using hand interaction, spatial panels, camera capture, and speech. Open [the Lens project](clients/specs/spectacles-dimensional-os.esproj) in **Lens Studio 5.15**, send it to Spectacles, and follow the setup wizard using the launcher's PIN or Host IP. The wrist menu opens runtime controls and settings from either palm.
 
 <p align="center">
   <img src="assets/specs_dimos_setupwizard.gif" alt="Spectacles connection and localization wizard" width="480" />
@@ -200,7 +198,7 @@ Contributions, new robot integrations, clients, and bug reports are welcome. Sta
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) for structure and architecture rules, and [AGENTS.md](AGENTS.md) for repository workflows. Reuse ClientCore, import installed DimOS, and update both protocol implementations alongside the protocol document.
 
-Run the complete gate before every commit or push:
+Follow [the validation checkpoint policy](AGENTS.md#commit--pull-request-guidelines); the complete gate is:
 
 ```sh
 ./launcher/scripts/run-ci.sh

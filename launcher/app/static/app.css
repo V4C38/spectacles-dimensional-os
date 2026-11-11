@@ -359,40 +359,6 @@ body.resizing {
   padding: 0.5rem 1rem 1rem;
 }
 
-.robot-ip-row {
-  align-items: center;
-}
-
-.robot-ip-controls {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.55rem;
-  min-width: 0;
-  flex: 1;
-}
-
-.robot-ip-input {
-  min-width: 0;
-  flex: 1;
-  max-width: 11.5rem;
-  border: 1px solid var(--border);
-  background: var(--panel);
-  color: var(--text);
-  border-radius: 8px;
-  padding: 0.28rem 0.5rem;
-  font: inherit;
-  font-family: var(--mono);
-  font-size: 0.82rem;
-  text-align: right;
-}
-
-.ip-auto {
-  margin: 0;
-  font-size: 0.85rem;
-  flex-shrink: 0;
-}
-
 .hidden {
   display: none !important;
 }
@@ -428,13 +394,6 @@ body.resizing {
   border-color: var(--accent);
 }
 
-.module-note {
-  margin: -0.15rem 0 0.55rem 1.75rem;
-  font-size: 0.75rem;
-  line-height: 1.35;
-  color: var(--warn);
-}
-
 .tag-list {
   display: flex;
   flex-direction: column;
@@ -455,64 +414,8 @@ body.resizing {
   overflow: hidden;
 }
 
-.tag-header {
-  display: grid;
-  grid-template-columns: 56px minmax(0, 1fr);
-  gap: 0.75rem;
-  align-items: center;
-  padding: 0.7rem 0.75rem;
-}
-
-.tag-selector {
-  width: 100%;
-  margin-top: 0.45rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.45rem 0.55rem;
-  background: var(--panel);
-  color: var(--text);
-  font: inherit;
-  font-size: 0.8rem;
-}
-
-.tag-config {
-  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-}
-
-.tag-config-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.6rem 0.75rem;
-  list-style: none;
-  color: var(--muted);
-  font-size: 0.78rem;
-  cursor: pointer;
-}
-
-.tag-config-summary::-webkit-details-marker { display: none; }
-.tag-config-summary::after { content: "▸"; transition: transform 0.15s ease; }
-.tag-config[open] > .tag-config-summary::after { transform: rotate(90deg); }
-
 .tag-summary-meta {
   min-width: 0;
-}
-
-.tag-thumb {
-  width: 56px;
-  height: 56px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: #fff;
-  padding: 3px;
-  cursor: pointer;
-  display: block;
-  object-fit: contain;
-}
-
-.tag-thumb:hover {
-  border-color: var(--accent);
 }
 
 .tag-title {
@@ -696,20 +599,6 @@ body.resizing {
   opacity: 0.72;
 }
 
-.config-section-label {
-  color: var(--muted);
-  font-size: 0.78rem;
-  margin: 0;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-
-.config-section {
-  display: flex;
-  flex-direction: column;
-  gap: 0.65rem;
-}
-
 .provider {
   display: flex;
   flex-direction: column;
@@ -817,14 +706,6 @@ body.resizing {
   gap: 0.35rem;
   margin-bottom: 0.9rem;
   font-size: 0.9rem;
-}
-
-.config-section-label {
-  color: var(--muted);
-  font-size: 0.78rem;
-  margin: 0;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
 }
 
 .field span em {
@@ -1064,7 +945,7 @@ body.resizing {
 .profile-selector button, .connection-selector button { width: var(--control-height); height: var(--control-height); flex: 0 0 var(--control-height); padding: 0; }
 
 /* Shared launcher controls. Variants change emphasis, never control metrics. */
-.app :is(button, summary, select, input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), .tag-upload) {
+.app :is(button, summary, select, input:not([type="checkbox"]):not([type="radio"]):not([type="file"])) {
   box-sizing: border-box;
   height: var(--control-height);
   min-height: var(--control-height);
@@ -1077,21 +958,21 @@ body.resizing {
   letter-spacing: normal;
   text-transform: none;
 }
-.app :is(button, select, .tag-upload) {
+.app :is(button, select) {
   border: 1px solid var(--border);
   background: var(--card);
   color: var(--text);
 }
-.app :is(button, summary, select, input, .tag-upload):focus-visible {
+.app :is(button, summary, select, input):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.app :is(button, summary, .tag-upload):hover:not(:disabled) {
+.app :is(button, summary):hover:not(:disabled) {
   background: color-mix(in srgb, var(--text) 8%, var(--card));
 }
 .app .btn.primary { background: var(--accent); color: var(--primary-text); border-color: var(--accent); }
 .app .btn.danger { background: var(--danger); border-color: var(--danger); }
-.app .tab.active, .app .tag-preset[aria-pressed="true"] {
+.app .tab.active{
   background: color-mix(in srgb, var(--accent) 22%, var(--card));
   border-color: var(--accent);
 }
@@ -1139,10 +1020,6 @@ body.resizing {
 .app .profile-editor { border-radius: var(--control-radius); gap: var(--space); }
 .app .tag-summary-meta { flex: 1; display: flex; align-items: center; gap: var(--space); overflow: hidden; }
 .app .tag-subtitle { margin: 0; overflow: hidden; text-overflow: ellipsis; }
-.app .tag-thumb { width: 24px; height: 24px; padding: 1px; border-radius: 3px; }
-.app .tag-preset { flex-direction: row; justify-content: center; gap: var(--space); }
-.app .tag-preset img { width: 20px; height: 20px; padding: 1px; }
-.app .tag-upload { display: flex; align-items: center; justify-content: center; }
 .app .num-input { border: 0; grid-template-columns: var(--control-height) 1fr var(--control-height); }
 .app .num-input :is(button, input) { border-radius: 0; padding: 0; }
 .app .num-input input { border: 0; }
@@ -1162,21 +1039,17 @@ body.resizing {
 .app summary .value { font-size: 13px; font-weight: 400; }
 .app button { font-weight: 500; }
 .app .brand-title { font-size: 16px; font-weight: 650; }
-.app .tag-thumb { width:32px; height:32px; }
 .app .tag-picker { grid-template-columns:repeat(2,minmax(0,1fr)); }
-.app .tag-preset { height:96px; min-height:96px; flex-direction:column; }
-.app .tag-preset img { width:64px; height:64px; }
 
 /* Marker editors must shrink with the sidebar, including numeric input tracks. */
 .app .tag-card, .app .tag-body, .app .tag-picker, .app .tag-grid,
-.app .tag-field, .app .num-input, .app .tag-preset { min-width: 0; max-width: 100%; }
+.app .tag-field, .app .num-input{ min-width: 0; max-width: 100%; }
 .app .tag-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .app .num-input input { min-width: 0; }
 .app .tag-summary > a { flex: 0 0 32px; }
 .app .tag-summary-meta { flex-direction: column; align-items: flex-start; gap: 0; }
 .app .tag-title, .app .tag-subtitle { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .app .tag-subtitle { font-size: 11px; line-height: 16px; }
-.app .tag-preset img { flex: 0 0 64px; max-width: 100%; object-fit: contain; }
 .app .tag-body { container-type: inline-size; }
 .app .tag-field.span-2 { grid-column: 1 / -1; }
 @container (max-width: 300px) {
@@ -1196,14 +1069,6 @@ body.resizing {
 .app .coordinate-input .num-btn { display: none; }
 .app .coordinate-input input { width: 100%; padding: 0 4px; font-size: 13px; }
 .app .tag-field > span { font-size: 11px; text-transform: none; letter-spacing: normal; }
-/* Image options need room for the preview as well as their label. */
-.app .tag-body .tag-picker > button.tag-preset,
-.app .tag-body .tag-picker > label.tag-preset {
-  height: 96px;
-  min-height: 96px;
-  padding: 3px 8px;
-  gap: 4px;
-}
 
 /* A marker row and its expanded preview share the same 64px visual size. */
 .app .tag-list .tag-card > summary.tag-summary {
@@ -1214,7 +1079,6 @@ body.resizing {
   border-bottom: 0;
 }
 .app .tag-summary > a { flex: 0 0 64px; }
-.app .tag-thumb { width: 64px; height: 64px; }
 .app .tag-body .tag-picker { display: grid; grid-template-columns: 64px minmax(0,1fr); align-items: center; gap: 12px; }
 .app .tag-preview, .app .tag-preview img { display: block; width: 64px; height: 64px; object-fit: contain; }
 .app .tag-type-field { min-width: 0; margin: 0; }
@@ -1231,12 +1095,6 @@ body.resizing {
 .app .profile-edit-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .app .profile-edit-row input { flex: 1; width: 0; min-width: 0; }
 .app .profile-edit-row .btn { flex: 0 0 var(--control-height); width: var(--control-height); padding: 0; }
-.config-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.85rem 1rem 0;
-}
 
 #locCard > .config-body { padding-top: 0.6rem; }
 

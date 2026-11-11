@@ -10,6 +10,7 @@ import xml.etree.ElementTree as ET
 import attrs
 import numpy as np
 
+from dimos.ar.manipulation.frames import pose_error
 from dimos.control.tasks.cartesian_ik_task.cartesian_ik_task import (
     CartesianIKTask,
     CartesianIKTaskConfig,
@@ -42,24 +43,13 @@ class SpeedScaledPoseTargetSolver(PinkPoseTargetSolver):  # type: ignore[misc]
                     if pose is None:
                         near = False
                         break
-                    distance = math.sqrt(
-                        sum(
-                            (getattr(pose.position, a) - getattr(target.position, a)) ** 2
-                            for a in ("x", "y", "z")
-                        )
+                    distance, angle = pose_error(pose, target)
+                    near &= distance <= (0.004 if held is not None else 0.002) and angle <= math.radians(
+                        2 if held is not None else 1
                     )
-                    dot = abs(
-                        sum(
-                            getattr(pose.orientation, a) * getattr(target.orientation, a)
-                            for a in ("x", "y", "z", "w")
-                        )
-                    )
-                    near &= distance <= (0.004 if held is not None else 0.002) and 2 * math.acos(
-                        min(1, dot)
-                    ) <= math.radians(2 if held is not None else 1)
                 self._arrival_hold = True if near else None
             return super().step(*args, **kwargs)
-        except Exception as exc:  # noqa: BLE001 — native solver failures retire this target
+        except Exception as exc:  # noqa: BLE001 — native solver errors retire the target
             if self.failure is None:
                 logger.warning("Following IK target failed", error=str(exc))
             self.failure = str(exc)
@@ -244,8 +234,6 @@ def create_task(cfg: Any, hardware: Any) -> SpeedScaledCartesianIKTask:
     from dimos.ar.manipulation.protection import guard_for
 
     task = SpeedScaledCartesianIKTask(cfg.name, config, solver=solver)
-    if task is None:
-        return task
     task.guard = guard_for(hardware)
     task.requested_speed = 0.5
     return task

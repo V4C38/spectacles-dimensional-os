@@ -32,6 +32,11 @@ class ManipulationBackend(Protocol):
     @property
     def config(self) -> ManipulationBackendConfig: ...
     feedback: JointState | None
+    endpoint_holding: bool
+    gripper_target: float | None
+    following_status: dict[str, Any]
+    following_status_at: float
+    protection: dict[str, Any]
 
     @property
     def ready(self) -> bool: ...

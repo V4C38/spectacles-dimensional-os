@@ -1,4 +1,4 @@
-import { normalizeQuat, rotateVecByQuat } from "./clientTrackingTransforms";
+import { normalizeQuat, rotateVecByQuat, requireVec3 } from "./clientTrackingTransforms";
 import type { CaptureGeometry } from "../websocket/hostPorts";
 import type { Quat, Vec3 } from "../websocket/protocolTypes";
 
@@ -29,22 +29,4 @@ export function passesGeometricGate(
     (view[1] / viewLen) * (dy / distance) +
     (view[2] / viewLen) * (dz / distance);
   return dot >= Math.cos((geometry.lookAtMaxAngleDeg * Math.PI) / 180);
-}
-
-function requireVec3(value: Vec3, key: string): Vec3 {
-  if (!Array.isArray(value) || value.length !== 3) {
-    throw new Error(`${key} must be a 3-element array`);
-  }
-  return [
-    requireFinite(value[0], `${key}[0]`),
-    requireFinite(value[1], `${key}[1]`),
-    requireFinite(value[2], `${key}[2]`),
-  ];
-}
-
-function requireFinite(value: unknown, key: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`${key} must be finite`);
-  }
-  return value;
 }

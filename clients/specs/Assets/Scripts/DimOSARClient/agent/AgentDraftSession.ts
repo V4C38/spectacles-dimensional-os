@@ -1,4 +1,4 @@
-import { StopCommandMatcher } from "./AgentSpeechSession";
+import { matchesStopCommand } from "./AgentSpeechSession";
 import { classifyAgentResponseText, type AgentResponseSeverity } from "./AgentResponseClassification";
 
 export interface RecognitionPort {
@@ -21,7 +21,6 @@ export interface AgentDraftSnapshot {
 
 /** Dictation edits a draft. Only an explicit Send can issue a command. */
 export class AgentDraftSession {
-  private readonly stopMatcher = new StopCommandMatcher();
   private enabled = false;
   private recognizing = false;
   private starting = false;
@@ -30,12 +29,14 @@ export class AgentDraftSession {
   private finishUntil = 0;
   private speaking = false;
   private epoch = 0;
+  private synthesisGeneration = 0;
+  private pendingResponse = false;
   private now = 0;
   private restartAt = 0;
   private confirmedDraft = "";
   private lastResponse: string | null = null;
   private lastResponseRevision: number | null = null;
-  private snapshotValue: AgentDraftSnapshot;
+  private snapshotValue: Omit<AgentDraftSnapshot, "status">;
 
   constructor(private readonly deps: {
     recognition: RecognitionPort | null;
@@ -45,10 +46,20 @@ export class AgentDraftSession {
     isSelected: () => boolean;
     select: () => void;
   }) {
-    this.snapshotValue = { status: "Off", prompt: "", response: "", severity: "ok", error: null, recognitionAvailable: deps.recognition !== null };
+    this.snapshotValue = { prompt: "", response: "", severity: "ok", error: null, recognitionAvailable: deps.recognition !== null };
   }
 
-  snapshot(): AgentDraftSnapshot { return { ...this.snapshotValue }; }
+  snapshot(): AgentDraftSnapshot { return { ...this.snapshotValue, status: this.status() }; }
+  private status(): AgentDraftSnapshot["status"] {
+    if (!this.enabled) return "Off";
+    return this.flushing ? "Transcribing…" : this.recognizing ? "Listening" : this.starting ? "Starting microphone…" :
+      this.speaking ? "Responding" : this.pendingResponse ? "Thinking" : this.snapshotValue.recognitionAvailable ? "Ready" : "Type a message";
+  }
+  private stopSynthesis(): void {
+    this.synthesisGeneration++;
+    this.speaking = false;
+    this.deps.synthesis?.stop();
+  }
   isRecording(): boolean { return this.holding; }
   setDraft(text: string): void { this.snapshotValue.prompt = text.slice(0, 2000); }
 
@@ -56,8 +67,7 @@ export class AgentDraftSession {
     if (!this.enabled || this.holding || this.flushing || !this.snapshotValue.recognitionAvailable) return false;
     this.deps.select();
     if (!this.deps.isSelected()) return false;
-    this.deps.synthesis?.stop();
-    this.speaking = false;
+    this.stopSynthesis();
     this.holding = true;
     this.confirmedDraft = this.snapshotValue.prompt;
     this.snapshotValue.error = null;
@@ -73,18 +83,17 @@ export class AgentDraftSession {
       this.recognizing = false;
       this.flushing = true;
       this.finishUntil = this.now + 1.5;
-      this.snapshotValue.status = "Transcribing…";
       try { this.deps.recognition.finish(); return; } catch { /* Keep the last interim draft. */ }
     }
     this.flushing = false;
     this.haltRecognition();
-    this.snapshotValue.status = this.enabled ? "Ready" : "Off";
   }
 
   tick(now: number, enabled: boolean, response: string | null, idle: boolean, responseRevision?: number): void {
     this.now = now;
     if (!enabled) { if (this.enabled) this.stop(); return; }
     this.enabled = true;
+    this.pendingResponse = !idle;
     if (this.flushing && now >= this.finishUntil) this.endRecording(true);
     const newResponse = responseRevision === undefined
       ? response !== this.lastResponse : responseRevision !== this.lastResponseRevision;
@@ -95,10 +104,10 @@ export class AgentDraftSession {
       this.snapshotValue.severity = classifyAgentResponseText(response);
       if (this.deps.synthesis && !this.holding && !this.flushing) {
         this.speaking = true;
-        const epoch = this.epoch;
+        const generation = ++this.synthesisGeneration;
         try {
           this.deps.synthesis.speak(response, () => {
-            if (epoch === this.epoch) this.speaking = false;
+            if (generation === this.synthesisGeneration) this.speaking = false;
           });
         } catch { this.speaking = false; }
       }
@@ -107,18 +116,16 @@ export class AgentDraftSession {
       this.confirmedDraft = this.snapshotValue.prompt;
       this.listen();
     }
-    this.snapshotValue.status = this.flushing ? "Transcribing…" : this.recognizing ? "Listening" : this.starting ? "Starting microphone…" :
-      this.speaking ? "Responding" : !idle ? "Thinking" : this.snapshotValue.recognitionAvailable ? "Ready" : "Type a message";
   }
 
   submitTyped(text: string): boolean {
     if (!this.enabled || !this.deps.isSelected() || this.holding || this.flushing || !text.trim()) return false;
     try {
-      if (this.stopMatcher.check(text, true)) this.deps.estop();
+      if (matchesStopCommand(text)) this.deps.estop();
       this.deps.send(text.trim());
       this.setDraft("");
       this.snapshotValue.error = null;
-      this.snapshotValue.status = "Thinking";
+      this.pendingResponse = true;
       return true;
     } catch (error) { this.snapshotValue.error = String(error); return false; }
   }
@@ -135,10 +142,8 @@ export class AgentDraftSession {
     this.enabled = false;
     this.endRecording(true);
     this.haltRecognition();
-    this.deps.synthesis?.stop();
-    this.speaking = false;
-    this.stopMatcher.reset();
-    this.snapshotValue.status = "Off";
+    this.stopSynthesis();
+    this.pendingResponse = false;
   }
 
   private haltRecognition(): void {
@@ -150,7 +155,6 @@ export class AgentDraftSession {
   private listen(): void {
     const epoch = ++this.epoch;
     this.starting = true;
-    this.snapshotValue.status = "Starting microphone…";
     const fail = (reason: string) => {
       if (epoch !== this.epoch) return;
       this.snapshotValue.error = `Speech unavailable: ${reason}.`;
@@ -166,13 +170,11 @@ export class AgentDraftSession {
         if (epoch !== this.epoch) return;
         this.recognizing = this.starting = false;
         if (this.flushing) { this.flushing = false; this.epoch++; }
-        this.snapshotValue.status = "Ready";
         this.restartAt = this.now + 0.35;
       }, () => {
         if (!this.holding || epoch !== this.epoch) return;
         this.starting = false;
         this.recognizing = true;
-        this.snapshotValue.status = "Listening";
       });
     } catch (error) { fail(String(error)); }
   }

@@ -63,9 +63,3 @@ export function loadStoredModuleHost(store: ModuleHostStore): string | null {
 export function saveModuleHost(store: ModuleHostStore, rawHost: string): void {
   store.putString(MODULE_HOST_STORAGE_KEY, rawHost);
 }
-
-export function clearModuleHost(store: ModuleHostStore): void {
-  if (store.has(MODULE_HOST_STORAGE_KEY)) {
-    store.remove(MODULE_HOST_STORAGE_KEY);
-  }
-}
