@@ -1,4 +1,5 @@
-import { sameTrackingReference, type ClientTrackingOrigin, clientTrackingToOdomPose } from "@dimos-ar-client/localization/ClientTracking";
+import type { ReadonlyFacts } from "@dimos-ar-client/ClientContracts";
+import { sameTrackingReference, type ClientTrackingOrigin as MutableClientTrackingOrigin, clientTrackingToOdomPose } from "@dimos-ar-client/localization/ClientTracking";
 import { ARM_PANEL_STYLE } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 import { updatePanelGesture, type PanelGesture } from "../presentation/PanelInteraction";
 import * as THREE from "three";
@@ -11,6 +12,8 @@ import type { ARModuleSession } from "@dimos-ar-client/websocket/ARModuleSession
 import { webxrToClientTrackingPose } from "../utilities/WebXRCoordinates";
 import type { Quat, Vec3 } from "@dimos-ar-client/ClientContracts";
 import { ManipulationRenderer } from "./ManipulationRenderer";
+
+type ClientTrackingOrigin = ReadonlyFacts<MutableClientTrackingOrigin>;
 
 export class WebXRManipulationController {
   readonly interaction: ManipulationInteraction;

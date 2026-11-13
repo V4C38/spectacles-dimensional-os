@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import re
 import subprocess
 import time
 
@@ -11,34 +12,45 @@ from ls_awake import KeepAwake
 
 def dismiss_welcome(pid: int) -> None:
     """Close only Lens Studio's Home/Welcome windows, which can block MCP actions."""
+    # Resolve one exact startup title per pass. Never retain accessibility indices
+    # across a close: the project can replace Home while the script is running.
     code = f'''
 tell application "System Events"
   tell (first process whose unix id is {pid})
-    -- Closing a window changes the accessibility indices of later windows.
-    repeat with windowIndex from (count of windows) to 1 by -1
-      set targetWindow to window windowIndex
-      set windowName to name of targetWindow
-      if windowName is "Home" or windowName is "Welcome" or windowName is "Welcome to Lens Studio" then
-        try
+    repeat with welcomeName in {{"Home", "Welcome", "Welcome to Lens Studio"}}
+      set welcomeTitle to contents of welcomeName
+      if exists (first window whose name is welcomeTitle) then
+        set targetWindow to first window whose name is welcomeTitle
+        if exists (first button of targetWindow whose subrole is "AXCloseButton") then
           click (first button of targetWindow whose subrole is "AXCloseButton")
-        on error
-          try
-            perform action "AXClose" of targetWindow
-          on error
-            if frontmost is false then error "Welcome window cannot be closed without taking focus"
-            set focusedName to name of (value of attribute "AXFocusedWindow")
-            if focusedName is not windowName then error "Welcome window is not the focused window"
-            keystroke "w" using command down
-          end try
-        end try
+        else
+          perform action "AXClose" of targetWindow
+        end if
+        return "closed"
       end if
     end repeat
+    return "none"
   end tell
 end tell
 '''
-    result = subprocess.run(["osascript", "-e", code], capture_output=True, text=True)
-    if result.returncode:
-        raise RuntimeError("Could not dismiss Lens Studio Home/Welcome: " + result.stderr.strip())
+    detail = "Home/Welcome windows kept changing"
+    for attempt in range(8):
+        result = subprocess.run(["osascript", "-e", code], capture_output=True, text=True)
+        if result.returncode == 0:
+            if result.stdout.strip() == "none":
+                return
+            if result.stdout.strip() != "closed":
+                raise RuntimeError("Could not dismiss Lens Studio Home/Welcome: unexpected accessibility response")
+        else:
+            detail = result.stderr.strip()
+            # A disappearing AX window can invalidate even an exact-name lookup.
+            # Retry only this race; permission/automation errors must stay visible.
+            if not (re.search(r"\(-1719\)\s*$", detail)
+                    and re.search(r"\binvalid index\b", detail, re.IGNORECASE)):
+                raise RuntimeError("Could not dismiss Lens Studio Home/Welcome: " + detail)
+        if attempt < 7:
+            time.sleep(0.1)
+    raise RuntimeError("Could not dismiss Lens Studio Home/Welcome: " + detail)
 
 
 def launch_source(app: Path, project: Path) -> None:

@@ -1,4 +1,4 @@
-import type { InteractionAuthorityPort, Quat, Vec3 } from "../ClientContracts";
+import type { InteractionAuthorityPort, Quat, Vec3, ReadonlyFacts } from "../ClientContracts";
 import { encodeNavGoalRequest, encodeNavJoystickRequest } from "../websocket/protocol";
 import { requireNavigation, type ARModuleSession } from "../websocket/ARModuleSession";
 
@@ -6,7 +6,7 @@ import { requireNavigation, type ARModuleSession } from "../websocket/ARModuleSe
 
 export function requestNavGoal(
   session: Pick<ARModuleSession, "view" | "sendText"> & { collaboration: InteractionAuthorityPort },
-  goal: { position: Vec3; orientation: Quat },
+  goal: ReadonlyFacts<{ position: Vec3; orientation: Quat }>,
 ): void {
   requireNavigation(session, "nav_goal");
   const credentials = session.collaboration.credentials();
@@ -17,7 +17,7 @@ export function requestNavGoal(
 
 export function requestNavPreview(
   session: Pick<ARModuleSession, "view" | "sendText"> & { collaboration: InteractionAuthorityPort },
-  goal: { position: Vec3; orientation: Quat; preview_id: string },
+  goal: ReadonlyFacts<{ position: Vec3; orientation: Quat; preview_id: string }>,
 ): void {
   requireNavigation(session, "nav_goal");
   if (session.view().capabilities?.navigation.nav_goal.preview !== true) throw new Error("Navigation preview is unavailable");

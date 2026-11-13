@@ -1,11 +1,11 @@
 // Pure presentation geometry in metres with world Y up; both hosts adapt their coordinates at the boundary.
-import type { Vec3 } from "../ClientContracts";
+import type { ReadonlyFacts, Vec3 } from "../ClientContracts";
 
 export const CORNER_FILLET_MAX_M = 0.1;
 export const CORNER_FILLET_ANGLE_DEG = 40;
 export const CORNER_FILLET_SEGMENTS = 2;
 
-export function filletPathCorners(points: Vec3[]): Vec3[] {
+export function filletPathCorners(points: readonly Readonly<Vec3>[]): Vec3[] {
   if (points.length < 3) {
     return points.map((point) => [point[0], point[1], point[2]] as Vec3);
   }
@@ -40,9 +40,9 @@ export function filletPathCorners(points: Vec3[]): Vec3[] {
   return filleted;
 }
 
-export function rangePathY(points: Vec3[], floorY: number | null, goalY: number | null): Vec3[] {
+export function rangePathY(points: readonly Readonly<Vec3>[], floorY: number | null, goalY: number | null): Vec3[] {
   if (floorY === null || goalY === null || points.length === 0) {
-    return points;
+    return points.map(point => [...point] as Vec3);
   }
   if (points.length === 1) {
     return [[points[0][0], floorY, points[0][2]]];
@@ -66,7 +66,7 @@ export function rangePathY(points: Vec3[], floorY: number | null, goalY: number 
   });
 }
 
-function cornerTurnAngleDeg(prev: Vec3, corner: Vec3, next: Vec3): number {
+function cornerTurnAngleDeg(prev: Readonly<Vec3>, corner: Readonly<Vec3>, next: Readonly<Vec3>): number {
   const inX = prev[0] - corner[0];
   const inZ = prev[2] - corner[2];
   const outX = next[0] - corner[0];
@@ -80,7 +80,7 @@ function cornerTurnAngleDeg(prev: Vec3, corner: Vec3, next: Vec3): number {
   return (Math.acos(cos) * 180) / Math.PI;
 }
 
-function lerpPoint(from: Vec3, toward: Vec3, t: number): Vec3 {
+function lerpPoint(from: Readonly<Vec3>, toward: Readonly<Vec3>, t: number): Vec3 {
   return [
     from[0] + (toward[0] - from[0]) * t,
     from[1] + (toward[1] - from[1]) * t,
@@ -91,76 +91,149 @@ function lerpPoint(from: Vec3, toward: Vec3, t: number): Vec3 {
 export type RouteCircle = { center: Vec3; radius: number };
 
 /** Trim along the actual polyline, including short segments inside either footprint. */
-export function clipPathToCircles(points: Vec3[], start?: RouteCircle, end?: RouteCircle): Vec3[] {
-  const trim = (path: Vec3[], circle: RouteCircle): Vec3[] => {
-    const radius2 = circle.radius * circle.radius;
-    if (path.length < 2) return [];
-    if ((path[0][0] - circle.center[0]) ** 2 + (path[0][2] - circle.center[2]) ** 2 >= radius2) return path;
-    for (let i = 1; i < path.length; i++) {
-      const b = path[i];
-      if ((b[0] - circle.center[0]) ** 2 + (b[2] - circle.center[2]) ** 2 <= radius2) continue;
-      const a = path[i - 1], dx = b[0] - a[0], dz = b[2] - a[2];
-      const x = a[0] - circle.center[0], z = a[2] - circle.center[2];
-      const aa = dx * dx + dz * dz;
-      if (aa < 1e-12) continue;
-      const bb = 2 * (x * dx + z * dz), cc = x * x + z * z - radius2;
-      const t = Math.max(0, Math.min(1, (-bb + Math.sqrt(Math.max(0, bb * bb - 4 * aa * cc))) / (2 * aa)));
-      return [lerpPoint(a, b, t), ...path.slice(i)];
-    }
-    return [];
-  };
-  let result = start ? trim(points, start) : points;
-  if (end) result = trim([...result].reverse(), end).reverse();
+export function clipPathToCircles(
+  points: readonly Readonly<Vec3>[],
+  start?: ReadonlyFacts<RouteCircle>,
+  end?: ReadonlyFacts<RouteCircle>,
+): Vec3[] {
+  const copied = points.map(point => [...point] as Vec3);
+  let result = start ? trimPathStart(copied, start) : copied;
+  if (end) result = trimPathStart([...result].reverse(), end).reverse();
   return result;
 }
 
+function trimPathStart(path: Vec3[], circle: ReadonlyFacts<RouteCircle>): Vec3[] {
+  const radiusSquared = circle.radius * circle.radius;
+  if (path.length < 2) return [];
+  const distanceSquared = (point: Readonly<Vec3>) =>
+    (point[0] - circle.center[0]) ** 2 + (point[2] - circle.center[2]) ** 2;
+  if (distanceSquared(path[0]) >= radiusSquared) return path;
+  for (let index = 1; index < path.length; index++) {
+    const end = path[index];
+    if (distanceSquared(end) <= radiusSquared) continue;
+    const start = path[index - 1];
+    const dx = end[0] - start[0], dz = end[2] - start[2];
+    const x = start[0] - circle.center[0], z = start[2] - circle.center[2];
+    const a = dx * dx + dz * dz;
+    if (a < 1e-12) continue;
+    const b = 2 * (x * dx + z * dz), c = x * x + z * z - radiusSquared;
+    const intersection = (-b + Math.sqrt(Math.max(0, b * b - 4 * a * c))) / (2 * a);
+    const progress = Math.max(0, Math.min(1, intersection));
+    return [lerpPoint(start, end, progress), ...path.slice(index)];
+  }
+  return [];
+}
+
 /** Start the displayed remainder at the robot, without drawing back toward an old path origin. */
-export function anchorPathStart(points: Vec3[], center: Vec3): Vec3[] {
+export function anchorPathStart(points: readonly Readonly<Vec3>[], center: Readonly<Vec3>): Vec3[] {
   if (points.length < 2) return points.map(point => [...point] as Vec3);
-  let bestDistance = Infinity, bestIndex = 0, nearest: Vec3 = points[0];
-  for (let i = 0; i < points.length - 1; i++) {
-    const a = points[i], b = points[i + 1], dx = b[0] - a[0], dz = b[2] - a[2];
-    const length2 = dx * dx + dz * dz;
-    const t = length2 > 1e-12 ? Math.max(0, Math.min(1, ((center[0] - a[0]) * dx + (center[2] - a[2]) * dz) / length2)) : 0;
-    const point = lerpPoint(a, b, t), distance = (point[0] - center[0]) ** 2 + (point[2] - center[2]) ** 2;
-    if (distance <= bestDistance) { bestDistance = distance; bestIndex = i; nearest = point; }
+  let bestDistance = Infinity;
+  let bestIndex = 0;
+  let nearest: Readonly<Vec3> = points[0];
+  for (let index = 0; index < points.length - 1; index++) {
+    const start = points[index], end = points[index + 1];
+    const dx = end[0] - start[0], dz = end[2] - start[2];
+    const lengthSquared = dx * dx + dz * dz;
+    const projection = ((center[0] - start[0]) * dx + (center[2] - start[2]) * dz) / lengthSquared;
+    const progress = lengthSquared > 1e-12 ? Math.max(0, Math.min(1, projection)) : 0;
+    const point = lerpPoint(start, end, progress);
+    const distance = (point[0] - center[0]) ** 2 + (point[2] - center[2]) ** 2;
+    if (distance <= bestDistance) {
+      bestDistance = distance;
+      bestIndex = index;
+      nearest = point;
+    }
   }
   const result: Vec3[] = [[...center]];
-  if (bestDistance > 1e-10) result.push(nearest);
-  return [...result, ...points.slice(bestIndex + 1)];
+  if (bestDistance > 1e-10) result.push([...nearest]);
+  return [...result, ...points.slice(bestIndex + 1).map(point => [...point] as Vec3)];
 }
 
 /** A shared-vertex ribbon: adjacent route segments cannot accumulate alpha at their joins. */
-export function routeRibbon(points: Vec3[], width: number): { positions: number[]; indices: number[] } {
-  const path = points.filter((p, i) => i === 0 || Math.hypot(p[0] - points[i - 1][0], p[2] - points[i - 1][2]) > 1e-6);
+export function routeRibbon(
+  points: readonly Readonly<Vec3>[],
+  width: number,
+): { positions: number[]; indices: number[] } {
+  const path = points.filter((point, index) => index === 0 ||
+    Math.hypot(point[0] - points[index - 1][0], point[2] - points[index - 1][2]) > 1e-6);
   if (path.length < 2) return { positions: [], indices: [] };
   const positions: number[] = [], indices: number[] = [];
-  const normal = (a: Vec3, b: Vec3): [number, number] => {
-    const length = Math.hypot(b[0] - a[0], b[2] - a[2]);
-    return [-(b[2] - a[2]) / length, (b[0] - a[0]) / length];
+  const normal = (start: Readonly<Vec3>, end: Readonly<Vec3>): [number, number] => {
+    const length = Math.hypot(end[0] - start[0], end[2] - start[2]);
+    return [-(end[2] - start[2]) / length, (end[0] - start[0]) / length];
   };
-  for (let i = 0; i < path.length; i++) {
-    const a = normal(path[Math.max(0, i - 1)], path[Math.max(1, i)]);
-    const b = normal(path[Math.min(i, path.length - 2)], path[Math.min(i + 1, path.length - 1)]);
-    let nx = a[0] + b[0], nz = a[1] + b[1];
+  for (let index = 0; index < path.length; index++) {
+    const incoming = normal(path[Math.max(0, index - 1)], path[Math.max(1, index)]);
+    const outgoing = normal(path[Math.min(index, path.length - 2)], path[Math.min(index + 1, path.length - 1)]);
+    let nx = incoming[0] + outgoing[0], nz = incoming[1] + outgoing[1];
     const length = Math.hypot(nx, nz);
-    if (length < 1e-6) { nx = b[0]; nz = b[1]; } else { nx /= length; nz /= length; }
-    const miter = width / 2 / Math.max(0.5, nx * b[0] + nz * b[1]);
-    const p = path[i];
-    positions.push(p[0] + nx * miter, p[1], p[2] + nz * miter, p[0] - nx * miter, p[1], p[2] - nz * miter);
-    if (i > 0) { const v = i * 2; indices.push(v - 2, v - 1, v, v - 1, v + 1, v); }
+    if (length < 1e-6) {
+      nx = outgoing[0];
+      nz = outgoing[1];
+    } else {
+      nx /= length;
+      nz /= length;
+    }
+    const miter = width / 2 / Math.max(0.5, nx * outgoing[0] + nz * outgoing[1]);
+    const point = path[index];
+    positions.push(
+      point[0] + nx * miter, point[1], point[2] + nz * miter,
+      point[0] - nx * miter, point[1], point[2] - nz * miter,
+    );
+    if (index > 0) {
+      const vertex = index * 2;
+      indices.push(vertex - 2, vertex - 1, vertex, vertex - 1, vertex + 1, vertex);
+    }
   }
   // End-cap fans occupy only the outer half-disc, sharing the ribbon's boundary.
   for (const end of [false, true]) {
     const index = end ? path.length - 1 : 0;
-    const p = path[index], n = normal(path[end ? index - 1 : 0], path[end ? index : 1]);
-    const angle = Math.atan2(n[1], n[0]);
-    const center = positions.length / 3; positions.push(...p);
-    for (let i = 0; i <= 12; i++) {
-      const theta = angle + (end ? -1 : 1) * Math.PI * i / 12;
-      positions.push(p[0] + Math.cos(theta) * width / 2, p[1], p[2] + Math.sin(theta) * width / 2);
-      if (i > 0) indices.push(center, center + i, center + i + 1);
+    const point = path[index];
+    const direction = normal(path[end ? index - 1 : 0], path[end ? index : 1]);
+    const angle = Math.atan2(direction[1], direction[0]);
+    const center = positions.length / 3;
+    positions.push(...point);
+    for (let segment = 0; segment <= 12; segment++) {
+      const theta = angle + (end ? -1 : 1) * Math.PI * segment / 12;
+      positions.push(
+        point[0] + Math.cos(theta) * width / 2, point[1],
+        point[2] + Math.sin(theta) * width / 2,
+      );
+      if (segment > 0) indices.push(center, center + segment, center + segment + 1);
     }
   }
   return { positions, indices };
+}
+
+
+export interface RoutePathOptions {
+  readonly floorY: number | null;
+  readonly goalY: number | null;
+  readonly startCircle?: ReadonlyFacts<RouteCircle>;
+  readonly endCircle?: ReadonlyFacts<RouteCircle>;
+  readonly solid?: boolean;
+  readonly widthM: number;
+}
+
+/** Shared route policy after the host converts points and footprints to Y-up metres. */
+export function prepareRoutePath(
+  points: readonly Readonly<Vec3>[],
+  options: RoutePathOptions,
+): { readonly points: readonly Readonly<Vec3>[]; readonly lengthM: number } {
+  let path = points.map(point => [...point] as Vec3);
+  if (options.startCircle) path = anchorPathStart(path, options.startCircle.center);
+  if (options.endCircle && path.length) path[path.length - 1] = [...options.endCircle.center];
+  const clearance = (circle?: ReadonlyFacts<RouteCircle>): ReadonlyFacts<RouteCircle> | undefined =>
+    circle && { ...circle, radius: circle.radius + (options.solid ? options.widthM / 2 : 0) };
+  path = rangePathY(
+    clipPathToCircles(filletPathCorners(path), clearance(options.startCircle), clearance(options.endCircle)),
+    options.startCircle?.center[1] ?? options.floorY,
+    options.endCircle?.center[1] ?? options.goalY,
+  );
+  let lengthM = 0;
+  for (let index = 1; index < path.length; index++) {
+    const previous = path[index - 1], point = path[index];
+    lengthM += Math.hypot(point[0] - previous[0], point[1] - previous[1], point[2] - previous[2]);
+  }
+  return { points: path, lengthM };
 }

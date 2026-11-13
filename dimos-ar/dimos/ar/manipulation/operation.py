@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from copy import copy
 from dataclasses import dataclass, field
 import math
 import time
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypedDict
 import xml.etree.ElementTree as ET
 
 from dimos.ar.manipulation.model import pose_error
 from dimos.ar.manipulation.ports import ManipulationBackend
 from dimos.ar.manipulation.protocol import ManipulationError
+from dimos.ar.numeric import measurement_is_fresh, wrapped_angle
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.utils.logging_config import setup_logger
 
@@ -19,6 +21,7 @@ if TYPE_CHECKING:
     from dimos.ar.manipulation.runtime import ManipulationRuntime
 
 logger = setup_logger()
+
 
 @dataclass(frozen=True)
 class OperationOutcome:
@@ -28,40 +31,144 @@ class OperationOutcome:
     message: str | None = None
 
 
+class TrajectorySample(TypedDict):
+    time: float
+    positions: list[float]
+
+
+class PlanPreview(TypedDict, total=False):
+    status: str
+    group_id: str
+    target_revision: int
+    plan_id: str
+    joint_names: list[str]
+    trajectory: list[TrajectorySample]
+    duration: float
+    pose: dict[str, Any] | None
+    final_gripper: float
+
+
+class DeferredGripper(NamedTuple):
+    group: str
+    value: float
+    endpoint: dict[str, float]
+
+
+class FollowingTarget(NamedTuple):
+    group: str
+    body: dict[str, Any]
+    joints: dict[str, float] | None
+    target_revision: int
+
+
+@dataclass(frozen=True)
+class CachedEvaluation:
+    group_id: str
+    target_revision: int
+    joints: dict[str, float]
+    pose: dict[str, Any] | None
+
+    def wire(self) -> dict[str, Any]:
+        return {
+            "group_id": self.group_id,
+            "target_revision": self.target_revision,
+            "joints": self.joints,
+            "pose": self.pose,
+        }
+
+
+class NativeAdmission(NamedTuple):
+    action: str
+    generation: int
+
+
+class TargetRetirement(NamedTuple):
+    epoch: str
+    revision: int
+
+
 @dataclass
-class ManipulationOperation:
-    plan: dict[str, Any] | None = None
-    id: str | None = None
-    admitting: bool = False
+class ActiveOperation:
+    id: str
     kind: Literal["executing", "resetting", "parking"] | None = None
-    final_gripper: tuple[str, float, dict[str, float]] | None = None
+    admitting: bool = False
+    final_gripper: DeferredGripper | None = None
     gripper_completion_at: float | None = None
     phase: str = "motion"
     endpoint_pose: Any = None
     group: str | None = None
     started_at: float | None = None
     settled_at: float | None = None
-    outcome: OperationOutcome | None = None
     stalled_at: float | None = None
     progress_pose: tuple[float, float] | None = None
     last_measurement_ts: float | None = None
     last_diagnostic_at: float = 0.0
 
-    def clear(self) -> None:
+
+@dataclass
+class ManipulationOperation:
+    """One optional active lifecycle, independent of its plan and terminal outcome."""
+
+    active: ActiveOperation | None = None
+    plan: PlanPreview | None = None
+    outcome: OperationOutcome | None = None
+
+    @property
+    def id(self) -> str | None:
+        return self.active.id if self.active else None
+
+    @property
+    def kind(self) -> Literal["executing", "resetting", "parking"] | None:
+        return self.active.kind if self.active else None
+
+    @property
+    def admitting(self) -> bool:
+        return self.active.admitting if self.active else False
+
+    @property
+    def phase(self) -> str | None:
+        return self.active.phase if self.active else None
+
+    def begin(
+        self,
+        operation_id: str,
+        kind: Literal["executing", "resetting", "parking"] | None = None,
+        *,
+        admitting: bool = False,
+    ) -> ActiveOperation:
+        self.active = ActiveOperation(operation_id, kind, admitting)
+        return self.active
+
+    def confirm_execution(
+        self, group: str, endpoint_pose: Any, endpoint: dict[str, float], *, now: float
+    ) -> None:
+        assert self.active is not None
         self.outcome = None
-        self.phase = "motion"
-        self.endpoint_pose = None
-        self.group = None
-        self.started_at = self.settled_at = None
-        self.stalled_at = None
-        self.progress_pose = None
-        self.last_measurement_ts = None
+        self.active = ActiveOperation(
+            self.active.id,
+            "executing",
+            group=group,
+            endpoint_pose=endpoint_pose,
+            started_at=now,
+            final_gripper=DeferredGripper(group, self.plan["final_gripper"], endpoint)
+            if self.plan is not None and "final_gripper" in self.plan
+            else None,
+        )
+
+    def reject_execution(self) -> None:
+        plan = self.plan
+        self.clear()
+        self.plan = plan
+
+    def clear(self) -> None:
+        self.active = None
         self.plan = None
-        self.id = None
-        self.admitting = False
-        self.kind = None
-        self.final_gripper = None
-        self.gripper_completion_at = None
+        self.outcome = None
+
+    def copy_for_observation(self) -> ManipulationOperation:
+        # Native readback can block. Progress is committed by the runtime only
+        # when its generation and operation identity still match.
+        return ManipulationOperation(copy(self.active), self.plan, self.outcome)
 
     @property
     def published_phase(self) -> str | None:
@@ -80,8 +187,8 @@ class ManipulationOperation:
         return self.outcome.message if self.outcome else None
 
     def finish(self, status: Literal["completed", "failed"], message: str | None = None) -> bool:
-        assert self.id is not None
-        outcome = OperationOutcome(self.id, status, self.phase, message)
+        assert self.active is not None
+        outcome = OperationOutcome(self.active.id, status, self.active.phase, message)
         self.clear()
         self.outcome = outcome
         logger.info(
@@ -96,16 +203,17 @@ class ManipulationOperation:
     def advance(
         self, backend: ManipulationBackend, *, stopped: bool, feedback_max_age_s: float
     ) -> bool:
-        if self.id is None or self.admitting or self.kind in {"resetting", "parking"}:
+        operation = self.active
+        if operation is None or operation.admitting or operation.kind in {"resetting", "parking"}:
             return False
         state = backend.get_state()
         if state.execution_status.name in {"IDLE", "UNCERTAIN"}:
             return False
         active = state.execution_status.name in {"ACCEPTED", "EXECUTING"}
         now = time.monotonic()
-        observed = state.groups.get(self.group) if self.group else None
+        observed = state.groups.get(operation.group) if operation.group else None
         pose = observed.end_effector_pose if observed else None
-        target = self.endpoint_pose
+        target = operation.endpoint_pose
         near = False
         distance = angle = None
         if (
@@ -113,40 +221,39 @@ class ManipulationOperation:
             and target is not None
             and pose is not None
             and observed.joints is not None
-            and 0 <= time.time() - observed.joints.ts <= feedback_max_age_s
+            and measurement_is_fresh(observed.joints.ts, time.time(), feedback_max_age_s)
         ):
             distance, angle = pose_error(pose, target)
             near = distance <= 0.030 and angle <= math.radians(8)
         eligible = (
             near
             and not stopped
-            and self.started_at is not None
-            and now - self.started_at >= (self.plan or {}).get("duration", 0) * 0.95
+            and operation.started_at is not None
+            and now - operation.started_at >= (self.plan or {}).get("duration", 0) * 0.95
         )
-        self.settled_at = (
-            (self.settled_at if self.settled_at is not None else now) if eligible else None
+        operation.settled_at = (
+            (operation.settled_at if operation.settled_at is not None else now)
+            if eligible
+            else None
         )
         measurement_ts = observed.joints.ts if observed and observed.joints else None
         new_measurement = measurement_ts is not None and (
-            self.last_measurement_ts is None or measurement_ts > self.last_measurement_ts
+            operation.last_measurement_ts is None or measurement_ts > operation.last_measurement_ts
         )
-        self.last_measurement_ts = measurement_ts
-        if now - self.last_diagnostic_at >= 1:
-            self.last_diagnostic_at = now
+        operation.last_measurement_ts = measurement_ts
+        if now - operation.last_diagnostic_at >= 1:
+            operation.last_diagnostic_at = now
             logger.debug(
                 "Arm completion check",
-                operation_id=self.id,
+                operation_id=operation.id,
                 distance_m=distance,
                 orientation_rad=angle,
-                settled_at=self.settled_at,
+                settled_at=operation.settled_at,
                 measurement_ts=measurement_ts,
                 execution=state.execution_status.name,
             )
 
-        final_phase = (
-            backend.endpoint_holding
-            or state.execution_status.name == "COMPLETED"
-        )
+        final_phase = backend.endpoint_holding or state.execution_status.name == "COMPLETED"
         if (
             final_phase
             and new_measurement
@@ -154,35 +261,43 @@ class ManipulationOperation:
             and angle is not None
             and not near
         ):
-            previous = self.progress_pose
+            previous = operation.progress_pose
             if (
                 previous is None
                 or abs(previous[0] - distance) >= 0.002
                 or abs(previous[1] - angle) >= math.radians(0.5)
             ):
-                self.progress_pose = (distance, angle)
-                self.stalled_at = now
-            elif self.stalled_at is not None and now - self.stalled_at >= 2:
+                operation.progress_pose = (distance, angle)
+                operation.stalled_at = now
+            elif operation.stalled_at is not None and now - operation.stalled_at >= 2:
                 receipt = backend.cancel()
                 if receipt.status.name not in {"UNCERTAIN", "FAULT"}:
                     return self.finish("failed", "Target not reached")
         if (
-            self.phase == "motion"
+            operation.phase == "motion"
             and not active
             and state.execution_status.name in {"ABORTED", "FAULT", "FAILED", "CANCELLED"}
         ):
             return self.finish("failed", "Target not reached")
         if (
-            self.phase == "motion"
+            operation.phase == "motion"
             and state.execution_status.name == "COMPLETED"
             and target is not None
-            and (not new_measurement or self.settled_at is None or now - self.settled_at < 0.5)
+            and (
+                not new_measurement
+                or operation.settled_at is None
+                or now - operation.settled_at < 0.5
+            )
         ):
             return False
-        if self.phase == "motion":
+        if operation.phase == "motion":
             completed = state.execution_status.name == "COMPLETED"
             if active:
-                if not new_measurement or self.settled_at is None or now - self.settled_at < 0.5:
+                if (
+                    not new_measurement
+                    or operation.settled_at is None
+                    or now - operation.settled_at < 0.5
+                ):
                     return False
                 receipt = backend.cancel()
                 if receipt.status.name in {"UNCERTAIN", "FAULT"}:
@@ -190,11 +305,11 @@ class ManipulationOperation:
                 completed = True
             if not completed or stopped:
                 return False
-            if self.final_gripper is None:
+            if operation.final_gripper is None:
                 return self.finish("completed")
-            self.phase = "gripper"
-            self.gripper_completion_at = now
-        deferred = self.final_gripper
+            operation.phase = "gripper"
+            operation.gripper_completion_at = now
+        deferred = operation.final_gripper
         if deferred is None or stopped:
             return False
         group, value, endpoint = deferred
@@ -202,7 +317,7 @@ class ManipulationOperation:
         if (
             observed
             and observed.joints
-            and 0 <= time.time() - observed.joints.ts <= feedback_max_age_s
+            and measurement_is_fresh(observed.joints.ts, time.time(), feedback_max_age_s)
         ):
             actual = dict(zip(observed.joints.name, observed.joints.position, strict=True))
             confirmed = (
@@ -214,7 +329,7 @@ class ManipulationOperation:
                 # Command acknowledgement is the gripper outcome. Closing on an object
                 # cannot require measured opening to reach zero. Retire before calling
                 # the bridge so repeated polling cannot send the action twice.
-                self.final_gripper = None
+                operation.final_gripper = None
                 accepted = backend.gripper_target
                 current = (
                     accepted
@@ -229,7 +344,10 @@ class ManipulationOperation:
                     if command.status.name != "SUCCEEDED":
                         return self.finish("failed", command.message or "Gripper command rejected")
                 return self.finish("completed")
-        if self.gripper_completion_at is not None and now - self.gripper_completion_at >= 2:
+        if (
+            operation.gripper_completion_at is not None
+            and now - operation.gripper_completion_at >= 2
+        ):
             return self.finish("failed", "Gripper action skipped: endpoint not confirmed")
         return False
 
@@ -250,6 +368,59 @@ class ManipulationSession:
     stop_confirmed: bool = True
     shutdown: bool = False
     quiesced: bool = False
+
+    def claim(self, client_id: str, group: str) -> None:
+        self.owner, self.group_id = client_id, group
+
+    def acquire_following(self, client_id: str, group: str, token: str, *, now: float) -> None:
+        self.claim(client_id, group)
+        self.token = token
+        self.sequence = -1
+        self.updated_at = now
+
+    def accept_sample(self, sequence: int, target_key: tuple[float, ...], *, now: float) -> None:
+        self.sequence = sequence
+        self.updated_at = now
+        self.target_key = target_key
+
+    def latch_stop(self, *, confirmed: bool = False) -> None:
+        self.stopped = True
+        self.stop_confirmed = confirmed
+
+    def begin_cancel(self) -> bool:
+        was_stopped = self.stopped
+        self.latch_stop()
+        self.cancelling = True
+        return was_stopped
+
+    def finish_cancel(self, generation: int, *, was_stopped: bool, confirmed: bool) -> bool:
+        if generation != self.generation:
+            return False
+        self.stop_confirmed = confirmed
+        self.stopped = was_stopped or not confirmed
+        return True
+
+    def request_shutdown(self) -> None:
+        self.shutdown = True
+
+    def confirm_quiesced(self, generation: int) -> bool:
+        if generation != self.generation:
+            return False
+        self.quiesced = True
+        return True
+
+    def confirm_stop(self, generation: int, *, confirmed: bool) -> bool:
+        if generation != self.generation:
+            return False
+        self.stop_confirmed = confirmed
+        return True
+
+    def resume(self) -> None:
+        self.stopped = False
+
+    def release_owner(self) -> None:
+        self.owner = None
+        self.group_id = None
 
     def retire_client(self, client_id: str) -> None:
         self.retired[client_id] = None
@@ -364,7 +535,7 @@ class FollowingTail:
     def joint_delta(self, name: str, current: float, expected: float) -> float:
         delta = current - expected
         if name in self.continuous_joints and math.isfinite(delta):
-            return math.atan2(math.sin(delta), math.cos(delta))
+            return wrapped_angle(delta)
         return delta
 
 
@@ -442,7 +613,10 @@ class JointZeroOperation:
                 actual = dict(zip(observed.joints.name, observed.joints.position, strict=True))
                 now = time.monotonic()
                 if now - last_log >= 0.5:
-                    worst = max(joints, key=lambda name: abs(actual.get(name, float("inf")) - expected[name]))
+                    worst = max(
+                        joints,
+                        key=lambda name: abs(actual.get(name, float("inf")) - expected[name]),
+                    )
                     logger.info(
                         "Arm settling",
                         operation=runtime.operation.kind,
@@ -474,12 +648,17 @@ class JointZeroOperation:
                             runtime.confirm_zero_reset(epoch, ready)
                             if shutdown:
                                 runtime.quiesce_zero(epoch)
-                            return {"status": "completed", "message": "Zero pose confirmed",
-                                    "quiescent": runtime.session.quiesced}
+                            return {
+                                "status": "completed",
+                                "message": "Zero pose confirmed",
+                                "quiescent": runtime.session.quiesced,
+                            }
                     else:
                         settled = None
                 time.sleep(0.05)
-            worst = max(joints, key=lambda name: abs(actual.get(name, float("inf")) - expected[name]))
+            worst = max(
+                joints, key=lambda name: abs(actual.get(name, float("inf")) - expected[name])
+            )
             raise ValueError(
                 f"Zero pose not confirmed: {worst} error "
                 f"{abs(actual.get(worst, float('inf')) - expected[worst]):.4f} rad "

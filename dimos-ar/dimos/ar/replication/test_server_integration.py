@@ -63,8 +63,7 @@ def runtime():
     h._server.start()
     h.loop.call_soon_threadsafe(module._start_interaction_poll)
     yield h, module, goals, stops
-    if module._interaction_task:
-        h.loop.call_soon_threadsafe(module._interaction_task.cancel)
+    asyncio.run_coroutine_threadsafe(module._interaction_controller.close(), h.loop).result(timeout=2)
     h.stop()
 
 

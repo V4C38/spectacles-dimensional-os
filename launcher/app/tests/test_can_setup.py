@@ -123,14 +123,14 @@ async def test_already_ready_setup_is_noop_and_does_not_take_process_ownership(
     manager = ProcessManager(root=tmp_path)
     monkeypatch.setattr(manager, "_running_dimos_pids", AsyncMock(return_value=[]))
     monkeypatch.setattr(
-        manager, "can_status", AsyncMock(return_value={"ready": True, "state": "ready"})
+        manager.dependencies, "can_status", AsyncMock(return_value={"ready": True, "state": "ready"})
     )
     spawn = AsyncMock()
     monkeypatch.setattr("armodule.asyncio.create_subprocess_exec", spawn)
     assert (await manager.setup_can())["ready"]
     spawn.assert_not_awaited()
-    assert manager._proc is None
-    assert not manager._can_setup_running
+    assert manager.runtime.backend.process is None
+    assert not manager.dependencies.can_setup_running
 
 
 @pytest.mark.asyncio
@@ -138,9 +138,9 @@ async def test_setup_logs_failure_and_releases_single_flight_guard(
     tmp_path, monkeypatch
 ):
     manager = ProcessManager(root=tmp_path)
-    manager.status.dimos_python = "/selected/python"
+    manager.dependencies.update_status(dimos_python="/selected/python")
     monkeypatch.setattr(manager, "_running_dimos_pids", AsyncMock(return_value=[]))
-    monkeypatch.setattr(manager, "can_status", AsyncMock(return_value={"ready": False}))
+    monkeypatch.setattr(manager.dependencies, "can_status", AsyncMock(return_value={"ready": False}))
     monkeypatch.setattr("armodule.setup_command", lambda _: ["fake-can-setup"])
     proc = AsyncMock(returncode=126)
     proc.communicate.return_value = (b"Authentication cancelled\n", None)
@@ -150,8 +150,8 @@ async def test_setup_logs_failure_and_releases_single_flight_guard(
     with pytest.raises(RuntimeError, match="cancelled or failed"):
         await manager.setup_can()
     assert "Authentication cancelled" in manager.events._log
-    assert manager._proc is None
-    assert not manager._can_setup_running
+    assert manager.runtime.backend.process is None
+    assert not manager.dependencies.can_setup_running
 
 
 @pytest.mark.asyncio
@@ -171,7 +171,7 @@ async def test_real_start_requires_can_before_any_cleanup_and_mock_bypasses_it(
     clear.assert_not_awaited()
     can.reset_mock()
     monkeypatch.setattr(manager, "_configure_system_if_needed", AsyncMock())
-    monkeypatch.setattr(manager, "_spawn", AsyncMock())
+    monkeypatch.setattr(manager.runtime, "_spawn", AsyncMock())
     await manager.start_armodule(
         blueprint="openyam_ar_planner", client="specs", simulation=True
     )
@@ -182,7 +182,7 @@ async def test_real_start_requires_can_before_any_cleanup_and_mock_bypasses_it(
 @pytest.mark.asyncio
 async def test_can_setup_cannot_overlap_itself(tmp_path, monkeypatch):
     manager = ProcessManager(root=tmp_path)
-    manager._can_setup_running = True
+    manager.dependencies.can_setup_running = True
     spawn = AsyncMock()
     monkeypatch.setattr("armodule.asyncio.create_subprocess_exec", spawn)
     with pytest.raises(RuntimeError, match="already running"):
@@ -193,9 +193,9 @@ async def test_can_setup_cannot_overlap_itself(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_setup_verifies_interface_after_official_command(tmp_path, monkeypatch):
     manager = ProcessManager(root=tmp_path)
-    manager.status.dimos_python = "/selected/python"
+    manager.dependencies.update_status(dimos_python="/selected/python")
     monkeypatch.setattr(manager, "_running_dimos_pids", AsyncMock(return_value=[]))
-    monkeypatch.setattr(manager, "can_status", AsyncMock(return_value={"ready": False}))
+    monkeypatch.setattr(manager.dependencies, "can_status", AsyncMock(return_value={"ready": False}))
     verified = AsyncMock(return_value={"ready": True, "state": "ready"})
     monkeypatch.setattr("armodule.check_can", verified)
     monkeypatch.setattr("armodule.setup_command", lambda _: ["official-can-command"])
@@ -206,7 +206,7 @@ async def test_setup_verifies_interface_after_official_command(tmp_path, monkeyp
     )
     assert (await manager.setup_can())["ready"]
     verified.assert_awaited_once()
-    assert manager._proc is None
+    assert manager.runtime.backend.process is None
 
 
 @pytest.mark.asyncio
@@ -216,7 +216,7 @@ async def test_can_api_exposes_status_and_running_conflict(monkeypatch):
     import app
 
     monkeypatch.setattr(
-        app.manager, "can_status", AsyncMock(return_value={"ready": True})
+        app.manager.dependencies, "can_status", AsyncMock(return_value={"ready": True})
     )
     assert (await app.api_can_status())["ready"]
     monkeypatch.setattr(

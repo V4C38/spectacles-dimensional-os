@@ -47,8 +47,6 @@ export class SpecsAgentController {
   syncEnabled(): void {
     if (!this.bound) return;
     const view = this.deps.session.view();
-    const enabled = this.deps.isSetupCompleted() && this.deps.getOperatingMode() === "agent" &&
-      view.connection === "ready" && view.capabilities?.agent.available === true;
-    this.draft.tick(getTime(), enabled, view.agentMessage, view.state?.agent.idle ?? true, view.agentMessageRevision);
+    this.draft.tickSession(getTime(), view, this.deps.isSetupCompleted(), this.deps.getOperatingMode());
   }
 }

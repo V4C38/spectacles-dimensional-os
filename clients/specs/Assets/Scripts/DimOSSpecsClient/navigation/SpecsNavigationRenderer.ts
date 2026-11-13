@@ -1,13 +1,16 @@
+import type { ReadonlyFacts } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 import { ARM_VISUAL_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationPresentation";
 import { NAV_FEEDBACK_ANIMATION_S, NAV_FEEDBACK_TIMING, type NavFlash } from "DimOSARClient.lspkg/Scripts/DimOSARClient/navigation/NavigationInteraction";
 import { FLOOR_MARKER_STYLE, NAVIGATION_COLORS, NAVIGATION_OUTCOME_STYLE, NAVIGATION_PREVIEW_ARROW_STYLE, WORLD_DASH_STYLE, circleStrokeSegments, navigationCancelReveal, ROUTE_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldPresentation";
 import { AdaptiveStrokeRenderer, WorldMeshRenderer, circleMesh, strokeMesh2D, type WorldColor } from "../presentation/WorldMeshRenderer";
-import { type ClientTrackingOrigin, odomToClientTrackingYawPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import { type ClientTrackingOrigin as MutableClientTrackingOrigin, odomToClientTrackingYawPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 
-import { anchorPathStart, clipPathToCircles, routeRibbon, filletPathCorners as sharedFilletPathCorners, rangePathY as sharedRangePathY } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/RoutePathGeometry";
+import { prepareRoutePath, routeRibbon } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/RoutePathGeometry";
 
 import type { NavGoal } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 import { clientTrackingToSpecsYawPose } from "../utilities/SpecsCoordinates";
+
+type ClientTrackingOrigin = ReadonlyFacts<MutableClientTrackingOrigin>;
 
 export interface NavigationMarkerStyle {
   selected: boolean; blocked?: boolean; hovered?: boolean; dragging: boolean; following: boolean;
@@ -140,7 +143,7 @@ export type RouteCircle = { center: [number, number, number]; radius: number };
 export class NavigationRouteRenderer {
   private readonly dots: AdaptiveStrokeRenderer;
   private readonly ribbon: WorldMeshRenderer;
-  private lastPath: import("DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts").YawPose[] | null = null;
+  private lastPath: readonly Readonly<import("DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts").YawPose>[] | null = null;
   private lastOrigin: ClientTrackingOrigin | null = null;
   private lastParameters: number[] = [];
   private lastSolid = false;
@@ -157,7 +160,7 @@ export class NavigationRouteRenderer {
 
   apply(input: {
     nav_goal?: NavGoal | null;
-    path?: import("DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts").YawPose[] | null;
+    path?: readonly Readonly<import("DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts").YawPose>[] | null;
     origin: ClientTrackingOrigin | null;
     pathVisible?: boolean;
     floorY?: number | null;
@@ -181,17 +184,20 @@ export class NavigationRouteRenderer {
       return;
     }
     this.lastPath = path; this.lastOrigin = input.origin; this.lastParameters = parameters; this.lastSolid = solid;
-    let points = path.map(p => {
+    const converted = path.map(p => {
       const s = clientTrackingToSpecsYawPose(odomToClientTrackingYawPose(p, input.origin!));
       return [s[0] / 100, s[1] / 100, s[2] / 100] as [number, number, number];
     });
-    const circle = (c?: RouteCircle) => c && ({ center: c.center.map(v => v / 100) as [number, number, number], radius: c.radius / 100 + (solid ? ROUTE_STYLE.ribbonWidthM / 2 : 0) });
+    const circle = (c?: RouteCircle) => c && ({ center: c.center.map(v => v / 100) as [number, number, number], radius: c.radius / 100 });
     const start = circle(input.startCircle), end = circle(input.endCircle);
-    if (start) points = anchorPathStart(points, start.center);
-    if (end) points[points.length - 1] = [...end.center];
-    points = sharedRangePathY(clipPathToCircles(sharedFilletPathCorners(points), start, end),
-      start?.center[1] ?? (input.floorY == null ? null : input.floorY / 100),
-      end?.center[1] ?? (input.goalY == null ? null : input.goalY / 100));
+    const { points } = prepareRoutePath(converted, {
+      startCircle: start,
+      endCircle: end,
+      floorY: input.floorY == null ? null : input.floorY / 100,
+      goalY: input.goalY == null ? null : input.goalY / 100,
+      solid,
+      widthM: ROUTE_STYLE.ribbonWidthM,
+    });
     if (points.length < 2) { this.lastPath = null; this.hide(); return; }
     if (solid) {
       const geometry = routeRibbon(points, ROUTE_STYLE.ribbonWidthM);

@@ -21,8 +21,7 @@ import {
 /** Correlate capture-derived result timestamps without adding wire ACKs. */
 export class LocalizationSubmission {
   private latestCaptureTs = -Infinity;
-  private expectedResultTs: number | null = null;
-  private deadline: number | null = null;
+  private pending: { expectedResultTs: number; deadline: number; uploadTimeoutS: number | null } | null = null;
 
   begin(captureTs: number, offset: number, now: number, timeoutS: number): void {
     if (!Number.isFinite(captureTs) || captureTs <= this.latestCaptureTs) {
@@ -35,27 +34,47 @@ export class LocalizationSubmission {
       throw new Error("localization clocks must be finite");
     }
     this.latestCaptureTs = captureTs;
-    this.expectedResultTs = captureTs + offset;
-    this.deadline = now + timeoutS;
+    this.pending = { expectedResultTs: captureTs + offset, deadline: now + timeoutS, uploadTimeoutS: null };
   }
 
   accept(resultTs: number, now: number): boolean {
     if (!Number.isFinite(resultTs) || !Number.isFinite(now)) return false;
-    if (this.expectedResultTs === null || this.deadline === null || now >= this.deadline) {
+    if (!this.pending || now >= this.pending.deadline) {
       this.cancel();
       return false;
     }
     // A few float64 epoch-time ULPs cover arithmetic rounding at either end.
-    if (Math.abs(resultTs - this.expectedResultTs) > 0.000001) return false;
+    if (Math.abs(resultTs - this.pending.expectedResultTs) > 0.000001) return false;
     this.cancel();
     return true;
   }
 
   cancel(): void {
-    this.expectedResultTs = null;
-    this.deadline = null;
+    this.pending = null;
   }
-  extendDeadline(deadline: number): void { if (this.expectedResultTs !== null && Number.isFinite(deadline)) this.deadline = deadline; }
+
+  get deadline(): number | null { return this.pending?.deadline ?? null; }
+
+  beginUpload(captureTs: number, offset: number, now: number, resultTimeoutS: number): void {
+    requirePositive(resultTimeoutS, "resultTimeoutS");
+    this.begin(captureTs, offset, now, resultTimeoutS + 30);
+    this.pending!.uploadTimeoutS = resultTimeoutS;
+  }
+
+  uploadSettled(now: number, accepted: boolean): void {
+    const timeoutS = this.pending?.uploadTimeoutS;
+    if (timeoutS == null) return;
+    if (!accepted) {
+      this.cancel();
+      return;
+    }
+    this.pending!.deadline = now + timeoutS;
+    this.pending!.uploadTimeoutS = null;
+  }
+
+  extendDeadline(deadline: number): void {
+    if (this.pending && Number.isFinite(deadline)) this.pending.deadline = deadline;
+  }
 
   reset(): void {
     this.cancel();
@@ -106,6 +125,94 @@ export interface ARModuleSessionDependencies {
 type ViewListener = (view: ARModuleSessionState) => void;
 type OutboundListener = (message: Outbound) => void;
 
+/** Owns control-channel queues, budgets and counters; session owns decoded facts. */
+class ControlChannelScheduler {
+  private readonly inbound = new Map<string, string>();
+  private readonly streams = new Map<string, string>();
+  private traffic = { at: 0, up: 0, down: 0, maxUp: 0, maxDown: 0, dropped: 0 };
+  private decodeMaxMs = 0;
+  private coalesced = 0;
+
+  constructor(private readonly clock: ClientClock, private readonly transport: WebSocketTransport,
+    private readonly ready: () => boolean, private readonly dispatch: (line: string) => void) {}
+
+  receiveBytes(chunk: string): void {
+    this.rollTraffic();
+    this.traffic.down += utf8Bytes(chunk);
+  }
+
+  receive(line: string): void {
+    const type = /"type"\s*:\s*"([^"]+)"/.exec(line)?.[1];
+    if (this.ready() && type && ["state", "pose", "manipulation_state", "interaction_state"].includes(type)) {
+      if (this.inbound.has(type)) this.coalesced++;
+      this.inbound.set(type, line);
+      return;
+    }
+    // Results must observe all control facts that preceded them on the wire.
+    this.pump(this.clock.now(), Infinity);
+    this.dispatch(line);
+  }
+
+  pump(start: number, budget: number): void {
+    for (const [type, line] of this.inbound) {
+      if (!this.ready() || this.clock.now() - start >= budget) break;
+      this.inbound.delete(type);
+      const before = this.clock.now();
+      this.dispatch(line);
+      this.decodeMaxMs = Math.max(this.decodeMaxMs, (this.clock.now() - before) * 1000);
+    }
+  }
+
+  send(text: string): void {
+    const bytes = utf8Bytes(text);
+    if (bytes > 16384) throw new Error("Control frame exceeds 16KiB");
+    this.rollTraffic();
+    const stream = /"(?:action)":"(?:update)"|"type":"client_pose"/.test(text);
+    const value = stream ? JSON.parse(text) as { type: string; action?: string; group_id?: string } : null;
+    const key = value ? `${value.type}:${value.action ?? ""}:${value.group_id ?? ""}` : "";
+    this.streams.delete(key);
+    if (stream && this.backpressured(bytes)) {
+      this.traffic.dropped++;
+      this.streams.set(key, text);
+      return;
+    }
+    this.traffic.up += bytes;
+    this.transport.sendText(text);
+  }
+
+  flushStreams(): void {
+    this.rollTraffic();
+    if (!this.ready()) return;
+    for (const [key, text] of this.streams) {
+      const bytes = utf8Bytes(text);
+      if (this.backpressured(bytes)) break;
+      this.streams.delete(key);
+      this.traffic.up += bytes;
+      this.transport.sendText(text);
+    }
+  }
+
+  clear(): void { this.inbound.clear(); this.streams.clear(); }
+
+  diagnostics() {
+    return { ...this.traffic, decodeMaxMs: this.decodeMaxMs, coalesced: this.coalesced, pending: this.inbound.size };
+  }
+
+  private backpressured(bytes: number): boolean {
+    return this.traffic.up + bytes > 24576 || (this.transport.bufferedAmount?.() ?? 0) > 24576;
+  }
+
+  private rollTraffic(): void {
+    const now = this.clock.now();
+    if (now - this.traffic.at < 1) return;
+    this.traffic.maxUp = Math.max(this.traffic.maxUp, this.traffic.up);
+    this.traffic.maxDown = Math.max(this.traffic.maxDown, this.traffic.down);
+    this.traffic.at = now;
+    this.traffic.up = 0;
+    this.traffic.down = 0;
+  }
+}
+
 export class ARModuleSession {
   readonly collaboration: CollaborationController;
   private readonly transport: WebSocketTransport;
@@ -122,10 +229,7 @@ export class ARModuleSession {
   private hello: Hello | null = null;
   private resumeToken: string | undefined;
   private recoveryUntil = 0;
-  private readonly pendingStreams = new Map<string, string>();
-  private readonly pendingControl = new Map<string, string>();
-  private decodeMaxMs = 0;
-  private coalescedControl = 0;
+  private readonly control: ControlChannelScheduler;
   private state: State | null = null;
   private pose: Pose | null = null;
   private lidar: Lidar | null = null;
@@ -140,16 +244,13 @@ export class ARModuleSession {
   private pendingHelloTs: number | null = null;
   private closing = false;
   private alignmentRequired = false;
-  private retainedOrigin: { reference: string; origin: ClientTrackingOrigin } | null = null;
+  private retainedOrigin: { reference: string; origin: ReadonlyFacts<ClientTrackingOrigin> } | null = null;
   private readonly localizationSubmission = new LocalizationSubmission();
   private captureEpisodeId: string | null = null;
   private captureId: string | null = null;
   private readonly bulk: BulkTransfer;
   private readonly assetReplies: DeferredAssetReplies;
-  private traffic = { at: 0, up: 0, down: 0, maxUp: 0, maxDown: 0, dropped: 0 };
   private reportWindow = { at: 0, count: 0 };
-  private uploadResultTimeout: number | null = null;
-  private resultDeadline: number | null = null;
 
   constructor(deps: ARModuleSessionDependencies) {
     this.collaboration = new CollaborationController({ ready: () => this.phase === "ready",
@@ -160,6 +261,7 @@ export class ARModuleSession {
       error => this.reportDecodeError(error, "Bulk asset completion"));
     this.transport = deps.transport;
     this.clock = deps.clock;
+    this.control = new ControlChannelScheduler(deps.clock, deps.transport, () => this.phase === "ready", line => this.dispatchText(line));
     this.clientTrackingOriginStore = deps.clientTrackingOriginStore;
     const config = deps.config ?? AR_MODULE_CLIENT_CONFIG.session;
     this.helloTimeoutS = requirePositive(config.helloTimeoutS, "helloTimeoutS");
@@ -198,21 +300,13 @@ export class ARModuleSession {
     this.emitView();
   }
 
-  diagnostics() { return { control: { ...this.traffic, decodeMaxMs: this.decodeMaxMs, coalesced: this.coalescedControl, pending: this.pendingControl.size }, bulk: this.bulk.diagnostics() }; }
+  diagnostics() { return { control: this.control.diagnostics(), bulk: this.bulk.diagnostics() }; }
 
   tick(): void {
-    this.rollTraffic();
     const frameStart = this.clock.now();
-    this.pumpControl(frameStart, .002);
+    this.control.pump(frameStart, .002);
     this.bulk.tick();
-    if (this.phase === "ready") {
-      for (const [key, text] of this.pendingStreams) {
-        if (this.traffic.up + utf8Bytes(text) > 24576 || (this.transport.bufferedAmount?.() ?? 0) > 24576) break;
-        this.pendingStreams.delete(key);
-        this.traffic.up += utf8Bytes(text);
-        this.transport.sendText(text);
-      }
-    }
+    this.control.flushStreams();
     this.assetReplies.tick(frameStart);
     this.collaboration.tick();
     const now = this.clock.now();
@@ -260,7 +354,7 @@ export class ARModuleSession {
     if (this.phase !== "awaiting_hello" && this.phase !== "ready") {
       throw new Error("text frame before session is open");
     }
-    this.rollTraffic(); this.traffic.down += utf8Bytes(chunk);
+    this.control.receiveBytes(chunk);
     let lines: string[];
     try {
       lines = this.framer.push(chunk);
@@ -272,25 +366,7 @@ export class ARModuleSession {
       if (this.phase !== "awaiting_hello" && this.phase !== "ready") {
         return;
       }
-      const type = /"type"\s*:\s*"([^"]+)"/.exec(line)?.[1];
-      if (this.phase === "ready" &&
-          ["state", "pose", "manipulation_state", "interaction_state"].includes(type ?? "")) {
-        if (this.pendingControl.has(type!)) this.coalescedControl++;
-        this.pendingControl.set(type!, line);
-      } else {
-        this.pumpControl(this.clock.now(), Infinity);
-        this.dispatchText(line);
-      }
-    }
-  }
-
-  private pumpControl(start: number, budget: number): void {
-    for (const [type, line] of this.pendingControl) {
-      if (this.phase !== "ready" || this.clock.now() - start >= budget) break;
-      this.pendingControl.delete(type);
-      const before = this.clock.now();
-      this.dispatchText(line);
-      this.decodeMaxMs = Math.max(this.decodeMaxMs, (this.clock.now() - before) * 1000);
+      this.control.receive(line);
     }
   }
 
@@ -316,27 +392,7 @@ export class ARModuleSession {
     if (this.phase !== "ready") {
       throw new Error("send requires a ready session");
     }
-    const bytes = utf8Bytes(text);
-    if (bytes > 16384) throw new Error("Control frame exceeds 16KiB");
-    this.rollTraffic();
-    const stream = /"(?:action)":"(?:update)"|"type":"client_pose"/.test(text);
-    const value = stream ? JSON.parse(text) as { type: string; action?: string; group_id?: string } : null;
-    const streamKey = value ? `${value.type}:${value.action ?? ""}:${value.group_id ?? ""}` : "";
-    this.pendingStreams.delete(streamKey);
-    if (stream && (this.traffic.up + bytes > 24576 || (this.transport.bufferedAmount?.() ?? 0) > 24576)) {
-      this.traffic.dropped++;
-      this.pendingStreams.set(streamKey, text);
-      return;
-    }
-    this.traffic.up += bytes; this.transport.sendText(text);
-  }
-  private rollTraffic(): void {
-    const now = this.clock.now();
-    if (now - this.traffic.at >= 1) {
-      this.traffic.maxUp = Math.max(this.traffic.maxUp, this.traffic.up);
-      this.traffic.maxDown = Math.max(this.traffic.maxDown, this.traffic.down);
-      this.traffic.at = now; this.traffic.up = this.traffic.down = 0;
-    }
+    this.control.send(text);
   }
 
   sendBinary(data: Uint8Array): void {
@@ -357,8 +413,7 @@ export class ARModuleSession {
     const encoded = encodeLocalizationObservations(observations);
     const timestamp = Math.max(...observations.map((observation) => observation.ts_capture));
     const sync = this.hello.time_sync;
-    this.localizationSubmission.begin(timestamp, sync.ts_server - sync.ts_client, this.clock.now(), timeoutS + 30);
-    this.resultDeadline = this.clock.now() + timeoutS + 30; this.uploadResultTimeout = timeoutS;
+    this.localizationSubmission.beginUpload(timestamp, sync.ts_server - sync.ts_client, this.clock.now(), timeoutS);
     try {
       this.sendBinary(encoded);
     } catch (error) {
@@ -367,7 +422,7 @@ export class ARModuleSession {
     }
   }
 
-  localizationResultDeadline(): number | null { return this.resultDeadline; }
+  localizationResultDeadline(): number | null { return this.localizationSubmission.deadline; }
 
   assetTransferDeadline(requestId: string): number | null {
     return this.assetReplies.deadline(requestId);
@@ -375,7 +430,6 @@ export class ARModuleSession {
 
   cancelLocalizationSubmission(): void {
     this.bulk.cancelUpload();
-    this.uploadResultTimeout = this.resultDeadline = null;
     this.localizationSubmission.cancel();
   }
 
@@ -484,15 +538,8 @@ export class ARModuleSession {
   }
 
   private bulkChanged(): void {
-    if (this.uploadResultTimeout !== null && !this.bulk.uploading) {
-      if (this.bulk.uploadResult()?.status === "accepted") {
-        this.resultDeadline = this.clock.now() + this.uploadResultTimeout;
-        this.localizationSubmission.extendDeadline(this.resultDeadline);
-      } else {
-        this.resultDeadline = null;
-        this.localizationSubmission.cancel();
-      }
-      this.uploadResultTimeout = null;
+    if (!this.bulk.uploading) {
+      this.localizationSubmission.uploadSettled(this.clock.now(), this.bulk.uploadResult()?.status === "accepted");
     }
     this.assetReplies.markDirty();
   }
@@ -653,11 +700,10 @@ export class ARModuleSession {
   }
 
   private clearConnectionFacts(preserveInteraction = false): void {
-    this.pendingStreams.clear();
-    this.pendingControl.clear();
+    this.control.clear();
     this.captureId = null;
     this.assetReplies.reset();
-    this.bulk.reset(); this.uploadResultTimeout = this.resultDeadline = null;
+    this.bulk.reset();
     if (!preserveInteraction) this.collaboration.reset();
     if (!preserveInteraction) this.manipulation = null;
     this.captureEpisodeId = null;

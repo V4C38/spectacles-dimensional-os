@@ -1,3 +1,4 @@
+import type { ReadonlyFacts } from "../ClientContracts";
 import { type ClientTrackingOrigin, clientTrackingToOdomPose, odomToClientTrackingPose } from "../localization/ClientTracking";
 
 import type { ManipulationPose } from "./ManipulationTypes";
@@ -5,24 +6,24 @@ import { composePose, inversePose } from "./ModelKinematics";
 
 /** Full-pose grab capture in client-tracking metres. */
 export class ManipulationGesture {
-  private input: ManipulationPose | null = null;
+  private input: ReadonlyFacts<ManipulationPose> | null = null;
   private offset: ManipulationPose | null = null;
   private displayed: ManipulationPose | null = null;
 
-  begin(input: ManipulationPose, target: ManipulationPose, _now: number): void {
+  begin(input: ReadonlyFacts<ManipulationPose>, target: ReadonlyFacts<ManipulationPose>, _now: number): void {
     this.input = input;
     this.offset = composePose(inversePose(input), target);
     this.displayed = { position: [...target.position], orientation: [...target.orientation] };
   }
 
-  hold(input: ManipulationPose, _now: number): ManipulationPose | null {
+  hold(input: ReadonlyFacts<ManipulationPose>, _now: number): ReadonlyFacts<ManipulationPose> | null {
     if (!this.offset || !this.displayed) return null;
     this.input = input;
     this.displayed = composePose(input, this.offset);
     return this.displayed;
   }
 
-  rebase(previous: ClientTrackingOrigin, next: ClientTrackingOrigin): void {
+  rebase(previous: ReadonlyFacts<ClientTrackingOrigin>, next: ReadonlyFacts<ClientTrackingOrigin>): void {
     if (!this.displayed || !this.input) return;
     this.displayed = odomToClientTrackingPose(clientTrackingToOdomPose(this.displayed, previous), next);
     this.offset = composePose(inversePose(this.input), this.displayed);
@@ -33,10 +34,11 @@ export class ManipulationGesture {
 
 /** One captured drag and an independently authorized secondary gripper press. */
 export class ManipulationInputCapture {
-  readonly events: {source: string; reason: string}[] = [];
+  private readonly eventLog: {source: string; reason: string}[] = [];
+  get events(): readonly Readonly<{source: string; reason: string}>[] { return this.eventLog; }
   private record(source: string, reason: string): void {
-    this.events.push({source, reason});
-    if (this.events.length > 32) this.events.shift();
+    this.eventLog.push({source, reason});
+    if (this.eventLog.length > 32) this.eventLog.shift();
   }
   private source: string | null = null;
   private readonly presses = new Set<string>();

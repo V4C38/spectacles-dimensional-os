@@ -1,4 +1,5 @@
-import type { BindableWebSocketTransport, WebSocketTransportHandlers } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
+import { appendFixtureUpload, fixtureAsset } from "../../../../tools/integration-tests/support/IntegrationBulk";
+import type { BindableWebSocketTransport, WebSocketTransportHandlers, CameraCaptureSource } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 
 type Value = Record<string, any>;
 
@@ -49,12 +50,9 @@ export class IntegrationV2Fixture implements BindableWebSocketTransport {
     }
   }
   sendBinary(data: Uint8Array): void {
-    const upload = this.upload, header = new DataView(data.buffer, data.byteOffset, data.byteLength);
-    if (!upload || data.length < 12 || header.getUint32(0, true) !== 0x32425241 ||
-      header.getUint32(4, true) !== upload.id || header.getUint32(8, true) !== upload.offset ||
-      upload.offset + data.length - 12 > upload.bytes.length) throw new Error("Invalid native fixture upload");
-    upload.bytes.set(data.subarray(12), upload.offset); upload.offset += data.length - 12;
-    if (upload.offset === upload.bytes.length) {
+    const upload = this.upload;
+    if (appendFixtureUpload(upload, data)) {
+      if (!upload) throw new Error("Invalid native fixture upload");
       this.upload = null;
       const accepted = upload.captureId === this.captureId;
       if (accepted) this.onUpload(upload.bytes);
@@ -194,27 +192,36 @@ export class IntegrationV2Fixture implements BindableWebSocketTransport {
     return message;
   }
   private asset(kind: string, value: Value): Value {
-    let hash = 2166136261; const text = JSON.stringify(value);
-    for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
-    const id = `${kind}-${hash >>> 0}`, ref = { epoch: "fixture-epoch", id, revision: String(hash >>> 0) };
-    if (this.assets.has(id)) return ref;
-    const metadata = { ...value }, fields = kind === "model" ? ["links", "joints"] : [kind === "route" ? "path_poses" : "trajectory"];
-    fields.forEach(field => delete metadata[field]);
-    const data: Value[] = [{ metadata }];
-    for (const field of fields) {
-      const key = field === "links" || field === "joints" ? field : "points";
-      let items: unknown[] = [];
-      for (const item of value[field] ?? []) {
-        if (items.length && JSON.stringify({ [key]: [...items, item] }).length > 12000) { data.push({ [key]: items }); items = []; }
-        items.push(item);
-      }
-      if (items.length) data.push({ [key]: items });
-    }
-    const records = data.map((part, index) => ({ type: "bulk_record", ...ref, kind, part: index, parts: data.length, data: part }));
+    const { ref, records } = fixtureAsset(kind, value, { maximumPartSize: 12000, measure: text => text.length }, this.assets);
+    const id = ref.id;
+    if (!records) return ref;
     if (this.assets.size >= 64) this.assets.delete(this.assets.keys().next().value!);
     this.assets.set(id, records);
     if (this.attached) for (const record of records) this.bulk(record); else this.waiting.push(records);
     return ref;
   }
   private bulk(value: Value): void { this.handlers.onTransportText(JSON.stringify(value) + "\n"); }
+}
+
+/** Replace methods on the actual composition adapter, retaining every existing owner reference. */
+export function installFixtureCamera(
+  source: CameraCaptureSource,
+  capture: CameraCaptureSource["capture"],
+): () => void {
+  const keys = ["start", "stop", "capture"] as const;
+  const descriptors = keys.map(key => Object.getOwnPropertyDescriptor(source, key));
+  const replacement: CameraCaptureSource = { start: () => {}, stop: () => {}, capture };
+  for (const key of keys) Object.defineProperty(source, key, {
+    configurable: true, writable: true, value: replacement[key],
+  });
+  let restored = false;
+  return () => {
+    if (restored) return;
+    restored = true;
+    keys.forEach((key, index) => {
+      const descriptor = descriptors[index];
+      if (descriptor) Object.defineProperty(source, key, descriptor);
+      else delete (source as unknown as Record<string, unknown>)[key];
+    });
+  };
 }

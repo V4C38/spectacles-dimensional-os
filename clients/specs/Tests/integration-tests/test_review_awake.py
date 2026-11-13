@@ -1,5 +1,4 @@
 """The review guard surrounds the entire coordinator, not just its recorder."""
-import argparse
 from pathlib import Path
 import sys
 import unittest
@@ -26,14 +25,14 @@ class ReviewAwakeTests(unittest.TestCase):
             events.extend(["prepare", "record", "restore", "handoff", "publish"])
             return 0
 
-        with patch.object(review, "arguments", return_value=argparse.Namespace(prepare_only=False)), \
+        with patch.object(review, "arguments", return_value=review.ReviewOptions(prepare_only=False)), \
                 patch.object(review, "KeepAwake", Guard), \
                 patch.object(review, "_run", side_effect=coordinate):
             self.assertEqual(review.main(), 0)
         self.assertEqual(events, ["acquire", "prepare", "record", "restore", "handoff", "publish", "release"])
 
     def test_guard_releases_when_coordinator_raises(self):
-        with patch.object(review, "arguments", return_value=argparse.Namespace(prepare_only=False)), \
+        with patch.object(review, "arguments", return_value=review.ReviewOptions(prepare_only=False)), \
                 patch.object(review, "KeepAwake") as guard, \
                 patch.object(review, "_run", side_effect=RuntimeError("handoff failed")):
             guard.return_value.__exit__.return_value = False
@@ -42,7 +41,7 @@ class ReviewAwakeTests(unittest.TestCase):
             guard.return_value.__exit__.assert_called_once()
 
     def test_prepare_only_needs_no_editor_guard(self):
-        with patch.object(review, "arguments", return_value=argparse.Namespace(prepare_only=True)), \
+        with patch.object(review, "arguments", return_value=review.ReviewOptions(prepare_only=True)), \
                 patch.object(review, "KeepAwake") as guard, \
                 patch.object(review, "_run", return_value=0):
             self.assertEqual(review.main(), 0)
@@ -58,13 +57,13 @@ class SharedFocusBudgetTests(unittest.IsolatedAsyncioTestCase):
             budget.with_suffix(".aborted").write_text("focus limit")
             output = root / "retry"
             output.mkdir()
-            args = argparse.Namespace(focus_budget=budget, keep_open=False, mcp_config=None)
+            args = review.ReviewOptions(focus_budget=budget, keep_open=False, mcp_config=None)
             with patch.object(review, "run_review", new_callable=AsyncMock,
                               side_effect=review.ReviewError("failed")), \
                     patch.object(review, "restore_source_project", new_callable=AsyncMock) as restore, \
                     patch.object(review, "LensMcp", side_effect=RuntimeError("offline")):
                 with self.assertRaisesRegex(review.ReviewError, "failed"):
-                    await review.review_and_restore(args, output, root / "workspace")
+                    await review.review_and_restore(review.ReviewContext.create(args, output, root / "workspace"))
             self.assertEqual(args.focus_budget, budget)
             restore.assert_not_awaited()
             self.assertTrue(budget.with_suffix(".aborted").exists())
@@ -97,6 +96,22 @@ class EditorProcessTests(unittest.TestCase):
         ]):
             with self.assertRaises(review.ReviewError):
                 review.app_pid(app)
+
+
+
+
+class FocusOutcomeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_focus_abort_cannot_fall_through_to_handoff_after_scenario_completion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            context = review.ReviewContext.create(review.ReviewOptions(mcp_config=None), output, output / "workspace")
+            context.focus_budget.with_suffix(".aborted").write_text("focus limit")
+            with patch.object(review, "run_review", new_callable=AsyncMock, return_value={"passed": True}), \
+                    patch.object(review, "restore_source_project", new_callable=AsyncMock) as restore, \
+                    patch.object(review, "LensMcp", side_effect=RuntimeError("offline")):
+                with self.assertRaisesRegex(review.ReviewError, "Explicit user authorization"):
+                    await review.review_and_restore(context)
+            restore.assert_not_awaited()
 
 
 if __name__ == "__main__":

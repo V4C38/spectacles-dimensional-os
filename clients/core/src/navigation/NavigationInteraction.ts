@@ -1,4 +1,4 @@
-import type { Quat, Vec3, YawPose, InteractionAuthorityPort, NavGoal } from "../ClientContracts";
+import type { Quat, Vec3, YawPose, InteractionAuthorityPort, NavGoal, ReadonlyFacts } from "../ClientContracts";
 import { type ClientTrackingOrigin, clientTrackingToOdomPose, odomToClientTrackingYawPose, odomToClientTrackingPose, sameTrackingReference } from "../localization/ClientTracking";
 
 import type { ARModuleSessionState, ARModuleSession } from "../websocket/ARModuleSession";
@@ -16,7 +16,7 @@ export function yawFromPlanarDirection(x: number, y: number): Quat {
   return [0, 0, Math.sin(half), Math.cos(half)];
 }
 
-export function robotDeadzoneRadiusM(footprint: [number, number]): number {
+export function robotDeadzoneRadiusM(footprint: readonly [number, number]): number {
   return Math.max(0.2, Math.max(...footprint) * 0.5 + 0.2);
 }
 
@@ -55,15 +55,15 @@ export type NavigationCommands = { sendGoal: (pose: NavigationPose) => void; can
 /** Owns execution facts and terminal feedback. Placement drafts never modify this state. */
 export class NavigationGoalLifecycle {
   private view: ARModuleSessionState | null = null;
-  private origin: ClientTrackingOrigin | null = null;
+  private origin: ReadonlyFacts<ClientTrackingOrigin> | null = null;
   private floor: NavigationPose | null = null;
   private pose: NavigationPose | null = null;
   private phase: "idle" | "submitted" | "accepted" | "resolved" = "idle";
   private get active(): boolean { return this.phase === "submitted" || this.phase === "accepted"; }
   private get resolved(): boolean { return this.phase === "resolved"; }
   private get awaitingFreshFacts(): boolean { return this.phase === "submitted"; }
-  private route: YawPose[] | null = null;
-  private routeGoalKey = "";
+  private route: NavGoal["path_poses"] | null = null;
+  private routeGoal: Readonly<YawPose> | null = null;
   private lastFrame: ARModuleSessionState["nav_goal"] = null;
   private newestTs = -Infinity;
   private retiredTs = -Infinity;
@@ -80,42 +80,63 @@ export class NavigationGoalLifecycle {
   private confirmationId = 0;
   constructor(private readonly commands: NavigationCommands) {}
 
-  apply(view: ARModuleSessionState, origin: ClientTrackingOrigin | null, floor: NavigationPose | null): void {
-    this.view = view; this.floor = floor;
+  apply(view: ARModuleSessionState, origin: ReadonlyFacts<ClientTrackingOrigin> | null, floor: NavigationPose | null): void {
+    this.view = view;
+    this.floor = floor;
     if (!origin || !view.hasTrackingOrigin || view.connection !== "ready" || view.capabilities?.navigation.nav_goal.available !== true) {
       this.reset(); return;
     }
     if (this.origin !== origin) this.route = null;
     this.origin = origin;
     const frame = view.nav_goal;
-    const freshGoal = frame !== null && frame !== this.lastFrame && frame !== this.suppressed && frame.ts >= this.newestTs && frame.ts > this.retiredTs && !!frame.pose && (view.nav?.state !== "resolved" || this.awaitingFreshFacts);
-    const newAcceptedGoal = freshGoal && (frame.ts > this.newestTs || JSON.stringify(frame.pose) !== this.routeGoalKey);
-    if (newAcceptedGoal) { this.postAcceptanceIdle = false; this.sharedCancellation = false; }
+    const freshGoal = this.isFreshGoal(frame, view);
+    const newAcceptedGoal = freshGoal && (frame.ts > this.newestTs || !sameYawPose(frame.pose, this.routeGoal));
+    if (newAcceptedGoal) {
+      this.postAcceptanceIdle = false;
+      this.sharedCancellation = false;
+    }
     if (freshGoal) {
-      this.newestTs = frame.ts; this.phase = "accepted";
-      this.flash = null; this.elapsed = 0;
+      this.newestTs = frame.ts;
+      this.phase = "accepted";
+      this.flash = null;
+      this.elapsed = 0;
     }
     const navChanged = view.nav !== this.lastNav;
     // Rendering/ticking a cached resolved fact after send is not a new outcome.
     const freshState = navChanged && view.nav !== this.submissionBaseline;
-    if (this.active && !newAcceptedGoal && freshState && view.nav?.state === "idle") this.postAcceptanceIdle = true;
+    if (this.active && !newAcceptedGoal && freshState && view.nav?.state === "idle") {
+      this.postAcceptanceIdle = true;
+    }
     const awaitingAtArrival = this.awaitingFreshFacts;
-    if (this.awaitingFreshFacts && freshState && view.nav?.state !== "resolved") this.phase = "accepted";
-    const terminal = freshState && view.nav?.state === "resolved" && (!this.awaitingFreshFacts || this.submissionBaseline?.state !== "resolved" || view.nav.outcome !== this.submissionBaseline.outcome);
+    if (this.awaitingFreshFacts && freshState && view.nav?.state !== "resolved") {
+      this.phase = "accepted";
+    }
+    const outcomeChanged = this.submissionBaseline?.state !== "resolved" ||
+      view.nav?.outcome !== this.submissionBaseline.outcome;
+    const terminal = freshState && view.nav?.state === "resolved" &&
+      (!this.awaitingFreshFacts || outcomeChanged);
+    const stoppedFollowing = freshState && this.lastNav?.state === "following_path";
+    const goalClearedAfterAcceptance = this.active && this.postAcceptanceIdle &&
+      view.interaction?.active_goal === null;
     const cancelled = !awaitingAtArrival && view.nav?.state === "idle" &&
-      (freshState && this.lastNav?.state === "following_path" || this.active && this.postAcceptanceIdle && view.interaction?.active_goal === null);
+      (stoppedFollowing || goalClearedAfterAcceptance);
     const correctedTerminal = terminal && this.sharedCancellation && this.flash === "cancelled";
-    if ((!this.resolved || correctedTerminal) && (this.active || freshGoal || view.nav?.state === "following_path" || correctedTerminal) && (terminal || cancelled)) {
-      this.sharedCancellation = !terminal && this.postAcceptanceIdle && view.interaction?.active_goal === null;
-      this.finish(terminal ? view.nav?.outcome === "succeeded" ? "succeeded" : "failed" : "cancelled");
+    const hasExecutionEvidence = this.active || freshGoal ||
+      view.nav?.state === "following_path" || correctedTerminal;
+    const canResolve = (!this.resolved || correctedTerminal) && hasExecutionEvidence;
+    if (canResolve && (terminal || cancelled)) {
+      this.sharedCancellation = !terminal && this.postAcceptanceIdle &&
+        view.interaction?.active_goal === null;
+      let feedback: NavFlash = "cancelled";
+      if (terminal) feedback = view.nav?.outcome === "succeeded" ? "succeeded" : "failed";
+      this.finish(feedback);
     }
     if (!this.resolved && !this.awaitingFreshFacts && view.nav?.state === "following_path") this.phase = "accepted";
     if (!this.resolved && view.nav?.state !== "resolved" && frame && frame !== this.suppressed && frame.ts >= this.newestTs) {
       this.newestTs = frame.ts;
       if (frame.pose) {
-        const key = JSON.stringify(frame.pose);
-        if (key !== this.routeGoalKey) this.route = null;
-        this.routeGoalKey = key;
+        if (!sameYawPose(frame.pose, this.routeGoal)) this.route = null;
+        this.routeGoal = frame.pose;
         const p = odomToClientTrackingYawPose(frame.pose, origin);
         this.pose = { position: [p[0], p[1], p[2]], orientation: [0, 0, Math.sin(p[3] / 2), Math.cos(p[3] / 2)] };
         this.phase = "accepted";
@@ -123,7 +144,14 @@ export class NavigationGoalLifecycle {
       if (frame.path_poses.length >= 2) this.route = frame.path_poses;
     }
     if (!this.active && !this.flash) this.pose = floor;
-    this.lastFrame = frame; this.lastNav = view.nav;
+    this.lastFrame = frame;
+    this.lastNav = view.nav;
+  }
+
+  private isFreshGoal(frame: ARModuleSessionState["nav_goal"], view: ARModuleSessionState): frame is NonNullable<ARModuleSessionState["nav_goal"]> {
+    return frame !== null && frame !== this.lastFrame && frame !== this.suppressed &&
+      frame.ts >= this.newestTs && frame.ts > this.retiredTs && !!frame.pose &&
+      (view.nav?.state !== "resolved" || this.awaitingFreshFacts);
   }
 
   send(now: number, pose: NavigationPose): boolean {
@@ -140,21 +168,26 @@ export class NavigationGoalLifecycle {
     this.postAcceptanceIdle = this.sharedCancellation = false;
     this.phase = "submitted";
     this.suppressed = this.view?.nav_goal ?? null;
-    this.flash = null; this.elapsed = 0;
-    this.pose = clone(pose); this.route = null;
-    this.lastSent = [...pose.position]; this.lastSentAt = now;
+    this.flash = null;
+    this.elapsed = 0;
+    this.pose = clone(pose);
+    this.route = null;
+    this.lastSent = [...pose.position];
+    this.lastSentAt = now;
   }
 
   cancel(): boolean {
     if (!this.active || this.view?.capabilities?.estop.available !== true) return false;
     try { this.commands.cancel(); } catch { return false; }
-    this.sharedCancellation = false; this.finish("cancelled"); return true;
+    this.sharedCancellation = false;
+    this.finish("cancelled"); return true;
   }
 
   tick(deltaS: number): void {
     if (!this.flash) return;
     this.elapsed = Math.min(FLASH_DURATION_S, this.elapsed + Math.max(0, deltaS));
-    if (this.elapsed >= FLASH_DURATION_S) { this.flash = null; this.pose = this.floor; }
+    if (this.elapsed >= FLASH_DURATION_S) { this.flash = null;
+    this.pose = this.floor; }
   }
 
   snapshot() {
@@ -166,20 +199,35 @@ export class NavigationGoalLifecycle {
   }
 
   reset(): void {
-    this.origin = null; this.pose = null; this.phase = "idle";
-    this.route = null; this.routeGoalKey = ""; this.flash = null; this.elapsed = 0; this.lastSent = null; this.lastSentAt = -Infinity;
-    this.newestTs = this.retiredTs = -Infinity; this.lastFrame = this.suppressed = null;
+    this.origin = null;
+    this.pose = null;
+    this.phase = "idle";
+    this.route = null;
+    this.routeGoal = null;
+    this.flash = null;
+    this.elapsed = 0;
+    this.lastSent = null;
+    this.lastSentAt = -Infinity;
+    this.newestTs = this.retiredTs = -Infinity;
+    this.lastFrame = this.suppressed = null;
     this.lastNav = this.submissionBaseline = null;
     this.postAcceptanceIdle = this.sharedCancellation = false;
   }
 
   private finish(flash: NavFlash): void {
-    this.flash = flash; this.elapsed = 0; this.feedbackId++;
-    this.phase = "resolved"; this.route = null;
+    this.flash = flash;
+    this.elapsed = 0;
+    this.feedbackId++;
+    this.phase = "resolved";
+    this.route = null;
     this.retiredTs = Math.max(this.retiredTs, this.newestTs, this.view?.nav_goal?.ts ?? -Infinity);
     this.suppressed = this.view?.nav_goal ?? null;
-    this.lastSent = null; this.lastSentAt = -Infinity;
+    this.lastSent = null;
+    this.lastSentAt = -Infinity;
   }
+}
+function sameYawPose(a: Readonly<YawPose> | null, b: Readonly<YawPose> | null): boolean {
+  return a === b || !!a && !!b && a.every((value, axis) => value === b[axis]);
 }
 function clone(pose: NavigationPose): NavigationPose { return { position: [...pose.position], orientation: [...pose.orientation] }; }
 function distance(a: Vec3, b: Vec3): number { return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]); }
@@ -251,8 +299,8 @@ export class NavigationPreviewCoordinator {
   private pending: { id: string; aim: Aim; deadline: number } | null = null;
   private lastAim: Aim | null = null;
   private lastSend = -PREVIEW_INTERVAL_S;
-  private lastResponse: NavGoal | null = null;
-  private origin: ClientTrackingOrigin | null = null;
+  private lastResponse: ReadonlyFacts<NavGoal> | null = null;
+  private origin: ReadonlyFacts<ClientTrackingOrigin> | null = null;
   private costmap: number | null = null;
   private queued = false;
   private requestedTargetRevision: number | null = null;
@@ -272,7 +320,7 @@ export class NavigationPreviewCoordinator {
     return this.displayed;
   }
 
-  apply(origin: ClientTrackingOrigin | null): void {
+  apply(origin: ReadonlyFacts<ClientTrackingOrigin> | null): void {
     const view = this.session.view();
     if (view.connection !== "ready") { this.reset(); return; }
     if (view.capabilities?.navigation.nav_goal.preview !== true) { this.clear(); return; }
@@ -318,13 +366,19 @@ export class NavigationPreviewCoordinator {
   tick(now: number): void {
     const shared = this.session.collaboration.snapshot();
     const canonical = shared.rawTarget && this.origin ? odomToClientTrackingPose(shared.rawTarget, this.origin) : null;
-    if (shared.ownsAuthority && canonical && this.pending && changed(this.pending.aim, canonical) && now - this.lastSend >= PREVIEW_INTERVAL_S) {
+    const mayRefresh = now - this.lastSend >= PREVIEW_INTERVAL_S;
+    const pendingAimObsolete = canonical && this.pending && changed(this.pending.aim, canonical);
+    if (shared.ownsAuthority && pendingAimObsolete && mayRefresh) {
       this.pending = null;
       this.queued = true;
     }
-    if (shared.ownsAuthority && shared.preview === null && this.lastAim &&
-        (shared.rawTarget?.revision !== this.requestedTargetRevision || !this.pending)) this.queued = true;
-    if (this.pending && now >= Math.max(this.pending.deadline, this.session.assetTransferDeadline?.(this.pending.id) ?? 0)) {
+    const previewMissingForTarget = shared.preview === null && this.lastAim &&
+      (shared.rawTarget?.revision !== this.requestedTargetRevision || !this.pending);
+    if (shared.ownsAuthority && previewMissingForTarget) this.queued = true;
+    const pendingDeadline = this.pending && Math.max(
+      this.pending.deadline, this.session.assetTransferDeadline?.(this.pending.id) ?? 0,
+    );
+    if (pendingDeadline !== null && now >= pendingDeadline) {
       this.pending = null;
       this.lastAim = null;
       this.queued = true;
@@ -371,7 +425,7 @@ const DEFAULT_SOURCE = "default";
 export class NavigationInteraction {
   readonly goals: NavigationGoalLifecycle;
   readonly placement = new NavigationPlacementSession();
-  private origin: ClientTrackingOrigin | null = null;
+  private origin: ReadonlyFacts<ClientTrackingOrigin> | null = null;
   private selected = false;
   private armed = false;
   private floor: NavigationPose | null = null;
@@ -403,7 +457,7 @@ export class NavigationInteraction {
       attachedToRobot: goal.attachedToRobot && !this.dragging && !draft,
       activeGoal: remote && shared.phase === "committed" && !goal.pose ? { ...goal, pose: remote } : goal, ...placement, draft };
   }
-  applyView(view: ARModuleSessionState, origin: ClientTrackingOrigin | null, floor: NavigationPose | null, _now: number): void {
+  applyView(view: ARModuleSessionState, origin: ReadonlyFacts<ClientTrackingOrigin> | null, floor: NavigationPose | null, _now: number): void {
     this.previews.apply(origin);
     const available = view.connection === "ready" && view.hasTrackingOrigin && view.capabilities?.navigation.available === true && view.capabilities.navigation.nav_goal.available === true && origin !== null;
     if (!available || !sameTrackingReference(this.origin, origin)) this.cancelDrag();
@@ -439,8 +493,8 @@ export class NavigationInteraction {
   isAiming(): boolean { return this.snapshot().draft !== null; }
   isDragging(): boolean { return this.dragging; }
   isRouteVisible(): boolean { return this.armed && this.flash() === null; }
-  activePath(): YawPose[] | null { return this.goals.snapshot().path; }
-  previewPath(): YawPose[] | null {
+  activePath(): NavGoal["path_poses"] | null { return this.goals.snapshot().path; }
+  previewPath(): NavGoal["path_poses"] | null {
     return this.previews.displayPath();
   }
   flash(): NavFlash | null { return this.goals.snapshot().flash; }
@@ -520,4 +574,28 @@ export class NavigationInteraction {
   cancelDrag(): void { this.collaboration.cancel(["live", "navigation_planning"]); this.placement.clear(); this.previews.clear(); this.direct = null; }
   reset(): void { this.cancelDrag(); this.goals.reset(); this.origin = null; this.floor = null; this.armed = this.selected = false; }
   dispose(): void { this.reset(); this.previews.reset(); }
+}
+
+/** Shared visibility/pose decisions. Hosts retain coordinate conversion and renderer interaction. */
+export function deriveNavigationPresentation(
+  state: ReadonlyFacts<NavigationTargetSnapshot>,
+  options: { readonly showFlashDuringDrag?: boolean } = {},
+) {
+  const mainPose: ReadonlyFacts<NavigationPose> = state.dragging ? state : state.activeGoal.pose ?? state;
+  return {
+    mainPose,
+    mainVisible: state.visible && (!state.draft || state.activeGoal.active || state.flash !== null),
+    draftPose: state.draft,
+    draftVisible: state.visible && state.draft !== null,
+    draftHeld: state.draft?.held ?? false,
+    flash: state.dragging && !options.showFlashDuringDrag ? null : state.flash,
+    blocked: state.blocked === true,
+    selected: state.selected,
+    dragging: state.dragging,
+    following: state.followingPath,
+    cancelVisible: state.cancelVisible,
+    feedbackProgress: state.feedbackProgress,
+    confirmationId: state.activeGoal.confirmationId,
+    probes: state.probes,
+  } as const;
 }

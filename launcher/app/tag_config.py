@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import copy
+import json
 import math
+from pathlib import Path
 from typing import Any
 
-LOCALIZATION_POLICY_DEFAULTS = {
-    "travel_threshold_m": 0.75,
-    "heading_threshold_deg": 30.0,
-    "marker_preference_s": 3.0,
-    "headset_travel_threshold_m": 10.0,
-}
+# Read the shipped resource directly: the launcher must work before DimOS is installed.
+LOCALIZATION_DEFAULTS_PATH = (
+    Path(__file__).resolve().parents[2] / "dimos-ar/dimos/ar/localization/defaults.json"
+)
+LOCALIZATION_POLICY_DEFAULTS: dict[str, float] = json.loads(
+    LOCALIZATION_DEFAULTS_PATH.read_text(encoding="utf-8")
+)
 
 DEFAULT_PRINT_SIZE_MM = 70.0
 _BLACK_FRACTION = 8.0 / 10.0

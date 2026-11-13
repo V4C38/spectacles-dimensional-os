@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import base64
 import contextlib
+from dataclasses import dataclass, replace
 import fcntl
 import json
 import math
@@ -30,14 +31,58 @@ from ls_awake import KeepAwake
 from integration_catalog import applicable_cases, case_filename, load_catalog
 from native_project import prepare_harness
 import native_provenance
-from review_evidence import ReviewError, ReviewEvents, checkpoint, parse_events, runtime_error_lines
-from native_recording import NativeRecording
+from review_evidence import ReviewError, ReviewOutcome, checkpoint, parse_events as parse_events, runtime_error_lines
+from native_recording import CaptureSession
 
 SPECS_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = SPECS_ROOT.parents[1]
 REVIEW_DATA_ROOT = REPO_ROOT / "Review Data"
 DEFAULT_CLAD = Path(os.environ.get("DIMOS_CLAD_ROOT", Path.home() / ".local/share/ls515-clad"))
 PREVIEW_ID = "Snap.Plugin.Gui.PreviewPanel"
+
+
+@dataclass(frozen=True)
+class ReviewOptions:
+    source: Path = SPECS_ROOT
+    harness: Path | None = None
+    suite: str = "all"
+    app: Path = DEFAULT_CLAD / "LS 5.15 CLAD.app"
+    mcp_config: Path | None = DEFAULT_CLAD / "ls515-clad/state/mcp.json"
+    work_root: Path = REVIEW_DATA_ROOT / "specs-work"
+    output_root: Path = REVIEW_DATA_ROOT / "specs"
+    duration: float = 600
+    start_delay: float = 5
+    recorder: Path | None = None
+    recorder_cache: Path = Path.home() / "Library/Caches/dimos-specs-review"
+    focus_budget: Path | None = None
+    extra_media: bool = False
+    prepare_only: bool = False
+    keep_open: bool = False
+    prepared_project: Path | None = None
+
+
+@dataclass
+class ReviewContext:
+    options: ReviewOptions
+    output: Path
+    workspace: Path
+    focus_budget: Path
+    provenance: dict[str, Any] | None = None
+    profile: str = "probe"
+
+    @classmethod
+    def create(cls, options: ReviewOptions, output: Path, workspace: Path) -> ReviewContext:
+        return cls(options, output, workspace, options.focus_budget or output / "focus-budget")
+
+    def begin_provenance(self) -> None:
+        if self.provenance is None:
+            self.provenance = native_provenance.begin(self.options.source, self.workspace, SPECS_ROOT)
+
+    def for_pass(self, profile: str, harness: Path, project: Path, output: Path) -> ReviewContext:
+        if self.provenance is None:
+            raise ReviewError("Review passes require the shared production provenance manifest")
+        return replace(self, options=replace(self.options, harness=harness, prepared_project=project),
+                       profile=profile, output=output)
 
 def native_log_file() -> Path:
     paths = list((Path.home() / "Library/Preferences/Snap/Lens Studio/logs").glob("LensStudioLog-*.txt"))
@@ -359,7 +404,8 @@ def recorder_binary(destination: Path, override: Path | None) -> Path:
     return destination
 
 
-async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> dict[str, Any]:
+async def run_pass(context: ReviewContext) -> dict[str, Any]:
+    args, output, workspace = context.options, context.output, context.workspace
     if args.prepared_project:
         marker = workspace / ".specs-review.json"
         if not marker.is_file() or json.loads(marker.read_text()).get("kind") != "dimos-specs-review":
@@ -370,23 +416,20 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
         prepare_harness(workspace, args.harness)
     else:
         project = copy_project(args.source, workspace, args.harness)
-    if not hasattr(args, "native_provenance"):
-        args.native_provenance = native_provenance.begin(args.source, workspace, SPECS_ROOT)
+    context.begin_provenance()
     with (args.app / "Contents" / "Info.plist").open("rb") as stream:
         version = plistlib.load(stream).get("CFBundleShortVersionString", "")
     if not version.startswith("5.15."):
         raise ReviewError(f"Spectacles 2024 review requires Lens Studio 5.15.x, found {version}")
-    profile = getattr(args, "profile", "probe")
+    profile = context.profile
     pid = app_pid(args.app)
     recording_dir = output / "diagnostics"
     recording_dir.mkdir(parents=True, exist_ok=True)
     binary = recorder_binary(args.recorder_cache / "RecordPreview", args.recorder)
-    subprocess.run([str(binary), "--focus-policy", str(pid), str(args.focus_budget)], check=True)
+    subprocess.run([str(binary), "--focus-policy", str(pid), str(context.focus_budget)], check=True)
     dismiss_welcome(pid)
     manifest: dict[str, Any] = {"recording": "diagnostics/recording.mp4", "profile": profile, "client": "specs", "scenes": [], "source": "Lens Studio native Preview"}
-    collected = ReviewEvents()
-    events = collected.events
-    offset = 0
+    events: list[dict[str, Any]] = []
     logfile: Path | None = None
     original_window: dict[str, int] | None = None
     viewport_variants: list[dict[str, Any]] = []
@@ -412,11 +455,11 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
             print("Waiting for native TypeScript compilation", flush=True)
             await compile_project(mcp, output, workspace)
             print("Attaching review scenario through the editor API", flush=True)
-            native_provenance.before_scene_overlay(args.native_provenance)
+            native_provenance.before_scene_overlay(context.provenance)
             await attach_scenario(mcp, workspace, args.start_delay, profile)
-            native_provenance.record_scene_overlay(args.native_provenance)
+            native_provenance.record_scene_overlay(context.provenance)
             logfile = native_log_file()
-            offset = logfile.stat().st_size
+            capture_session = CaptureSession(binary, pid, output, args.duration, context.focus_budget, logfile)
             # Refresh can briefly remove Preview's AX viewport controls. Reset it
             # before starting continuous capture, rather than invalidating a live recorder.
             await mcp.editor(
@@ -425,7 +468,9 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
             )
             # The recorded start timestamp is emitted by ScreenCaptureKit only
             # after the first recording frame, never guessed from process spawn.
-            async with NativeRecording(binary, pid, recording_dir, args.duration, args.focus_budget) as recording:
+            async with capture_session as recording:
+                collected = recording.collected
+                events = collected.events
                 recorder = recording.process
                 ready = recording.ready
                 manifest["startedAt"] = ready["startedAt"]
@@ -437,65 +482,53 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
                 while time.monotonic() < deadline:
                     if recorder.returncode not in (None, 0):
                         raise ReviewError("Continuous recording failed; see recorder.log")
-                    if logfile.is_file():
-                        if logfile.stat().st_size < offset:
-                            offset = 0
-                        with logfile.open("rb") as log:
-                            log.seek(offset)
-                            chunk = log.read()
-                            offset = log.tell()
-                        if chunk:
-                            with (output / "native.log").open("ab") as log_copy:
-                                log_copy.write(chunk)
-                            fresh = collected.feed(chunk)
-                            write_json(output / "events.json", events)
-                            for event in fresh:
-                                if event["type"] == "scene":
-                                    scene = checkpoint(event, ready["startedAt"], manifest["scenes"])
-                                    scene["id"] = event.get("id", event["name"])
-                                    if profile in {"golden", "regression"}:
-                                        row = next((row for row in applicable_cases() if row["id"] == scene["id"]), None)
-                                        if row is None:
-                                            raise ReviewError(f"Unknown native catalog case: {scene['id']}")
-                                        scene["durationS"] = float(event.get("durationS", row.get("holdS", 2.8)))
-                                        scene["screenshotAt"] = scene["at"] + float(event.get("screenshotOffsetS", 0.55 if scene["id"] in {"navigation_success", "navigation_cancelled"} else 0.8))
-                                    if event.get("captureBounds"):
-                                        write_json(recording_dir / "recording.viewport.json", {
-                                            "bounds": event["captureBounds"], "aspect": event.get("cameraAspect"),
-                                        })
-                                        scene["framing"] = {"bounds": event["captureBounds"], "cameraAspect": event.get("cameraAspect")}
-                                    if profile == "golden": scene["videoOnly"] = True
-                                    if scene["videoOnly"]:
-                                        image = output / f"{scene['name']}.png"
-                                        scene["screenshotSource"] = "continuous native application-window video"
-                                    else:
-                                        scene["screenshotSource"] = "native Preview render"
-                                        await asyncio.sleep(0.4)
-                                        image = await capture(mcp, output, case_filename(scene["id"]) if profile in {"golden", "regression"} else f"{len(manifest['scenes']) + 1:02}_{scene['name'].replace('-', '_')}")
-                                    scene["screenshot"] = str(image.relative_to(output))
-                                    manifest["scenes"].append(scene)
-                                    write_json(output / "review-scenes.json", manifest)
-                                    print(f"Captured {scene['name']} at {scene['at']:.2f}s", flush=True)
-                                elif event["type"] == "host" and event.get("action") == "update_framing":
-                                    write_json(recording_dir / "recording.viewport.json", {
-                                        "bounds": event["bounds"], "aspect": event["aspect"],
-                                    })
-                                elif event["type"] == "host" and event.get("action") == "resize_viewport":
-                                    if original_window is None:
-                                        original_window = resize_project_window(pid)
-                                    bounds = resize_project_window(pid, height=int(event["height"]), width=int(event["width"]))
-                                    await asyncio.sleep(0.5)
-                                    variant = str(event["variant"])
-                                    image = await capture(mcp, recording_dir, f"viewport_aspect_{variant}")
-                                    viewport_variants.append({"variant": variant, "window": bounds,
-                                                              "image": str(image.relative_to(output))})
-                                    write_json(output / "viewport-variants.json", viewport_variants)
+                    for event in recording.poll():
+                        if event["type"] == "scene":
+                            scene = checkpoint(event, ready["startedAt"], manifest["scenes"])
+                            scene["id"] = event.get("id", event["name"])
+                            if profile in {"golden", "regression"}:
+                                row = next((row for row in applicable_cases() if row["id"] == scene["id"]), None)
+                                if row is None:
+                                    raise ReviewError(f"Unknown native catalog case: {scene['id']}")
+                                scene["durationS"] = float(event.get("durationS", row.get("holdS", 2.8)))
+                                scene["screenshotAt"] = scene["at"] + float(event.get("screenshotOffsetS", 0.55 if scene["id"] in {"navigation_success", "navigation_cancelled"} else 0.8))
+                            if event.get("captureBounds"):
+                                write_json(recording_dir / "recording.viewport.json", {
+                                    "bounds": event["captureBounds"], "aspect": event.get("cameraAspect"),
+                                })
+                                scene["framing"] = {"bounds": event["captureBounds"], "cameraAspect": event.get("cameraAspect")}
+                            if profile == "golden": scene["videoOnly"] = True
+                            if scene["videoOnly"]:
+                                image = output / f"{scene['name']}.png"
+                                scene["screenshotSource"] = "continuous native application-window video"
+                            else:
+                                scene["screenshotSource"] = "native Preview render"
+                                await asyncio.sleep(0.4)
+                                image = await capture(mcp, output, case_filename(scene["id"]) if profile in {"golden", "regression"} else f"{len(manifest['scenes']) + 1:02}_{scene['name'].replace('-', '_')}")
+                            scene["screenshot"] = str(image.relative_to(output))
+                            manifest["scenes"].append(scene)
+                            write_json(output / "review-scenes.json", manifest)
+                            print(f"Captured {scene['name']} at {scene['at']:.2f}s", flush=True)
+                        elif event["type"] == "host" and event.get("action") == "update_framing":
+                            write_json(recording_dir / "recording.viewport.json", {
+                                "bounds": event["bounds"], "aspect": event["aspect"],
+                            })
+                        elif event["type"] == "host" and event.get("action") == "resize_viewport":
+                            if original_window is None:
+                                original_window = resize_project_window(pid)
+                            bounds = resize_project_window(pid, height=int(event["height"]), width=int(event["width"]))
+                            await asyncio.sleep(0.5)
+                            variant = str(event["variant"])
+                            image = await capture(mcp, recording_dir, f"viewport_aspect_{variant}")
+                            viewport_variants.append({"variant": variant, "window": bounds,
+                                                      "image": str(image.relative_to(output))})
+                            write_json(output / "viewport-variants.json", viewport_variants)
                     if collected.completion:
                         break
                     await asyncio.sleep(0.2)
                 await recording.finish(completed=collected.completion is not None)
     finally:
-        if original_window is not None and not args.focus_budget.with_suffix(".aborted").exists():
+        if original_window is not None and not context.focus_budget.with_suffix(".aborted").exists():
             resize_project_window(pid, bounds=original_window)
         write_json(output / "review-scenes.json", manifest)
         write_json(output / "events.json", events)
@@ -566,37 +599,31 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
 
 
 
-async def run_review(args: argparse.Namespace, output: Path, workspace: Path) -> dict[str, Any]:
+async def run_review(context: ReviewContext) -> dict[str, Any]:
     """Run uninterrupted golden footage separately from screenshot regressions."""
+    args, output, workspace = context.options, context.output, context.workspace
     if args.harness is not None:
-        args.profile = "probe"
-        return await run_pass(args, output, workspace)
+        return await run_pass(context)
     harnesses = SPECS_ROOT / "Tests/integration-tests"
     project = args.prepared_project or copy_project(args.source, workspace, harnesses / "IntegrationScenario.ts")
-    args.native_provenance = native_provenance.begin(args.source, workspace, SPECS_ROOT)
+    context.begin_provenance()
     suites = ["golden", "regression"] if args.suite == "all" else [args.suite]
     passes = []
     for profile in suites:
-        child = argparse.Namespace(**vars(args))
-        child.profile = profile
-        child.harness = harnesses / "IntegrationScenario.ts"
-        child.prepared_project = project
         directory = output / profile
         directory.mkdir()
-        result = await run_pass(child, directory, workspace)
+        child = context.for_pass(profile, harnesses / "IntegrationScenario.ts", project, directory)
+        result = await run_pass(child)
         result["checks"].append({"caseId": "setup_entry" if profile == "golden" else "setup_navigation",
                                  "name": "native_pass_integrity", "passed": result["passed"]})
         write_json(directory / "results.json", result)
         passes.append(result)
     if args.suite == "all":
         for name, harness in (("manipulation", "ManipulationProbe.ts"), ("overlap", "NavMarkerOverlapProbe.ts")):
-            child = argparse.Namespace(**vars(args))
-            child.profile = "probe"
-            child.harness = harnesses / harness
-            child.prepared_project = project
             directory = output / name
             directory.mkdir()
-            probe_result = await run_pass(child, directory, workspace)
+            child = context.for_pass("probe", harnesses / harness, project, directory)
+            probe_result = await run_pass(child)
             write_json(directory / "results.json", probe_result)
             passes.append(probe_result)
     command = ["node", str(REPO_ROOT / "tools/integration-tests/finalize.mjs"),
@@ -607,8 +634,9 @@ async def run_review(args: argparse.Namespace, output: Path, workspace: Path) ->
     write_json(output / "results.json", result)
     return result
 
-async def restore_source_project(args: argparse.Namespace, output: Path, workspace: Path) -> None:
+async def restore_source_project(context: ReviewContext) -> None:
     """Do not leave scripted fixtures in the editor after a review."""
+    args, output, workspace = context.options, context.output, context.workspace
     finder_metadata = args.source / "Cache/TypeScript/.DS_Store"
     if finder_metadata.is_file():
         backup = output / "diagnostics/cache-backup/TypeScript.DS_Store"
@@ -652,12 +680,12 @@ async def restore_source_project(args: argparse.Namespace, output: Path, workspa
         raise ReviewError("Lens Studio did not restore the source project after review")
 
 
-async def review_and_restore(args: argparse.Namespace, output: Path, workspace: Path) -> dict[str, Any]:
+async def review_and_restore(context: ReviewContext) -> dict[str, Any]:
+    args, output, workspace = context.options, context.output, context.workspace
     failure: BaseException | None = None
-    args.focus_budget = getattr(args, "focus_budget", None) or output / "focus-budget"
-    args.focus_budget.parent.mkdir(parents=True, exist_ok=True)
+    context.focus_budget.parent.mkdir(parents=True, exist_ok=True)
     try:
-        result = await run_review(args, output, workspace)
+        result = await run_review(context)
         if not args.keep_open:
             mark_source_pending(output, result)
         return result
@@ -667,8 +695,8 @@ async def review_and_restore(args: argparse.Namespace, output: Path, workspace: 
     finally:
         if getattr(args, "mcp_config", None):
             try:
-                if hasattr(args, "native_provenance"):
-                    native_provenance.before_scene_overlay(args.native_provenance)
+                if context.provenance is not None:
+                    native_provenance.before_scene_overlay(context.provenance)
                 async with LensMcp(args.mcp_config, output / "disable-harness") as mcp:
                     disabled = await mcp.editor(
                         'const p=pluginSystem.findInterface(Editor.Model.IModel).project;'
@@ -679,12 +707,12 @@ async def review_and_restore(args: argparse.Namespace, output: Path, workspace: 
                         'p.save();return {autoRun:false};'
                     )
                     write_json(output / "harness-disabled.json", disabled)
-                    if hasattr(args, "native_provenance"):
-                        native_provenance.record_scene_overlay(args.native_provenance)
+                    if context.provenance is not None:
+                        native_provenance.record_scene_overlay(context.provenance)
             except Exception as error:
                 write_json(output / "harness-disabled.json", {"disabled": False, "error": str(error)})
                 print(f"Could not verify harness disabled: {error}", file=sys.stderr)
-        if args.focus_budget.with_suffix(".aborted").exists():
+        if context.focus_budget.with_suffix(".aborted").exists():
             message = "Native test aborted after focus loss. Explicit user authorization is required before any retry or source restoration."
             print(message, file=sys.stderr, flush=True)
             write_json(output / "editor-restoration.json", {"restored": False, "requiresUserAuthorization": True, "error": message})
@@ -692,9 +720,11 @@ async def review_and_restore(args: argparse.Namespace, output: Path, workspace: 
             with contextlib.suppress(Exception):
                 async with LensMcp(args.mcp_config, output / "pause") as mcp:
                     await mcp.editor('const p:any=pluginSystem.findInterface(Editor.Dock.IDockManager).panels.find(p=>p.id.toString().includes("Snap.Plugin.Gui.PreviewPanel"));if(p)p.pause("focus-limit");return {paused:true};')
+            if failure is None:
+                raise ReviewError(message)
         elif not args.keep_open:
             try:
-                await restore_source_project(args, output, workspace)
+                await restore_source_project(context)
             except Exception as error:
                 write_json(output / "editor-restoration.json", {"restored": False, "error": str(error)})
                 if failure is None:
@@ -702,17 +732,16 @@ async def review_and_restore(args: argparse.Namespace, output: Path, workspace: 
 
 
 def mark_source_pending(output: Path, result: dict[str, Any]) -> None:
-    result.setdefault("scenarioPassed", result["passed"])
-    result["passed"] = False
-    result["sourceAuditState"] = "pending"
+    ReviewOutcome.from_result(result).apply(result)
     result["checks"] = [row for row in result.get("checks", []) if row.get("caseId") != "source_handoff"]
     result["checks"].append({"caseId": "source_handoff", "name": "source_editor_clean", "passed": False,
                               "state": "pending"})
     write_json(output / "results.json", result)
 
 
-async def verify_source_handoff(args: argparse.Namespace, output: Path, result: dict[str, Any]) -> dict[str, Any]:
+async def verify_source_handoff(context: ReviewContext, result: dict[str, Any]) -> dict[str, Any]:
     """Gate overall success on restored, compiled production Source."""
+    args, output = context.options, context.output
     from audit_source import audit
     mark_source_pending(output, result)
     try:
@@ -723,20 +752,19 @@ async def verify_source_handoff(args: argparse.Namespace, output: Path, result: 
         write_json(output / "diagnostics/source-audit/failure.json", {"error": str(error)})
     check = next(row for row in result["checks"] if row.get("caseId") == "source_handoff")
     check.update({"passed": passed, "state": "complete"})
-    result["sourceAuditState"] = "passed" if passed else "failed"
-    result["passed"] = result["scenarioPassed"] and passed
-    if hasattr(args, "native_provenance"):
-        provenance = args.native_provenance
+    matched: bool | None = None
+    if context.provenance is not None:
+        provenance = context.provenance
         matched = native_provenance.matches(provenance)
         result["nativeProvenance"] = provenance
         result["checks"].append({"caseId": "source_handoff", "name": "tested_source_matches",
                                  "passed": matched})
-        result["passed"] = result["passed"] and matched
         run_path = output / "run.json"
         if run_path.is_file():
             run = json.loads(run_path.read_text())
             run["nativeProvenance"] = provenance
             write_json(run_path, run)
+    ReviewOutcome(bool(result["scenarioPassed"]), passed, matched).apply(result)
     write_json(output / "results.json", result)
     return result
 
@@ -779,7 +807,7 @@ def prune_success_recordings(output: Path) -> None:
         write_json(path, manifest)
 
 
-def arguments() -> argparse.Namespace:
+def arguments() -> ReviewOptions:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, default=SPECS_ROOT)
     parser.add_argument("--harness", type=Path, help="Optional standalone regression harness")
@@ -808,21 +836,16 @@ def arguments() -> argparse.Namespace:
         args.prepared_project = args.prepared_project.expanduser().resolve()
         if args.prepare_only or not args.prepared_project.is_file():
             parser.error("--prepared-project must name an existing disposable .esproj")
-    return args
+    return ReviewOptions(**vars(args))
 
 
-def _run(args: argparse.Namespace) -> int:
+def _run(args: ReviewOptions) -> int:
     run_id = "SpecsReview-" + time.strftime("%Y%m%d-%H%M%S") + f"-{os.getpid()}"
     workspace = args.prepared_project.parent if args.prepared_project else args.work_root / run_id
     output = args.output_root / run_id
     output.mkdir(parents=True)
-    identity_script = (
-        f"import {{ sourceIdentity }} from {json.dumps((REPO_ROOT / 'tools/integration-tests/artifacts.mjs').as_uri())};"
-        "console.log(JSON.stringify(sourceIdentity(process.argv[1])));"
-    )
-    identity = json.loads(subprocess.check_output(
-        ["node", "--input-type=module", "-e", identity_script, str(REPO_ROOT)], text=True,
-    ))
+    context = ReviewContext.create(args, output, workspace)
+    identity = native_provenance.source_identity()
     write_json(output / "run.json", {"client": "specs", "source": identity,
                                     "startedAt": time.time()})
     try:
@@ -840,9 +863,9 @@ def _run(args: argparse.Namespace) -> int:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as error:
                 raise ReviewError("Another native review owns this MCP connection") from error
-            result = asyncio.run(review_and_restore(args, output, workspace))
+            result = asyncio.run(review_and_restore(context))
             if not args.keep_open:
-                result = asyncio.run(verify_source_handoff(args, output, result))
+                result = asyncio.run(verify_source_handoff(context, result))
         if args.harness is not None and args.extra_media: make_video(output)
         if result["passed"] and args.harness is None and args.suite in {"all", "golden"} and not args.keep_open:
             subprocess.run(["node", str(REPO_ROOT / "tools/integration-tests/finalize.mjs"),
@@ -872,8 +895,8 @@ def _run(args: argparse.Namespace) -> int:
             "completed": False, "workspace": str(workspace), "checks": [],
         }
         results.update(passed=False, error=message)
-        if hasattr(args, "native_provenance"):
-            results["nativeProvenance"] = args.native_provenance
+        if context.provenance is not None:
+            results["nativeProvenance"] = context.provenance
         write_json(results_path, results)
         print(f"Review failed: {message}\nArtifacts: {output}", file=sys.stderr)
         return 130 if interrupted else 1

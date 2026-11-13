@@ -1,32 +1,34 @@
-import { odomToClientTrackingPose, rotateVecByQuat, type ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
-import { getRobotActivityState, robotTitleText, type RobotMarkerApplyInput } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotPresentation";
+import type { ReadonlyFacts } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
+import { type ClientTrackingOrigin as MutableClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import { getRobotActivityState, robotTitleText, projectRobotPose, robotFloorOffset, type RobotMarkerApplyInput } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotPresentation";
 import type { ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/ARModuleSession";
 import type { Quat, RobotDescription, Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 import { sessionLinkStatus } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
+import { robotDeadzoneRadiusM } from "DimOSARClient.lspkg/Scripts/DimOSARClient/navigation/NavigationInteraction";
 import { RuntimePoseSmoothing } from "../utilities/RuntimePoseSmoothing";
 
 import { clientTrackingToSpecsPoint, clientTrackingToSpecsPose, yawRotationFromPlanarDirection } from "../utilities/SpecsCoordinates";
 
-import type { UIPresentationState } from "./UIPresentationState";
 import { RobotWorldRenderer } from "./RobotWorldRenderer";
 import { findChildRecursive } from "./UIKit";
+
+type ClientTrackingOrigin = ReadonlyFacts<MutableClientTrackingOrigin>;
 type RobotActivityVoice = { asrRunning: boolean; ttsPlaying: boolean };
 
 export interface RobotMarkerApplyContext {
   mainUi: SceneObject;
   fallbackUniformScale?: number;
-  appState: UIPresentationState;
+  debugEnabled: boolean;
 }
 
 const GO2_BASE_HEIGHT_M = 0.33;
 
-export function robotFloorOffsetCm(robot: RobotDescription): Vec3 {
+export function robotFloorOffsetCm(robot: ReadonlyFacts<RobotDescription>): Vec3 {
   return clientTrackingToSpecsPoint([0, 0, -robot.base_height_m]);
 }
 
-export function robotDeadzoneRadiusCm(robot: RobotDescription): number {
-  const maxDimensionCm = Math.max(...robot.footprint_m) * 100;
-  return Math.max(20, maxDimensionCm * 0.5 + 20);
+export function robotDeadzoneRadiusCm(robot: ReadonlyFacts<RobotDescription>): number {
+  return robotDeadzoneRadiusM(robot.footprint_m) * 100;
 }
 
 export function robotBelowMainUiLocalOffset(): vec3 {
@@ -75,7 +77,7 @@ export class RobotPresenter extends BaseScriptComponent {
   private readonly poseSmoothing = new RuntimePoseSmoothing();
   private origin: ClientTrackingOrigin | null = null;
   private placedOrigin: ClientTrackingOrigin | null = null;
-  private robot: RobotDescription | null = null;
+  private robot: ReadonlyFacts<RobotDescription> | null = null;
   private presented = false;
   private referenceFloorHeight: number | null = null;
   setFloorHeight(height: number | null): void { this.referenceFloorHeight = height; }
@@ -136,14 +138,14 @@ export class RobotPresenter extends BaseScriptComponent {
   }
 
   refreshLabels(
-    appState: UIPresentationState,
+    debugEnabled: boolean,
     view: ARModuleSessionState,
     voice: RobotActivityVoice & { status?: string },
   ): void {
     const title = robotTitleText(view);
     const state = getRobotActivityState(view, voice);
-    this.worldVisuals?.labels(title, state, appState.debugModeEnabled ? view.pose?.position.map(v => v.toFixed(2)).join(", ") ?? "" : "", sessionLinkStatus(view).color);
-    this.applyDebugViewVisibility(appState);
+    this.worldVisuals?.labels(title, state, debugEnabled ? view.pose?.position.map(v => v.toFixed(2)).join(", ") ?? "" : "", sessionLinkStatus(view).color);
+    this.applyDebugViewVisibility(debugEnabled);
   }
 
   tick(dt: number): void {
@@ -215,12 +217,8 @@ export class RobotPresenter extends BaseScriptComponent {
       return null;
     }
     const baseHeightM = this.robot?.base_height_m ?? GO2_BASE_HEIGHT_M;
-    const offset = rotateVecByQuat(
-      fromQuat(rotation),
-      clientTrackingToSpecsPoint([0, 0, -baseHeightM]),
-    );
-    // Generic Specs poses retain Lens -Z as robot forward. Ground markers use
-    // a local +X arrow, so give placement the corresponding marker heading.
+    const offset = robotFloorOffset(fromQuat(rotation), baseHeightM, "y").map(value => value * 100);
+    // Ground marker arrows use local +X, while native robot forward is local -Z.
     const forward = rotation.multiplyVec3(new vec3(0, 0, -1));
     return {
       position: new vec3(position.x + offset[0], position.y + offset[1], position.z + offset[2]),
@@ -293,7 +291,7 @@ export class RobotPresenter extends BaseScriptComponent {
     this.presented = true;
     this.getSceneObject().enabled = true;
     this.motionRoot.enabled = true;
-    this.applyDebugViewVisibility(this.pendingUnlocalizedCtx.appState);
+    this.applyDebugViewVisibility(this.pendingUnlocalizedCtx.debugEnabled);
   }
 
   private cancelUnlocalizedAnchor(): void {
@@ -314,7 +312,7 @@ export class RobotPresenter extends BaseScriptComponent {
       this.clearUnlocalizedAnchor();
     }
     const specs = clientTrackingToSpecsPose(
-      odomToClientTrackingPose(input.pose, input.origin),
+      projectRobotPose(input),
     );
     const position = toVec3(specs.position);
     const rotation = toQuat(specs.orientation);
@@ -330,7 +328,7 @@ export class RobotPresenter extends BaseScriptComponent {
     this.presented = true;
     this.getSceneObject().enabled = true;
     this.motionRoot.enabled = true;
-    this.applyDebugViewVisibility(ctx.appState);
+    this.applyDebugViewVisibility(ctx.debugEnabled);
   }
 
   private clearUnlocalizedAnchor(): void {
@@ -357,11 +355,11 @@ export class RobotPresenter extends BaseScriptComponent {
     }
   }
 
-  private applyDebugViewVisibility(appState: UIPresentationState | null): void {
+  private applyDebugViewVisibility(debugEnabled: boolean | null): void {
     if (!this.debugViewRoot) {
       return;
     }
-    this.debugViewRoot.enabled = this.presented && (appState?.debugModeEnabled ?? false);
+    this.debugViewRoot.enabled = this.presented && (debugEnabled ?? false);
   }
 
 

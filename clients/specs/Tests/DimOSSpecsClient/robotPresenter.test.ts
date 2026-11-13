@@ -7,7 +7,6 @@ import {
 import { clientTrackingToSpecsPoint } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
 import type { RobotDescription, Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 
-import { UIPresentationState } from "../../Assets/Scripts/DimOSSpecsClient/presentation/UIPresentationState";
 import type { ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/ARModuleSession";
 
 const GO2: RobotDescription = {
@@ -60,7 +59,7 @@ describe("robotFloorOffsetCm", () => {
 
 describe("robotDeadzoneRadiusCm", () => {
   it("uses half the max footprint plus 20 cm, floored at 20", () => {
-    expect(robotDeadzoneRadiusCm(GO2)).toBe(55);
+    expect(robotDeadzoneRadiusCm(GO2)).toBeCloseTo(55, 10);
     expect(
       robotDeadzoneRadiusCm({
         ...GO2,
@@ -105,9 +104,9 @@ describe("activity survives pose presentation", () => {
       connection: "ready", hello: { robot: GO2 },
       nav: null, state: { agent: { idle } },
     } as unknown as ARModuleSessionState;
-    const appState = new UIPresentationState();
-    const ctx = { mainUi: motionRoot as unknown as SceneObject, appState };
-    presenter.refreshLabels(appState, view, { asrRunning, ttsPlaying });
+    const debugEnabled = false;
+    const ctx = { mainUi: motionRoot as unknown as SceneObject, debugEnabled };
+    presenter.refreshLabels(debugEnabled, view, { asrRunning, ttsPlaying });
     for (let i = 0; i < 3; i++) {
       presenter.apply({
         mode: "localizedOdom", robot: GO2, view,

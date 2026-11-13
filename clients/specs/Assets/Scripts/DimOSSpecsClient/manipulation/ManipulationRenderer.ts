@@ -1,20 +1,21 @@
-import type { ManipulationPose, ManipulationState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationTypes";
-import { ARM_VISUAL_STYLE, armTransformDifference, EndEffectorStatus, END_EFFECTOR_STATUS_STYLE, type EndEffectorStatusInput, endEffectorAction, manipulationActivePlan, manipulationButtonEnabled, manipulationMenuRows, manipulationPathOpacity, ArmMeshFade, ArmOpacityCadence, ARM_VISUAL_STYLE as STYLE, armLinkPresentation, armLinkWeight, armShapeEdges, endEffectorAngles, endEffectorDisplayPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationPresentation";
+import type { ReadonlyFacts } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
+import type { ManipulationPose as MutableManipulationPose, ManipulationState as MutableManipulationState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationTypes";
+import { ARM_VISUAL_STYLE, armTransformDifference, EndEffectorStatus, END_EFFECTOR_STATUS_STYLE, type EndEffectorStatusInput, endEffectorAction, manipulationButtonEnabled, manipulationMenuRows, ArmMeshFade, ArmOpacityCadence, ARM_VISUAL_STYLE as STYLE, armLinkPresentation, armLinkWeight, armShapeEdges, endEffectorAngles } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationPresentation";
 import { clientTrackingToSpecsPose, clientTrackingToSpecsPoint } from "../utilities/SpecsCoordinates";
 import { AdaptiveStrokeRenderer, WorldMeshRenderer, sphereMesh } from "../presentation/WorldMeshRenderer";
 
 import { ViewerNotificationPresenter } from "../presentation/ViewerNotificationPresenter";
 import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable";
-import { type ClientTrackingOrigin, odomToClientTrackingPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import { type ClientTrackingOrigin as MutableClientTrackingOrigin, odomToClientTrackingPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 
-import { ArmPresentationSampler, ArmTrajectoryProgress } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ArmPresentation";
+import { ManipulationFramePresenter } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ArmPresentation";
 
 import type { ManipulationController } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationController";
 import type { ManipulationInputCapture } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationInput";
 
 
 
-import { composePose, linkPoses, manipulationPlanPath } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ModelKinematics";
+import { composePose, linkPoses } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ModelKinematics";
 import { ARM_PANEL_STYLE, PanelHeightAnimation } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
 
 import { ROBOT_LABEL_STYLE, WORLD_DASH_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldPresentation";
@@ -25,6 +26,10 @@ import { MarkerCorrectionRenderer } from "../presentation/MarkerCorrectionRender
 
 import { ManipulationControlsView } from "./ManipulationControlsView";
 import { OPENYAM_MESH } from "./OpenYAMMesh";
+
+type ManipulationState = ReadonlyFacts<MutableManipulationState>;
+type ManipulationPose = ReadonlyFacts<MutableManipulationPose>;
+type ClientTrackingOrigin = ReadonlyFacts<MutableClientTrackingOrigin>;
 
 export const ARM_MATERIAL = requireAsset("../../../Materials/ArmFresnel.mat") as Material;
 
@@ -206,14 +211,10 @@ export class ManipulationRenderer {
   private readonly hoverSources = new Set<string>();
   private readonly handleHover = new Set<string>();
   private readonly actionHover = new Set<string>();
-  private readonly sampler = new ArmPresentationSampler();
-  private readonly progress = new ArmTrajectoryProgress();
+  private readonly framePresenter: ManipulationFramePresenter;
   private readonly menuHeight = new PanelHeightAnimation();
   private menuRows = "";
   private modelRevision = "";
-  private pathKey = "";
-  private pathPoints: Vec3[] = [];
-  private pathDistances: number[] = [];
   private uploadedPath = "";
   private lastTime = 0;
   private hoverUntil = 0;
@@ -227,6 +228,7 @@ export class ManipulationRenderer {
 
   constructor(parent: SceneObject, private readonly core: ManipulationController,
     private readonly capture: ManipulationInputCapture, recalibrate: () => void = () => {}) {
+    this.framePresenter = new ManipulationFramePresenter(core.presentation);
     this.object = this.node(parent, "Manipulation");
     this.handle = this.node(this.object, "EndEffectorHandle");
     const geometry = sphereMesh(0.9, 20, 16);
@@ -285,11 +287,18 @@ export class ManipulationRenderer {
   ownsMesh(object: SceneObject): boolean { return object === this.base || [...this.picks.values()].includes(object); }
   ownsHandle(object: SceneObject): boolean { return object === this.handle; }
 
-  apply(state: ManipulationState | null | undefined, origin: ClientTrackingOrigin | null,
-    selected: boolean, enabled: boolean, now: number, camera: SceneObject, title: string): void {
+  apply(input: {
+    state: ManipulationState | null | undefined;
+    origin: ClientTrackingOrigin | null;
+    selected: boolean;
+    enabled: boolean;
+    now: number;
+    camera: SceneObject;
+    title: string;
+  }): void {
+    const { state, origin, selected, enabled, now, camera, title } = input;
     if(this.core.interaction.retainingFeedback && origin) {
-      this.core.presentation.hold(now);
-      this.sampler.hold(now);
+      this.framePresenter.hold(now);
       this.controlsEnabled = false;
       for (const [key, button] of this.controls.buttons) button.button.inactive = key !== "estop" && key !== "stop";
       this.controls.gripper.button.inactive = true; this.controls.speed.enabled = false;
@@ -303,6 +312,7 @@ export class ManipulationRenderer {
     this.object.enabled = !!origin && enabled;
     if (!this.object.enabled || !state?.available || !state.model || !origin) {
       this.object.enabled = !!origin && enabled && this.modelRevision !== "";
+      this.framePresenter.reset();
       this.meshFade.reset(); this.measured.object.enabled = false;
       this.handle.enabled = false; this.controls.previewMenu.enabled = false; this.controls.gripper.sceneObject.enabled = false;
       this.correction.reset();
@@ -317,31 +327,29 @@ export class ManipulationRenderer {
       this.controls.speed.enabled = false;
       return;
     }
-    const model = state.model, interaction = this.core.interaction, intent = interaction.snapshot();
-    const group = state.groups?.find(g => g.id === interaction.groupId), observed = state.observations?.[interaction.groupId ?? ""];
-    const dt = this.lastTime ? Math.max(0, Math.min(0.1, now - this.lastTime)) : 1 / 60; this.lastTime = now;
-    const root: ManipulationPose = state.root_pose ?? { position: [0, 0, 0], orientation: [0, 0, 0, 1] };
-    const plan = manipulationActivePlan(state, interaction.plan, intent.executing);
-    if (intent.dragging || state.stopped) this.core.presentation.reset();
-    const playback = this.core.presentation.sample(plan, now);
-    const sampled = this.sampler.sample({ model, state, group, origin, now, selected,
-      dragging: intent.dragging, rejected: !!interaction.rejection, solution: interaction.previewJoints,
-      opening: selected ? interaction.desiredGripper : observed?.gripper, plan, playback });
-    if (sampled.contextChanged) this.progress.reset();
-    const { observedValues, proposed: poses, measured: measuredPoses } = sampled;
-    const displaced = !!interaction.target && intent.targetOffset;
-    const markerAction = endEffectorAction(intent, selected ? interaction.desiredGripper ?? observed?.gripper_target ?? observed?.gripper : observed?.gripper, group?.has_gripper === true);
-    const displayedPose = endEffectorDisplayPose(observed?.pose, interaction.target, {
-      selected, following: state.following === true, dragging: intent.dragging === true,
-      finishing: intent.finishing === true, offset: intent.targetOffset, sharedDraft: intent.sharedDraft,
+    const model = state.model;
+    const interaction = this.core.interaction;
+    const intent = interaction.snapshot();
+    const dt = this.lastTime ? Math.max(0, Math.min(0.1, now - this.lastTime)) : 1 / 60;
+    this.lastTime = now;
+    const frame = this.framePresenter.sample({
+      model, state, groupId: interaction.groupId, origin, now, selected, intent,
+      target: interaction.target, solution: interaction.previewJoints, plan: interaction.plan,
+      desiredGripper: interaction.desiredGripper,
+      rejection: interaction.rejection,
     });
+    const { group, observed, root, observedValues, measured: measuredPoses,
+      proposed: poses, displaced, playback, endEffectorPose: displayedPose } = frame;
+    const markerAction = endEffectorAction(intent,
+      selected ? interaction.desiredGripper ?? observed?.gripper_target ?? observed?.gripper : observed?.gripper,
+      group?.has_gripper === true);
     if (this.modelRevision !== model.revision) {
       for (const unsubscribe of this.modelSubscriptions) unsubscribe(); this.modelSubscriptions.length = 0;
       for (const mesh of this.meshes.values()) mesh.destroy(); this.meshes.clear();
       for (const { stroke } of this.edges.values()) stroke.destroy(); this.edges.clear();
       for (const pick of this.picks.values()) pick.destroy(); this.picks.clear(); this.hoverSources.clear();
       this.pointOpacity.clear(); this.placements.clear();
-      this.modelRevision = model.revision; this.pathKey = "";
+      this.modelRevision = model.revision;
       for (const link of model.links) {
         const data = OPENYAM_MESH.links[link.name];
         if (!data || model.visual_signature !== OPENYAM_MESH.signature) continue;
@@ -498,32 +506,18 @@ export class ManipulationRenderer {
     const emergency = this.controls.buttons.get("estop")!;
     emergency.labelText.text = state.stopped ? "Resume operation" : "E-stop";
     setButtonStyle(emergency.button, state.stopped ? SnapOS2Styles.Primary : SnapOS2Styles.Special);
-    this.warning.apply({ blocked: intent.blocked === true, fresh: intent.fresh, stopped: intent.stopped,
-      moving: intent.executing || intent.resetting, rejection: interaction.rejection }, this.handle, camera, now);
-    const time = plan && intent.executing && observed?.joints ? this.progress.advance(plan, observed.joints,
-      new Set(model.joints.filter(j => j.kind === "continuous").map(j => j.name)), state.operation_id ?? plan.plan_id) : 0;
-    if (!intent.executing) this.progress.reset();
-    const points: Vec3[] = [];
-    if (plan && group?.tip_frame) {
-      const key = JSON.stringify([plan.plan_id, model.revision, origin, root]);
-      if (key !== this.pathKey) {
-        this.pathKey = key;
-        this.pathPoints = manipulationPlanPath(model, plan, group.tip_frame, observedValues, root).map(position => world({ position, orientation: [0, 0, 0, 1] }).position);
-        this.pathDistances = [0];
-        for (let i = 1; i < this.pathPoints.length; i++) this.pathDistances.push(this.pathDistances[i - 1] + Math.hypot(...this.pathPoints[i].map((v, axis) => v - this.pathPoints[i - 1][axis])));
-      }
-      if (displaced || playback.playing || intent.executing) points.push(...this.pathPoints);
-    } else if (displaced && interaction.target && observed?.pose) points.push(world(observed.pose).position, world(interaction.target).position);
-    const geometryKey = plan ? this.pathKey : JSON.stringify(points);
+    this.warning.apply(frame.status, this.handle, camera, now);
+    const points = frame.path.visible ? frame.path.points.map(position => world({
+      position, orientation: [0, 0, 0, 1],
+    }).position) : [];
+    const geometryKey = JSON.stringify([frame.path.revision, origin, frame.path.visible]);
     if (geometryKey !== this.uploadedPath) {
       this.uploadedPath = geometryKey;
-      this.path.segments(points.slice(0, -1).flatMap((p, i) => [p, points[i + 1]]), WORLD_DASH_STYLE.widthM * 65, 1, 1.2, 1, true);
+      this.path.segments(points.slice(0, -1).flatMap((point, i) => [point, points[i + 1]]),
+        WORLD_DASH_STYLE.widthM * 65, 1, 1.2, 1, true);
     }
     this.path.object.enabled = points.length >= 2;
-    const cursor = plan ? Math.min(this.pathDistances.length - 1, time / Math.max(1e-6, plan.duration) * (this.pathDistances.length - 1)) : 0;
-    const lower = Math.max(0, Math.floor(cursor)), upper = Math.min(this.pathDistances.length - 1, lower + 1);
-    const startDistance = plan && this.pathDistances.length ? this.pathDistances[lower] + (this.pathDistances[upper] - this.pathDistances[lower]) * (cursor - lower) : 0;
-    this.path.style(WORLD_DASH_STYLE.widthM * 65, manipulationPathOpacity(intent, !selected && state.following === true && !interaction.rejection, !!plan), [1,1,1], startDistance);
+    this.path.style(WORLD_DASH_STYLE.widthM * 65, frame.pathOpacity, [1, 1, 1], frame.path.startDistanceM * 100);
   }
   private place(object: SceneObject, pose: ManipulationPose, origin: ClientTrackingOrigin): void {
     const p = clientTrackingToSpecsPose(odomToClientTrackingPose(pose, origin));

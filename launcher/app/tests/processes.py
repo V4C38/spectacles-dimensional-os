@@ -30,19 +30,19 @@ class Child:
 async def parsed(mgr: ProcessManager, child: Child, line: str) -> None:
     """Wait until the real stream reader has parsed this line."""
     handled = asyncio.Event()
-    original = mgr._parse_armodule_line
+    original = mgr.runtime._parse_armodule_line
 
     def parse(value: str) -> None:
         original(value)
         if value == line:
             handled.set()
 
-    mgr._parse_armodule_line = parse  # type: ignore[method-assign]
+    mgr.runtime._parse_armodule_line = parse  # type: ignore[method-assign]
     try:
         child.output(line)
         await asyncio.wait_for(handled.wait(), timeout=1)
     finally:
-        mgr._parse_armodule_line = original  # type: ignore[method-assign]
+        mgr.runtime._parse_armodule_line = original  # type: ignore[method-assign]
 
 
 async def error_status(mgr: ProcessManager) -> None:

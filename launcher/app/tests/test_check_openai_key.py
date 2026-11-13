@@ -23,7 +23,7 @@ async def test_run_check_does_not_set_openai_warning(tmp_path: Path) -> None:
         await on_line("OPENAI_API_KEY = false")
         return 0
 
-    with patch.object(mgr, "_run_tracked", new=fake_run):
+    with patch.object(mgr.dependencies, "_run_tracked", new=fake_run):
         snap = await mgr.run_check()
 
     assert snap["check_ok"] is True

@@ -1,10 +1,13 @@
+import type { ReadonlyFacts } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 import type { RoundedRectangle } from "SpectaclesUIKit.lspkg/Scripts/Visuals/RoundedRectangle/RoundedRectangle";
 import { composePlaceArMarker, type PlaceArMarkerArgs } from "DimOSARClient.lspkg/Scripts/DimOSARClient/agent/MarkerSkills";
-import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import type { ClientTrackingOrigin as MutableClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 import type { Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 import { clientTrackingToSpecsPoint } from "../utilities/SpecsCoordinates";
 import { COLOR_WHITE,createRoundedSurface,createText } from "./UIKit";
 import { WorldMeshRenderer,sphereMesh } from "./WorldMeshRenderer";
+
+type ClientTrackingOrigin = ReadonlyFacts<MutableClientTrackingOrigin>;
 
 export interface ARMarkerPresenterDeps {
   parent: SceneObject;

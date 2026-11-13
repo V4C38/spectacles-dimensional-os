@@ -21,27 +21,27 @@ from armodule import (
 
 def test_parse_armodule_ready_and_ips(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
-    mgr._parse_armodule_line("ARModule ready — ws://0.0.0.0:8787")
+    mgr.runtime._parse_armodule_line("ARModule ready — ws://0.0.0.0:8787")
     assert mgr.status.websocket_url == "ws://0.0.0.0:8787"
     assert mgr.status.phase == Phase.RUNNING
 
-    mgr._parse_armodule_line("Host IP:      192.168.1.42")
+    mgr.runtime._parse_armodule_line("Host IP:      192.168.1.42")
     assert mgr.status.host_ip == "192.168.1.42"
 
-    mgr._parse_armodule_line("Robot IP:     192.168.12.1")
+    mgr.runtime._parse_armodule_line("Robot IP:     192.168.12.1")
     assert mgr.status.robot_ip == "192.168.12.1"
 
 
 def test_parse_websocket_banner_before_ready(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
-    mgr.status.phase = Phase.STARTING
-    mgr._parse_armodule_line(
+    mgr.runtime.update_status(phase=Phase.STARTING)
+    mgr.runtime._parse_armodule_line(
         "WebSocket:    ws://0.0.0.0:8787 (not listening yet — booting DimOS stack…)"
     )
     assert mgr.status.websocket_url == "ws://0.0.0.0:8787"
     assert mgr.status.phase == Phase.STARTING
 
-    mgr._parse_armodule_line(
+    mgr.runtime._parse_armodule_line(
         "16:33:23.496[inf][s-ar/dimos/ar/module.py] ARModule started websocket=ws://0.0.0.0:8787"
     )
     assert mgr.status.websocket_url == "ws://0.0.0.0:8787"
@@ -50,13 +50,13 @@ def test_parse_websocket_banner_before_ready(tmp_path: Path) -> None:
 
 def test_parse_armodule_ready_ascii_dash(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
-    mgr._parse_armodule_line("ARModule ready - ws://127.0.0.1:8787")
+    mgr.runtime._parse_armodule_line("ARModule ready - ws://127.0.0.1:8787")
     assert mgr.status.websocket_url == "ws://127.0.0.1:8787"
 
 
 def test_start_sh_openai_log_does_not_set_status_warning(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
-    mgr._parse_armodule_line(
+    mgr.runtime._parse_armodule_line(
         "Warning: OPENAI_API_KEY is unset — agent mode will not work until it is set."
     )
     assert mgr.status.warning is None
@@ -64,19 +64,19 @@ def test_start_sh_openai_log_does_not_set_status_warning(tmp_path: Path) -> None
 
 def test_parse_strips_ansi_and_simulated_robot_ip(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
-    mgr._parse_armodule_line("\033[32mHost IP:      10.23.159.29\033[0m")
+    mgr.runtime._parse_armodule_line("\033[32mHost IP:      10.23.159.29\033[0m")
     assert mgr.status.host_ip == "10.23.159.29"
 
-    mgr._parse_armodule_line("Robot IP:     simulated")
+    mgr.runtime._parse_armodule_line("Robot IP:     simulated")
     assert mgr.status.robot_ip == "simulated"
 
 
 def test_parse_pin_after_ready(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
-    mgr._parse_armodule_line("ARModule ready — ws://0.0.0.0:8787")
-    mgr._parse_armodule_line("Host IP:      192.168.1.42")
-    mgr._parse_armodule_line("Robot IP:     192.168.12.1")
-    mgr._parse_armodule_line("\033[32mPIN: 123456\033[0m")
+    mgr.runtime._parse_armodule_line("ARModule ready — ws://0.0.0.0:8787")
+    mgr.runtime._parse_armodule_line("Host IP:      192.168.1.42")
+    mgr.runtime._parse_armodule_line("Robot IP:     192.168.12.1")
+    mgr.runtime._parse_armodule_line("\033[32mPIN: 123456\033[0m")
     assert mgr.status.phase == Phase.RUNNING
     assert mgr.status.pin == "123456"
     assert mgr.snapshot()["pin"] == "123456"
@@ -84,12 +84,12 @@ def test_parse_pin_after_ready(tmp_path: Path) -> None:
 
 def test_snapshot_includes_host_ip_not_spectacles(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
-    mgr.status.check_ok = True
-    mgr.status.host_ip = "192.168.1.9"
-    mgr.status.blueprint = "unitree_go2_ar"
-    mgr.status.client = "webxr"
-    mgr.status.webxr_local_url = f"https://localhost:{WEBXR_PORT}"
-    mgr.status.webxr_url = f"https://192.168.1.9:{WEBXR_PORT}"
+    mgr.dependencies.update_status(check_ok=True)
+    mgr.observe_host_ip("192.168.1.9")
+    mgr.runtime.update_status(blueprint="unitree_go2_ar")
+    mgr.runtime.update_status(client="webxr")
+    mgr.runtime.update_status(webxr_local_url=f"https://localhost:{WEBXR_PORT}")
+    mgr.runtime.update_status(webxr_url=f"https://192.168.1.9:{WEBXR_PORT}")
     snap = mgr.snapshot()
     assert snap["check_ok"] is True
     assert snap["host_ip"] == "192.168.1.9"
@@ -138,41 +138,41 @@ def test_detect_lan_ip(address, monkeypatch) -> None:
 
 def test_webxr_snapshot_shows_shared_pin(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
-    mgr.status.client = "webxr"
-    mgr.status.webxr_url = "https://192.168.1.9:5173"
-    mgr._parse_armodule_line("PIN: 123456")
+    mgr.runtime.update_status(client="webxr")
+    mgr.runtime.update_status(webxr_url="https://192.168.1.9:5173")
+    mgr.runtime._parse_armodule_line("PIN: 123456")
     assert mgr.snapshot()["pin"] == "123456"
     assert mgr.snapshot()["webxr_url"] == "https://192.168.1.9:5173"
 
 
 def test_unknown_shell_ip_does_not_erase_detected_address(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
-    mgr.status.host_ip = "192.168.1.42"
-    mgr._parse_armodule_line("Host IP:      unknown")
+    mgr.observe_host_ip("192.168.1.42")
+    mgr.runtime._parse_armodule_line("Host IP:      unknown")
     assert mgr.status.host_ip == "192.168.1.42"
 
 
 @pytest.mark.parametrize("ansi", [False, True])
 def test_vite_urls_recover_unknown_address(tmp_path: Path, ansi: bool) -> None:
     mgr = ProcessManager(root=tmp_path)
-    mgr.status.host_ip = "unknown"
-    mgr._parse_webxr_line("  ➜  Local:   https://localhost:5173/")
+    mgr.observe_host_ip("unknown")
+    mgr.runtime._parse_webxr_line("  ➜  Local:   https://localhost:5173/")
     line = "  ➜  Network: https://192.168.1.181:5173/"
     if ansi:
         line = "\x1b[32m" + line + "\x1b[0m"
-    mgr._parse_webxr_line(line)
+    mgr.runtime._parse_webxr_line(line)
     assert mgr.status.webxr_url == "https://192.168.1.181:5173/"
     assert mgr.status.webxr_local_url == "https://localhost:5173/"
     assert mgr.status.host_ip == "192.168.1.181"
-    mgr._parse_webxr_line("  ➜  Network: https://172.17.0.1:5173/")
+    mgr.runtime._parse_webxr_line("  ➜  Network: https://172.17.0.1:5173/")
     assert mgr.status.webxr_url == "https://192.168.1.181:5173/"
 
 
 def test_vite_urls_prefer_default_route_interface(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
-    mgr.status.host_ip = "192.168.1.42"
-    mgr.status.webxr_url = "https://192.168.1.42:5173"
-    mgr._parse_webxr_line("  ➜  Network: https://172.17.0.1:5173/")
+    mgr.observe_host_ip("192.168.1.42")
+    mgr.runtime.update_status(webxr_url="https://192.168.1.42:5173")
+    mgr.runtime._parse_webxr_line("  ➜  Network: https://172.17.0.1:5173/")
     assert mgr.status.webxr_url == "https://192.168.1.42:5173"
-    mgr._parse_webxr_line("  ➜  Network: https://192.168.1.42:5173/")
+    mgr.runtime._parse_webxr_line("  ➜  Network: https://192.168.1.42:5173/")
     assert mgr.status.webxr_url == "https://192.168.1.42:5173/"

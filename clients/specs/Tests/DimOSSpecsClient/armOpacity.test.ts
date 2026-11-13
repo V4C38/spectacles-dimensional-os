@@ -71,7 +71,7 @@ it("samples displacement on request, smoothly fades and stops writing settled un
 vi.mock("SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider", () => ({ Slider: class {} }));
 vi.mock("../mocks/UIKit.ts", () => ({ setButtonStyle: vi.fn(), SnapOS2Styles: {} }));
 
-import { ArmPresentationSampler, ArmTrajectoryProgress } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ArmPresentation";
+import { ManipulationFramePresenter } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ArmPresentation";
 
 
 import { PanelHeightAnimation } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
@@ -92,20 +92,21 @@ it("keeps all initialized link buffers static during reveal, motion, warnings an
   const links = ARM_FIXTURE.model.links.map(link => link.name);
   const meshes = new Map(links.map(name => [name, visual()]));
   const edges = new Map(links.map(name => [name, { stroke: visual() }]));
+  const presentation = new ManipulationPreviewPlayback();
   const renderer = Object.assign(Object.create(ManipulationRenderer.prototype), {
-    core: { interaction, presentation: new ManipulationPreviewPlayback() }, object: node(),
+    core: { interaction, presentation }, object: node(),
     meshes, edges, picks: new Map(), placements: new Map(),
     pointOpacity: new Map(links.map(name => [name, new ArmOpacityUniforms()])),
     hoverSources: new Set(), handleHover: new Set(), actionHover: new Set(),
     modelRevision: ARM_FIXTURE.model.revision, context: "", debugNodes: new Map(),
-    sampler: new ArmPresentationSampler(),
+    framePresenter: new ManipulationFramePresenter(presentation),
     meshFade: new ArmMeshFade(), fillFade: new ArmMeshFade(), opacityCadence: new ArmOpacityCadence(),
-    progress: new ArmTrajectoryProgress(), menuHeight: new PanelHeightAnimation(),
+    menuHeight: new PanelHeightAnimation(),
     controls: { panelPresenter: { update: vi.fn() }, gripper: button(), previewMenu: node(), rescan: button(),
       panelTitle: {}, speedLabel: {}, speed: { currentValue: 0, getSceneObject: node },
       buttons: new Map(["reset", "stop", "estop"].map(key => [key, button()])), scanIcon: null },
     handle: node(), measured: visual(), base: node(), nameLabel: {}, activityLabel: {}, label: {}, sphere: visual(),
-    warning: { apply: vi.fn() }, path: visual(), pathPoints: [], pathDistances: [],
+    warning: { apply: vi.fn() }, path: visual(),
     correction: { update: vi.fn(), reset: vi.fn() },
     lastTime: 0, solutionSequence: 0, uploadedPath: "", menuRows: "", scanIcon: null,
   }) as ManipulationRenderer;
@@ -117,7 +118,7 @@ it("keeps all initialized link buffers static during reveal, motion, warnings an
     interaction.previewJoints = frame > 60 && frame < 180 ? { ...ARM_FIXTURE.joints, yam_joint2: 1.3 } : null;
     interaction.rejection = frame > 180 && frame < 240 ? { failedJoints: ["yam_joint2"] } : null;
     (renderer as any).hoverSources = new Set(frame > 240 ? ["hand"] : []);
-    renderer.apply(state, origin, frame <= 240, true, frame / 60, node(), "OpenYAM");
+    renderer.apply({ state, origin, selected: frame <= 240, enabled: true, now: frame / 60, camera: node(), title: "OpenYAM" });
   }
   for (const mesh of meshes.values()) {
     expect(mesh.triangles).not.toHaveBeenCalled();
@@ -132,7 +133,7 @@ it("keeps all initialized link buffers static during reveal, motion, warnings an
   // EOF keeps historical observations visible while commands remain disabled.
   state.read_only = true; state.observations.arm.measured_at = 1;
   intent.fresh = false; intent.canManipulate = false; intent.activity = "Recording";
-  for (let frame = 360; frame < 420; frame++) renderer.apply(state, origin, true, true, frame / 60, node(), "OpenYAM");
+  for (let frame = 360; frame < 420; frame++) renderer.apply({ state, origin, selected: true, enabled: true, now: frame / 60, camera: node(), title: "OpenYAM" });
   expect((renderer as any).object.enabled).toBe(true);
   expect((renderer as any).activityLabel.text).toBe("Recording");
   for (const mesh of meshes.values()) {

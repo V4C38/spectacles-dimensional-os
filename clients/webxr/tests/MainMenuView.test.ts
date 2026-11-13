@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-import { ManipulationPressEdges } from "@dimos-ar-client/manipulation/ManipulationInput";
 import { MenuAnchorController } from "../src/presentation/PanelInteraction";
 import { expect, it, vi } from "vitest";
 import "./fixtures/xrEnvironment";
@@ -65,7 +64,7 @@ it("grips the panel body, rotates around the grab point with smoothing, and reta
 
 import * as THREE from "three";
 import { WebXRApp } from "../src/WebXRApp";
-import { WebXRInputController } from "../src/input/WebXRInputController";
+import { WebXRInputController, PanelInputPresenter, WebXRInputSession } from "../src/input/WebXRInputController";
 import { DimOSWebXRClient } from "../src/DimOSWebXRClient";
 import { BrowserWebSocketTransport } from "../src/websocket/BrowserWebSocketTransport";
 import { registerRayTarget } from "../src/input/WebXRInteraction";
@@ -290,9 +289,9 @@ it("disposes allocated UI resources once, including shared icon materials and sc
 it("uses identical conversation fields, shared tabs and one robot badge in setup", () => {
   const noop = () => {};
   const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
-  const internals = view as unknown as { agent: xb.TextView; inputLabel: xb.TextView; inputField: xb.TextButton; robotBadge: THREE.Group; stepTabs: xb.TextButton[] };
-  expect(internals.agent.width).toBe(internals.inputLabel.width);
-  expect(internals.agent.height).toBe(internals.inputLabel.height);
+  const internals = view as unknown as { pageViews: { runtime: { agent: xb.TextView; inputLabel: xb.TextView; inputField: xb.TextButton } }; robotBadge: THREE.Group; stepTabs: xb.TextButton[] };
+  expect(internals.pageViews.runtime.agent.width).toBe(internals.pageViews.runtime.inputLabel.width);
+  expect(internals.pageViews.runtime.agent.height).toBe(internals.pageViews.runtime.inputLabel.height);
   const fields: xb.TextButton[] = [];
   view.panel.traverse(node => { if (node instanceof xb.TextButton && node.height === DIMOS_AR_DESIGN.message.height / DIMOS_AR_DESIGN.panel.height) fields.push(node); });
   expect(fields).toHaveLength(2);
@@ -320,7 +319,7 @@ it("separates tab layers and text depth without competing internal depth-buffer 
   }
   const plate = view.panel.getObjectByName("Menu background") as THREE.Mesh;
   expect((plate.material as THREE.Material).depthWrite).toBe(true);
-  const successRing = (view as unknown as { successRing: THREE.Mesh }).successRing;
+  const successRing = (view as unknown as { pageViews: { success: { successRing: THREE.Mesh } } }).pageViews.success.successRing;
   expect(successRing.renderOrder).toBeGreaterThan(plate.renderOrder);
   view.dispose();
 });
@@ -333,7 +332,7 @@ it("locks palm summoning to one hand, supports the right hand and does not dismi
   const ui = { setupCompleted: true, menuOpen: false };
   const state = {
     session: { inputSources: [left, right] }, palmGates: new Map(), menuAnchor: anchor,
-    client: { ui }, palmOpened: false, capture: { owner: null },
+    ui, palmOpened: false, captured: () => state.capture.owner !== null, capture: { owner: null },
     anchorMenu(source: XRInputSource) { anchor.attach(source, new THREE.Vector3(), new THREE.Vector3(0, 1, 1), new THREE.Quaternion(), panel); },
   };
   const frame = { getJointPose(space: string) {
@@ -352,7 +351,7 @@ it("locks palm summoning to one hand, supports the right hand and does not dismi
   const clock = vi.spyOn(performance, "now").mockImplementation(() => now * 1000);
   const sync = (time: number) => {
     now = time;
-    (WebXRInputController.prototype as unknown as { syncPalm: (...args: unknown[]) => void }).syncPalm.call(state, frame, {}, {}, {});
+    (PanelInputPresenter.prototype as unknown as { syncPalm: (...args: unknown[]) => void }).syncPalm.call(state, frame, {}, {}, {});
   };
   sync(0); sync(0.36); expect(ui.menuOpen).toBe(true); expect(anchor.source).toBe(left);
   up.right = true; sync(1); sync(1.36); expect(anchor.source).toBe(left);
@@ -403,13 +402,13 @@ it("starts a panel grab from the accepted input ray while the visual laser is st
   const bar = new THREE.Object3D(), raw = { origin: [0, 0, 0], direction: [0, 0, -1] };
   const begin = vi.fn(() => true), pin = vi.fn(), detach = vi.fn();
   Object.assign(app, { trackingState: { tracking: () => true, session: () => ({ visibilityState: "visible" }) }, navigationSourceIds: new WeakMap(), nextNavigationSource: 0,
-    pressEdges: new ManipulationPressEdges(), touches: { owns: () => false }, capture: { press: () => true }, setupPlacement: { pin }, menuAnchor: { detach },
+    gestures: new WebXRInputSession(() => {}), panels: { setupPlacement: { pin }, detachAnchor: detach },
     interaction: { capture: vi.fn(), hit: () => ({ object: bar, point: new THREE.Vector3(0, 0, -1) }), direct: { capture() {}, ray: () => null }, ray: () => raw, smoothedRay: () => ({ origin: [0, 0, 0], direction: [1, 0, 0] }) },
     client: { manipulation: { owns: () => false }, navigation: { clearAim() {}, marker: { object: new THREE.Group() } }, joystick: { loseInput() {} } },
     mainMenu: { isEmergencyTarget: () => false, ownsTarget: () => true, canInteract: () => true, scrollView: () => null, isSpeechTarget: () => false, isControl: () => false, beginManipulation: begin } });
   app.onSelectStart({ target });
   expect(begin.mock.calls[0].slice(0, 2)).toEqual([raw.origin, raw.direction]);
-  expect(app.panelHold).toBe(target); expect(pin).toHaveBeenCalledOnce(); expect(detach).toHaveBeenCalledOnce();
+  expect(app.holdingPanel).toBe(target); expect(pin).toHaveBeenCalledOnce(); expect(detach).toHaveBeenCalledOnce();
 });
 
 it("gives every control one physical body without a competing front cap", () => {

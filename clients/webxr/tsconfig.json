@@ -28,6 +28,9 @@
       ],
       "@dimos-ar-client/*": [
         "../core/src/*"
+      ],
+      "DimOSARClient.lspkg/Scripts/DimOSARClient/*": [
+        "../core/src/*"
       ]
     }
   },

@@ -12,8 +12,8 @@ from armodule import ARMODULE_PORT, Phase, ProcessManager
 @pytest.mark.asyncio
 async def test_stop_idle_leaves_foreign_port_listeners_alone(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
-    mgr.status.phase = Phase.READY
-    mgr.status.check_ok = True
+    mgr.dependencies.update_status(phase=Phase.READY)
+    mgr.dependencies.update_status(check_ok=True)
     with (
         patch.object(mgr, "_pids_listening", new=AsyncMock(return_value=[4242])) as pids,
         patch("armodule.os.kill") as kill,
@@ -56,7 +56,7 @@ async def test_explicit_takeover_signals_only_selected_listener_pid(tmp_path: Pa
         await mgr._clear_before_start(takeover_pids=[4242])
     kill.assert_called_once_with(4242, signal.SIGINT)
     killpg.assert_not_called()
-    assert not mgr._stopping_pids
+    assert not mgr.runtime.stopping_pids
 
 
 @pytest.mark.real_clear
@@ -145,15 +145,15 @@ async def test_exited_leader_with_inherited_stdout_retires_owned_worker(
             if reader == "setup":
                 assert await asyncio.wait_for(mgr._drain_output(proc), 3) == exit_code
             elif reader == "webxr":
-                mgr._webxr_proc = proc
-                await asyncio.wait_for(mgr._read_webxr_stream(proc), 5)
-                assert mgr._webxr_proc is None
+                mgr.runtime.webxr.process = proc
+                await asyncio.wait_for(mgr.runtime._read_webxr_stream(proc), 5)
+                assert mgr.runtime.webxr.process is None
                 assert mgr.status.webxr_phase == "error"
             else:
-                mgr._proc = proc
-                await asyncio.wait_for(mgr._read_stream(proc), 3)
+                mgr.runtime.backend.process = proc
+                await asyncio.wait_for(mgr.runtime._read_stream(proc), 3)
                 async with asyncio.timeout(5):
-                    while mgr._proc is not None:
+                    while mgr.runtime.backend.process is not None:
                         await asyncio.sleep(0.02)
                     # Finalization clears the handle before awaiting group cleanup.
                     async with mgr._lock:

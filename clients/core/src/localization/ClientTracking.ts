@@ -1,4 +1,4 @@
-import type { LocalizationResult, LocalizationMapTransform, MapAlignment, MapContext, Quat, Vec3, YawPose, CaptureGeometry } from "../ClientContracts";
+import type { LocalizationResult, LocalizationMapTransform, MapAlignment, MapContext, Quat, Vec3, YawPose, CaptureGeometry, ReadonlyFacts } from "../ClientContracts";
 
 
 /** `T_odom_client` — this client's tracking origin in `odom`. */
@@ -12,27 +12,27 @@ export interface ClientTrackingOrigin {
 }
 
 export class ClientTrackingOriginStore {
-  private current: ClientTrackingOrigin | null = null;
-  private alignment: MapAlignment | null = null;
-  private transform: LocalizationMapTransform | null = null;
-  private context: MapContext | null = null;
+  private current: ReadonlyFacts<ClientTrackingOrigin> | null = null;
+  private alignment: ReadonlyFacts<MapAlignment> | null = null;
+  private transform: ReadonlyFacts<LocalizationMapTransform> | null = null;
+  private context: ReadonlyFacts<MapContext> | null = null;
   private trackingReference = "";
 
-  get mapAlignment(): MapAlignment | null { return this.alignment; }
-  get mapContext(): MapContext | null { return this.context; }
+  get mapAlignment(): ReadonlyFacts<MapAlignment> | null { return this.alignment; }
+  get mapContext(): ReadonlyFacts<MapContext> | null { return this.context; }
   beginTrackingReference(reference: string): void {
     if (this.trackingReference && this.trackingReference !== reference) { const context = this.context; this.clear(); this.context = context; }
     this.trackingReference = reference;
   }
-  acceptsContext(context: MapContext): boolean {
+  acceptsContext(context: ReadonlyFacts<MapContext>): boolean {
     return this.context !== null && this.context.map_code === context.map_code && this.context.odom_reference_id === context.odom_reference_id;
   }
-  setMapContext(context: MapContext, reset = false): void {
+  setMapContext(context: ReadonlyFacts<MapContext>, reset = false): void {
     if (reset || (this.context !== null && !this.acceptsContext(context)) ||
         (this.alignment !== null && (this.alignment.map_code !== context.map_code || this.alignment.odom_reference_id !== context.odom_reference_id))) this.clear();
     this.context = { ...context };
   }
-  applyMapTransform(transform: LocalizationMapTransform): void {
+  applyMapTransform(transform: ReadonlyFacts<LocalizationMapTransform>): void {
     if (!this.acceptsContext(transform) || (this.transform !== null && transform.revision <= this.transform.revision)) return;
     this.transform = { ...transform };
     this.recompose();
@@ -49,7 +49,7 @@ export class ClientTrackingOriginStore {
     };
   }
 
-  setFromLocalizationResult(result: LocalizationResult): ClientTrackingOrigin {
+  setFromLocalizationResult(result: ReadonlyFacts<LocalizationResult>): ReadonlyFacts<ClientTrackingOrigin> {
     const position = requireVec3(result.position, "position");
     const orientation = requireQuat(result.orientation);
     const confidence = result.confidence;
@@ -80,7 +80,7 @@ export class ClientTrackingOriginStore {
   }
 
   /** Restore a retained estimate without declaring it a newly observed localization result. */
-  restore(origin: ClientTrackingOrigin): void {
+  restore(origin: ReadonlyFacts<ClientTrackingOrigin>): void {
     if (origin.mapAlignment && origin.mapAlignment.tracking_reference_id !== this.trackingReference) { this.clear(); return; }
     this.alignment = origin.mapAlignment ?? null;
     this.transform = origin.mapTransform ?? null;
@@ -95,7 +95,7 @@ export class ClientTrackingOriginStore {
     this.current = null;
   }
 
-  get T_odom_client(): ClientTrackingOrigin | null {
+  get T_odom_client(): ReadonlyFacts<ClientTrackingOrigin> | null {
     return this.current;
   }
 
@@ -105,47 +105,45 @@ export class ClientTrackingOriginStore {
 }
 
 /** Corrections within one reference preserve interaction ownership. */
-export function sameTrackingReference(a: ClientTrackingOrigin | null, b: ClientTrackingOrigin | null): boolean {
+export function sameTrackingReference(a: ReadonlyFacts<ClientTrackingOrigin> | null, b: ReadonlyFacts<ClientTrackingOrigin> | null): boolean {
   return !!a && !!b && a.mapAlignment?.tracking_reference_id === b.mapAlignment?.tracking_reference_id &&
     a.mapAlignment?.odom_reference_id === b.mapAlignment?.odom_reference_id && a.mapAlignment?.map_code === b.mapAlignment?.map_code;
 }
 
-type PositionOrientation = {
-  position: Vec3;
-  orientation: Quat;
-};
+export type PositionOrientation = { position: Vec3; orientation: Quat };
+export type ReadonlyPose = ReadonlyFacts<PositionOrientation>;
 
 export function odomToClientTrackingPoint(
-  point: Vec3,
-  origin: ClientTrackingOrigin,
+  point: Readonly<Vec3>,
+  origin: ReadonlyFacts<ClientTrackingOrigin>,
 ): Vec3 {
   return relativePointInOdom(point, origin);
 }
 
 export function clientTrackingToOdomPoint(
-  point: Vec3,
-  origin: ClientTrackingOrigin,
+  point: Readonly<Vec3>,
+  origin: ReadonlyFacts<ClientTrackingOrigin>,
 ): Vec3 {
   return applyOriginPoint(point, origin);
 }
 
 export function odomToClientTrackingPose(
-  pose: PositionOrientation,
-  origin: ClientTrackingOrigin,
+  pose: ReadonlyPose,
+  origin: ReadonlyFacts<ClientTrackingOrigin>,
 ): PositionOrientation {
   return relativePoseInOdom(pose, origin);
 }
 
 export function clientTrackingToOdomPose(
-  pose: PositionOrientation,
-  origin: ClientTrackingOrigin,
+  pose: ReadonlyPose,
+  origin: ReadonlyFacts<ClientTrackingOrigin>,
 ): PositionOrientation {
   return applyOriginPose(pose, origin);
 }
 
 export function odomToClientTrackingYawPose(
-  pose: YawPose,
-  origin: ClientTrackingOrigin,
+  pose: Readonly<YawPose>,
+  origin: ReadonlyFacts<ClientTrackingOrigin>,
 ): YawPose {
   const relative = relativePoseInOdom(poseFromYaw(pose), origin);
   return [
@@ -157,8 +155,8 @@ export function odomToClientTrackingYawPose(
 }
 
 function relativePoseInOdom(
-  pose: PositionOrientation,
-  origin: ClientTrackingOrigin,
+  pose: ReadonlyPose,
+  origin: ReadonlyFacts<ClientTrackingOrigin>,
 ): PositionOrientation {
   const qInv = quatConjugate(requireOrigin(origin));
   return {
@@ -168,8 +166,8 @@ function relativePoseInOdom(
 }
 
 function applyOriginPose(
-  pose: PositionOrientation,
-  origin: ClientTrackingOrigin,
+  pose: ReadonlyPose,
+  origin: ReadonlyFacts<ClientTrackingOrigin>,
 ): PositionOrientation {
   const q = requireOrigin(origin);
   return {
@@ -178,12 +176,12 @@ function applyOriginPose(
   };
 }
 
-function relativePointInOdom(point: Vec3, origin: ClientTrackingOrigin): Vec3 {
+function relativePointInOdom(point: Readonly<Vec3>, origin: ReadonlyFacts<ClientTrackingOrigin>): Vec3 {
   const qInv = quatConjugate(requireOrigin(origin));
   return rotateVecByQuat(qInv, sub(requireVec3(point, "position"), origin.position));
 }
 
-function applyOriginPoint(point: Vec3, origin: ClientTrackingOrigin): Vec3 {
+function applyOriginPoint(point: Readonly<Vec3>, origin: ReadonlyFacts<ClientTrackingOrigin>): Vec3 {
   const rotated = rotateVecByQuat(requireOrigin(origin), requireVec3(point, "position"));
   return [
     rotated[0] + origin.position[0],
@@ -192,7 +190,7 @@ function applyOriginPoint(point: Vec3, origin: ClientTrackingOrigin): Vec3 {
   ];
 }
 
-function poseFromYaw(pose: YawPose): PositionOrientation {
+function poseFromYaw(pose: Readonly<YawPose>): PositionOrientation {
   if (!Array.isArray(pose) || pose.length !== 4) {
     throw new Error("yaw pose must be a 4-element [x, y, z, yaw]");
   }
@@ -206,12 +204,12 @@ function poseFromYaw(pose: YawPose): PositionOrientation {
   };
 }
 
-function requireOrigin(origin: ClientTrackingOrigin): Quat {
+function requireOrigin(origin: ReadonlyFacts<ClientTrackingOrigin>): Quat {
   requireVec3(origin.position, "ClientTrackingOrigin.position");
   return normalizeQuat(origin.orientation);
 }
 
-export function requireVec3(value: Vec3, key: string): Vec3 {
+export function requireVec3(value: Readonly<Vec3>, key: string): Vec3 {
   if (!Array.isArray(value) || value.length !== 3) {
     throw new Error(`${key} must be a 3-element array`);
   }
@@ -234,7 +232,7 @@ function quatFromYaw(yaw: number): Quat {
   return [0, 0, Math.sin(half), Math.cos(half)];
 }
 
-function quatYaw(q: Quat): number {
+function quatYaw(q: Readonly<Quat>): number {
   const forward = rotateVecByQuat(normalizeQuat(q), [1, 0, 0]);
   const length = Math.hypot(forward[0], forward[1]);
   if (length < 1e-6) {
@@ -243,7 +241,7 @@ function quatYaw(q: Quat): number {
   return Math.atan2(forward[1], forward[0]);
 }
 
-export function requireQuat(q: Quat): Quat {
+export function requireQuat(q: Readonly<Quat>): Quat {
   if (!Array.isArray(q) || q.length !== 4) {
     throw new Error("orientation must be a 4-element quaternion [qx, qy, qz, qw]");
   }
@@ -260,16 +258,16 @@ export function requireQuat(q: Quat): Quat {
   return orientation;
 }
 
-export function normalizeQuat(q: Quat): Quat {
+export function normalizeQuat(q: Readonly<Quat>): Quat {
   const orientation = requireQuat(q), length = Math.hypot(...orientation);
   return orientation.map(value => value / length) as Quat;
 }
 
-function quatConjugate(q: Quat): Quat {
+function quatConjugate(q: Readonly<Quat>): Quat {
   return [-q[0], -q[1], -q[2], q[3]];
 }
 
-export function multiplyRotation(a: Quat, b: Quat): Quat {
+export function multiplyRotation(a: Readonly<Quat>, b: Readonly<Quat>): Quat {
   const [ax, ay, az, aw] = a;
   const [bx, by, bz, bw] = b;
   return [
@@ -280,7 +278,63 @@ export function multiplyRotation(a: Quat, b: Quat): Quat {
   ];
 }
 
-export function rotateVecByQuat(q: Quat, v: Vec3): Vec3 {
+/** Compose rigid poses in one basis. Input poses are observations, never mutation targets. */
+export function composePose(a: ReadonlyPose, b: ReadonlyPose): PositionOrientation {
+  const offset = rotateVecByQuat(a.orientation, b.position);
+  return {
+    position: [a.position[0] + offset[0], a.position[1] + offset[1], a.position[2] + offset[2]],
+    orientation: multiplyRotation(a.orientation, b.orientation),
+  };
+}
+
+/** Poses are rigid transforms with unit rotations, as validated at their input boundary. */
+export function inversePose(pose: ReadonlyPose): PositionOrientation {
+  const inverse = quatConjugate(pose.orientation);
+  const translation: Vec3 = [-pose.position[0], -pose.position[1], -pose.position[2]];
+  return { position: rotateVecByQuat(inverse, translation), orientation: inverse };
+}
+
+export function lerpVec3(a: Readonly<Vec3>, b: Readonly<Vec3>, t: number): Vec3 {
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+}
+
+/** Shortest-arc interpolation; finite non-zero input rotations are normalized here. */
+export function slerpQuat(a: Readonly<Quat>, input: Readonly<Quat>, t: number): Quat {
+  requireFinite(t, "interpolation fraction");
+  const left = normalizeQuat(a);
+  let right = normalizeQuat(input);
+  let dot = left.reduce((sum, value, i) => sum + value * right[i], 0);
+  if (dot < 0) {
+    right = [-right[0], -right[1], -right[2], -right[3]];
+    dot = -dot;
+  }
+  if (dot > 0.9995) {
+    return normalizeQuat([
+      left[0] + (right[0] - left[0]) * t,
+      left[1] + (right[1] - left[1]) * t,
+      left[2] + (right[2] - left[2]) * t,
+      left[3] + (right[3] - left[3]) * t,
+    ]);
+  }
+  const angle = Math.acos(Math.min(1, dot));
+  const denominator = Math.sin(angle);
+  const l = Math.sin((1 - t) * angle) / denominator;
+  const r = Math.sin(t * angle) / denominator;
+  return normalizeQuat([
+    left[0] * l + right[0] * r,
+    left[1] * l + right[1] * r,
+    left[2] * l + right[2] * r,
+    left[3] * l + right[3] * r,
+  ]);
+}
+
+/** Component identity for replicated samples; geometric rotation equivalence is a different policy. */
+export function poseCoordinatesEqual(a: ReadonlyPose, b: ReadonlyPose, tolerance = 1e-8): boolean {
+  return a.position.every((value, i) => (value === b.position[i] || Math.abs(value - b.position[i]) < tolerance)) &&
+    a.orientation.every((value, i) => (value === b.orientation[i] || Math.abs(value - b.orientation[i]) < tolerance));
+}
+
+export function rotateVecByQuat(q: Readonly<Quat>, v: Readonly<Vec3>): Vec3 {
   const [x, y, z, w] = q;
   const tx = 2 * (y * v[2] - z * v[1]);
   const ty = 2 * (z * v[0] - x * v[2]);
@@ -292,7 +346,7 @@ export function rotateVecByQuat(q: Quat, v: Vec3): Vec3 {
   ];
 }
 
-function sub(a: Vec3, b: Vec3): Vec3 {
+function sub(a: Readonly<Vec3>, b: Readonly<Vec3>): Vec3 {
   return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 }
 
@@ -303,21 +357,21 @@ export type Mat3 = readonly [
 ];
 
 /** Change both world and local axes of a rotation. */
-export function changeBasisQuat(orientation: Quat, basis: Mat3): Quat {
+export function changeBasisQuat(orientation: Readonly<Quat>, basis: Mat3): Quat {
   const inverse = transposeBasis(basis);
   const columns = ([ [1, 0, 0], [0, 1, 0], [0, 0, 1] ] as Vec3[])
     .map(axis => applyBasis(basis, rotateVecByQuat(orientation, applyBasis(inverse, axis))));
   return quatFromBasis(columns[0], columns[1], columns[2]);
 }
 
-export function remapPoseQuat(orientation: Quat, forward: Mat3): Quat {
+export function remapPoseQuat(orientation: Readonly<Quat>, forward: Mat3): Quat {
   const x = applyBasis(forward, rotateVecByQuat(orientation, [1, 0, 0]));
   const y = applyBasis(forward, rotateVecByQuat(orientation, [0, 1, 0]));
   const z = applyBasis(forward, rotateVecByQuat(orientation, [0, 0, 1]));
   return quatFromBasis(x, y, z);
 }
 
-function quatFromBasis(x: Vec3, y: Vec3, z: Vec3): Quat {
+export function quatFromBasis(x: Readonly<Vec3>, y: Readonly<Vec3>, z: Readonly<Vec3>): Quat {
   const c0 = normalizeVec3(x);
   const c1 = normalizeVec3(y);
   const c2 = normalizeVec3(z);
@@ -363,7 +417,7 @@ function quatFromBasis(x: Vec3, y: Vec3, z: Vec3): Quat {
   return normalizeQuat([qx, qy, qz, qw]);
 }
 
-export function applyBasis(matrix: Mat3, point: Vec3): Vec3 {
+export function applyBasis(matrix: Mat3, point: Readonly<Vec3>): Vec3 {
   return [
     matrix[0][0] * point[0] + matrix[0][1] * point[1] + matrix[0][2] * point[2],
     matrix[1][0] * point[0] + matrix[1][1] * point[1] + matrix[1][2] * point[2],
@@ -379,7 +433,7 @@ export function transposeBasis(matrix: Mat3): Mat3 {
   ];
 }
 
-function normalizeVec3(value: Vec3): Vec3 {
+function normalizeVec3(value: Readonly<Vec3>): Vec3 {
   const length = Math.hypot(value[0], value[1], value[2]);
   if (length < 1e-6) {
     throw new Error("orientation must be a non-zero quaternion");
@@ -388,8 +442,8 @@ function normalizeVec3(value: Vec3): Vec3 {
 }
 
 export function passesGeometricGate(
-  cameraOptical: { position: Vec3; orientation: Quat },
-  robotTrackingPosition: Vec3,
+  cameraOptical: ReadonlyPose,
+  robotTrackingPosition: Readonly<Vec3>,
   geometry: Pick<CaptureGeometry, "minDistanceM" | "maxDistanceM" | "lookAtMaxAngleDeg">,
 ): boolean {
   const camera = requireVec3(cameraOptical.position, "camera position");

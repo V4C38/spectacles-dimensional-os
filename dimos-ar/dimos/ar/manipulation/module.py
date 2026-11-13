@@ -40,6 +40,7 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
         self._auxiliary_thread: threading.Thread | None = None
         self._watchdog_thread: threading.Thread | None = None
         self._closing = False
+        self._shutdown_lock = threading.Lock()
 
     @rpc
     def build(self) -> None:
@@ -49,15 +50,16 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
     @rpc
     def start(self) -> None:
         self._adapter.require_workers_open()
-        if any(thread is not None and thread.is_alive() for thread in (
-            self._lifecycle_thread, self._auxiliary_thread, self._watchdog_thread
-        )):
+        if any(
+            thread is not None and thread.is_alive()
+            for thread in (self._lifecycle_thread, self._auxiliary_thread, self._watchdog_thread)
+        ):
             raise RuntimeError("prior manipulation lifecycle has not stopped; restart the process")
         self._closing = False
         self._adapter.configure_rpc()
         super().start()
         self._adapter.prepare_feedback()
-        self._runtime.started = True
+        self._runtime.start()
         self._lifecycle_stop.clear()
         self._lifecycle_thread = threading.Thread(
             target=self._advance, name="ar-manipulation-lifecycle", daemon=True
@@ -95,7 +97,7 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
 
     @rpc
     def stop(self) -> None:
-        with self._runtime.lock:
+        with self._shutdown_lock:
             if self._closing:
                 return
             self._closing = True
@@ -110,7 +112,7 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
                     logger.warning("Native manipulation worker remains quarantined", worker=name)
                 else:
                     setattr(self, name, None)
-        if self._runtime.session.quiesced:
+        if self._runtime.quiesced:
             self._adapter.prepare_teardown()
         super().stop()
 

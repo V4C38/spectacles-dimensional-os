@@ -74,3 +74,121 @@ test("source request preserves explicit device and replay selection", () => {
   assert.deepEqual(value, { mode: "device", device_id: "can1", address: "10.0.0.1", replay: "/record.db",
     playback: "recording", streams: { camera: "front" } });
 });
+
+test("request scopes retire stale successes and failures without retiring a newer request", async () => {
+  const { ScopedRequests } = await import("../static/source-selection.mjs");
+  const requests = new ScopedRequests();
+  let selection = "first";
+  const first = requests.begin("replay", () => selection);
+  assert.equal(requests.busy("replay"), true);
+  selection = "second";
+  assert.equal(first.current(), false);
+  assert.equal(requests.busy("replay"), false);
+  const second = requests.begin("replay", () => selection);
+  first.finish();
+  assert.equal(second.current(), true);
+  requests.cancel("replay");
+  assert.equal(second.current(), false);
+});
+
+test("configuration consumes service metadata without blueprint-specific policy", async () => {
+  const { LaunchConfiguration } = await import("../static/source-selection.mjs");
+  const selection = new LaunchConfiguration({ blueprint: "custom-arm" });
+  selection.configure({ blueprints: [
+    { id: "custom-arm", robot: "openyam", manipulation: true, agent: false },
+    { id: "custom-dog", robot: "unitree_go2", manipulation: false, agent: true },
+  ], log_levels: ["ERROR"], log_level: "ERROR" });
+  assert.equal(selection.manipulation, true);
+  assert.equal(selection.replayRobot, "openyam");
+  selection.selectBlueprint("custom-dog");
+  assert.equal(selection.manipulation, false);
+  assert.equal(selection.replayRobot, "go2");
+  assert.deepEqual(selection.logLevels, ["ERROR"]);
+});
+
+test("profile editor cancels debounce on explicit save and retains queued profile identity", async () => {
+  const { ProfileSettingsEditor } = await import("../static/persistence.mjs");
+  let callback, cancelled = 0;
+  const writes = [];
+  const editor = new ProfileSettingsEditor({ save: async values => { writes.push(structuredClone(values)); return values; } }, {
+    setTimeout: value => { callback = value; return 1; }, clearTimeout: () => { cancelled++; },
+  });
+  editor.settingsReady = true;
+  editor.robotProfileId = "A";
+  let draft = { profile_id: "A", value: 1 };
+  editor.schedule(() => draft);
+  draft.value = 2;
+  await editor.save(draft);
+  editor.robotProfileId = "B";
+  assert.equal(editor.persistTimer, null);
+  assert.equal(cancelled, 2);
+  assert.deepEqual(writes, [{ profile_id: "A", value: 2 }]);
+  assert.equal(typeof callback, "function");
+});
+
+test("edited preferences reject delayed hydration and serialized writes retain snapshots", async () => {
+  const { LauncherPreferences } = await import("../static/persistence.mjs");
+  const preferences = new LauncherPreferences();
+  const bodies = [], pending = [];
+  const request = body => new Promise(resolve => { bodies.push(JSON.parse(body)); pending.push(resolve); });
+  preferences.values.go2_source = "manual";
+  const first = preferences.save(request, "10.0.0.1");
+  assert.equal(preferences.hydrate({ go2_source: "auto" }), false);
+  preferences.values.go2_source = "simulated";
+  const second = preferences.save(request, "10.0.0.2");
+  await new Promise(setImmediate);
+  assert.equal(bodies.length, 1);
+  assert.equal(bodies[0].go2_source, "manual");
+  pending[0]({ ok: true });
+  await first;
+  await new Promise(setImmediate);
+  assert.equal(bodies[1].go2_source, "simulated");
+  assert.equal(bodies[1].manual_ip, "10.0.0.2");
+  pending[1]({ ok: true });
+  await second;
+});
+
+test("obsolete profile loads cannot create profiles after the robot selection changes", async () => {
+  let current = true;
+  const calls = [];
+  const request = async (_url, options) => {
+    calls.push(options?.method || "GET");
+    current = false;
+    return response({ profiles: [] });
+  };
+  assert.deepEqual(await profilesForRobot(request, "openyam", true, () => current), []);
+  assert.deepEqual(calls, ["GET"]);
+});
+
+for (const failure of [false, true]) test(`hardware owner retires an obsolete planner ${failure ? "failure" : "success"}`, async () => {
+  const { HardwareDiscovery } = await import("../static/source-selection.mjs");
+  const pending = [];
+  const hardware = new HardwareDiscovery(() => new Promise((resolve, reject) => pending.push({ resolve, reject })));
+  let interpreter = "first";
+  const options = { enabled: true, scope: () => interpreter, changed: () => {} };
+  const first = hardware.refreshPlanner(options);
+  interpreter = "second";
+  const second = hardware.refreshPlanner(options);
+  pending[1].resolve(response({ ready: true, state: "ready", message: "current" }));
+  await second;
+  if (failure) pending[0].reject(new Error("obsolete"));
+  else pending[0].resolve(response({ ready: false, state: "error", message: "obsolete" }));
+  await first;
+  assert.equal(hardware.plannerStatus.message, "current");
+  assert.equal(hardware.requests.busy("planner"), false);
+});
+
+test("hardware owner serializes CAN setup admission and publishes readiness once", async () => {
+  const { HardwareDiscovery } = await import("../static/source-selection.mjs");
+  let resolve;
+  const progress = [];
+  const hardware = new HardwareDiscovery(() => new Promise(value => { resolve = value; }));
+  const options = { enabled: true, scope: () => "arm/can0", interface: "can0", changed: () => {}, progress: value => progress.push(value.phase) };
+  const first = hardware.setupCan(options);
+  assert.equal(hardware.setupCan(options), undefined);
+  assert.equal(hardware.requests.busy("canSetup"), true);
+  resolve(response({ ready: true, interface: "can0" }));
+  await first;
+  assert.deepEqual(progress, ["checking", "ready"]);
+  assert.equal(hardware.canStatus.ready, true);
+});

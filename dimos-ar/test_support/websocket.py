@@ -57,7 +57,9 @@ def _sample_hello(_client_id: str) -> HelloBody:
 
 
 async def _send_hello_request(ws: websockets.ClientConnection, ts_client: float = 1000.0) -> dict:
-    await ws.send(json.dumps({"type": "hello_request", "protocol_version": 2, "ts_client": ts_client}))
+    await ws.send(
+        json.dumps({"type": "hello_request", "protocol_version": 2, "ts_client": ts_client})
+    )
     raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
     return json.loads(raw)
 
@@ -146,11 +148,16 @@ class ServerHarness:
         Match the current socket so a resumed identity cannot reuse its old
         connection's admission notification.
         """
+
         def wait() -> bool:
             with self._admission:
                 return self._admission.wait_for(
-                    lambda: self._admitted.get(client_id) is not None
-                    and self._server._connections.get(client_id) is self._admitted[client_id],
+                    lambda: (
+                        self._admitted.get(client_id) is not None
+                        and self._server._connection(client_id) is not None
+                        and self._server._connection(client_id).websocket
+                        is self._admitted[client_id]
+                    ),
                     timeout,
                 )
 

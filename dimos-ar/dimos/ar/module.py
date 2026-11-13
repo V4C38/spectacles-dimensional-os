@@ -14,7 +14,8 @@ from pydantic import BaseModel, Field, field_validator
 import websockets.asyncio.server as ws_server
 
 from dimos.agents.annotation import skill
-from dimos.ar.async_execution import BoundedWorker, NativeRPC
+from dimos.ar.async_execution import BoundedWorker
+from dimos.ar.localization.defaults import LOCALIZATION_POLICY_DEFAULTS
 from dimos.ar.localization.fiducial_marker.localizer import FiducialMarkerLocalizer
 from dimos.ar.localization.map_localization import MapLocalization
 from dimos.ar.localization.odom_map_transform import OdomMapTransform
@@ -34,7 +35,7 @@ from dimos.ar.localization.vps.multiset_client import MultisetVpsClient, Multise
 from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
 from dimos.ar.manipulation.model import ReferencePose
 from dimos.ar.manipulation.protocol import ARManipulationSpec, ManipulationRequest
-from dimos.ar.manipulation.service import ManipulationService, admit_manipulation
+from dimos.ar.manipulation.service import ManipulationService
 from dimos.ar.navigation.control import (
     ARNavigationControlSpec,
     NavGoalCoordinator,
@@ -42,9 +43,10 @@ from dimos.ar.navigation.control import (
     TeleCmdVelPublisher,
 )
 from dimos.ar.navigation.preview import NavigationPreviewService, PreviewPlanner
-from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavJoystickRequest, NavState
+from dimos.ar.navigation.types import NavGoalRequest, NavJoystickRequest, NavState
+from dimos.ar.numeric import quaternion_yaw
+from dimos.ar.replication.controller import InteractionController, InteractionPorts
 from dimos.ar.replication.interaction import (
-    InteractionCoordinator,
     InteractionKind,
     InteractionRequest,
     SharedTarget,
@@ -117,10 +119,23 @@ class LocalizationProviderConfig(BaseModel):
 
 class LocalizationConfig(BaseModel):
     providers: list[LocalizationProviderConfig] = Field(default_factory=list)
-    travel_threshold_m: float = Field(default=0.75, gt=0, allow_inf_nan=False)
-    heading_threshold_deg: float = Field(default=30.0, gt=0, le=180, allow_inf_nan=False)
-    marker_preference_s: float = Field(default=3.0, ge=0, allow_inf_nan=False)
-    headset_travel_threshold_m: float = Field(default=10.0, gt=0, allow_inf_nan=False)
+    travel_threshold_m: float = Field(
+        default=LOCALIZATION_POLICY_DEFAULTS["travel_threshold_m"], gt=0, allow_inf_nan=False
+    )
+    heading_threshold_deg: float = Field(
+        default=LOCALIZATION_POLICY_DEFAULTS["heading_threshold_deg"],
+        gt=0,
+        le=180,
+        allow_inf_nan=False,
+    )
+    marker_preference_s: float = Field(
+        default=LOCALIZATION_POLICY_DEFAULTS["marker_preference_s"], ge=0, allow_inf_nan=False
+    )
+    headset_travel_threshold_m: float = Field(
+        default=LOCALIZATION_POLICY_DEFAULTS["headset_travel_threshold_m"],
+        gt=0,
+        allow_inf_nan=False,
+    )
     episode_timeout_s: float = Field(default=EPISODE_TIMEOUT_S, gt=0, allow_inf_nan=False)
 
 
@@ -228,18 +243,12 @@ class ARModule(Module):  # type: ignore[misc]
     _previews: NavigationPreviewService
     _agent_service: ARAgentService
     _agent_control: ARAgentControlSpec | None = None
-    _agent_mode_rpc: NativeRPC | None = None
     _navigation_control: ARNavigationControlSpec | None = None
     _navigation_service: NavigationControlService | None = None
-    _mode_task: asyncio.Task[None] | None = None
     _manipulation: ARManipulationSpec | None = None
     _manipulation_service: ManipulationService | None = None
+    _interaction_controller: InteractionController
     _stationary_task: asyncio.Task[None] | None = None
-    _interaction: InteractionCoordinator
-    _interaction_task: asyncio.Task[None] | None = None
-    _native_mode_uncertain: bool = False
-    _interaction_sent_revision: int = -1
-    _native_sequences: dict[str, int]
 
     @rpc
     def build(self) -> None:
@@ -249,14 +258,13 @@ class ARModule(Module):  # type: ignore[misc]
             super().build()
             assert self._loop is not None
             self._profile = profile_for_config(self.config)
-            self._interaction = InteractionCoordinator()
-            self._interaction_task = None
-            self._interaction_sent_revision = -1
-            self._native_sequences = {}
             if self._navigation_control is not None:
                 self._navigation_service = NavigationControlService(
                     self._navigation_control,
-                    lambda: (self._interaction.epoch, self._interaction.revision),
+                    lambda: (
+                        self._interaction_controller.state.epoch,
+                        self._interaction_controller.state.revision,
+                    ),
                     self._native_navigation_failed,
                     on_recovered=self._broadcast_state,
                 )
@@ -307,7 +315,10 @@ class ARModule(Module):  # type: ignore[misc]
                     on_ready=lambda: logger.info("Manipulation runtime ready"),
                     on_snapshot=self._on_manipulation_snapshot,
                     on_result=self._on_manipulation_result,
-                    control_state=lambda: (self._interaction.epoch, self._interaction.revision),
+                    control_state=lambda: (
+                        self._interaction_controller.state.epoch,
+                        self._interaction_controller.state.revision,
+                    ),
                     prepare_outbound=self._ws_server.prepare_outbound_async,
                 )
             self._nav_goal_coordinator = NavGoalCoordinator(
@@ -397,11 +408,32 @@ class ARModule(Module):  # type: ignore[misc]
                 on_prompt=self._send_observations_request,
                 timeout_s=self.config.localization.episode_timeout_s,
             )
+            self._interaction_controller = self._build_interaction_controller()
             logger.info("ARModule build complete")
             self._ar_built = True
         except BaseException as exc:
             self._build_failure = exc
             raise
+
+    def _build_interaction_controller(self) -> InteractionController:
+        return InteractionController(
+            InteractionPorts(
+                capabilities=lambda: self._capabilities,
+                mapping_restart_required=lambda: getattr(self, "_requires_mapping_restart", False),
+                manipulation=lambda: self._manipulation_service,
+                agent_control=lambda: self._agent_control,
+                agent_idle=lambda: self._agent_service.idle,
+                previews=lambda: self._previews,
+                commit_target=self._commit_shared_target,
+                submit_goal=self._submit_navigation_goal,
+                cancel_joystick=self._cancel_tele_cmd_vel,
+                stop_navigation=lambda: self._safety.on_estop_request(),
+                broadcast_state=self._broadcast_state,
+                send=lambda client, text: self._ws_server.schedule_send_to_client(client, text),
+                broadcast=lambda text: self._ws_server.schedule_broadcast_text(text),
+                prepare_outbound=lambda body: self._ws_server.prepare_outbound_async(body),
+            )
+        )
 
     def _build_localizers(
         self,
@@ -475,15 +507,10 @@ class ARModule(Module):  # type: ignore[misc]
         self._ar_stopping = True
         logger.info("ARModule stopping")
         self._cancel_tele_cmd_vel()
-        if self._mode_task is not None:
-            self._loop.call_soon_threadsafe(self._mode_task.cancel)
-        if self._agent_mode_rpc is not None:
-            self._loop.call_soon_threadsafe(self._agent_mode_rpc.close)
-        if self._interaction_task is not None:
-            self._loop.call_soon_threadsafe(self._interaction_task.cancel)
         if self._stationary_task is not None:
             self._loop.call_soon_threadsafe(self._stationary_task.cancel)
         for name, service in (
+            ("interaction", getattr(self, "_interaction_controller", None)),
             ("navigation", getattr(self, "_navigation_service", None)),
             (
                 "telemetry",
@@ -542,7 +569,8 @@ class ARModule(Module):  # type: ignore[misc]
             connected_clients=self._ws_server.connection_count,
             lidar=self._lidar_settings,
             nav=NavState("resolved", "failed")
-            if isinstance(self._navigation_service, NavigationControlService) and self._navigation_service.faulted
+            if isinstance(self._navigation_service, NavigationControlService)
+            and self._navigation_service.faulted
             else self._nav_goal_coordinator.nav_state(),
             agent=AgentState(idle=idle),
             nav_preview_costmap_ts=self._previews.costmap_ts,
@@ -598,12 +626,12 @@ class ARModule(Module):  # type: ignore[misc]
         client_id: str,
     ) -> None:
         logger.info("AR client session ready", client_id=client_id)
-        self._interaction.connect(client_id)
+        self._interaction_controller.state.connect(client_id)
         self._lidar_subscriptions[client_id] = DEFAULT_LIDAR_SETTINGS
         if self._manipulation_service is not None:
             self._manipulation_service.connect(client_id)
         self._ws_server.schedule_send_to_client(
-            client_id, encode_text(self._interaction.snapshot())
+            client_id, encode_text(self._interaction_controller.state.snapshot())
         )
         for marker in self._agent_service.marker_snapshot():
             self._ws_server.schedule_send_to_client(client_id, marker)
@@ -629,12 +657,15 @@ class ARModule(Module):  # type: ignore[misc]
             self._send_observations_request(requested_client_id)
 
     def _on_client_suspend(self, client_id: str, deadline: float) -> None:
-        if self._interaction.suspend(client_id, deadline) and self._manipulation_service is not None:
+        if (
+            self._interaction_controller.state.suspend(client_id, deadline)
+            and self._manipulation_service is not None
+        ):
             self._manipulation_service.suspend(client_id, deadline)
 
     def _on_client_disconnect(self, _websocket: ws_server.ServerConnection, client_id: str) -> None:
         self._previews.cancel(client_id)
-        self._interaction.disconnect(client_id)
+        self._interaction_controller.state.disconnect(client_id)
         self._lidar_subscriptions.pop(client_id, None)
         self._update_lidar_aggregate()
         if self._manipulation_service is not None:
@@ -650,9 +681,10 @@ class ARModule(Module):  # type: ignore[misc]
         self._policy.on_disconnect(client_id)
         if self._ws_server.logical_session_count == 0:
             if self._manipulation_service is not None:
-                self._interaction.request_manipulation_stop()
+                self._interaction_controller.state.request_manipulation_stop()
                 self._manipulation_service.emergency_stop(
-                    self._interaction.epoch, self._interaction.revision
+                    self._interaction_controller.state.epoch,
+                    self._interaction_controller.state.revision,
                 )
             self._cancel_tele_cmd_vel()
             self._safety.on_last_disconnect()
@@ -678,224 +710,16 @@ class ARModule(Module):  # type: ignore[misc]
             await asyncio.sleep(0.1)
 
     def _start_interaction_poll(self) -> None:
-        self._interaction_task = asyncio.create_task(self._poll_interaction())
-
-    async def _poll_interaction(self) -> None:
-        while True:
-            self._interaction.poll()
-            self._drain_interaction_retirements()
-            self._broadcast_interaction()
-            await asyncio.sleep(0.05)
+        self._interaction_controller.start()
 
     def _broadcast_interaction(self, *, force: bool = False) -> None:
-        if force or self._interaction_sent_revision != self._interaction.revision:
-            self._interaction_sent_revision = self._interaction.revision
-            self._ws_server.schedule_broadcast_text(encode_text(self._interaction.snapshot()))
+        return self._interaction_controller.broadcast(force=force)
 
     def _drain_interaction_retirements(self) -> None:
-        for authority, reason in self._interaction.drain_retirements():
-            self._previews.cancel(authority.client_id)
-            self._native_sequences.pop(authority.lease_id, None)
-            if (
-                authority.kind.startswith("manipulation_")
-                and self._manipulation_service is not None
-            ):
-                self._manipulation_service.revoke(
-                    self._interaction.epoch, authority.lease_id, self._interaction.revision, reason
-                )
-            if authority.kind == "joystick":
-                self._cancel_tele_cmd_vel()
-            elif authority.kind == "live" and reason not in {"released", "confirmed"}:
-                self._cancel_tele_cmd_vel()
-                self._safety.on_estop_request()
-                self._interaction.set_active_goal(None)
-                self._broadcast_interaction(force=True)
-                self._broadcast_state()
+        return self._interaction_controller.drain_retirements()
 
     def _on_interaction_request(self, request: InteractionRequest, client_id: str) -> None:
-        self._interaction.poll()
-        self._drain_interaction_retirements()
-        if request.action == "mode":
-            previous = self._interaction.preflight(client_id, request)
-            if previous is not None:
-                self._ws_server.schedule_send_to_client(client_id, encode_text(previous.wire()))
-                return
-        if (
-            request.action == "mode"
-            and (request.mode != self._interaction.mode or self._native_mode_uncertain)
-            and self._capabilities.supports(CapabilityName.AGENT)
-        ):
-            if (
-                self._mode_task is not None
-                or not self._interaction.mode_change_available
-            ):
-                self._interaction_reply(request, client_id, "busy", "robot_busy")
-                return
-            if self._agent_control is None:
-                self._interaction_reply(
-                    request, client_id, "rejected", "native_quiescence_unavailable"
-                )
-                return
-            self._interaction.set_agent_busy(True)
-            self._mode_task = asyncio.create_task(self._change_native_mode(request, client_id))
-            return
-        if request.action == "acquire" and (
-            self._mode_task is not None or self._native_mode_uncertain
-        ):
-            self._interaction_reply(request, client_id, "busy", "robot_busy")
-            return
-        if (
-            request.action == "mode"
-            and request.mode == "agent"
-            and not self._capabilities.supports(CapabilityName.AGENT)
-        ):
-            reply = {
-                "type": "interaction_result",
-                "request_id": request.request_id,
-                "status": "rejected",
-                "code": "agent_unavailable",
-                "epoch": self._interaction.epoch,
-                "revision": self._interaction.revision,
-            }
-        elif request.action == "acquire" and (
-            not self._capabilities.supports(
-                CapabilityName.MANIPULATION
-                if request.kind is not None and request.kind.startswith("manipulation_")
-                else CapabilityName.NAVIGATION
-            )
-            or getattr(self, "_requires_mapping_restart", False)
-        ):
-            reply = {
-                "type": "interaction_result",
-                "request_id": request.request_id,
-                "status": "rejected",
-                "code": "navigation_unavailable",
-                "epoch": self._interaction.epoch,
-                "revision": self._interaction.revision,
-            }
-        else:
-            previous_target = self._interaction.target
-            result = self._interaction.handle(client_id, request, commit=self._commit_shared_target)
-            authority = self._interaction.authority
-            if (
-                self._manipulation_service is not None
-                and authority is not None
-                and authority.kind == "manipulation_planning"
-                and self._interaction.target is not None
-                and (
-                    previous_target is None
-                    or self._interaction.target.domain != previous_target.domain
-                    or self._interaction.target.group_id != previous_target.group_id
-                    or self._interaction.target.revision != previous_target.revision
-                )
-            ):
-                self._manipulation_service.revoke(
-                    self._interaction.epoch,
-                    authority.lease_id,
-                    # Retire work preceding this edit, not requests admitted for it.
-                    self._interaction.revision - 1,
-                    "target_changed",
-                )
-            if (
-                request.action == "acquire"
-                and result.status == "accepted"
-                and result.code == "acquired"
-                and self._manipulation_service is not None
-            ):
-                self._manipulation_service.revoke(
-                    self._interaction.epoch,
-                    result.lease_id or "",
-                    self._interaction.revision - 1,
-                    "superseded",
-                )
-            reply = result.wire()
-        if (reply.get("status") == "accepted"
-                and request.action in {"update", "renew"}
-                and self._manipulation_service is not None):
-            authority = self._interaction.authority
-            target = self._interaction.target
-            if (authority is not None and authority.kind == "manipulation_following"
-                    and target is not None and authority.group_id is not None):
-                self._manipulation_service.follow_shared(client_id, authority.group_id, {
-                    "position": list(target.position), "orientation": list(target.orientation),
-                    "speed_scale": target.speed_scale, "sequence": authority.sequence,
-                    "ts": time.time(), "authority_epoch": self._interaction.epoch,
-                    "authority_lease": authority.lease_id,
-                    "authority_revision": self._interaction.revision,
-                    "authority_deadline": authority.expires_at,
-                    "target_revision": target.revision,
-                })
-        self._drain_interaction_retirements()
-        if not (request.action in {"update", "renew"} and reply.get("status") == "accepted"):
-            self._ws_server.schedule_send_to_client(client_id, encode_text(reply))
-        # High-rate target samples are coalesced by the 20Hz loop. Authority
-        # transitions and their exact final poses are delivered immediately.
-        if request.action not in {"update", "renew"}:
-            self._broadcast_interaction(force=True)
-
-    def _interaction_reply(
-        self, request: InteractionRequest, client_id: str, status: str, code: str
-    ) -> None:
-        self._ws_server.schedule_send_to_client(
-            client_id,
-            encode_text(
-                {
-                    "type": "interaction_result",
-                    "request_id": request.request_id,
-                    "status": status,
-                    "code": code,
-                    "epoch": self._interaction.epoch,
-                    "revision": self._interaction.revision,
-                }
-            ),
-        )
-
-    async def _change_native_mode(self, request: InteractionRequest, client_id: str) -> None:
-        try:
-            assert self._agent_control is not None
-            if self._agent_mode_rpc is None:
-                self._agent_mode_rpc = NativeRPC(self._agent_control)
-            accepted = await self._agent_mode_rpc.call(
-                "ar_agent_set_manual",
-                request.mode == "manual",
-                timeout=2,
-            )
-            if (accepted and request.mode == "agent"
-                    and request.epoch != self._interaction.epoch):
-                # A source reset invalidates a pending resume. Confirm a native
-                # pause before publishing manual; unknown outcomes stay fenced.
-                paused = await self._agent_mode_rpc.call("ar_agent_set_manual", True, timeout=2)
-                if paused:
-                    self._interaction.confirm_native_manual()
-                self._native_mode_uncertain = not paused
-                self._interaction_reply(request, client_id, "stale", "epoch_changed")
-                self._broadcast_interaction(force=True)
-                return
-            self._interaction.set_agent_busy(not self._agent_service.idle)
-            # Native acknowledgement is a fact even if the requester or source
-            # retired during the RPC. Reconcile before rejecting the old request.
-            if accepted:
-                assert request.mode is not None
-                self._interaction.confirm_native_mode(request.mode)
-            self._native_mode_uncertain = self._native_mode_uncertain and not accepted
-            if request.epoch != self._interaction.epoch:
-                self._interaction_reply(request, client_id, "stale", "epoch_changed")
-            elif not accepted:
-                self._interaction_reply(request, client_id, "busy", "native_motion_active")
-            else:
-                result = self._interaction.complete_native_mode(client_id, request)
-                self._ws_server.schedule_send_to_client(client_id, encode_text(result.wire()))
-            self._broadcast_interaction(force=True)
-        except TimeoutError:
-            self._native_mode_uncertain = True
-            self._interaction_reply(request, client_id, "rejected", "native_mode_timeout")
-        except Exception:
-            self._native_mode_uncertain = True
-            logger.exception("Native robot mode transition failed")
-            self._interaction_reply(request, client_id, "rejected", "native_mode_failed")
-        finally:
-            self._interaction.set_agent_busy(not self._agent_service.idle)
-            self._mode_task = None
+        return self._interaction_controller.handle_request(request, client_id)
 
     def _commit_shared_target(self, target: SharedTarget, kind: InteractionKind) -> bool:
         if kind == "joystick":
@@ -905,23 +729,25 @@ class ARModule(Module):  # type: ignore[misc]
 
     def _submit_navigation_goal(self, msg: NavGoalRequest) -> bool:
         service = self._navigation_service
-        if service is None or getattr(
-            self, "_requires_mapping_restart", False
-        ):
+        if service is None or getattr(self, "_requires_mapping_restart", False):
             return False
         goal = self._nav_goal_coordinator.submit_goal(msg)
         self._broadcast_state()
-        if not service.submit(goal, self._interaction.epoch, self._interaction.revision):
+        if not service.submit(
+            goal,
+            self._interaction_controller.state.epoch,
+            self._interaction_controller.state.revision,
+        ):
             return False
         yaw = PoseStamped(position=list(msg.position), orientation=list(msg.orientation)).yaw
-        self._interaction.set_active_goal(
+        self._interaction_controller.state.set_active_goal(
             {"type": "nav_goal", "pose": [*msg.position, yaw], "path_poses": [], "ts": time.time()}
         )
         return True
 
     def _native_navigation_failed(self, goal_ts: float) -> None:
         if self._nav_goal_coordinator.on_native_status(goal_ts, "failed"):
-            self._interaction.set_active_goal(None)
+            self._interaction_controller.state.set_active_goal(None)
             self._publish_stop()
             self._broadcast_interaction(force=True)
             self._broadcast_state()
@@ -929,99 +755,29 @@ class ARModule(Module):  # type: ignore[misc]
     def _native_authorized(
         self, client_id: str, msg: NavGoalRequest | NavJoystickRequest, kind: InteractionKind
     ) -> bool:
-        allowed = self._interaction.authorized(client_id, msg.epoch, msg.lease_id, kind=kind)
-        self._drain_interaction_retirements()
-        authority = self._interaction.authority
-        if not allowed or authority is None or msg.sequence is None:
-            return False
-        if msg.sequence < authority.sequence or msg.sequence <= self._native_sequences.get(
-            authority.lease_id, -1
-        ):
-            return False
-        self._native_sequences[authority.lease_id] = msg.sequence
-        return True
+        return self._interaction_controller.authorize_native(client_id, msg, kind)
 
     def _on_nav_goal_request(
         self, msg: NavGoalRequest, _websocket: ws_server.ServerConnection, client_id: str
     ) -> None:
-        if not self._capabilities.supports_navigation(NAV_GOAL) or getattr(
-            self, "_requires_mapping_restart", False
-        ):
-            return
-        if msg.preview:
-            if not self._interaction.authorized(
-                client_id, msg.epoch, msg.lease_id, kind="navigation_planning"
-            ):
-                self._drain_interaction_retirements()
-                return
-            target = self._interaction.target
-            if target is None:
-                return
-            self._previews.request(
-                replace(
-                    msg,
-                    position=target.position,
-                    orientation=target.orientation,
-                    target_revision=target.revision,
-                ),
-                client_id,
-            )
-            return
-        if not self._native_authorized(client_id, msg, "live"):
-            return
-        target = self._interaction.target
-        if target is not None and target.domain == "navigation":
-            self._submit_navigation_goal(
-                replace(msg, position=target.position, orientation=target.orientation)
-            )
+        return self._interaction_controller.handle_navigation(msg, _websocket, client_id)
 
     async def _on_navigation_preview(
         self, client_id: str, request: NavGoalRequest, frame: object
     ) -> None:
         # The worker may complete after release, expiry, handover or aim changes.
-        if not isinstance(frame, NavGoalFrame):
-            return
-        if request.epoch is None or request.lease_id is None or request.target_revision is None:
-            return
-        body = await self._ws_server.prepare_outbound_async(navigation_payload(frame))
-        if self._interaction.set_preview(
-            body,
-            epoch=request.epoch,
-            lease_id=request.lease_id,
-            target_revision=request.target_revision,
-            source_position=request.position,
-            source_orientation=request.orientation,
-        ):
-            self._broadcast_interaction()
+        return await self._interaction_controller.observe_preview(client_id, request, frame)
 
     def _on_manipulation_snapshot(self, snapshot: dict[str, Any]) -> None:
-        self._interaction.observe_manipulation_snapshot(snapshot)
+        return self._interaction_controller.observe_manipulation_snapshot(snapshot)
 
     def _on_manipulation_result(self, request: ManipulationRequest, result: dict[str, Any]) -> None:
-        self._interaction.observe_manipulation_result(request, result)
+        return self._interaction_controller.observe_manipulation_result(request, result)
 
     def _on_manipulation_request(
         self, request: ManipulationRequest, client_id: str, clock_offset: float
     ) -> None:
-        service = self._manipulation_service
-        if service is None:
-            return
-        self._interaction.poll()
-        self._drain_interaction_retirements()
-        admitted: ManipulationRequest | dict[str, Any]
-        if request.action != "cancel" and (
-            self._mode_task is not None or self._native_mode_uncertain
-        ):
-            admitted = {"status": "rejected", "code": "busy"}
-        else:
-            admitted = admit_manipulation(request, client_id, self._interaction)
-        if isinstance(admitted, ManipulationRequest):
-            service.submit(admitted, client_id, clock_offset)
-        else:
-            self._ws_server.schedule_send_to_client(client_id, encode_text({
-                "type": "manipulation_result", "request_id": request.request_id,
-                "action": request.action, "group_id": request.group_id, **admitted,
-            }))
+        return self._interaction_controller.handle_manipulation(request, client_id, clock_offset)
 
     async def handle_global_costmap(self, msg: OccupancyGrid) -> None:
         await self._previews.update_costmap(msg)
@@ -1030,11 +786,12 @@ class ARModule(Module):  # type: ignore[misc]
     def _on_estop_request(self, _msg: EstopRequest, _websocket: ws_server.ServerConnection) -> None:
         if not self._capabilities.supports(CapabilityName.ESTOP):
             return
-        self._interaction.stop()
+        self._interaction_controller.state.stop()
         if self._manipulation_service is not None:
-            self._interaction.request_manipulation_stop()
+            self._interaction_controller.state.request_manipulation_stop()
             self._manipulation_service.emergency_stop(
-                self._interaction.epoch, self._interaction.revision
+                self._interaction_controller.state.epoch,
+                self._interaction_controller.state.revision,
             )
         self._drain_interaction_retirements()
         self._cancel_tele_cmd_vel()
@@ -1088,21 +845,16 @@ class ARModule(Module):  # type: ignore[misc]
         if self.human_input.transport is None:
             logger.warning("user_message_request ignored — human_input transport is not wired")
             return
-        if (
-            self._mode_task is not None
-            or self._native_mode_uncertain
-            or self._interaction.mode != "agent"
-            or self._interaction.authority is not None
-        ):
+        if not self._interaction_controller.agent_input_available:
             return
         if not self._agent_service.begin_turn(client_id):
             return
-        self._interaction.set_agent_busy(True)
+        self._interaction_controller.state.set_agent_busy(True)
         try:
             self.human_input.publish(msg.text)
         except Exception:
             self._agent_service.cancel_turn(client_id)
-            self._interaction.set_agent_busy(False)
+            self._interaction_controller.state.set_agent_busy(False)
             raise
         logger.info("human_input published", client_id=client_id, chars=len(msg.text))
 
@@ -1147,7 +899,7 @@ class ARModule(Module):  # type: ignore[misc]
         if sample is None:
             return 0.0
         x, y, z, w = sample.orientation
-        return math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+        return quaternion_yaw((x, y, z, w))
 
     def _on_localization_progress(
         self,
@@ -1191,7 +943,9 @@ class ARModule(Module):  # type: ignore[misc]
             self._policy, self._odometry, domain, client_id, replay=self._replay_mode
         )
         if work is None:
-            logger.warning("localization_observations ignored — no pending episode", client_id=client_id)
+            logger.warning(
+                "localization_observations ignored — no pending episode", client_id=client_id
+            )
             return
         self._localization_runner.submit(work)
 
@@ -1256,14 +1010,15 @@ class ARModule(Module):  # type: ignore[misc]
 
     def _retire_robot_source(self) -> None:
         # Retire native work against the old reference before replacing its epoch.
-        self._interaction.stop("reference_reset")
+        self._interaction_controller.state.stop("reference_reset")
         self._drain_interaction_retirements()
         if self._manipulation_service is not None:
-            self._interaction.request_manipulation_stop()
+            self._interaction_controller.state.request_manipulation_stop()
             self._manipulation_service.emergency_stop(
-                self._interaction.epoch, self._interaction.revision
+                self._interaction_controller.state.epoch,
+                self._interaction_controller.state.revision,
             )
-        self._interaction.reset()
+        self._interaction_controller.state.reset()
         self._broadcast_interaction()
         self._odometry.retire()
         publisher = getattr(self, "_state_publisher", None)
@@ -1349,15 +1104,14 @@ class ARModule(Module):  # type: ignore[misc]
             return
         nav_goal_frame, state_changed = self._nav_goal_coordinator.on_path(msg)
         if nav_goal_frame is not None:
-            epoch = self._interaction.epoch
-            body = await self._ws_server.prepare_outbound_async(
-                navigation_payload(nav_goal_frame)
-            )
-            if epoch != self._interaction.epoch or not self._nav_goal_coordinator.accepts_path(
-                nav_goal_frame.ts
+            epoch = self._interaction_controller.state.epoch
+            body = await self._ws_server.prepare_outbound_async(navigation_payload(nav_goal_frame))
+            if (
+                epoch != self._interaction_controller.state.epoch
+                or not self._nav_goal_coordinator.accepts_path(nav_goal_frame.ts)
             ):
                 return
-            self._interaction.set_active_goal(body)
+            self._interaction_controller.state.set_active_goal(body)
             self._broadcast_interaction()
         if state_changed:
             self._broadcast_state()
@@ -1384,7 +1138,7 @@ class ARModule(Module):  # type: ignore[misc]
             self._finish_navigation(phase == "succeeded")
 
     def _finish_navigation(self, succeeded: bool) -> None:
-        self._interaction.set_active_goal(None)
+        self._interaction_controller.state.set_active_goal(None)
         self._broadcast_interaction()
         self._broadcast_state()
         if succeeded:
@@ -1401,7 +1155,9 @@ class ARModule(Module):  # type: ignore[misc]
         if not self._capabilities.supports(CapabilityName.AGENT):
             return
         changed = self._agent_service.update_idle(bool(msg))
-        self._interaction.set_agent_busy(self._mode_task is not None or not self._agent_service.idle)
+        self._interaction_controller.state.set_agent_busy(
+            self._interaction_controller.mode_task is not None or not self._agent_service.idle
+        )
         if changed:
             self._broadcast_state()
 

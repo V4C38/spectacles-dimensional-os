@@ -21,12 +21,12 @@ it("interrupts another source's capture with one emergency stop on press", () =>
   const f = fixture();
   const left = new THREE.Group(), right = new THREE.Group();
   left.userData.id = 1; right.userData.id = 2;
-  f.internal.capture.press(left, {});
-  f.internal.primary = { kind: "navigation", source: left, fromMarker: true };
+  f.controller.gestures.authorize(left, {});
+  f.controller.gestures.begin({ kind: "navigation", source: left, fromMarker: true });
   f.internal.interaction.hit.mockReturnValue({ object: new THREE.Mesh(), point: new THREE.Vector3() });
   f.controller.onSelectStart({ target: right });
-  expect(f.internal.capture.owner).toBeNull();
-  expect(f.internal.worldHold).toBeNull();
+  expect(f.controller.gestures.owner).toBeNull();
+  expect(f.controller.gestures.worldHold).toBeNull();
   expect(f.client.loseInput.mock.invocationCallOrder[0]).toBeLessThan(f.client.emergencyStop.mock.invocationCallOrder[0]);
   f.controller.onSelectEnd({ target: right });
   expect(f.client.emergencyStop).toHaveBeenCalledOnce();
@@ -50,8 +50,8 @@ it("preserves native touch release ordering and retires authorization before a c
     events.length = 0;
     f.internal.dispatchTouch(source, contact, false, false);
     expect(events).toEqual(["input-end", "contact", "sdk-start", "sdk-end", "app-end"]);
-    f.internal.capture.press(source, contact.object);
-    end.mockImplementation(() => { expect(f.internal.capture.owner).toBeNull(); });
+    f.controller.gestures.authorize(source, contact.object);
+    end.mockImplementation(() => { expect(f.controller.gestures.owner).toBeNull(); });
     f.internal.dispatchTouch(source, contact, false, true);
     expect(f.client.loseInput).toHaveBeenCalled();
   } finally { start.mockRestore(); end.mockRestore(); f.controller.dispose(); }
@@ -61,13 +61,13 @@ it("preserves native touch release ordering and retires authorization before a c
 it("lets Stop interrupt a different hand capture before dispatching the stop action", () => {
   const f = fixture();
   const left = new THREE.Group(), right = new THREE.Group();
-  f.internal.capture.press(left, {});
+  f.controller.gestures.authorize(left, {});
   f.internal.mainMenu.isEmergencyTarget = () => false;
   f.internal.canInteract = () => true;
   const stop = new THREE.Mesh(); stop.userData.manipulationAction = "stop";
   f.internal.interaction.hit.mockReturnValue({object: stop, point: new THREE.Vector3()});
   f.controller.onSelectStart({target: right});
-  expect(f.internal.capture.owner).toBeNull();
+  expect(f.controller.gestures.owner).toBeNull();
   expect(f.client.manipulation.interrupt).not.toHaveBeenCalled();
   expect(f.client.manipulation.action).toHaveBeenCalledWith("stop");
   expect(f.client.emergencyStop).not.toHaveBeenCalled();
@@ -80,7 +80,7 @@ it("lets the other hand toggle the gripper without ending the owner's drag", () 
   const owner = new THREE.Group(), other = new THREE.Group();
   owner.userData.id = 1; other.userData.id = 2;
   (other as any).inputSource = { hand: {}, handedness: "left" };
-  f.internal.capture.press(owner, {}); f.internal.primary = { kind: "arm", source: owner };
+  f.controller.gestures.authorize(owner, {}); f.controller.gestures.begin({ kind: "arm", source: owner });
   f.internal.canInteract = () => true;
   const button = new THREE.Mesh(); button.userData.manipulationAction = "gripper";
   f.internal.interaction.hit.mockReturnValue({ object: button, point: new THREE.Vector3() });
@@ -90,8 +90,69 @@ it("lets the other hand toggle the gripper without ending the owner's drag", () 
   expect((f.client.manipulation as any).action).toHaveBeenCalledOnce();
   expect((f.client.manipulation as any).action).toHaveBeenCalledWith("gripper");
   f.controller.onSelectEnd({ target: other });
-  expect(f.internal.capture.owner).toBe(owner);
-  expect(f.internal.manipulationHold).toBe(owner);
+  expect(f.controller.gestures.owner).toBe(owner);
+  expect(f.controller.gestures.manipulationHold).toBe(owner);
   expect(f.client.manipulation.end).not.toHaveBeenCalled();
   f.controller.dispose();
+});
+
+it("retires semantic capture on suspend without suspending domain owners twice", () => {
+  const f = fixture();
+  const owner = new THREE.Group();
+  f.controller.gestures.authorize(owner, {});
+  f.controller.gestures.begin({ kind: "navigation", source: owner, fromMarker: true });
+  f.controller.gestures.finish("suspend", { releaseMechanisms: vi.fn(), notifyDomain: f.client.loseInput });
+  expect(f.controller.gestures.owner).toBeNull();
+  expect(f.controller.holdingWorld).toBeNull();
+  expect(f.client.loseInput).not.toHaveBeenCalled();
+  f.controller.dispose();
+});
+
+it("does not replay a held press after losing its source", () => {
+  const f = fixture();
+  expect(f.controller.gestures.observePress("left", true)).toBe(true);
+  f.controller.gestures.finish("source-lost", { releaseMechanisms: vi.fn(), notifyDomain: f.client.loseInput });
+  expect(f.controller.gestures.observePress("left", true)).toBe(false);
+  f.controller.gestures.observePress("left", false);
+  expect(f.controller.gestures.observePress("left", true)).toBe(true);
+  f.controller.dispose();
+});
+
+it("rejects starting a semantic gesture for another input owner's authorization", () => {
+  const f = fixture();
+  const owner = new THREE.Group(), other = new THREE.Group();
+  f.controller.gestures.authorize(owner, {});
+  expect(f.controller.gestures.begin({ kind: "navigation", source: other, fromMarker: false })).toBe(false);
+  expect(f.controller.holdingWorld).toBeNull();
+  expect(f.controller.gestures.owner).toBe(owner);
+  f.controller.dispose();
+});
+
+it("disposes safely before SDK initialization and releases resources only once", () => {
+  const client = { loseInput: vi.fn() };
+  const controller = new WebXRInputController(client as never, new THREE.Group(), {
+    tracking: () => false, session: () => null,
+  });
+  const geometry = vi.spyOn(controller.floor.geometry, "dispose");
+  const material = vi.spyOn(controller.floor.material as THREE.Material, "dispose");
+  expect(() => { controller.dispose(); controller.dispose(); }).not.toThrow();
+  expect(client.loseInput).toHaveBeenCalledOnce();
+  expect(geometry).toHaveBeenCalledOnce();
+  expect(material).toHaveBeenCalledOnce();
+});
+
+it("restores SDK hooks after initialization fails and keeps teardown idempotent", () => {
+  const originalRaycast = vi.fn();
+  const input = { performRaycastOnScene: originalRaycast, raycaster: new THREE.Raycaster() };
+  const client = { loseInput: vi.fn() };
+  const controller = new WebXRInputController(client as never, {
+    add: () => { throw new Error("scene unavailable"); },
+  } as never, { tracking: () => false, session: () => null });
+  const geometry = vi.spyOn(controller.floor.geometry, "dispose");
+  expect(() => controller.init({ input: input as never })).toThrow("scene unavailable");
+  expect(input.performRaycastOnScene).not.toBe(originalRaycast);
+  expect(() => { controller.dispose(); controller.dispose(); }).not.toThrow();
+  expect(input.performRaycastOnScene).toBe(originalRaycast);
+  expect(client.loseInput).toHaveBeenCalledOnce();
+  expect(geometry).toHaveBeenCalledOnce();
 });

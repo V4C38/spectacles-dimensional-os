@@ -1,10 +1,11 @@
+import type { ReadonlyFacts } from "@dimos-ar-client/ClientContracts";
 import { ARM_PANEL_STYLE, PanelHeightAnimation } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 import { RobotPanelFrame } from "../presentation/RobotPanelFrame";
 import { manipulationMenuRows, manipulationButtonEnabled, endEffectorAction, type ManipulationSnapshot } from "@dimos-ar-client/manipulation/ManipulationPresentation";
 
 import type {
-  ManipulationGroup,
-  ManipulationObservation,
+  ManipulationGroup as MutableManipulationGroup,
+  ManipulationObservation as MutableManipulationObservation,
 } from "@dimos-ar-client/manipulation/ManipulationTypes";
 import * as THREE from "three";
 import { Text } from "troika-three-text";
@@ -17,6 +18,9 @@ import { RobotMarkerLabel } from "../presentation/RobotMarkerLabel";
 import { SpeedSlider } from "../presentation/SpeedSlider";
 import { SurfaceButton } from "../presentation/SurfaceButton";
 import { syncText, UI_FONT_REGULAR, UI_FONT_SEMIBOLD, disposeObjectTrees } from "../presentation/SceneResources";
+
+type ManipulationGroup = ReadonlyFacts<MutableManipulationGroup>;
+type ManipulationObservation = ReadonlyFacts<MutableManipulationObservation>;
 
 
 export class ManipulationControlsView {

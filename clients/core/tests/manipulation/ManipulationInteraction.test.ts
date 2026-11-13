@@ -1174,3 +1174,26 @@ it("retires rejection and old replies on reset before a fresh grab of the same p
   f.reply(old, { status: "infeasible", code: "ik_failed" });
   expect(f.interaction.target).toEqual(pose); expect(f.interaction.rejection).toBeNull();
 });
+
+it("keeps a checked plan independent of an overlapping advisory request", () => {
+  const f = fixture();
+  f.interaction.setSelected(true);
+  expect(f.interaction.begin()).toBe(true);
+  f.interaction.aim(pose);
+  f.advance(.01);
+  const advisory = f.sent.find(request => request.action === "evaluate");
+  expect(advisory).toBeDefined();
+  f.interaction.end();
+  f.advance(.01);
+  const plan = f.sent.find(request => request.action === "plan");
+  expect(plan).toBeDefined();
+  f.reply(plan, planned("independent-artifact"));
+  expect(f.interaction.plan?.plan_id).toBe("independent-artifact");
+  expect(f.interaction.snapshot().planning).toBe(true);
+  f.reply(advisory, { status: "feasible", joints: { joint: .3 } });
+  expect(f.interaction.plan?.plan_id).toBe("independent-artifact");
+  expect(f.interaction.snapshot().planning).toBe(false);
+  f.interaction.execute();
+  f.advance(0);
+  expect(f.sent.at(-1)).toMatchObject({ action: "execute", plan_id: "independent-artifact" });
+});

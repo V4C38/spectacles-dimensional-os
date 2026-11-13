@@ -1,6 +1,9 @@
-import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import type { ReadonlyFacts } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
+import type { ClientTrackingOrigin as MutableClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 import { MarkerCorrectionTrail } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldPresentation";
 import { AdaptiveStrokeRenderer, WorldMeshRenderer } from "./WorldMeshRenderer";
+
+type ClientTrackingOrigin = ReadonlyFacts<MutableClientTrackingOrigin>;
 
 /** Reused visual meshes only; no interaction components or localization writes. */
 export class MarkerCorrectionRenderer {

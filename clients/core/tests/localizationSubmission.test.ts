@@ -42,3 +42,21 @@ describe("localization submission correlation", () => {
     expect(gate.accept(1_700_000_001.0000002, 1)).toBe(true);
   });
 });
+
+it("keeps upload and result timing in one submission and never revives retired work", () => {
+  const gate = new LocalizationSubmission();
+  gate.beginUpload(1, 100, 0, 5);
+  expect(gate.deadline).toBe(35);
+  gate.uploadSettled(10, true);
+  expect(gate.deadline).toBe(15);
+  gate.uploadSettled(12, true);
+  expect(gate.deadline).toBe(15);
+  expect(gate.accept(101, 14)).toBe(true);
+  expect(gate.deadline).toBeNull();
+  gate.uploadSettled(20, true);
+  expect(gate.deadline).toBeNull();
+  gate.beginUpload(2, 100, 20, 5);
+  gate.uploadSettled(21, false);
+  expect(gate.deadline).toBeNull();
+  expect(gate.accept(102, 22)).toBe(false);
+});

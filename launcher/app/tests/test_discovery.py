@@ -124,7 +124,7 @@ async def test_arm_recording_passes_validated_stream_binding_to_process(monkeypa
     validate = AsyncMock(return_value={"streams": streams, "needs_selection": False})
     start = AsyncMock()
     monkeypatch.setattr(app, "validate_replay", validate)
-    monkeypatch.setattr(app.manager.status, "dimos_python", "/selected/python")
+    app.manager.dependencies.update_status(dimos_python="/selected/python")
     monkeypatch.setattr(app.manager, "start_armodule", start)
     monkeypatch.setattr(app.manager, "snapshot", dict)
     monkeypatch.setattr(app.robot_profiles, "snapshot", lambda *args: {})

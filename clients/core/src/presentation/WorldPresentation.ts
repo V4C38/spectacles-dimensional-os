@@ -1,3 +1,4 @@
+import type { ReadonlyFacts } from "../ClientContracts";
 import type { ClientTrackingOrigin } from "../localization/ClientTracking";
 import type { Vec3 } from "../ClientContracts";
 
@@ -127,7 +128,7 @@ function clamp(value: number, low: number, high: number): number { return Math.m
 
 /** Visual only: the authoritative marker keeps its existing placement behavior. */
 export class MarkerCorrectionTrail {
-  private origin: ClientTrackingOrigin | null = null;
+  private origin: ReadonlyFacts<ClientTrackingOrigin> | null = null;
   private previous: Vec3 | null = null;
   private start: Vec3 | null = null;
   private startedAt = 0;
@@ -136,7 +137,7 @@ export class MarkerCorrectionTrail {
   scale = 1;
   constructor(private readonly unitsPerMetre = 1) {}
 
-  update(origin: ClientTrackingOrigin | null, position: Vec3, now: number): Vec3 | null {
+  update(origin: ReadonlyFacts<ClientTrackingOrigin> | null, position: Readonly<Vec3>, now: number): Vec3 | null {
     if (!origin) { this.reset(); return null; }
     const prior = this.origin;
     if (prior && this.previous) {

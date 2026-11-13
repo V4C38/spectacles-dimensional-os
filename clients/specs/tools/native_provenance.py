@@ -1,67 +1,56 @@
-"""Bind native evidence to selected production inputs and the actual disposable copy."""
+"""Python lifecycle adapter to the shared integration provenance policy."""
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
+import subprocess
+from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+BRIDGE = REPO_ROOT / "tools/integration-tests/provenance.mjs"
+
+
+def query(operation: str, **arguments: Any) -> Any:
+    return json.loads(subprocess.check_output(
+        ["node", str(BRIDGE)], input=json.dumps({"operation": operation, **arguments}), text=True,
+    ))
+
+
+def source_identity(root: Path = REPO_ROOT) -> dict:
+    return query("source-identity", root=str(root))
 
 
 def project_files(root: Path) -> dict[str, str]:
-    paths = (list((root / "Assets").rglob("*")) + list((root / "Packages").rglob("*"))
-             + list(root.glob("*.esproj")))
-    return {
-        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in sorted(paths)
-        if path.is_file()
-        and path.name != ".DS_Store"
-        and not path.relative_to(root).as_posix().startswith("Assets/Review/")
-        and path.relative_to(root).as_posix() != "Assets/Review.meta"
-    }
+    return query("project-files", root=str(root))
 
 
 def begin(source: Path, workspace: Path, canonical: Path) -> dict:
-    marker = json.loads((workspace / ".specs-review.json").read_text())
-    selected = project_files(source)
-    tested = project_files(workspace)
-    original = marker.get("productionFiles")
-    expected = dict(original or tested)
-    expected.update(marker.get("sceneOverlays", {}))
-    return {
-        "selectedRoot": str(source.resolve()),
-        "workspaceRoot": str(workspace.resolve()),
-        "selectedFiles": selected,
-        "productionFiles": original,
-        "workspaceFiles": tested,
-        "publicationEligible": source.resolve() == canonical.resolve()
-        and workspace.resolve() != source.resolve()
-        and original == selected and expected == tested,
-    }
+    return query("begin", source=str(source), workspace=str(workspace), canonical=str(canonical))
+
+
+def _update(value: dict, operation: str) -> None:
+    updated = query(operation, value=value)
+    value.clear()
+    value.update(updated)
 
 
 def before_scene_overlay(provenance: dict) -> None:
-    if (project_files(Path(provenance["selectedRoot"])) != provenance["selectedFiles"]
-            or project_files(Path(provenance["workspaceRoot"])) != provenance["workspaceFiles"]):
-        provenance["publicationEligible"] = False
+    _update(provenance, "before-overlay")
 
 
 def record_scene_overlay(provenance: dict) -> None:
-    """Only editor-owned harness scene saves are allowed to change tested inputs."""
-    workspace = Path(provenance["workspaceRoot"])
-    scene = workspace / "Assets/Scene.scene"
-    if not scene.is_file():
+    """Record editor-owned harness saves without forgiving intervening source changes."""
+    _update(provenance, "record-overlay")
+    scene = provenance["workspaceFiles"].get("Assets/Scene.scene")
+    if scene is None:
         return
-    digest = hashlib.sha256(scene.read_bytes()).hexdigest()
-    provenance["workspaceFiles"]["Assets/Scene.scene"] = digest
-    marker_path = workspace / ".specs-review.json"
+    marker_path = Path(provenance["workspaceRoot"]) / ".specs-review.json"
     marker = json.loads(marker_path.read_text())
-    marker["sceneOverlays"] = {"Assets/Scene.scene": digest}
+    marker["sceneOverlays"] = {"Assets/Scene.scene": scene}
     marker_path.write_text(json.dumps(marker, indent=2) + "\n")
 
 
 def matches(provenance: dict) -> bool:
-    return (
-        provenance.get("publicationEligible") is True
-        and provenance["productionFiles"] == provenance["selectedFiles"]
-        and project_files(Path(provenance["selectedRoot"])) == provenance["selectedFiles"]
-        and project_files(Path(provenance["workspaceRoot"])) == provenance["workspaceFiles"]
-    )
+    # begin() established the selected canonical root. Publication independently
+    # checks it against the repository's production root in artifacts.mjs.
+    return query("matches", value=provenance, canonical=provenance["selectedRoot"])

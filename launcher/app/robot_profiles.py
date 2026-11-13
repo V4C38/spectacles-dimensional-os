@@ -13,14 +13,10 @@ from typing import Any
 from uuid import uuid4
 
 from dimos_config import dimos_config_path
+from robot_sources import BLUEPRINTS, blueprint_definition
 from tag_config import merge_armodule_settings
 
 _LOCK = threading.RLock()
-BLUEPRINT_ROBOTS = {
-    "unitree_go2_ar": "unitree_go2",
-    "unitree_go2_ar_agentic": "unitree_go2",
-    "openyam_ar_planner": "openyam",
-}
 
 
 def profiles_path() -> Path:
@@ -62,7 +58,7 @@ class RobotProfiles:
     def create(
         self, robot: str, name: str | None = None, source_id: str | None = None
     ) -> dict[str, Any]:
-        if robot not in set(BLUEPRINT_ROBOTS.values()):
+        if robot not in {item.robot for item in BLUEPRINTS.values()}:
             raise ValueError("unknown robot type")
         with _LOCK:
             profiles = self.all()
@@ -117,7 +113,7 @@ class RobotProfiles:
 
     def snapshot(self, profile_id: str, blueprint: str) -> dict[str, Any]:
         profile = self.get(profile_id)
-        if BLUEPRINT_ROBOTS.get(blueprint) != profile["robot"]:
+        if blueprint_definition(blueprint).robot != profile["robot"]:
             raise ValueError("robot profile is incompatible with blueprint")
         return {
             **copy.deepcopy(profile["armodule"]),

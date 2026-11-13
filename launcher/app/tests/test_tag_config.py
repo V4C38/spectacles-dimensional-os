@@ -150,3 +150,14 @@ def test_print_size_conversion_removes_float_noise_without_losing_fractional_siz
 
     assert print_mm_from_black_size_m(0.056) == 70.0
     assert print_mm_from_black_size_m(black_size_m_from_print_mm(70.25)) == 70.25
+def test_localization_defaults_are_the_packaged_backend_resource():
+    import json
+    import tomllib
+    from pathlib import Path
+
+    from tag_config import LOCALIZATION_DEFAULTS_PATH, LOCALIZATION_POLICY_DEFAULTS
+
+    assert LOCALIZATION_POLICY_DEFAULTS == json.loads(LOCALIZATION_DEFAULTS_PATH.read_text())
+    project = Path(__file__).resolve().parents[3] / "dimos-ar/pyproject.toml"
+    data = tomllib.loads(project.read_text())
+    assert "defaults.json" in data["tool"]["setuptools"]["package-data"]["dimos.ar.localization"]

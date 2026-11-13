@@ -1,8 +1,8 @@
 import type { Quat, Vec3 } from "../ClientContracts";
 
 export interface ManipulationPose {
-  position: Vec3;
-  orientation: Quat;
+  position: Readonly<Vec3>;
+  orientation: Readonly<Quat>;
 }
 export type ManipulationAction =
   | "evaluate"
@@ -21,7 +21,7 @@ export interface ManipulationJoint {
   kind: "fixed" | "revolute" | "continuous" | "prismatic";
   parent: string;
   child: string;
-  axis: Vec3;
+  axis: Readonly<Vec3>;
   origin: ManipulationPose;
   limits?: { lower: number; upper: number } | null;
   mimic: { joint: string; multiplier: number; offset: number } | null;
@@ -33,12 +33,12 @@ export interface ManipulationModel {
   revision: string;
   root: string;
   asset_url: string | null;
-  links: { name: string; bounds: { center: Vec3; size: Vec3 } | null }[];
-  joints: ManipulationJoint[];
+  links: readonly { name: string; bounds: { center: Readonly<Vec3>; size: Readonly<Vec3> } | null }[];
+  joints: readonly ManipulationJoint[];
 }
 export interface ManipulationGroup {
   id: string;
-  joint_names: string[];
+  joint_names: readonly string[];
   base_frame: string;
   tip_frame: string | null;
   has_gripper: boolean;
@@ -47,8 +47,8 @@ export interface ManipulationGroup {
 export interface ManipulationPlan {
   target_revision?: number; group_id?: string;
   plan_id: string;
-  joint_names: string[];
-  trajectory: { time: number; positions: number[] }[];
+  joint_names: readonly string[];
+  trajectory: readonly { time: number; positions: readonly number[] }[];
   duration: number;
 }
 export interface ManipulationObservation {
@@ -72,7 +72,7 @@ export interface ManipulationState {
   ts?: number;
   root_pose?: ManipulationPose;
   model?: ManipulationModel;
-  groups?: ManipulationGroup[];
+  groups?: readonly ManipulationGroup[];
   observations?: Record<string, ManipulationObservation>;
   execution?: string;
   execution_phase?: "motion" | "gripper" | null;

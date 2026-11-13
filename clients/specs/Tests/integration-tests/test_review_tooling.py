@@ -62,11 +62,13 @@ class ReviewEvidenceTests(unittest.TestCase):
             self.assertIn('from "./ReviewScenario"',
                           (review_dir / "IntegrationRegressionCases.ts").read_text())
             self.assertNotIn("IntegrationScenario.ts", main_helpers)
+            shared = TOOLS.parents[2] / "tools/integration-tests/support/IntegrationBulk.ts"
+            self.assertEqual((review_dir / "IntegrationBulk.ts").read_bytes(), shared.read_bytes())
 
             prepare_harness(destination, main.with_name("ManipulationProbe.ts"))
             self.assertEqual({path.name for path in review_dir.glob("Integration*.ts")}, {
                 "IntegrationHost.ts", "IntegrationArmFixture.ts", "IntegrationInput.ts",
-                "IntegrationV2Fixture.ts", "IntegrationCatalog.ts",
+                "IntegrationV2Fixture.ts", "IntegrationCatalog.ts", "IntegrationBulk.ts",
             })
             self.assertIn('from "../Scripts/DimOSSpecsClient/DimOSSpecsClient"',
                           (review_dir / "IntegrationHost.ts").read_text())
@@ -257,47 +259,47 @@ class ReviewLifecycleTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
             (output / "focus-budget.aborted").write_text("focus lost")
-            args = review.argparse.Namespace(keep_open=False, mcp_config=output / "unused")
+            args = review.ReviewOptions(keep_open=False, mcp_config=output / "unused")
             with mock.patch.object(review, "run_review", new_callable=mock.AsyncMock,
                                    side_effect=review.ReviewError("recorder failed")), \
                     mock.patch.object(review, "restore_source_project", new_callable=mock.AsyncMock) as restore, \
                     mock.patch.object(review, "LensMcp", side_effect=RuntimeError("offline")):
                 with self.assertRaisesRegex(review.ReviewError, "recorder failed"):
-                    await review.review_and_restore(args, output, Path("workspace"))
+                    await review.review_and_restore(review.ReviewContext.create(args, output, Path("workspace")))
             restore.assert_not_awaited()
             self.assertTrue(json.loads((output / "editor-restoration.json").read_text())["requiresUserAuthorization"])
 
     async def test_focused_probe_restores_source_and_cannot_pass_before_handoff(self) -> None:
-        args = review.argparse.Namespace(keep_open=False, harness=Path("probe.ts"))
+        args = review.ReviewOptions(keep_open=False, mcp_config=None, harness=Path("probe.ts"))
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
             with mock.patch.object(review, "run_review", new_callable=mock.AsyncMock, return_value={"passed": True}), \
                     mock.patch.object(review, "restore_source_project", new_callable=mock.AsyncMock) as restore:
-                result = await review.review_and_restore(args, output, Path("workspace"))
+                result = await review.review_and_restore(review.ReviewContext.create(args, output, Path("workspace")))
             self.assertTrue(result["scenarioPassed"])
             self.assertFalse(result["passed"])
             self.assertEqual(result["sourceAuditState"], "pending")
-            restore.assert_awaited_once_with(args, output, Path("workspace"))
+            restore.assert_awaited_once_with(review.ReviewContext.create(args, output, Path("workspace")))
 
     async def test_restores_source_after_a_failed_scenario(self) -> None:
-        args = review.argparse.Namespace(keep_open=False)
+        args = review.ReviewOptions(keep_open=False, mcp_config=None)
         with mock.patch.object(review, "run_review", new_callable=mock.AsyncMock, side_effect=review.ReviewError("scenario failed")), \
                 mock.patch.object(review, "restore_source_project", new_callable=mock.AsyncMock) as restore:
             with self.assertRaisesRegex(review.ReviewError, "scenario failed"):
-                await review.review_and_restore(args, Path("output"), Path("workspace"))
+                await review.review_and_restore(review.ReviewContext.create(args, Path("output"), Path("workspace")))
         restore.assert_awaited_once()
 
     async def test_only_leaves_fixtures_open_when_explicitly_requested(self) -> None:
-        args = review.argparse.Namespace(keep_open=True)
+        args = review.ReviewOptions(keep_open=True, mcp_config=None)
         with mock.patch.object(review, "run_review", new_callable=mock.AsyncMock, return_value={"passed": True}), \
                 mock.patch.object(review, "restore_source_project", new_callable=mock.AsyncMock) as restore:
-            await review.review_and_restore(args, Path("output"), Path("workspace"))
+            await review.review_and_restore(review.ReviewContext.create(args, Path("output"), Path("workspace")))
         restore.assert_not_awaited()
 
 
 class IntegrationHandoffTests(unittest.IsolatedAsyncioTestCase):
     async def test_result_stays_pending_during_source_restore(self) -> None:
-        args = review.argparse.Namespace(keep_open=False, suite="all", harness=None)
+        args = review.ReviewOptions(keep_open=False, mcp_config=None, suite="all", harness=None)
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
             async def restore(*_args):
@@ -306,7 +308,7 @@ class IntegrationHandoffTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result["sourceAuditState"], "pending")
             with mock.patch.object(review, "run_review", new_callable=mock.AsyncMock, return_value={"passed": True}), \
                     mock.patch.object(review, "restore_source_project", side_effect=restore):
-                result = await review.review_and_restore(args, output, Path("workspace"))
+                result = await review.review_and_restore(review.ReviewContext.create(args, output, Path("workspace")))
             self.assertTrue(result["scenarioPassed"])
             self.assertFalse(result["passed"])
 
@@ -339,21 +341,21 @@ class IntegrationHandoffTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_source_audit_fails_the_overall_run(self) -> None:
         import audit_source
-        args = review.argparse.Namespace(source=Path("source"), mcp_config=Path("mcp.json"))
+        args = review.ReviewOptions(source=Path("source"), mcp_config=Path("mcp.json"))
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(
             audit_source, "audit", new_callable=mock.AsyncMock, return_value=False,
         ):
-            result = await review.verify_source_handoff(args, Path(directory), {"passed": True})
+            result = await review.verify_source_handoff(review.ReviewContext.create(args, Path(directory), Path("workspace")), {"passed": True})
             self.assertFalse(result["passed"])
             self.assertFalse(result["checks"][-1]["passed"])
 
     async def test_audit_success_does_not_mask_a_failed_case(self) -> None:
         import audit_source
-        args = review.argparse.Namespace(source=Path("source"), mcp_config=Path("mcp.json"))
+        args = review.ReviewOptions(source=Path("source"), mcp_config=Path("mcp.json"))
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(
             audit_source, "audit", new_callable=mock.AsyncMock, return_value=True,
         ):
-            result = await review.verify_source_handoff(args, Path(directory), {"passed": False})
+            result = await review.verify_source_handoff(review.ReviewContext.create(args, Path(directory), Path("workspace")), {"passed": False})
             self.assertFalse(result["passed"])
             self.assertTrue(result["checks"][-1]["passed"])
 
@@ -519,6 +521,38 @@ class McpSdkContractTests(unittest.IsolatedAsyncioTestCase):
                 await review.compile_project(Client(), root, root, timeout=3)
             self.assertTrue((root / "Assets/Review/ReviewCompileTrigger.ts").is_file())
             self.assertNotIn("old failure", (root / "compile.log").read_text())
+
+
+
+
+class ReviewStateTests(unittest.TestCase):
+    def test_options_are_immutable_and_passes_share_focus_and_provenance(self):
+        from dataclasses import FrozenInstanceError
+        options = review.ReviewOptions(focus_budget=Path("shared-focus"))
+        with self.assertRaises(FrozenInstanceError):
+            options.suite = "golden"
+        context = review.ReviewContext.create(options, Path("output"), Path("workspace"))
+        context.provenance = {"publicationEligible": True}
+        child = context.for_pass("golden", Path("scenario.ts"), Path("project.esproj"), Path("output/golden"))
+        self.assertIs(child.provenance, context.provenance)
+        self.assertEqual(child.focus_budget, context.focus_budget)
+        self.assertEqual(child.options.harness, Path("scenario.ts"))
+        self.assertIsNone(options.harness)
+        child.provenance["publicationEligible"] = False
+        self.assertFalse(context.provenance["publicationEligible"])
+
+    def test_overall_success_requires_scenarios_handoff_and_provenance(self):
+        from review_evidence import ReviewOutcome
+        for scenarios in (False, True):
+            for handoff in (None, False, True):
+                for provenance in (None, False, True):
+                    result = {}
+                    outcome = ReviewOutcome(scenarios, handoff, provenance)
+                    outcome.apply(result)
+                    self.assertEqual(result["passed"], scenarios and handoff is True and provenance is not False)
+                    self.assertEqual(result["scenarioPassed"], scenarios)
+                    if handoff is None:
+                        self.assertEqual(result["sourceAuditState"], "pending")
 
 
 if __name__ == "__main__":

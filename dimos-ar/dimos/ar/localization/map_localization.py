@@ -12,7 +12,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import math
 import time
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 import numpy as np
@@ -27,6 +27,7 @@ from dimos.ar.localization.types import (
 )
 from dimos.ar.localization.vps.admission import QueryDeferredError, VpsAdmission
 from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
+from dimos.ar.numeric import quaternion_yaw
 from dimos.ar.robot.odometry import RobotOdometry
 from dimos.ar.websocket.protocol import (
     LocalizationCaptureProgress,
@@ -41,15 +42,42 @@ from dimos.utils.transform_utils import matrix_to_pose, pose_to_matrix
 logger = setup_logger()
 
 
+CapturePurpose = Literal["robot", "headset"]
+CapturePhase = Literal["requested", "waiting", "capturing", "submitted", "processing"]
+
+
 @dataclass
 class CaptureEpisode:
     id: str
-    purpose: str
+    purpose: CapturePurpose
     deadline: float
-    phase: str = "requested"
+    phase: CapturePhase = "requested"
     capture_ts: float | None = None
     travel_m: float = 0.0
     gate_deadline: float | None = None
+
+    def update_progress(
+        self,
+        message: LocalizationCaptureProgress,
+        sync: TimeSync,
+        *,
+        now: float,
+        preference_s: float,
+        timeout_s: float,
+    ) -> None:
+        if message.phase == "waiting" and self.phase in ("requested", "capturing"):
+            # Losing LOS cannot renew an episode's original preference window.
+            self.deadline = self.gate_deadline or now + max(0.25, preference_s)
+        if message.phase == "capturing" and self.phase in ("requested", "waiting"):
+            self.deadline = now + timeout_s
+        self.phase = cast("CapturePhase", message.phase)
+        self.travel_m = message.travel_m
+        if message.capture_ts is not None:
+            self.capture_ts = sync.to_server_ts(message.capture_ts)
+            self.deadline = now + timeout_s
+
+    def begin_processing(self) -> None:
+        self.phase = "processing"
 
 
 @dataclass(frozen=True)
@@ -61,21 +89,110 @@ class RelativeAlignment:
     robot_heading: float
 
 
+@dataclass(frozen=True)
+class MapAlignment:
+    id: str
+    map_code: str
+    odom_reference_id: str
+    tracking_reference_id: str
+    travel_m: float
+    ts: float
+    confidence: float
+    position: tuple[float, float, float]
+    orientation: tuple[float, float, float, float]
+
+    def wire(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "map_code": self.map_code,
+            "odom_reference_id": self.odom_reference_id,
+            "tracking_reference_id": self.tracking_reference_id,
+            "travel_m": self.travel_m,
+            "ts": self.ts,
+            "confidence": self.confidence,
+            "position": list(self.position),
+            "orientation": list(self.orientation),
+        }
+
+    def matches(self, tracking: LocalizationTracking, odom_reference: str, map_code: str) -> bool:
+        return (
+            self.tracking_reference_id == tracking.tracking_reference_id
+            and self.odom_reference_id == odom_reference
+            and self.map_code == map_code
+            and tracking.travel_m >= self.travel_m
+        )
+
+
+@dataclass(frozen=True)
+class PendingAlignment:
+    id: str
+    deadline: float
+
+
 @dataclass
 class MapClient:
     reference: str = ""
     active: bool = False
     seen_at: float = 0.0
     travel_m: float = 0.0
-    alignment: dict[str, Any] | None = None
+    alignment: MapAlignment | None = None
     episode: CaptureEpisode | None = None
     retry_at: float = 0.0
     manual: bool = True
     force: bool = False
-    awaiting_alignment: str | None = None
-    acceptance_deadline: float = 0.0
+    pending_alignment: PendingAlignment | None = None
     relative_alignment: RelativeAlignment | None = None
     next_attempt: Literal["vps", "tag"] = "vps"
+
+    def reset_reference(self) -> None:
+        self.alignment = None
+        self.episode = None
+        self.pending_alignment = None
+        self.manual = True
+        self.relative_alignment = None
+        self.next_attempt = "vps"
+        self.force = False
+
+    def request_manual_alignment(self) -> None:
+        self.manual = True
+        self.force = True
+        self.pending_alignment = None
+        self.retry_at = 0.0
+        if self.relative_alignment is not None:
+            self.next_attempt = "tag"
+
+    def issue_alignment(self, alignment: MapAlignment, *, now: float) -> None:
+        # An accepted baseline remains valid while its replacement awaits acknowledgment.
+        self.pending_alignment = PendingAlignment(alignment.id, now + 3.0)
+        self.manual = False
+
+    def acknowledge_alignment(self, alignment: MapAlignment) -> None:
+        self.alignment = alignment
+        self.relative_alignment = None
+        pending = self.pending_alignment
+        if pending is not None and pending.id == alignment.id:
+            self.pending_alignment = None
+            self.manual = False
+            self.force = False
+        elif pending is None:
+            self.manual = False
+
+    def awaiting_acceptance(self, *, now: float) -> bool:
+        if self.pending_alignment is None:
+            return False
+        if now < self.pending_alignment.deadline:
+            return True
+        self.pending_alignment = None
+        return False
+
+    def finish_capture(self) -> None:
+        self.episode = None
+
+    def accept_relative_alignment(self, alignment: RelativeAlignment) -> None:
+        self.relative_alignment = alignment
+        self.manual = self.force = False
+        self.next_attempt = "tag"
+        self.retry_at = 0.0
 
 
 def _pose_payload(matrix: Any) -> dict[str, Any]:
@@ -89,11 +206,6 @@ def _pose_payload(matrix: Any) -> dict[str, Any]:
             pose.orientation.w,
         ],
     }
-
-
-def _yaw(orientation: Sequence[float]) -> float:
-    x, y, z, w = orientation
-    return math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
 
 
 class MapLocalization:
@@ -134,7 +246,7 @@ class MapLocalization:
         self._headset_distance = headset_travel_threshold_m
         self._timeout = timeout_s
         self._clients: OrderedDict[str, MapClient] = OrderedDict()
-        self._issued: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._issued: OrderedDict[str, MapAlignment] = OrderedDict()
         self._revision = 0
         self._robot_travel: float | None = None
         self._robot_heading: float | None = None
@@ -212,12 +324,7 @@ class MapLocalization:
             self._prefer_robot = True
         else:
             # Setup/reference recovery still needs an independent headset fix.
-            client.manual = True
-            client.force = True
-            client.awaiting_alignment = None
-            client.retry_at = 0.0
-            if client.relative_alignment is not None:
-                client.next_attempt = "tag"
+            client.request_manual_alignment()
 
     def progress(
         self,
@@ -231,13 +338,7 @@ class MapLocalization:
         now = self._clock()
         if isinstance(message, LocalizationTracking):
             if client.reference and client.reference != message.tracking_reference_id:
-                client.alignment = None
-                client.episode = None
-                client.awaiting_alignment = None
-                client.manual = True
-                client.relative_alignment = None
-                client.next_attempt = "vps"
-                client.force = False
+                client.reset_reference()
                 if self._robot_episode is not None and self._robot_episode[0] == client_id:
                     self._robot_episode = None
             if (
@@ -251,27 +352,17 @@ class MapLocalization:
             client.travel_m = message.travel_m
             if message.alignment_id is not None:
                 alignment = self._issued.get(message.alignment_id)
-                if alignment is not None and (
-                    alignment["tracking_reference_id"] == client.reference
-                    and alignment["odom_reference_id"] == self._odometry.reference_id
-                    and alignment["map_code"] == self._map_code
-                    and message.travel_m >= alignment["travel_m"]
+                if alignment is not None and alignment.matches(
+                    message, self._odometry.reference_id, self._map_code
                 ):
-                    client.alignment = alignment
-                    client.relative_alignment = None
-                    if client.awaiting_alignment == message.alignment_id:
-                        client.awaiting_alignment = None
-                        client.manual = False
-                        client.force = False
-                    elif client.awaiting_alignment is None:
-                        client.manual = False
+                    client.acknowledge_alignment(alignment)
                 else:
                     client.alignment = None
                     self._emit(
                         client_id,
                         {"type": "localization_context", **self._context(), "reset": True},
                     )
-            elif client.awaiting_alignment is None:
+            elif client.pending_alignment is None:
                 client.alignment = None
             return
         episode = client.episode
@@ -285,16 +376,9 @@ class MapLocalization:
                 client.retry_at = now + 2.0
                 self._offer_tag_fallback(client_id)
             return
-        if message.phase == "waiting" and episode.phase in ("requested", "capturing"):
-            # Losing LOS must not renew the same episode's preference window.
-            episode.deadline = episode.gate_deadline or now + max(0.25, self._preference)
-        if message.phase == "capturing" and episode.phase in ("requested", "waiting"):
-            episode.deadline = now + self._timeout
-        episode.phase = message.phase
-        episode.travel_m = message.travel_m
-        if message.capture_ts is not None:
-            episode.capture_ts = sync.to_server_ts(message.capture_ts)
-            episode.deadline = now + self._timeout
+        episode.update_progress(
+            message, sync, now=now, preference_s=self._preference, timeout_s=self._timeout
+        )
 
     def observations(self, observations: Sequence[Observation], client_id: str) -> None:
         client = self._clients.get(client_id)
@@ -308,7 +392,7 @@ class MapLocalization:
             self._finish_capture(client_id, "deferred", "fresh_capture_required")
             client.retry_at = self._clock() + 0.25
             return
-        episode.phase = "processing"
+        episode.begin_processing()
         if episode.purpose == "robot":
             task = self._spawn(self._tag(client_id, client, episode, tuple(observations)))
             self._tag_jobs[client_id] = task
@@ -333,10 +417,8 @@ class MapLocalization:
         return client.active and self._clock() - client.seen_at <= 2.5
 
     def _headset_due(self, client: MapClient) -> bool:
-        if client.awaiting_alignment is not None:
-            if self._clock() < client.acceptance_deadline:
-                return False
-            client.awaiting_alignment = None
+        if client.awaiting_acceptance(now=self._clock()):
+            return False
         relative = client.relative_alignment
         if relative is not None:
             latest = self._odometry.history.latest()
@@ -347,16 +429,19 @@ class MapLocalization:
                 or self._odometry.travel() - relative.robot_travel_m >= self._distance
                 or (
                     latest is not None
-                    and abs(math.remainder(
-                        _yaw(latest.orientation) - relative.robot_heading, 2 * math.pi
-                    )) >= self._angle
+                    and abs(
+                        math.remainder(
+                            quaternion_yaw(latest.orientation) - relative.robot_heading, 2 * math.pi
+                        )
+                    )
+                    >= self._angle
                 )
             )
         return (
             client.force
             or client.manual
             or client.alignment is None
-            or (client.travel_m - float(client.alignment["travel_m"]) >= self._headset_distance)
+            or (client.travel_m - client.alignment.travel_m >= self._headset_distance)
         )
 
     def _robot_due(self) -> bool:
@@ -369,7 +454,11 @@ class MapLocalization:
             or self._robot_heading is None
             or (
                 self._odometry.travel() - self._robot_travel >= self._distance
-                or abs(math.remainder(_yaw(latest.orientation) - self._robot_heading, 2 * math.pi))
+                or abs(
+                    math.remainder(
+                        quaternion_yaw(latest.orientation) - self._robot_heading, 2 * math.pi
+                    )
+                )
                 >= self._angle
             )
         )
@@ -395,11 +484,17 @@ class MapLocalization:
             return
         # A failed initial VPS attempt can always try a tag, even before a map
         # anchor exists. Relative alignments prefer tags for subsequent fixes.
-        tag = next((
-            (key, value) for key, value in active
-            if value.episode is None and now >= value.retry_at
-            and value.next_attempt == "tag" and self._headset_due(value)
-        ), None)
+        tag = next(
+            (
+                (key, value)
+                for key, value in active
+                if value.episode is None
+                and now >= value.retry_at
+                and value.next_attempt == "tag"
+                and self._headset_due(value)
+            ),
+            None,
+        )
         if self._marker is not None and tag is not None and self._robot_episode is None:
             key, client = tag
             client.next_attempt = "vps"
@@ -424,9 +519,10 @@ class MapLocalization:
             None,
         )
         robot_due = (
-            self._robot_due() and self._robot_episode is None and now >= self._robot_retry
-            and any(value.alignment is not None or self._headset_due(value)
-                    for _, value in active)
+            self._robot_due()
+            and self._robot_episode is None
+            and now >= self._robot_retry
+            and any(value.alignment is not None or self._headset_due(value) for _, value in active)
         )
         if robot_due and (self._prefer_robot or headset is None or self._map_payload() is None):
             self._prefer_robot = False
@@ -457,12 +553,13 @@ class MapLocalization:
         elif headset is not None and self._admission.delay() > 0:
             self._offer_tag_fallback(headset[0])
 
-    def _request(self, client_id: str, client: MapClient, purpose: str) -> CaptureEpisode:
+    def _request(
+        self, client_id: str, client: MapClient, purpose: CapturePurpose
+    ) -> CaptureEpisode:
         episode = CaptureEpisode(
             uuid4().hex,
             purpose,
-            self._clock()
-            + (max(0.25, self._preference) if purpose == "robot" else self._timeout),
+            self._clock() + (max(0.25, self._preference) if purpose == "robot" else self._timeout),
         )
         if purpose == "robot":
             episode.gate_deadline = episode.deadline
@@ -487,8 +584,10 @@ class MapLocalization:
         for key, client in self._clients.items():
             if (
                 (client_id is None or key == client_id)
-                and client.alignment is None and client.episode is None
-                and self._active(client) and self._headset_due(client)
+                and client.alignment is None
+                and client.episode is None
+                and self._active(client)
+                and self._headset_due(client)
             ):
                 client.next_attempt = "tag"
                 # Cloud admission can defer for 30 s; local tag recovery only
@@ -534,7 +633,7 @@ class MapLocalization:
         if episode.capture_ts is not None:
             payload["ts"] = episode.capture_ts
         self._emit(client_id, payload)
-        client.episode = None
+        client.finish_capture()
 
     def _robot_status(self, status: str, reason: str) -> None:
         for key, client in self._clients.items():
@@ -646,7 +745,7 @@ class MapLocalization:
                     localized,
                     sample.observation.ts_server,
                     sample.travel_m,
-                    _yaw(pose.orientation),
+                    quaternion_yaw(pose.orientation),
                     generation,
                 ):
                     self._robot_failed("robot_localization_failed")
@@ -655,8 +754,30 @@ class MapLocalization:
             self._offer_tag_fallback()
         except Exception as exc:
             if generation == self._odometry.generation:
-                logger.warning("robot map correction failed", error=type(exc).__name__, exc_info=True)
+                logger.warning(
+                    "robot map correction failed", error=type(exc).__name__, exc_info=True
+                )
                 self._robot_failed("robot_localization_failed")
+
+    def _issue_alignment(self, client: MapClient, alignment: MapAlignment) -> None:
+        self._issued[alignment.id] = alignment
+        protected = {
+            value.alignment.id for value in self._clients.values() if value.alignment is not None
+        }
+        protected.update(
+            value.pending_alignment.id
+            for value in self._clients.values()
+            if value.pending_alignment is not None
+        )
+        protected.add(alignment.id)
+        while len(self._issued) > 256 + len(protected):
+            oldest = next(
+                (identity for identity in self._issued if identity not in protected), None
+            )
+            if oldest is None:
+                break
+            del self._issued[oldest]
+        client.issue_alignment(alignment, now=self._clock())
 
     async def _headset(
         self,
@@ -684,37 +805,19 @@ class MapLocalization:
                     self._offer_tag_fallback(key)
                     return
                 map_client = np.asarray(pose_to_matrix(localized.pose), dtype=np.float64)
-                alignment = {
-                    "id": uuid4().hex,
-                    **self._context(),
-                    "tracking_reference_id": reference,
-                    "travel_m": episode.travel_m,
-                    "ts": observation.ts_server,
-                    "confidence": localized.confidence,
-                    **_pose_payload(map_client),
-                }
-                self._issued[alignment["id"]] = alignment
-                protected = {
-                    value.alignment["id"]
-                    for value in self._clients.values()
-                    if value.alignment is not None
-                }
-                protected.update(
-                    value.awaiting_alignment
-                    for value in self._clients.values()
-                    if value.awaiting_alignment is not None
+                pose = _pose_payload(map_client)
+                alignment = MapAlignment(
+                    id=uuid4().hex,
+                    map_code=self._map_code,
+                    odom_reference_id=self._odometry.reference_id,
+                    tracking_reference_id=reference,
+                    travel_m=episode.travel_m,
+                    ts=observation.ts_server,
+                    confidence=localized.confidence,
+                    position=tuple(pose["position"]),
+                    orientation=tuple(pose["orientation"]),
                 )
-                protected.add(alignment["id"])
-                while len(self._issued) > 256 + len(protected):
-                    oldest = next(
-                        (identity for identity in self._issued if identity not in protected), None
-                    )
-                    if oldest is None:
-                        break
-                    del self._issued[oldest]
-                client.awaiting_alignment = alignment["id"]
-                client.acceptance_deadline = self._clock() + 3.0
-                client.manual = False
+                self._issue_alignment(client, alignment)
                 transform = self._map_payload()
                 assert transform is not None
                 self._emit(
@@ -724,11 +827,11 @@ class MapLocalization:
                         **_pose_payload(anchor.T_odom_map @ map_client),
                         "confidence": min(localized.confidence, anchor.confidence or 0.0),
                         "ts": observation.ts_server,
-                        "map_alignment": alignment,
+                        "map_alignment": alignment.wire(),
                         "map_transform": transform,
                     },
                 )
-                client.episode = None
+                client.finish_capture()
         except QueryDeferredError as exc:
             if client.episode is episode:
                 self._finish_capture(key, "deferred", exc.reason, exc.retry_after_s)
@@ -736,7 +839,9 @@ class MapLocalization:
                 self._offer_tag_fallback(key)
         except Exception as exc:
             if self._clients.get(key) is client and client.episode is episode:
-                logger.warning("headset map alignment failed", error=type(exc).__name__, exc_info=True)
+                logger.warning(
+                    "headset map alignment failed", error=type(exc).__name__, exc_info=True
+                )
                 self._finish_capture(key, "failed", "headset_localization_failed")
                 client.retry_at = self._clock() + 2.0
                 self._offer_tag_fallback(key)
@@ -769,18 +874,21 @@ class MapLocalization:
                 if localized is not None and pose is not None:
                     # A marker yields T_odom_client directly; it needs neither a
                     # robot-camera image nor a fabricated VPS map registration.
-                    client.relative_alignment = RelativeAlignment(
-                        episode.travel_m, pose.travel_m, _yaw(pose.orientation)
+                    client.accept_relative_alignment(
+                        RelativeAlignment(
+                            episode.travel_m, pose.travel_m, quaternion_yaw(pose.orientation)
+                        )
                     )
-                    client.manual = client.force = False
-                    client.next_attempt = "tag"
-                    client.retry_at = 0.0
-                    self._emit(key, {
-                        "type": "localization_result",
-                        **_pose_payload(pose_to_matrix(localized.pose)),
-                        "confidence": localized.confidence, "ts": newest.ts_server,
-                    })
-                    client.episode = None
+                    self._emit(
+                        key,
+                        {
+                            "type": "localization_result",
+                            **_pose_payload(pose_to_matrix(localized.pose)),
+                            "confidence": localized.confidence,
+                            "ts": newest.ts_server,
+                        },
+                    )
+                    client.finish_capture()
                 else:
                     self._tag_unavailable(key)
                 return
@@ -798,7 +906,7 @@ class MapLocalization:
                 return
             if localized is not None and pose is not None:
                 map_client = np.asarray(
-                    pose_to_matrix(Pose(*alignment["position"], *alignment["orientation"])),
+                    pose_to_matrix(Pose(*alignment.position, *alignment.orientation)),
                     dtype=np.float64,
                 )
                 odom_client = np.asarray(pose_to_matrix(localized.pose), dtype=np.float64)
@@ -806,13 +914,13 @@ class MapLocalization:
                 corrected = LocalizedPose(
                     matrix_to_pose(np.linalg.inv(odom_map)),
                     "map",
-                    min(localized.confidence, float(alignment["confidence"])),
+                    min(localized.confidence, alignment.confidence),
                 )
                 if self._commit_robot(
                     corrected,
                     newest.ts_server,
                     pose.travel_m,
-                    _yaw(pose.orientation),
+                    quaternion_yaw(pose.orientation),
                     generation,
                     fiducial=True,
                 ):
@@ -821,7 +929,9 @@ class MapLocalization:
             self._tag_unavailable(key)
         except Exception as exc:
             if self._clients.get(key) is client and client.episode is episode:
-                logger.warning("robot tag correction failed", error=type(exc).__name__, exc_info=True)
+                logger.warning(
+                    "robot tag correction failed", error=type(exc).__name__, exc_info=True
+                )
                 self._tag_unavailable(key)
         finally:
             if self._robot_episode == (key, episode.id):

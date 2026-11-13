@@ -25,13 +25,21 @@ function harness() {
     wizardTitle: "", wizardDescription: "", wizardCardTitle: "Connected", wizardCardBody: "Ready", nextLabel: "Continue", localizationIssue: null,
     captureText: "", captureTone: "muted", backVisible: false, agentMessage: null, hudText: null, hudTone: null,
   };
-  const internals = view as unknown as { heightController: PanelHeightAnimation; plate: GlassSurface; hud: xb.TextView; cardTitle: xb.TextView; chat: THREE.Group;
-    manualHelp: THREE.Group; wizardBody: THREE.Group; wizardFooter: THREE.Group; header: THREE.Group; estop: xb.TextButton;
+  const internals = view as unknown as { heightController: PanelHeightAnimation; plate: GlassSurface; chat: THREE.Group;
+    manualHelp: THREE.Group; wizardBody: THREE.Group; wizardFooter: THREE.Group; header: THREE.Group;
     page: "main" | "settings" | "sensors" | "diagnostics"; appearanceRoot: THREE.Group };
   const apply = (overrides: Partial<WebXRUISnapshot> = {}) => view.apply({ ...snap, ...overrides });
   const settle = () => view.updateHover([], 0.28);
   const top = () => internals.plate.localToWorld(new THREE.Vector3(0, internals.heightController.height / 2, 0));
-  return { view, snap, internals, apply, settle, top, estop };
+  const textViews = () => {
+    const result: xb.TextView[] = [];
+    view.panel.traverse(node => { if (node instanceof xb.TextView) result.push(node); });
+    return result;
+  };
+  const emergencyButton = () => textViews().find(node => node instanceof xb.TextButton &&
+    view.isEmergencyTarget(node.mesh)) as xb.TextButton;
+  const textView = (text: string) => textViews().find(node => node.text === text)!;
+  return { view, snap, internals, apply, settle, top, estop, emergencyButton, textView, textViews };
 }
 
 it("keeps the world top and header stationary while resizing a rotated, scaled panel", () => {
@@ -50,11 +58,11 @@ it("keeps the world top and header stationary while resizing a rotated, scaled p
     f.view.updateHover([], 0.07);
     expect(f.top().distanceTo(top)).toBeLessThan(1e-7);
     expect(title.getWorldPosition(new THREE.Vector3()).distanceTo(header)).toBeLessThan(1e-7);
-    expect(f.internals.estop.position.y * 0.76 - 0.032).toBeCloseTo(0.38 - f.internals.heightController.height + 0.05);
+    expect(f.emergencyButton().position.y * 0.76 - 0.032).toBeCloseTo(0.38 - f.internals.heightController.height + 0.05);
   }
   expect(f.internals.heightController.height).toBe(RUNTIME_LAYOUTS.agent.height);
   expect(f.internals.chat.visible).toBe(true);
-  f.internals.estop.onTriggered(0); expect(f.estop).toHaveBeenCalledOnce();
+  f.emergencyButton().onTriggered(0); expect(f.estop).toHaveBeenCalledOnce();
   f.apply(); f.view.updateHover([], 0.14);
   expect(f.top().distanceTo(top)).toBeLessThan(1e-7);
   expect(f.internals.chat.visible).toBe(false);
@@ -141,9 +149,9 @@ it("keeps space above Emergency Stop through every runtime page resize", () => {
       alignmentReview: page === "alignment" ? { reason: "Tracking resumed", pending: true } : null });
     for (let frame = 0; frame < 10; frame++) {
       f.view.updateHover([], 0.028);
-      const footerTop = f.internals.estop.position.y + f.internals.estop.rangeY * f.internals.estop.scale.y / 2;
+      const footerTop = f.emergencyButton().position.y + f.emergencyButton().rangeY * f.emergencyButton().scale.y / 2;
       f.view.panel.traverse(node => {
-        if (!(node instanceof xb.TextView) || node === f.internals.estop || node.name === "Robot selection button") return;
+        if (!(node instanceof xb.TextView) || node === f.emergencyButton() || node.name === "Robot selection button") return;
         for (let parent: THREE.Object3D | null = node; parent; parent = parent.parent) if (!parent.visible) return;
         const center = f.internals.appearanceRoot.worldToLocal(node.getWorldPosition(new THREE.Vector3()));
         const scale = node.getWorldScale(new THREE.Vector3()).y / f.internals.appearanceRoot.getWorldScale(new THREE.Vector3()).y;
@@ -160,17 +168,17 @@ it("keeps robot activity only in the robot badge while preserving menu errors", 
     f.apply({ activity });
     const robot = f.view.panel.getObjectByName("Robot selection button") as xb.TextButton;
     expect(robot.text).toContain(activity === "Following Path" ? "Following path" : activity);
-    expect(f.internals.hud.text).toBe("");
+    expect(f.textViews().filter(node => node.name !== "Robot selection button").some(node => node.text === activity)).toBe(false);
   }
   f.apply({ hudText: "Connection interrupted", hudTone: "warn" });
-  expect(f.internals.hud.text).toBe("Connection interrupted");
+  expect(f.textView("Connection interrupted")).toBeDefined();
 });
 
 it("colors the connected setup heading green and resets it for other states", () => {
   const f = harness(); f.apply({ setupCompleted: false, connectComplete: true });
-  expect(f.internals.cardTitle.fontColor).toBe("#30d158");
+  expect(f.textView(f.snap.wizardCardTitle).fontColor).toBe("#30d158");
   f.apply({ setupCompleted: false, connectComplete: false });
-  expect(f.internals.cardTitle.fontColor).toBe("#ffffff");
+  expect(f.textView(f.snap.wizardCardTitle).fontColor).toBe("#ffffff");
   f.apply({ setupCompleted: false, connectComplete: true, wizardStep: "localization" });
-  expect(f.internals.cardTitle.fontColor).toBe("#ffffff");
+  expect(f.textView(f.snap.wizardCardTitle).fontColor).toBe("#ffffff");
 });

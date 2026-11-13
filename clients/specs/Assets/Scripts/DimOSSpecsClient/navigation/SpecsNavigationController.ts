@@ -1,6 +1,7 @@
-import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import type { ReadonlyFacts } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
+import type { ClientTrackingOrigin as MutableClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 import { requestNavGoal } from "DimOSARClient.lspkg/Scripts/DimOSARClient/navigation/NavigationCommands";
-import { type NavFlash, NavigationInteraction, type Placement, NavigationPreviewCoordinator } from "DimOSARClient.lspkg/Scripts/DimOSARClient/navigation/NavigationInteraction";
+import { type NavFlash, deriveNavigationPresentation, NavigationInteraction, type Placement, NavigationPreviewCoordinator } from "DimOSARClient.lspkg/Scripts/DimOSARClient/navigation/NavigationInteraction";
 
 
 import type { ARModuleSession, ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/ARModuleSession";
@@ -12,6 +13,8 @@ import { NavigationMarkerRenderer } from "./SpecsNavigationRenderer";
 import { InteractionManager } from "SpectaclesInteractionKit.lspkg/Core/InteractionManager/InteractionManager";
 import { InteractorInputType, type Interactor } from "SpectaclesInteractionKit.lspkg/Core/Interactor/Interactor";
 import { worldMarkerHover } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldPresentation";
+
+type ClientTrackingOrigin = ReadonlyFacts<MutableClientTrackingOrigin>;
 
 export class SpecsNavigationController {
   readonly interaction: NavigationInteraction;
@@ -220,27 +223,28 @@ export class SpecsNavigationController {
     if (!this.marker) this.marker = this.createMarker("NavigationTargetMarker");
     // Execution feedback may arrive between streamed drag goals. Keep the
     // captured SIK target enabled and render the local pose until release.
-    const flash = state.dragging ? null : state.flash;
-    const pose = trackingToSpecs(state.dragging ? state : state.activeGoal.pose ?? state);
+    const frame = deriveNavigationPresentation(state);
+    const pose = trackingToSpecs(frame.mainPose);
     this.marker.setPose(pose.position, pose.rotation);
-    if (!state.draft || state.activeGoal.active || state.flash) this.marker.show(); else this.marker.hide();
-    this.marker.setDragEnabled(this.inputEnabled && !flash && !state.blocked);
-    this.marker.setCancelVisible(state.cancelVisible, true, state.activeGoal.confirmationId);
-    this.marker.applyWorldStyle({ selected: state.selected, blocked: state.blocked, hovered: this.hovered, dragging: state.dragging,
-      following: state.followingPath, aiming: false, cancelVisible: state.cancelVisible, flash, feedbackProgress: state.feedbackProgress }, deltaS, this.viewportHeight);
+    if (frame.mainVisible) this.marker.show(); else this.marker.hide();
+    this.marker.setDragEnabled(this.inputEnabled && !frame.flash && !frame.blocked);
+    this.marker.setCancelVisible(frame.cancelVisible, true, frame.confirmationId);
+    this.marker.applyWorldStyle({ selected: frame.selected, blocked: frame.blocked, hovered: this.hovered,
+      dragging: frame.dragging, following: frame.following, aiming: false, cancelVisible: frame.cancelVisible,
+      flash: frame.flash, feedbackProgress: frame.feedbackProgress }, deltaS, this.viewportHeight);
     this.marker.orientViewer(this.deps.cameraObject.getTransform().getWorldPosition());
     const opacity = this.marker.circleOpacity();
-    if (state.draft) {
+    if (frame.draftVisible && frame.draftPose) {
       if (!this.draftMarker) this.draftMarker = this.createMarker("NavigationDraftMarker");
-      const draft = trackingToSpecs(state.draft);
+      const draft = trackingToSpecs(frame.draftPose);
       this.draftMarker.setPose(draft.position, draft.rotation); this.draftMarker.show();
       this.draftMarker.setDragEnabled(false); this.draftMarker.setCancelVisible(false);
-      this.draftMarker.applyWorldStyle({ selected: true, dragging: state.draft.held, following: false,
+      this.draftMarker.applyWorldStyle({ selected: true, dragging: frame.draftHeld, following: false,
         aiming: true, blocked: state.blocked, flash: null, feedbackProgress: 0, opacity }, deltaS, this.viewportHeight);
     } else this.draftMarker?.hide();
-    const ids = new Set(state.probes.map(p => p.sourceId));
+    const ids = new Set(frame.probes.map(p => p.sourceId));
     for (const [id, probe] of this.probes) if (!ids.has(id)) { probe.destroy(); this.probes.delete(id); }
-    for (const probe of state.probes) {
+    for (const probe of frame.probes) {
       let renderer = this.probes.get(probe.sourceId);
       if (!renderer) { renderer = new NavigationMarkerRenderer(this.deps.parent, 6, true); this.probes.set(probe.sourceId, renderer); }
       renderer.root.getTransform().setWorldScale(vec3.one());
@@ -251,7 +255,7 @@ export class SpecsNavigationController {
     }
   }
 }
-function trackingToSpecs(pose: { position: Vec3; orientation: import("DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts").Quat }) {
+function trackingToSpecs(pose: { position: Readonly<Vec3>; orientation: Readonly<import("DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts").Quat> }) {
   const yaw = 2 * Math.atan2(pose.orientation[2], pose.orientation[3]);
   return specsYawPoseToWorld(clientTrackingToSpecsYawPose([...pose.position, yaw]));
 }

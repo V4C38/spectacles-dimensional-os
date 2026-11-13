@@ -1,3 +1,6 @@
+import type { ARModuleSessionState } from "../websocket/ARModuleSession";
+import { isAgentEnabled, type OperatingMode } from "../presentation/ControlPanelPresentation";
+
 export function matchesStopCommand(text: string): boolean {
   return /\bstop\b/i.test(text);
 }
@@ -80,7 +83,7 @@ export class AgentDraftSession {
     this.snapshotValue = { prompt: "", response: "", severity: "ok", error: null, recognitionAvailable: deps.recognition !== null };
   }
 
-  snapshot(): AgentDraftSnapshot { return { ...this.snapshotValue, status: this.status() }; }
+  snapshot(): Readonly<AgentDraftSnapshot> { return { ...this.snapshotValue, status: this.status() }; }
   private status(): AgentDraftSnapshot["status"] {
     if (!this.enabled) return "Off";
     return this.flushing ? "Transcribing…" : this.recognizing ? "Listening" : this.starting ? "Starting microphone…" :
@@ -147,6 +150,11 @@ export class AgentDraftSession {
       this.confirmedDraft = this.snapshotValue.prompt;
       this.listen();
     }
+  }
+
+  tickSession(now: number, view: ARModuleSessionState, setupCompleted: boolean, mode: OperatingMode): void {
+    this.tick(now, isAgentEnabled(view, setupCompleted, mode), view.agentMessage,
+      view.state?.agent.idle ?? true, view.agentMessageRevision);
   }
 
   submitTyped(text: string): boolean {

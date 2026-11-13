@@ -261,7 +261,7 @@ async def test_collecting_headset_keeps_turn_then_robot_and_other_client_both_pr
     f.service.connect("client")
     f.service.progress(LocalizationTracking("tracking", 0, True, alignment),
                        "client", TimeSync(0, 0))
-    assert f.service._clients["client"].alignment["id"] == alignment
+    assert f.service._clients["client"].alignment.id == alignment
     f.service.progress(LocalizationTracking("replacement", 0, True, alignment),
                        "client", TimeSync(0, 0))
     assert f.service._clients["client"].alignment is None

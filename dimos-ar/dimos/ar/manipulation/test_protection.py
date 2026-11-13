@@ -1,5 +1,6 @@
 import pytest
 
+from dimos.ar.manipulation.operation import DeferredGripper
 from dimos.ar.manipulation.protection import MotorProtection, ProtectionPolicy
 
 
@@ -60,7 +61,14 @@ def test_execution_clock_and_status_share_derating_and_pause(monkeypatch):
     from dimos.control.tasks.trajectory_task import trajectory_task
 
     compute, status, cancel = Mock(), Mock(), Mock()
-    native = SimpleNamespace(compute=compute, cancel=cancel, get_status=status, is_active=lambda: True, execute=Mock(), on_preempted=Mock())
+    native = SimpleNamespace(
+        compute=compute,
+        cancel=cancel,
+        get_status=status,
+        is_active=lambda: True,
+        execute=Mock(),
+        on_preempted=Mock(),
+    )
     monkeypatch.setattr(trajectory_task, "create_task", lambda *_: native)
     guard = MotorProtection()
     task = create_trajectory_task(
@@ -111,7 +119,9 @@ def test_trajectory_keeps_final_command_until_measured_arrival(monkeypatch):
 
     endpoint = JointCommandOutput(joint_names=["joint"], positions=[0.5])
     native = SimpleNamespace(
-        is_active=lambda: False, execute=Mock(), on_preempted=Mock(),
+        is_active=lambda: False,
+        execute=Mock(),
+        on_preempted=Mock(),
         compute=Mock(side_effect=[endpoint, None, None, None, None]),
         cancel=Mock(),
         get_status=lambda _: Status(),
@@ -160,7 +170,7 @@ def test_real_trajectory_status_survives_rpc_and_applies_deferred_gripper_after_
     from types import SimpleNamespace
     from unittest.mock import Mock
 
-    from dimos.ar.manipulation.operation import ManipulationOperation
+    from dimos.ar.manipulation.operation import ActiveOperation, ManipulationOperation
     from dimos.ar.manipulation.protection import create_trajectory_task
     from dimos.control.coordinator import TaskConfig
     from dimos.control.task import CoordinatorState, JointStateSnapshot
@@ -194,10 +204,11 @@ def test_real_trajectory_status_survives_rpc_and_applies_deferred_gripper_after_
     loop = SimpleNamespace(_task_lock=threading.Lock(), _tasks={"arm": task})
     for frame in range(101):
         assert task.is_active()
-        outputs = TickLoop._compute_all_tasks(loop,
+        outputs = TickLoop._compute_all_tasks(
+            loop,
             CoordinatorState(
                 joints=JointStateSnapshot(joint_positions={"j": 0}), t_now=frame * 0.01, dt=0.01
-            )
+            ),
         )
     assert outputs and outputs[0][2] is not None
     pending = task.get_status(1)
@@ -208,7 +219,9 @@ def test_real_trajectory_status_survives_rpc_and_applies_deferred_gripper_after_
         end_effector_pose=None,
         gripper_position=0,
     )
-    backend = SimpleNamespace(endpoint_holding=False, gripper_target=None,
+    backend = SimpleNamespace(
+        endpoint_holding=False,
+        gripper_target=None,
         get_state=lambda: SimpleNamespace(
             execution_status=task.get_status(1).state, groups={"arm": observed}
         ),
@@ -218,7 +231,12 @@ def test_real_trajectory_status_survives_rpc_and_applies_deferred_gripper_after_
         cancel=Mock(),
     )
     operation = ManipulationOperation(
-        id="op", kind="executing", group="arm", final_gripper=("arm", 1, {"j": 0.5})
+        active=ActiveOperation(
+            id="op",
+            kind="executing",
+            group="arm",
+            final_gripper=DeferredGripper("arm", 1, {"j": 0.5}),
+        )
     )
     assert not operation.advance(backend, stopped=False, feedback_max_age_s=0.5)
     backend.set_gripper_position.assert_not_called()
@@ -259,7 +277,8 @@ def test_endpoint_poll_is_declared_and_quiet_for_real_and_simulated_tasks(monkey
         task = create_trajectory_task(
             TaskConfig(name="joint_trajectory", type="ar_joint_trajectory", joint_names=["j"]),
             {"arm": SimpleNamespace(_wb_adapter=SimpleNamespace(guard=MotorProtection()))}
-            if protected else {},
+            if protected
+            else {},
         )
         coordinator.add_task(task, task_type="ar_joint_trajectory")
         for _ in range(100):

@@ -75,7 +75,7 @@ export class AdaptiveDashedLineRenderer {
     this.object.material.opacity = opacity;
   }
 
-  setSegments(points: readonly Vec3[], continuous = false): void {
+  setSegments(points: readonly Readonly<Vec3>[], continuous = false): void {
     const count = Math.floor(points.length / 2);
     let geometry = this.object.geometry;
     if (geometry.instanceCount !== count && geometry.getAttribute("instanceStart")) {

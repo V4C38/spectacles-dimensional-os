@@ -23,12 +23,20 @@ def runtime(localize):
     worker = BoundedWorker()
     messages = []
     service = MapLocalization(
-        odometry=odometry, transforms=OdomMapTransform(), robot_images=SimpleNamespace(),
-        marker=None, vps=SimpleNamespace(localize=localize), worker=worker,
-        admission=VpsAdmission(), map_code="office",
+        odometry=odometry,
+        transforms=OdomMapTransform(),
+        robot_images=SimpleNamespace(),
+        marker=None,
+        vps=SimpleNamespace(localize=localize),
+        worker=worker,
+        admission=VpsAdmission(),
+        map_code="office",
         send=lambda client, text: messages.append((client, json.loads(text))),
-        travel_threshold_m=0.75, heading_threshold_deg=30, marker_preference_s=1.5,
-        headset_travel_threshold_m=10, timeout_s=1,
+        travel_threshold_m=0.75,
+        heading_threshold_deg=30,
+        marker_preference_s=1.5,
+        headset_travel_threshold_m=10,
+        timeout_s=1,
     )
     return service, odometry, worker, messages
 
@@ -97,7 +105,9 @@ def test_robot_map_commit_rejects_older_samples_source_changes_and_nonfinite_qua
         original = service._transforms.vps_sample()
         assert not service._commit_robot(good, 9, 0, 0, 0)
         assert not service._commit_robot(good, 11, 0, 0, 1)
-        assert not service._commit_robot(LocalizedPose(Pose(0, 0, 0), "map", float("nan")), 11, 0, 0, 0)
+        assert not service._commit_robot(
+            LocalizedPose(Pose(0, 0, 0), "map", float("nan")), 11, 0, 0, 0
+        )
         assert service._transforms.vps_sample() is original
         assert np.allclose(original.T_odom_map[:3, 3], [-2, -3, 0])
     finally:
@@ -170,9 +180,9 @@ async def test_vendor_response_to_robot_and_headset_alignment_randomized() -> No
                 ]
             )
             service.reset()
-            robot = await localizer.localize([Observation(
-                encoded.tobytes(), intrinsics, matrix_to_pose(optical_in_odom), 100
-            )])
+            robot = await localizer.localize(
+                [Observation(encoded.tobytes(), intrinsics, matrix_to_pose(optical_in_odom), 100)]
+            )
             assert robot is not None
             assert service._commit_robot(robot, 100, 0, 0, odometry.generation)
             service.connect("client")
@@ -180,13 +190,86 @@ async def test_vendor_response_to_robot_and_headset_alignment_randomized() -> No
             client.reference = "tracking"
             episode = service._request("client", client, "headset")
             messages.clear()
-            await service._headset("client", client, episode, Observation(
-                encoded.tobytes(), intrinsics, matrix_to_pose(optical_in_client), 100
-            ))
+            await service._headset(
+                "client",
+                client,
+                episode,
+                Observation(encoded.tobytes(), intrinsics, matrix_to_pose(optical_in_client), 100),
+            )
             result = next(body for _, body in messages if body["type"] == "localization_result")
             actual = pose_to_matrix(Pose(*result["position"], *result["orientation"]))
             assert np.allclose(actual, expected_origin, atol=1e-9)
     finally:
         await service.close()
         await localizer.close()
+        worker.close()
+
+
+async def test_replacement_alignment_keeps_accepted_baseline_until_matching_acknowledgment():
+    from dimos.ar.websocket.protocol import LocalizationTracking, TimeSync
+
+    service, _odometry, worker, messages = runtime(
+        AsyncMock(return_value=LocalizedPose(Pose(1, 2, 0), "map", 0.7))
+    )
+    now = [100.0]
+    service._clock = lambda: now[0]
+    try:
+        service._commit_robot(LocalizedPose(Pose(), "map", 0.9), 10, 0, 0, 0)
+        service.connect("client")
+        service.progress(LocalizationTracking("tracking", 0, True), "client", TimeSync(0, 0))
+        client = service._clients["client"]
+        episode = service._request("client", client, "headset")
+        await service._headset("client", client, episode, _observation(11))
+        first = messages[-1][1]["map_alignment"]["id"]
+        service.progress(LocalizationTracking("tracking", 0, True, first), "client", TimeSync(0, 0))
+        accepted = client.alignment
+
+        episode = service._request("client", client, "headset")
+        await service._headset("client", client, episode, _observation(12))
+        replacement = messages[-1][1]["map_alignment"]["id"]
+        assert client.alignment is accepted
+        assert client.pending_alignment.id == replacement
+        assert not service._headset_due(client)
+
+        # A delayed acknowledgment for the old baseline cannot accept the replacement.
+        service.progress(LocalizationTracking("tracking", 0, True, first), "client", TimeSync(0, 0))
+        assert client.alignment is accepted
+        assert client.pending_alignment.id == replacement
+        service.progress(
+            LocalizationTracking("tracking", 0, True, replacement), "client", TimeSync(0, 0)
+        )
+        assert client.alignment.id == replacement
+        assert client.pending_alignment is None
+        assert not client.manual and not client.force
+    finally:
+        await service.close()
+        worker.close()
+
+
+async def test_unacknowledged_replacement_expiry_preserves_accepted_alignment():
+    from dimos.ar.websocket.protocol import LocalizationTracking, TimeSync
+
+    service, _odometry, worker, messages = runtime(
+        AsyncMock(return_value=LocalizedPose(Pose(), "map", 0.7))
+    )
+    now = [100.0]
+    service._clock = lambda: now[0]
+    try:
+        service._commit_robot(LocalizedPose(Pose(), "map", 0.9), 10, 0, 0, 0)
+        service.connect("client")
+        service.progress(LocalizationTracking("tracking", 0, True), "client", TimeSync(0, 0))
+        client = service._clients["client"]
+        episode = service._request("client", client, "headset")
+        await service._headset("client", client, episode, _observation(11))
+        first = messages[-1][1]["map_alignment"]["id"]
+        service.progress(LocalizationTracking("tracking", 0, True, first), "client", TimeSync(0, 0))
+        accepted = client.alignment
+        episode = service._request("client", client, "headset")
+        await service._headset("client", client, episode, _observation(12))
+        now[0] += 3.0
+        assert not service._headset_due(client)
+        assert client.pending_alignment is None
+        assert client.alignment is accepted
+    finally:
+        await service.close()
         worker.close()

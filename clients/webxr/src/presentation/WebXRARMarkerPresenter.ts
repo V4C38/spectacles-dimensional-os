@@ -1,5 +1,6 @@
+import type { ReadonlyFacts } from "@dimos-ar-client/ClientContracts";
 import * as THREE from "three";
-import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/ClientTracking";
+import type { ClientTrackingOrigin as MutableClientTrackingOrigin } from "@dimos-ar-client/localization/ClientTracking";
 import { composePlaceArMarker, type PlaceArMarkerArgs } from "@dimos-ar-client/agent/MarkerSkills";
 import { Text } from "troika-three-text";
 import type { Vec3 } from "@dimos-ar-client/ClientContracts";
@@ -9,6 +10,8 @@ import { GlassSurface } from "./SurfaceMaterials";
 import { indicatorMaterial } from "./PoseIndicatorMaterial";
 
 import { clientTrackingToWebxrPoint } from "../utilities/WebXRCoordinates";
+
+type ClientTrackingOrigin = ReadonlyFacts<MutableClientTrackingOrigin>;
 
 type MarkerEntry = {
   args: PlaceArMarkerArgs;

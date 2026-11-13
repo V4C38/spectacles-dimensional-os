@@ -1,12 +1,15 @@
+import type { ReadonlyFacts } from "@dimos-ar-client/ClientContracts";
 import { ARM_VISUAL_STYLE as STYLE, ARM_VISUAL_STYLE, armShapeEdges } from "@dimos-ar-client/manipulation/ManipulationPresentation";
 import * as THREE from "three";
-import type { ManipulationModel } from "@dimos-ar-client/manipulation/ManipulationTypes";
+import type { ManipulationModel as MutableManipulationModel } from "@dimos-ar-client/manipulation/ManipulationTypes";
 
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { registerRayTarget } from "../input/WebXRInteraction";
 import { AdaptiveDashedLineRenderer } from "../presentation/AdaptiveDashedLineRenderer";
 import { clientTrackingToWebxrPoint } from "../utilities/WebXRCoordinates";
 import { disposeObjectTrees } from "../presentation/SceneResources";
+
+type ManipulationModel = ReadonlyFacts<MutableManipulationModel>;
 
 export function armMaterial(): THREE.ShaderMaterial {
   const material = new THREE.ShaderMaterial({

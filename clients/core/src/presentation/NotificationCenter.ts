@@ -1,3 +1,7 @@
+import type { ARModuleSessionState } from "../websocket/ARModuleSession";
+import type { ReadonlyFacts, Vec3 } from "../ClientContracts";
+import { odomToClientTrackingPose, type ClientTrackingOrigin } from "../localization/ClientTracking";
+
 export type ClientNotification = {
   key?: string;
   text: string; tone?: "neutral" | "danger" | "success" | "warning";
@@ -83,4 +87,17 @@ export class AlignmentWarning {
     presenter.show({ key: "alignment:weak", text: "Weak alignment", tone: "warning", glyph: "warning", durationS: 2.5, priority: 50 });
     this.shown = true;
   }
+}
+
+
+/** The host supplies a current tracking position, using the same reference as the origin. */
+export function alignmentDistance(
+  view: ARModuleSessionState,
+  origin: ReadonlyFacts<ClientTrackingOrigin> | null,
+  viewer: Readonly<Vec3> | null,
+): number | null {
+  const pose = view.pose ?? view.manipulation?.root_pose;
+  if (!origin || !pose || !viewer || !view.hasTrackingOrigin) return null;
+  const robot = odomToClientTrackingPose(pose, origin).position;
+  return Math.hypot(robot[0] - viewer[0], robot[1] - viewer[1], robot[2] - viewer[2]);
 }

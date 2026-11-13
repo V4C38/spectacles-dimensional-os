@@ -282,3 +282,52 @@ export function localizationCaptureStatus(
       };
   }
 }
+
+
+export type OperatingMode = "manual" | "agent";
+
+export function operatingMode(view: ARModuleSessionState, fallback: OperatingMode = "manual"): OperatingMode {
+  const mode = view.interaction?.mode ?? fallback;
+  return mode === "agent" && view.capabilities?.agent.available !== true ? "manual" : mode;
+}
+
+/** Shared mode policy; native authority remains the source whenever it is available. */
+export class OperatingModeController {
+  private fallback: OperatingMode = "manual";
+  constructor(private readonly options: { resetFallbackWithSharedState?: boolean } = {}) {}
+  effective(view: ARModuleSessionState): OperatingMode { return operatingMode(view, this.fallback); }
+  set(view: ARModuleSessionState, mode: OperatingMode, requestMode: (mode: OperatingMode) => void): void {
+    if (mode === "agent" && view.capabilities?.agent.available !== true) {
+      throw new Error("hello.capabilities.agent is not available");
+    }
+    if (view.interaction) requestMode(mode);
+    else this.fallback = mode;
+  }
+  reset(view: ARModuleSessionState): void {
+    if (!view.interaction || this.options.resetFallbackWithSharedState) this.fallback = "manual";
+  }
+}
+
+export function isSelectionEligible(
+  view: ARModuleSessionState,
+  setupCompleted: boolean,
+  alignmentReviewPending: boolean,
+  retainingFeedback = false,
+): boolean {
+  return setupCompleted && !alignmentReviewPending && (view.connection === "ready" || retainingFeedback);
+}
+
+export function isAgentEnabled(view: ARModuleSessionState, setupCompleted: boolean, mode: OperatingMode): boolean {
+  return setupCompleted && mode === "agent" && view.connection === "ready" && view.capabilities?.agent.available === true;
+}
+
+export function isManualControlEnabled(
+  view: ARModuleSessionState,
+  setupCompleted: boolean,
+  alignmentReviewPending: boolean,
+  setupCelebrating = false,
+  mode: OperatingMode = operatingMode(view),
+): boolean {
+  return setupCompleted && !alignmentReviewPending && !setupCelebrating &&
+    mode === "manual" && view.connection === "ready";
+}

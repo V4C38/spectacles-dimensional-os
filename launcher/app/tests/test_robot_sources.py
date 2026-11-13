@@ -8,11 +8,32 @@ from pathlib import Path
 import pytest
 
 from robot_sources import (
+    BLUEPRINTS,
     ResolvedRobotSource,
     SourceBody,
     SourceSelectionRequired,
     resolve_robot_source,
 )
+
+
+def test_blueprint_metadata_and_shell_menu_share_the_registry():
+    import json
+
+    from app import StartBody, settings_payload
+
+    script = Path(__file__).resolve().parents[1] / "robot_sources.py"
+    metadata = json.loads(subprocess.check_output([sys.executable, str(script), "--metadata"]))
+    assert metadata == settings_payload()["defaults"]["blueprints"]
+    menu = subprocess.check_output([sys.executable, str(script), "--menu"], text=True)
+    assert menu.splitlines() == [
+        f"{item.id}\t{item.label}\t{int(item.manipulation)}" for item in BLUEPRINTS.values()
+    ]
+    for item in BLUEPRINTS.values():
+        body = StartBody(blueprint=item.id, profile_id="profile", source={"mode": "auto"})
+        assert body.blueprint == item.id
+        assert ResolvedRobotSource().cli_arguments(item.id) == ("run", item.cli)
+    with pytest.raises(ValueError, match="Unknown robot blueprint"):
+        StartBody(blueprint="unknown", profile_id="profile", source={"mode": "auto"})
 
 
 @pytest.mark.parametrize("mode", ["auto", "device"])

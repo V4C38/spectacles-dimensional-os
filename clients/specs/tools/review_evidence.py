@@ -1,5 +1,6 @@
 """Native log decoding and checkpoint evidence; no editor or process effects."""
 from __future__ import annotations
+from dataclasses import dataclass
 import json
 import math
 import re
@@ -9,6 +10,28 @@ EVENT_PREFIX = "SPECS_REVIEW "
 
 class ReviewError(RuntimeError):
     """A review could not produce trustworthy artifacts."""
+
+
+@dataclass(frozen=True)
+class ReviewOutcome:
+    """Scenario completion cannot imply a verified production source handoff."""
+
+    scenario_passed: bool
+    handoff_passed: bool | None = None
+    provenance_passed: bool | None = None
+
+    @classmethod
+    def from_result(cls, result: dict[str, Any]) -> ReviewOutcome:
+        return cls(bool(result.get("scenarioPassed", result["passed"])))
+
+    @property
+    def passed(self) -> bool:
+        return self.scenario_passed and self.handoff_passed is True and self.provenance_passed is not False
+
+    def apply(self, result: dict[str, Any]) -> None:
+        result.update(scenarioPassed=self.scenario_passed, passed=self.passed,
+                      sourceAuditState="pending" if self.handoff_passed is None else
+                      "passed" if self.handoff_passed else "failed")
 
 
 def parse_events(text: str) -> list[dict[str, Any]]:

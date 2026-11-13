@@ -11,7 +11,7 @@ from dimos.ar.module import (
 )
 from dimos.ar.navigation.preview import NavigationPreviewService
 from dimos.ar.navigation.types import NavState
-from dimos.ar.replication.interaction import InteractionCoordinator, InteractionRequest
+from dimos.ar.replication.interaction import InteractionRequest
 from dimos.ar.robot.agent_service import ARAgentService
 from dimos.ar.robot.capabilities import CapabilityName, CapabilitySet
 from dimos.ar.robot.emergency_stop import EmergencyStopController
@@ -60,15 +60,15 @@ def _module_with_policy(
 ) -> ARModule:
     module = object.__new__(ARModule)
     module.config = ARModuleConfig()
-    module._interaction = InteractionCoordinator()
     module._lidar_subscriptions = {}
-    module._native_sequences = {}
     module._navigation_service = SimpleNamespace(
-        submit=lambda goal, _epoch, _revision: (module.goal_request.publish(goal) or True)
-        if module.goal_request.transport is not None else False,
+        submit=lambda goal, _epoch, _revision: (
+            (module.goal_request.publish(goal) or True)
+            if module.goal_request.transport is not None
+            else False
+        ),
         cancel=lambda: None,
     )
-    module._interaction_sent_revision = -1
     module._map_localization = None
     module._pairing_log_at = 0.0
     module._pairing_rejected = 0
@@ -109,6 +109,7 @@ def _module_with_policy(
         odometry=module._odometry.latest,
         on_preview=module._on_navigation_preview,
     )
+    module._interaction_controller = module._build_interaction_controller()
     return module
 
 
@@ -122,7 +123,7 @@ def _arm_module_with_two_clients() -> ARModule:
     )
     module._manipulation_service = Mock()
     for client_id in ("a", "b"):
-        module._interaction.connect(client_id)
+        module._interaction_controller.state.connect(client_id)
     return module
 
 
@@ -131,7 +132,7 @@ def _arm_grab(module: ARModule, client_id: str, *, planning: bool = False) -> No
         InteractionRequest(
             f"grab-{client_id}-{len(module._ws_server.interaction_sent)}",
             "acquire",
-            module._interaction.epoch,
+            module._interaction_controller.state.epoch,
             kind="manipulation_planning" if planning else "manipulation_following",
             source_id="right-hand",
             group_id="arm",
@@ -143,13 +144,13 @@ def _arm_grab(module: ARModule, client_id: str, *, planning: bool = False) -> No
 
 
 def _release_arm_grab(module: ARModule) -> None:
-    authority = module._interaction.authority
+    authority = module._interaction_controller.state.authority
     assert authority is not None
     module._on_interaction_request(
         InteractionRequest(
             "release-a",
             "release",
-            module._interaction.epoch,
+            module._interaction_controller.state.epoch,
             lease_id=authority.lease_id,
             sequence=0,
             position=(0.1, 0.2, 0.3),

@@ -6,6 +6,7 @@ import asyncio
 from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable
 from concurrent.futures import Future
+from dataclasses import dataclass, field as dataclass_field
 import json
 import logging
 import secrets
@@ -50,6 +51,7 @@ from dimos.ar.websocket.protocol import (
     decode_inbound,
     decode_localization_observations,
     encode_hello,
+    encode_text,
 )
 from dimos.ar.websocket.send_queue import ClientSendQueue, peek_frame_type
 from dimos.ar.websocket.server_discovery import IpRelayPublisher, lan_ip
@@ -103,6 +105,47 @@ def _new_client_id() -> str:
     return secrets.token_hex(16)
 
 
+@dataclass
+class ControlConnection:
+    """Resources belonging to one socket, never to a resumed successor."""
+
+    websocket: ws_server.ServerConnection
+    client_id: str
+    time_sync: TimeSync
+    bulk_token: str
+    sender: ClientSendQueue | None = None
+    ingress: TokenBucket = dataclass_field(default_factory=lambda: TokenBucket(100, 200))
+    ingress_timing: TimingSummary = dataclass_field(init=False)
+    bulk_peer: BulkPeer | None = None
+    capture_id: str | None = None
+    retired: bool = False
+
+    def __post_init__(self) -> None:
+        self.ingress_timing = TimingSummary("control ingress timing", client_id=self.client_id)
+
+    def issue_capture(self, payload: dict[str, Any]) -> str:
+        self.capture_id = secrets.token_hex(16)
+        payload["capture_id"] = self.capture_id
+        return encode_text(payload)
+
+
+@dataclass
+class LogicalSession:
+    client_id: str
+    resume_token: str
+    connection: ControlConnection | None = None
+    disconnect_handle: asyncio.TimerHandle | None = None
+    claimed: bool = False
+
+
+@dataclass
+class HandshakeAdmission:
+    session: LogicalSession
+    connection: ControlConnection
+    resume_handle: asyncio.TimerHandle | None
+    completed: bool = False
+
+
 class WebSocketServer:
     """Accepts AR client connections and dispatches inbound protocol frames."""
 
@@ -133,9 +176,9 @@ class WebSocketServer:
         ]
         | None = None,
     ) -> None:
-        self._resume_tokens: dict[str, str] = {}
-        self._resume_claims: set[str] = set()
-        self._disconnect_handles: dict[str, asyncio.TimerHandle] = {}
+        self._sessions: dict[str, LogicalSession] = {}
+        self._sockets: dict[ws_server.ServerConnection, ControlConnection] = {}
+        self._admissions: dict[ws_server.ServerConnection, HandshakeAdmission] = {}
         self._on_suspend = on_suspend
         self._relay_url = relay_url
         self._port = port
@@ -156,23 +199,13 @@ class WebSocketServer:
         self._on_disconnect = on_disconnect
         self._on_interaction_request = on_interaction_request
         self._on_manipulation_request = on_manipulation_request
-        self._retired_connections: set[ws_server.ServerConnection] = set()
         self._closing_tasks: set[asyncio.Task[None]] = set()
 
         self._stop_event: asyncio.Event | None = None
-        self._connections: dict[str, ws_server.ServerConnection] = {}
-        self._client_ids: dict[ws_server.ServerConnection, str] = {}
-        self._outbound: dict[ws_server.ServerConnection, ClientSendQueue] = {}
-        self._time_sync: dict[ws_server.ServerConnection, TimeSync] = {}
         self._serve_future: Future[None] | None = None
         self._ip_relay: IpRelayPublisher | None = None
         self.bulk = BulkAssetStore()
-        self._bulk_tokens: dict[str, str] = {}
-        self._capture_ids: dict[str, str] = {}
-        self._bulk_peers: dict[str, BulkPeer] = {}
         self._bulk_budget = TokenBucket(BULK_BYTES_PER_SECOND, MAX_BULK_RECORD_BYTES)
-        self._ingress: dict[str, TokenBucket] = {}
-        self._ingress_timing: dict[str, TimingSummary] = {}
         self._encoder = BoundedWorker("ar-bulk-encode")
         self._hello_worker = BoundedWorker("ar-hello", parallelism=2)
         self._pending_handshakes = 0
@@ -180,7 +213,9 @@ class WebSocketServer:
         self._bridge_fifo: deque[tuple[ws_server.ServerConnection | None, str]] = deque()
         self._bridge_fifo_bytes = 0
         self._bridge_fifo_counts: dict[ws_server.ServerConnection | None, int] = {}
-        self._bridge_latest: OrderedDict[tuple[ws_server.ServerConnection | None, str], str] = OrderedDict()
+        self._bridge_latest: OrderedDict[tuple[ws_server.ServerConnection | None, str], str] = (
+            OrderedDict()
+        )
         self._bridge_scheduled = False
         self._bridge_task: asyncio.Task[None] | None = None
         self._bridge_binary: dict[str | None, bytes] = {}
@@ -193,11 +228,46 @@ class WebSocketServer:
 
     @property
     def connection_count(self) -> int:
-        return len(self._connections)
+        return len(self._active_connections())
 
     @property
     def logical_session_count(self) -> int:
-        return len(set(self._connections) | set(self._disconnect_handles))
+        return sum(
+            session.connection is not None or session.disconnect_handle is not None
+            for session in self._sessions.values()
+        )
+
+    def _connection(self, client_id: str) -> ControlConnection | None:
+        session = self._sessions.get(client_id)
+        return session.connection if session is not None else None
+
+    def _active_connections(self) -> tuple[ControlConnection, ...]:
+        return tuple(
+            session.connection
+            for session in self._sessions.values()
+            if session.connection is not None
+        )
+
+    def _peers(self) -> tuple[BulkPeer, ...]:
+        return tuple(
+            connection.bulk_peer
+            for connection in self._active_connections()
+            if connection.bulk_peer is not None
+        )
+
+    def _bulk_connection(self, client_id: str) -> ControlConnection | None:
+        connection = self._connection(client_id)
+        if connection is not None:
+            return connection
+        # A paired bulk hello can race the control hello's final send.
+        return next(
+            (
+                admission.connection
+                for admission in self._admissions.values()
+                if admission.connection.client_id == client_id
+            ),
+            None,
+        )
 
     def start(self) -> None:
         if self._serve_future is not None:
@@ -272,10 +342,10 @@ class WebSocketServer:
                 ready.set_exception(exc)
             raise
         finally:
-            for handle in self._disconnect_handles.values():
-                handle.cancel()
-            self._disconnect_handles.clear()
-            self._resume_tokens.clear()
+            for session in self._sessions.values():
+                if session.disconnect_handle is not None:
+                    session.disconnect_handle.cancel()
+            self._sessions.clear()
             ws_logger.removeFilter(_handshake_noise_filter)
             monitor.cancel()
             tasks = tuple(self._bulk_preparations)
@@ -296,9 +366,14 @@ class WebSocketServer:
             now = time.monotonic()
             histogram.add(max(0, now - expected) * 1000)
             if now >= next_report:
-                logger.info("AR control event loop timing", p95_ms=histogram.percentile(0.95),
-                            p99_ms=histogram.percentile(0.99), maximum_ms=histogram.maximum,
-                            clients=len(self._connections), bulk_clients=len(self._bulk_peers))
+                logger.info(
+                    "AR control event loop timing",
+                    p95_ms=histogram.percentile(0.95),
+                    p99_ms=histogram.percentile(0.99),
+                    maximum_ms=histogram.maximum,
+                    clients=self.connection_count,
+                    bulk_clients=len(self._peers()),
+                )
                 histogram.clear()
                 next_report = now + 30
 
@@ -311,37 +386,40 @@ class WebSocketServer:
             await websocket.close(1008, "Not Found")
             return
 
-        if len(self._connections) + self._pending_handshakes >= MAX_CONTROL_CLIENTS:
+        if self.connection_count + self._pending_handshakes >= MAX_CONTROL_CLIENTS:
             await websocket.close(1013, "client capacity reached")
             return
         self._pending_handshakes += 1
 
         remote = getattr(websocket, "remote_address", None)
         client_id = _new_client_id()
+        connection: ControlConnection | None = None
         registered = False
         handshake_pending = True
         try:
             async with asyncio.timeout(HELLO_TIMEOUT_S):
-                client_id = await self._complete_handshake(websocket, client_id)
+                admission = await self._complete_handshake(websocket, client_id)
+            connection = admission.connection
+            client_id = connection.client_id
             self._pending_handshakes -= 1
             handshake_pending = False
-            self._connections[client_id] = websocket
-            self._client_ids[websocket] = client_id
-            self._ingress[client_id] = TokenBucket(100, 200)
-            self._ingress_timing[client_id] = TimingSummary("control ingress timing", client_id=client_id)
+            admission.session.connection = connection
+            self._sessions[client_id] = admission.session
+            self._sockets[websocket] = connection
+            self._admissions.pop(websocket, None)
             outbound = ClientSendQueue(
                 websocket,
                 on_failure=lambda reason: self._retire_connection(websocket, client_id, reason),
                 client_id=client_id,
             )
-            self._outbound[websocket] = outbound
+            connection.sender = outbound
             outbound.start()
             registered = True
             logger.info("AR client connected", remote=str(remote), client_id=client_id)
             if self._on_connect is not None:
                 self._on_connect(websocket, client_id)
             async for message in websocket:
-                if websocket in self._retired_connections:
+                if connection.retired:
                     break
                 try:
                     if isinstance(message, bytes):
@@ -354,17 +432,18 @@ class WebSocketServer:
                     if len(lines) > CONTROL_BATCH_MAX_RECORDS:
                         raise ControlBudgetError("control batch exceeds record budget")
                     for line in lines:
-                        if websocket in self._retired_connections:
+                        if connection.retired:
                             break
                         if len(line.encode()) > CONTROL_RECORD_MAX_BYTES:
                             raise ControlBudgetError("control record exceeds byte budget")
                         inbound = decode_inbound(line)
-                        within_budget = self._ingress[client_id].take()
+                        within_budget = connection.ingress.take()
                         if not within_budget and not isinstance(inbound, EstopRequest):
                             self._retire_connection(websocket, client_id, "control rate exceeded")
                             break
-                        self._ingress_timing[client_id].record(
-                            counts={"records": 1, "bytes": len(line.encode())}, maxima={})
+                        connection.ingress_timing.record(
+                            counts={"records": 1, "bytes": len(line.encode())}, maxima={}
+                        )
                         await self._dispatch_inbound(inbound, websocket, client_id)
                         if not within_budget:
                             # Always honor Stop, including the request that exhausts
@@ -373,8 +452,10 @@ class WebSocketServer:
                             break
                 except (TypeError, ValueError, OverflowError, RecursionError) as exc:
                     logger.warning("Invalid inbound WebSocket frame", error=str(exc))
-                    if isinstance(exc, ControlBudgetError) or not self._ingress[client_id].take():
-                        self._retire_connection(websocket, client_id, "invalid control frame budget")
+                    if isinstance(exc, ControlBudgetError) or not connection.ingress.take():
+                        self._retire_connection(
+                            websocket, client_id, "invalid control frame budget"
+                        )
                         break
                 except Exception:
                     logger.exception("Unhandled inbound WebSocket handler error")
@@ -394,32 +475,47 @@ class WebSocketServer:
         finally:
             if handshake_pending:
                 self._pending_handshakes -= 1
-            owns_session = self._connections.get(client_id) is websocket
+            owns_session = connection is not None and self._connection(client_id) is connection
             peer = self._detach_session(websocket, client_id)
-            self._client_ids.pop(websocket, None)
-            self._time_sync.pop(websocket, None)
-            queued = self._outbound.pop(websocket, None)
+            queued = connection.sender if connection is not None else None
+            self._sockets.pop(websocket, None)
+            self._admissions.pop(websocket, None)
             # Retire authority before awaiting either transport. A closed control
             # session must stop being a client even if bulk close or a writer hangs.
-            if registered and owns_session and websocket not in self._retired_connections:
-                self._retired_connections.add(websocket)
+            if registered and owns_session and connection is not None and not connection.retired:
+                connection.retired = True
+                session = self._sessions.get(client_id)
                 if self._on_disconnect is not None:
                     try:
-                        if client_id in self._resume_tokens and self._stop_event is not None and not self._stop_event.is_set():
+                        if (
+                            session is not None
+                            and self._stop_event is not None
+                            and not self._stop_event.is_set()
+                        ):
                             deadline = time.monotonic() + 1.0
                             if self._on_suspend is not None:
                                 self._on_suspend(client_id, deadline)
+
                             def expire() -> None:
-                                self._disconnect_handles.pop(client_id, None)
-                                self._resume_tokens.pop(client_id, None)
+                                if self._sessions.get(client_id) is not session:
+                                    return
+                                self._sessions.pop(client_id)
+                                session.disconnect_handle = None
                                 if self._on_disconnect is not None:
                                     self._on_disconnect(websocket, client_id)
-                            self._disconnect_handles[client_id] = self._loop.call_later(1.0, expire)
+
+                            session.disconnect_handle = self._loop.call_later(1.0, expire)
                         else:
-                            self._resume_tokens.pop(client_id, None)
+                            self._sessions.pop(client_id, None)
                             self._on_disconnect(websocket, client_id)
                     except Exception:
-                        logger.exception("AR client disconnect callback failed", client_id=client_id)
+                        if session is not None and session.disconnect_handle is None:
+                            self._sessions.pop(client_id, None)
+                        logger.exception(
+                            "AR client disconnect callback failed", client_id=client_id
+                        )
+                elif session is not None:
+                    self._sessions.pop(client_id, None)
             try:
                 if peer is not None:
                     if peer.task is not None:
@@ -429,27 +525,25 @@ class WebSocketServer:
                     except Exception:
                         logger.exception("Failed to close client bulk socket", client_id=client_id)
             finally:
-                try:
-                    if queued is not None:
-                        try:
-                            await queued.stop()
-                        except Exception:
-                            logger.exception("Failed to stop client sender", client_id=client_id)
-                finally:
-                    self._retired_connections.discard(websocket)
+                if queued is not None:
+                    try:
+                        await queued.stop()
+                    except Exception:
+                        logger.exception("Failed to stop client sender", client_id=client_id)
 
     def _detach_session(
         self, websocket: ws_server.ServerConnection, client_id: str
     ) -> BulkPeer | None:
         # An old socket must never detach a resumed identity's resources.
-        if self._connections.get(client_id) is not websocket:
+        session = self._sessions.get(client_id)
+        connection = session.connection if session is not None else None
+        if connection is None or connection.websocket is not websocket:
             return None
-        self._connections.pop(client_id)
-        self._bulk_tokens.pop(client_id, None)
-        self._capture_ids.pop(client_id, None)
-        self._ingress.pop(client_id, None)
-        self._ingress_timing.pop(client_id, None)
-        peer = self._bulk_peers.pop(client_id, None)
+        assert session is not None
+        session.connection = None
+        connection.bulk_token = ""
+        connection.capture_id = None
+        peer, connection.bulk_peer = connection.bulk_peer, None
         if peer is not None and peer.task is not None:
             peer.task.cancel()
         return peer
@@ -460,37 +554,44 @@ class WebSocketServer:
         client_id: str,
         reason: str,
     ) -> None:
-        if websocket in self._retired_connections:
+        connection = self._sockets.get(websocket)
+        if connection is None or connection.retired:
             return
-        owns_session = self._connections.get(client_id) is websocket
-        self._retired_connections.add(websocket)
+        owns_session = self._connection(client_id) is connection
+        connection.retired = True
         peer = self._detach_session(websocket, client_id)
         if owns_session:
-            self._resume_tokens.pop(client_id, None)
+            self._sessions.pop(client_id, None)
 
         async def close() -> None:
             try:
                 async with asyncio.timeout(2.0):
                     await asyncio.gather(
                         websocket.close(1011, reason[:120]),
-                        *([peer.websocket.close(1001, "control session retired")]
-                          if peer is not None else []),
+                        *(
+                            [peer.websocket.close(1001, "control session retired")]
+                            if peer is not None
+                            else []
+                        ),
                         return_exceptions=True,
                     )
-            except Exception:
-                logger.exception("Failed to close retired client", client_id=client_id)
+            except TimeoutError:
+                logger.warning("Retired transport close timed out", client_id=client_id)
 
+        if owns_session and self._on_disconnect is not None:
+            try:
+                self._on_disconnect(websocket, client_id)
+            except Exception:
+                logger.exception("AR client disconnect callback failed", client_id=client_id)
         task = asyncio.create_task(close())
         self._closing_tasks.add(task)
         task.add_done_callback(self._closing_tasks.discard)
-        if owns_session and self._on_disconnect is not None:
-            self._on_disconnect(websocket, client_id)
 
     async def _complete_handshake(
         self,
         websocket: ws_server.ServerConnection,
         client_id: str,
-    ) -> str:
+    ) -> HandshakeAdmission:
         message = await websocket.recv()
         if not isinstance(message, str):
             raise TypeError("hello_request must be a text frame")
@@ -498,29 +599,39 @@ class WebSocketServer:
         if len(lines) != 1:
             raise ValueError("hello_request must be the only JSON object in the first text frame")
         hello_request = decode_hello_request(lines[0])
-        if (hello_request.resume_token is None
-                and len(self._connections) + len(self._disconnect_handles)
-                    + self._pending_handshakes - 1 >= MAX_CONTROL_CLIENTS):
+        if (
+            hello_request.resume_token is None
+            and self.logical_session_count + self._pending_handshakes - 1 >= MAX_CONTROL_CLIENTS
+        ):
             await websocket.close(1013, "client capacity reached")
             raise ValueError("client capacity reached")
         resume_handle = None
+        session = None
         if hello_request.resume_token is not None:
-            matched = next((key for key, value in self._resume_tokens.items()
-                            if secrets.compare_digest(value, hello_request.resume_token)), None)
-            if (matched is None or matched not in self._disconnect_handles
-                    or matched in self._resume_claims):
+            session = next(
+                (
+                    item
+                    for item in self._sessions.values()
+                    if secrets.compare_digest(item.resume_token, hello_request.resume_token)
+                ),
+                None,
+            )
+            if session is None or session.disconnect_handle is None or session.claimed:
                 raise ValueError("resume session expired or still connected")
-            client_id = matched
-            resume_handle = self._disconnect_handles[client_id]
-            self._resume_claims.add(client_id)
-        published_token: str | None = None
-        completed = False
+            client_id = session.client_id
+            resume_handle = session.disconnect_handle
+            session.claimed = True
+        else:
+            session = LogicalSession(client_id, secrets.token_hex(32))
+        admission: HandshakeAdmission | None = None
         try:
             ts_server = time.time()
             time_sync = TimeSync(ts_client=hello_request.ts_client, ts_server=ts_server)
-            self._time_sync[websocket] = time_sync
             body = await self._hello_worker.run(lambda: self._hello_supplier(client_id))
             token = secrets.token_hex(32)
+            connection = ControlConnection(websocket, client_id, time_sync, token)
+            admission = HandshakeAdmission(session, connection, resume_handle)
+            self._admissions[websocket] = admission
             req = getattr(websocket, "request", None)
             hello = Hello(
                 client_id=client_id,
@@ -536,25 +647,29 @@ class WebSocketServer:
                 bulk_url="/ws/bulk" if req is not None and req.path == "/ws" else "/bulk",
                 bulk_token=token,
                 bulk_epoch=self.bulk.epoch,
-                resume_token=hello_request.resume_token or secrets.token_hex(32),
+                resume_token=session.resume_token,
             )
-            if resume_handle is not None and self._disconnect_handles.get(client_id) is not resume_handle:
+
+            def resume_current() -> bool:
+                return resume_handle is None or (
+                    self._sessions.get(client_id) is session
+                    and session.disconnect_handle is resume_handle
+                )
+
+            if not resume_current():
                 raise ValueError("resume deadline expired during handshake")
-            self._bulk_tokens[client_id] = token
-            published_token = token
             await websocket.send(encode_hello(hello))
-            if resume_handle is not None and self._disconnect_handles.get(client_id) is not resume_handle:
+            if not resume_current():
                 raise ValueError("resume deadline expired during handshake")
             if resume_handle is not None:
                 resume_handle.cancel()
-                self._disconnect_handles.pop(client_id, None)
-            self._resume_tokens[client_id] = hello.resume_token
-            completed = True
-            return client_id
+                session.disconnect_handle = None
+            admission.completed = True
+            return admission
         finally:
-            self._resume_claims.discard(client_id)
-            if not completed and published_token == self._bulk_tokens.get(client_id):
-                self._bulk_tokens.pop(client_id, None)
+            session.claimed = False
+            if admission is None or not admission.completed:
+                self._admissions.pop(websocket, None)
 
     async def _handle_bulk(self, websocket: ws_server.ServerConnection) -> None:
         client_id: str | None = None
@@ -570,37 +685,58 @@ class WebSocketServer:
                 client_id = hello.get("client_id")
                 token = hello.get("token")
                 if isinstance(client_id, str) and isinstance(token, str):
-                    while (client_id not in self._connections
-                           and secrets.compare_digest(self._bulk_tokens.get(client_id, ""), token)):
+                    candidate = self._bulk_connection(client_id)
+                    while (
+                        self._connection(client_id) is None
+                        and candidate is not None
+                        and secrets.compare_digest(candidate.bulk_token, token)
+                    ):
                         await asyncio.sleep(0.005)
-                if (hello.get("type") != "bulk_hello_request" or hello.get("protocol_version") != 2
-                        or not isinstance(client_id, str) or not isinstance(token, str)
-                        or client_id not in self._connections
-                        or not secrets.compare_digest(self._bulk_tokens.get(client_id, ""), token)
-                        or client_id in self._bulk_peers):
+                        candidate = self._bulk_connection(client_id)
+                connection = self._connection(client_id) if isinstance(client_id, str) else None
+                if (
+                    hello.get("type") != "bulk_hello_request"
+                    or hello.get("protocol_version") != 2
+                    or not isinstance(client_id, str)
+                    or not isinstance(token, str)
+                    or connection is None
+                    or not secrets.compare_digest(connection.bulk_token, token)
+                    or connection.bulk_peer is not None
+                ):
                     raise ValueError("bulk session is not attached to a live control session")
                 identity = client_id
                 peer = BulkPeer(
-                    websocket, self.bulk.epoch, self._bulk_budget,
-                    lambda: sum(int(item.busy) for item in self._bulk_peers.values()),
-                    lambda: any(item.pending for item in self._outbound.values()),
+                    websocket,
+                    self.bulk.epoch,
+                    self._bulk_budget,
+                    lambda: sum(int(item.busy) for item in self._peers()),
+                    lambda: any(
+                        item.sender is not None and item.sender.pending
+                        for item in self._active_connections()
+                    ),
                 )
-                self._bulk_peers[identity] = peer
-                await websocket.send(json.dumps({"type": "bulk_hello", "protocol_version": 2,
-                                                  "epoch": self.bulk.epoch}) + "\n")
+                connection.bulk_peer = peer
+                await websocket.send(
+                    json.dumps(
+                        {"type": "bulk_hello", "protocol_version": 2, "epoch": self.bulk.epoch}
+                    )
+                    + "\n"
+                )
                 peer.task = asyncio.create_task(peer.run())
+
                 def sender_done(task: asyncio.Task[None]) -> None:
                     if not task.cancelled() and task.exception() is not None:
                         close = asyncio.create_task(websocket.close(1011, "bulk sender failed"))
                         self._closing_tasks.add(close)
                         close.add_done_callback(self._closing_tasks.discard)
+
                 peer.task.add_done_callback(sender_done)
             upload: BulkUpload | None = None
             requests = TokenBucket(20, 40)
             while True:
                 async with asyncio.timeout(5 if upload is not None else None):
                     raw = await websocket.recv()
-                if identity not in self._connections or self._bulk_peers.get(identity) is not peer:
+                if self._connection(identity) is not connection or connection.bulk_peer is not peer:
                     break
                 if peer.task.done():
                     peer.task.result()
@@ -613,32 +749,54 @@ class WebSocketServer:
                     # each bounded chunk so control callbacks remain runnable.
                     await asyncio.sleep(0)
                     if completed is not None:
-                        current = upload.capture_id == self._capture_ids.get(identity)
-                        if current:
-                            await self._handle_binary(completed, self._connections[identity], identity)
-                        await websocket.send(json.dumps({"type": "bulk_upload_result",
-                                                         "upload_id": upload.identity,
-                                                         "status": "accepted" if current else "rejected",
-                                                         **({} if current else {"code": "capture_retired"})}) + "\n")
+                        capture_current = upload.capture_id == connection.capture_id
+                        if capture_current:
+                            await self._handle_binary(completed, connection.websocket, identity)
+                        await websocket.send(
+                            json.dumps(
+                                {
+                                    "type": "bulk_upload_result",
+                                    "upload_id": upload.identity,
+                                    "status": "accepted" if capture_current else "rejected",
+                                    **({} if capture_current else {"code": "capture_retired"}),
+                                }
+                            )
+                            + "\n"
+                        )
                         upload = None
                         peer.uploading = False
                     continue
-                if not isinstance(raw, str) or len(raw.encode()) > CONTROL_RECORD_MAX_BYTES or not requests.take():
+                if (
+                    not isinstance(raw, str)
+                    or len(raw.encode()) > CONTROL_RECORD_MAX_BYTES
+                    or not requests.take()
+                ):
                     raise ValueError("bulk metadata exceeds budget")
                 request = json.loads(raw)
                 if not isinstance(request, dict):
                     raise TypeError("bulk metadata must be an object")
                 if request.get("type") == "bulk_get":
-                    if (request.get("kind") not in {"model", "trajectory", "route"}
-                            or any(not isinstance(request.get(field), str)
-                                   or not 1 <= len(request[field]) <= 256
-                                   for field in ("epoch", "id", "revision"))):
+                    if request.get("kind") not in {"model", "trajectory", "route"} or any(
+                        not isinstance(request.get(field), str)
+                        or not 1 <= len(request[field]) <= 256
+                        for field in ("epoch", "id", "revision")
+                    ):
                         raise ValueError("invalid bulk asset reference")
                     asset = self.bulk.get(str(request.get("kind")), request)
                     if asset is None:
-                        await websocket.send(json.dumps({"type": "bulk_error", "code": "asset_unavailable",
-                                                         **{field: request[field] for field in
-                                                            ("kind", "epoch", "id", "revision")}}) + "\n")
+                        await websocket.send(
+                            json.dumps(
+                                {
+                                    "type": "bulk_error",
+                                    "code": "asset_unavailable",
+                                    **{
+                                        field: request[field]
+                                        for field in ("kind", "epoch", "id", "revision")
+                                    },
+                                }
+                            )
+                            + "\n"
+                        )
                     else:
                         peer.enqueue(asset)
                 elif request.get("type") == "bulk_upload_begin":
@@ -648,16 +806,25 @@ class WebSocketServer:
                     if type(upload_id) is not int or type(total_bytes) is not int:
                         raise ValueError("bulk upload requires integer bounds")
                     capture_id = request.get("capture_id")
-                    if not isinstance(capture_id, str) or capture_id != self._capture_ids.get(identity):
-                        await websocket.send(json.dumps({"type": "bulk_upload_result",
-                                                         "upload_id": upload_id,
-                                                         "status": "rejected",
-                                                         "code": "capture_retired"}) + "\n")
+                    if not isinstance(capture_id, str) or capture_id != connection.capture_id:
+                        await websocket.send(
+                            json.dumps(
+                                {
+                                    "type": "bulk_upload_result",
+                                    "upload_id": upload_id,
+                                    "status": "rejected",
+                                    "code": "capture_retired",
+                                }
+                            )
+                            + "\n"
+                        )
                         continue
                     upload = BulkUpload(upload_id, total_bytes, capture_id)
                     peer.uploading = True
-                    await websocket.send(json.dumps({"type": "bulk_upload_ready",
-                                                     "upload_id": upload.identity}) + "\n")
+                    await websocket.send(
+                        json.dumps({"type": "bulk_upload_ready", "upload_id": upload.identity})
+                        + "\n"
+                    )
                 elif request.get("type") == "bulk_upload_cancel":
                     upload_id = request.get("upload_id")
                     if type(upload_id) is not int or not 0 <= upload_id < 2**32:
@@ -665,9 +832,16 @@ class WebSocketServer:
                     if upload is not None and upload.identity == upload_id:
                         upload = None
                         peer.uploading = False
-                    await websocket.send(json.dumps({"type": "bulk_upload_result",
-                                                     "upload_id": upload_id,
-                                                     "status": "cancelled"}) + "\n")
+                    await websocket.send(
+                        json.dumps(
+                            {
+                                "type": "bulk_upload_result",
+                                "upload_id": upload_id,
+                                "status": "cancelled",
+                            }
+                        )
+                        + "\n"
+                    )
                 else:
                     raise ValueError("unsupported bulk record")
         except asyncio.CancelledError:
@@ -675,8 +849,10 @@ class WebSocketServer:
         except (ValueError, TypeError, KeyError, TimeoutError, websockets.WebSocketException):
             await websocket.close(1008, "invalid or expired bulk transfer")
         finally:
-            if client_id is not None and self._bulk_peers.get(client_id) is peer:
-                self._bulk_peers.pop(client_id, None)
+            if client_id is not None:
+                current_connection = self._connection(client_id)
+                if current_connection is not None and current_connection.bulk_peer is peer:
+                    current_connection.bulk_peer = None
             if peer is not None and peer.task is not None:
                 peer.task.cancel()
                 await asyncio.gather(peer.task, return_exceptions=True)
@@ -695,13 +871,13 @@ class WebSocketServer:
         if self._on_localization_observations is None:
             logger.warning("localization_observations received but no handler is configured")
             return
-        time_sync = self._time_sync.get(websocket)
-        if time_sync is None:
+        connection = self._sockets.get(websocket)
+        if connection is None:
             raise RuntimeError("localization_observations before hello handshake completed")
         observations = decode_localization_observations(message)
         if len(observations) > 3:
             raise ValueError("localization observation count exceeds requested budget")
-        result = self._on_localization_observations(observations, client_id, time_sync)
+        result = self._on_localization_observations(observations, client_id, connection.time_sync)
         if asyncio.iscoroutine(result):
             await result
 
@@ -712,14 +888,21 @@ class WebSocketServer:
         client_id: str,
     ) -> None:
         if isinstance(inbound, ClientError):
-            logger.error("Client reported decode error", client_id=client_id,
-                         message_type=inbound.message_type, detail=inbound.detail,
-                         excerpt=inbound.excerpt, client_ts=inbound.ts, message_ts=inbound.message_ts,
-                         request_id=inbound.request_id, suppressed_count=inbound.suppressed_count)
+            logger.error(
+                "Client reported decode error",
+                client_id=client_id,
+                message_type=inbound.message_type,
+                detail=inbound.detail,
+                excerpt=inbound.excerpt,
+                client_ts=inbound.ts,
+                message_ts=inbound.message_ts,
+                request_id=inbound.request_id,
+                suppressed_count=inbound.suppressed_count,
+            )
             return
         if isinstance(inbound, ManipulationRequest):
             if self._on_manipulation_request is not None:
-                sync = self._time_sync[websocket]
+                sync = self._sockets[websocket].time_sync
                 self._on_manipulation_request(inbound, client_id, sync.ts_server - sync.ts_client)
             return
         if isinstance(inbound, InteractionRequest):
@@ -745,13 +928,17 @@ class WebSocketServer:
         if isinstance(inbound, LocalizationStartRequest):
             # This is a generation boundary before the policy can admit another
             # episode; cancellation on the other socket may arrive later.
-            self._capture_ids.pop(client_id, None)
+            connection = self._connection(client_id)
+            if connection is not None:
+                connection.capture_id = None
             if self._on_localization_start_request is not None:
                 self._on_localization_start_request(inbound, client_id)
             return
         if isinstance(inbound, (LocalizationTracking, LocalizationCaptureProgress)):
             if self._on_localization_progress is not None:
-                self._on_localization_progress(inbound, client_id, self._time_sync[websocket])
+                self._on_localization_progress(
+                    inbound, client_id, self._sockets[websocket].time_sync
+                )
             return
         if isinstance(inbound, UserMessageRequest):
             if self._on_user_message_request is not None:
@@ -778,7 +965,9 @@ class WebSocketServer:
             raise TypeError("native control payload must be an object")
         return self.prepare_outbound(payload)
 
-    async def _encode_bulk(self, operation: Callable[..., dict[str, Any]], value: Any) -> dict[str, Any]:
+    async def _encode_bulk(
+        self, operation: Callable[..., dict[str, Any]], value: Any
+    ) -> dict[str, Any]:
         result = await self._encoder.run(lambda: operation(value))
         self._publish_refs(result)
         return result
@@ -787,12 +976,16 @@ class WebSocketServer:
         return await self._encode_bulk(self.prepare_outbound, payload)
 
     def _publish_refs(self, payload: dict[str, Any]) -> None:
-        for field, kind in (("model_ref", "model"), ("plan_ref", "trajectory"), ("route_ref", "route")):
+        for field, kind in (
+            ("model_ref", "model"),
+            ("plan_ref", "trajectory"),
+            ("route_ref", "route"),
+        ):
             ref = payload.get(field)
             if isinstance(ref, dict):
                 asset = self.bulk.get(kind, ref)
                 if asset is not None:
-                    for peer in tuple(self._bulk_peers.values()):
+                    for peer in self._peers():
                         # Cache retrieval, not continuous observation, owns
                         # retransmission. A revision is enqueued once per peer.
                         if peer._latest.get((kind, asset.ref["id"])) != asset.ref["revision"]:
@@ -808,35 +1001,48 @@ class WebSocketServer:
             return
         frame_type = peek_frame_type(text) or "unknown"
         if frame_type == "localization_observations_request":
+            # Capture identity belongs to the event-loop connection owner. Native
+            # producers may enqueue ordinary bridge frames from worker threads.
+            try:
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                current_loop = None
+            if current_loop is not self._loop:
+                self._loop.call_soon_threadsafe(self._post_text, websocket, text)
+                return
             if websocket is None:
-                for connection in tuple(self._connections.values()):
-                    self._post_text(connection, text)
+                for target in self._active_connections():
+                    self._post_text(target.websocket, text)
                 return
-            client_id = self._client_ids.get(websocket)
-            if client_id is None:
+            connection = self._sockets.get(websocket)
+            if (
+                connection is None
+                or connection.retired
+                or self._connection(connection.client_id) is not connection
+            ):
                 return
-            payload = json.loads(text)
-            capture_id = secrets.token_hex(16)
-            payload["capture_id"] = capture_id
-            self._capture_ids[client_id] = capture_id
-            text = json.dumps(payload, separators=(",", ":")) + "\n"
+            text = connection.issue_capture(json.loads(text))
         coalesced = frame_type in COALESCE_FRAME_TYPES
         with self._bridge_lock:
             if coalesced:
                 self._bridge_latest[(websocket, frame_type)] = text
-            elif (self._bridge_fifo_counts.get(websocket, 0) < 64
-                  and self._bridge_fifo_bytes + len(text.encode()) <= 33_554_432):
+            elif (
+                self._bridge_fifo_counts.get(websocket, 0) < 64
+                and self._bridge_fifo_bytes + len(text.encode()) <= 33_554_432
+            ):
                 self._bridge_fifo.append((websocket, text))
                 self._bridge_fifo_bytes += len(text.encode())
                 self._bridge_fifo_counts[websocket] = self._bridge_fifo_counts.get(websocket, 0) + 1
             else:
                 # The source's control connection is retired instead of losing
                 # a decision. Native broadcasts cannot silently overrun memory.
-                targets = tuple(self._connections.items())
-                for client_id, connection in targets:
-                    if websocket is None or connection is websocket:
+                for target in self._active_connections():
+                    if websocket is None or target.websocket is websocket:
                         self._loop.call_soon_threadsafe(
-                            self._retire_connection, connection, client_id, "control bridge overflow"
+                            self._retire_connection,
+                            target.websocket,
+                            target.client_id,
+                            "control bridge overflow",
                         )
                 return
             if not self._bridge_scheduled:
@@ -881,30 +1087,36 @@ class WebSocketServer:
                 task.add_done_callback(self._bulk_preparations.discard)
             except Exception:
                 logger.exception("Unable to prepare outbound control frame")
-                for client_id, connection in tuple(self._connections.items()):
-                    if websocket is None or connection is websocket:
-                        self._retire_connection(connection, client_id, "invalid native control state")
+                for target in self._active_connections():
+                    if websocket is None or target.websocket is websocket:
+                        self._retire_connection(
+                            target.websocket, target.client_id, "invalid native control state"
+                        )
 
-    async def _prepare_bulk_text(self, websocket: ws_server.ServerConnection | None, text: str) -> None:
+    async def _prepare_bulk_text(
+        self, websocket: ws_server.ServerConnection | None, text: str
+    ) -> None:
         try:
             payload = await self._encode_bulk(self._prepare_text, text)
-            prepared = json.dumps(payload, separators=(",", ":"), allow_nan=False) + "\n"
+            prepared = encode_text(payload)
             if websocket is None:
                 await self._enqueue_all_text(prepared)
             else:
                 await self._enqueue_one_text(websocket, prepared)
         except Exception:
             logger.exception("Unable to prepare native bulk state")
-            for client_id, connection in tuple(self._connections.items()):
-                if websocket is None or connection is websocket:
-                    self._retire_connection(connection, client_id, "invalid native bulk state")
+            for target in self._active_connections():
+                if websocket is None or target.websocket is websocket:
+                    self._retire_connection(
+                        target.websocket, target.client_id, "invalid native bulk state"
+                    )
 
     def schedule_disconnect_all(self, reason: str) -> None:
         async def close_connections() -> None:
             await asyncio.gather(
                 *(
-                    connection.close(1012, reason)
-                    for connection in tuple(self._connections.values())
+                    connection.websocket.close(1012, reason)
+                    for connection in self._active_connections()
                 ),
                 return_exceptions=True,
             )
@@ -928,38 +1140,36 @@ class WebSocketServer:
 
     def _queue_bulk_binary(self, client_id: str | None, data: bytes) -> None:
         if client_id is None:
-            for peer in tuple(self._bulk_peers.values()):
+            for peer in self._peers():
                 peer.lidar(data)
-        elif client_id in self._bulk_peers:
-            self._bulk_peers[client_id].lidar(data)
+        else:
+            connection = self._connection(client_id)
+            if connection is not None and connection.bulk_peer is not None:
+                connection.bulk_peer.lidar(data)
 
     def schedule_send_to(self, websocket: ws_server.ServerConnection, text: str) -> None:
         self._post_text(websocket, text)
 
     def schedule_send_to_client(self, client_id: str, text: str) -> None:
-        websocket = self._connections.get(client_id)
-        if websocket is None:
-            return
-        self.schedule_send_to(websocket, text)
+        connection = self._connection(client_id)
+        if connection is not None:
+            self.schedule_send_to(connection.websocket, text)
 
     async def _enqueue_all_text(self, text: str) -> None:
-        for websocket in tuple(self._outbound):
-            await self._enqueue_one_text(websocket, text)
+        for connection in tuple(self._sockets.values()):
+            await self._enqueue_one_text(connection.websocket, text)
 
     async def _enqueue_one_text(self, websocket: ws_server.ServerConnection, text: str) -> None:
-        outbound = self._outbound.get(websocket)
-        if outbound is not None:
-            if peek_frame_type(text) == "localization_observations_request":
-                payload = json.loads(text)
-                client_id = self._client_ids.get(websocket)
-                if client_id is None:
-                    return
-                capture_id = payload.get("capture_id")
-                if capture_id is None:
-                    capture_id = secrets.token_hex(16)
-                    self._capture_ids[client_id] = capture_id
-                    payload["capture_id"] = capture_id
-                    text = json.dumps(payload, separators=(",", ":")) + "\n"
-                elif capture_id != self._capture_ids.get(client_id):
-                    return  # A newer policy request superseded queued old work.
-            outbound.enqueue(text)
+        connection = self._sockets.get(websocket)
+        if connection is None or connection.sender is None:
+            return
+        if peek_frame_type(text) == "localization_observations_request":
+            if connection.retired or self._connection(connection.client_id) is not connection:
+                return
+            payload = json.loads(text)
+            capture_id = payload.get("capture_id")
+            if capture_id is None:
+                text = connection.issue_capture(payload)
+            elif capture_id != connection.capture_id:
+                return  # A newer policy request superseded queued old work.
+        connection.sender.enqueue(text)

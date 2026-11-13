@@ -1,6 +1,6 @@
 import type { ManipulationOutbound } from "./manipulation/ManipulationTypes";
 /** Observation objects retain stable references while exposing no mutable object fields. */
-export type ReadonlyFacts<T> = T extends readonly unknown[] ? T : T extends object
+export type ReadonlyFacts<T> = T extends object
   ? { readonly [K in keyof T]: ReadonlyFacts<T[K]> } : T;
 export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number];
@@ -193,8 +193,8 @@ export interface NavGoal {
   preview?: boolean;
   preview_id?: string;
   type: "nav_goal";
-  pose: YawPose | null;
-  path_poses: YawPose[];
+  pose: Readonly<YawPose> | null;
+  path_poses: readonly Readonly<YawPose>[];
   ts: number;
 }
 
@@ -431,17 +431,17 @@ export interface InteractionSnapshot {
   readonly blocked: boolean;
   readonly pending: boolean;
   readonly ownsAuthority: boolean;
-  readonly authority: Readonly<InteractionAuthority> | null;
+  readonly authority: ReadonlyFacts<InteractionAuthority> | null;
   readonly planning: boolean;
   readonly mode: "manual" | "agent";
-  readonly settings: Readonly<InteractionSettings>;
+  readonly settings: ReadonlyFacts<InteractionSettings>;
   readonly settling: boolean;
-  readonly target: Readonly<InteractionPose> | null;
-  readonly rawTarget: Readonly<InteractionTarget> | null;
+  readonly target: ReadonlyFacts<InteractionPose> | null;
+  readonly rawTarget: ReadonlyFacts<InteractionTarget> | null;
   readonly phase: InteractionTarget["phase"] | null;
   readonly stale: boolean;
-  readonly preview: Readonly<NavGoal> | null;
-  readonly activeGoal: Readonly<NavGoal> | null;
+  readonly preview: ReadonlyFacts<NavGoal> | null;
+  readonly activeGoal: ReadonlyFacts<NavGoal> | null;
 }
 
 /** Consumers use observational facts and commands, independent of the implementation. */
@@ -449,10 +449,10 @@ export interface InteractionAuthorityPort {
   readonly denialRevision: number;
   raw(): ReadonlyFacts<InteractionState> | null;
   snapshot(domain?: InteractionDomain, groupId?: string, now?: number): InteractionSnapshot;
-  begin(kind: InteractionKind, sourceId: string, pose?: InteractionPose, settings?: InteractionSettings): boolean;
-  update(pose: InteractionPose, settings?: InteractionSettings): void;
+  begin(kind: InteractionKind, sourceId: string, pose?: ReadonlyFacts<InteractionPose>, settings?: InteractionSettings): boolean;
+  update(pose: ReadonlyFacts<InteractionPose>, settings?: InteractionSettings): void;
   credentials(): InteractionCredentials | null;
-  release(pose?: InteractionPose, kinds?: readonly InteractionKind[]): number | null;
-  confirm(pose?: InteractionPose, kinds?: readonly InteractionKind[]): void;
+  release(pose?: ReadonlyFacts<InteractionPose>, kinds?: readonly InteractionKind[]): number | null;
+  confirm(pose?: ReadonlyFacts<InteractionPose>, kinds?: readonly InteractionKind[]): void;
   cancel(kinds?: readonly InteractionKind[]): void;
 }

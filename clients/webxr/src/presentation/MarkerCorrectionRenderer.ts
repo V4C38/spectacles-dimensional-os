@@ -1,8 +1,11 @@
+import type { ReadonlyFacts } from "@dimos-ar-client/ClientContracts";
 import * as THREE from "three";
-import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/ClientTracking";
+import type { ClientTrackingOrigin as MutableClientTrackingOrigin } from "@dimos-ar-client/localization/ClientTracking";
 import { MarkerCorrectionTrail, ROBOT_LINE_STYLE } from "@dimos-ar-client/presentation/WorldPresentation";
 
 import { AdaptiveDashedLineRenderer } from "./AdaptiveDashedLineRenderer";
+
+type ClientTrackingOrigin = ReadonlyFacts<MutableClientTrackingOrigin>;
 
 export class MarkerCorrectionRenderer {
   readonly object = new THREE.Group();

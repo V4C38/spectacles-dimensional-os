@@ -1,3 +1,5 @@
+import { lerpVec3, slerpQuat } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+
 export function exponentialSmoothAlpha(dt: number, rate: number): number {
   return dt > 0 ? 1.0 - Math.exp(-rate * dt) : 1.0;
 }
@@ -13,10 +15,16 @@ export function interpolatePose(
 ): { position: vec3; rotation: quat } {
   const alpha = exponentialSmoothAlpha(dt, positionRate);
   const rotationAlpha = exponentialSmoothAlpha(dt, rotationRate);
-  return {
-    position: vec3.lerp(currentPos, targetPos, alpha),
-    rotation: quat.slerp(currentRot, targetRot, rotationAlpha),
-  };
+  const position = lerpVec3([currentPos.x, currentPos.y, currentPos.z],
+    [targetPos.x, targetPos.y, targetPos.z], alpha);
+  // Immediate native placement preserves the authored endpoint components exactly.
+  if (rotationAlpha === 1) {
+    return { position: new vec3(...position),
+      rotation: new quat(targetRot.w, targetRot.x, targetRot.y, targetRot.z) };
+  }
+  const [x, y, z, w] = slerpQuat([currentRot.x, currentRot.y, currentRot.z, currentRot.w],
+    [targetRot.x, targetRot.y, targetRot.z, targetRot.w], rotationAlpha);
+  return { position: new vec3(...position), rotation: new quat(w, x, y, z) };
 }
 
 export type RuntimePoseTarget = {

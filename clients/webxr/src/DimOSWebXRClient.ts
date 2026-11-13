@@ -1,7 +1,9 @@
+import { isSelectionEligible, isManualControlEnabled } from "@dimos-ar-client/presentation/ControlPanelPresentation";
+import type { ReadonlyFacts } from "@dimos-ar-client/ClientContracts";
 import { clientTrackingToWebxrPoint } from "./utilities/WebXRCoordinates";
-import { odomToClientTrackingPose, ClientTrackingOriginStore, type ClientTrackingOrigin, rotateVecByQuat } from "@dimos-ar-client/localization/ClientTracking";
+import { ClientTrackingOriginStore, type ClientTrackingOrigin as MutableClientTrackingOrigin, rotateVecByQuat } from "@dimos-ar-client/localization/ClientTracking";
 import { WebXRManipulationController } from "./manipulation/WebXRManipulationController";
-import { AlignmentWarning } from "@dimos-ar-client/presentation/NotificationCenter";
+import { AlignmentWarning, alignmentDistance } from "@dimos-ar-client/presentation/NotificationCenter";
 import { ClientPosePublisher } from "@dimos-ar-client/agent/AgentTransport";
 import { ViewerNotificationPresenter } from "./presentation/ViewerNotificationPresenter";
 import { reportDiagnostic } from "./diagnostics/Diagnostics";
@@ -26,6 +28,8 @@ import { WebXRLidarRenderer } from "./sensors/WebXRLidarRenderer";
 import { WebXRRobotPresenter } from "./presentation/WebXRRobotPresenter";
 import { WebXRRouteRenderer } from "./navigation/WebXRNavigationRenderer";
 import { WebXRUIPresenter } from "./presentation/WebXRUIPresenter";
+
+type ClientTrackingOrigin = ReadonlyFacts<MutableClientTrackingOrigin>;
 
 type WebXRCameraPort = Pick<HmdCameraSource, "samplePose" | "cameraOptical" | "start" | "stop" | "capture" | "clearTracking" | "availabilityError" | "previewFrame" | "dispose"> & Partial<Pick<HmdCameraSource, "trackingPosition">>;
 
@@ -184,9 +188,7 @@ export class DimOSWebXRClient {
     this.ui.tick(now);
     const view = this.session.view();
     if (!this.ui.menuOpen || !this.isRobotSelected()) this.speech.endRecording(true);
-    this.speech.tick(now, this.ui.setupCompleted && this.ui.operatingMode === "agent" &&
-      view.connection === "ready" && view.capabilities?.agent.available === true,
-      view.agentMessage, view.state?.agent.idle ?? true, view.agentMessageRevision);
+    this.speech.tickSession(now, view, this.ui.setupCompleted, this.ui.operatingMode);
     const visibleDeltaS = this.lastTickAt === null ? 0 : Math.min(0.1, Math.max(0, now - this.lastTickAt));
     this.stopFeedbackRemaining = Math.max(0, this.stopFeedbackRemaining - visibleDeltaS);
     this.manipulation.renderer.debugEnabled = this.ui.debugEnabled;
@@ -282,8 +284,8 @@ export class DimOSWebXRClient {
   }
 
   controlsEnabled(): boolean {
-    return this.ui.setupCompleted && !this.ui.alignmentReview?.pending && !this.ui.setupCelebrating && this.ui.operatingMode === "manual" &&
-      this.session.view().connection === "ready";
+    return isManualControlEnabled(this.session.view(), this.ui.setupCompleted,
+      this.ui.alignmentReview?.pending === true, this.ui.setupCelebrating, this.ui.operatingMode);
   }
 
   loseInput(completeDictation = false): void {
@@ -413,7 +415,18 @@ export class DimOSWebXRClient {
       this.navigation.applyView(view, null, null, now);
       return;
     }
-    this.lidar.apply(view.lidar?.points ?? null, origin, this.ui.lidarMode, view.pose?.position ?? null, view.hello?.robot.base_height_m ?? 0, view.pose?.orientation, view.hello?.robot.body_bounds_m, this.ui.lidarPreferences.pointLimit, this.ui.lidarPreferences.obstacleRangeM, view.hello?.robot.odom_scale_correction_factor ?? 1);
+    this.lidar.apply({
+      points: view.lidar?.points ?? null,
+      origin,
+      mode: this.ui.lidarMode,
+      robot: view.pose?.position ?? null,
+      baseHeightM: view.hello?.robot.base_height_m ?? 0,
+      orientation: view.pose?.orientation,
+      bounds: view.hello?.robot.body_bounds_m,
+      pointLimit: this.ui.lidarPreferences.pointLimit,
+      obstacleRangeM: this.ui.lidarPreferences.obstacleRangeM,
+      odomScaleCorrectionFactor: view.hello?.robot.odom_scale_correction_factor ?? 1,
+    });
     this.navigation.setSelected(this.selection.isSelected());
     this.navigation.applyView(view, origin, this.robot.floorPose(), now);
     const goalY = this.navigation.marker.object.visible ? this.navigation.marker.pose().position[1] : null;
@@ -426,18 +439,12 @@ export class DimOSWebXRClient {
       { executing: view.nav?.state === "following_path", startCircle: this.robot.floorCircleBounds(), endCircle: this.navigation.marker.circleBounds() },
     );
 
-      let alignmentDistance: number | null = null;
-      try {
-        const viewer = this.camera.trackingPosition?.();
-        if (viewer) this.navigation.setViewerPosition(clientTrackingToWebxrPoint(viewer));
-        const pose = view.pose ?? view.manipulation?.root_pose;
-        if (origin && pose && viewer && view.hasTrackingOrigin) {
-          const robot = odomToClientTrackingPose(pose, origin).position;
-          alignmentDistance = Math.hypot(...robot.map((v, i) => v - viewer[i]));
-        }
-      } catch { /* No usable headset pose: do not infer weak alignment. */ }
-      if (this.notifications) this.alignmentWarning.update(alignmentDistance,
-        view.hello?.localization?.providers.includes("vps") === true, this.episode.view().phase, this.notifications);
+    let viewer: Vec3 | null = null;
+    try { viewer = this.camera.trackingPosition?.() ?? null; }
+    catch { /* Tracking sampling may be unavailable between visible frames. */ }
+    if (viewer) this.navigation.setViewerPosition(clientTrackingToWebxrPoint(viewer));
+    this.alignmentWarning.update(alignmentDistance(view, origin, viewer),
+      view.hello?.localization?.providers.includes("vps") === true, this.episode.view().phase, this.notifications);
     this.previewRoute.apply(this.navigation.previewPath(), origin, this.navigation.isAiming(), this.robot.floorWorldY(), this.navigation.draftMarker.pose().position[1],
       { preview: true, startCircle: this.robot.floorCircleBounds(), endCircle: this.navigation.draftMarker.circleBounds() });
     if (origin !== this.lastMarkerOrigin) {
@@ -462,7 +469,7 @@ export class DimOSWebXRClient {
   private maybeSendClientPose(): void { this.posePublisher.tick(); }
 
   private syncSelectionEligibility(): void {
-    this.selection.setEligible(this.ui.setupCompleted && !this.ui.alignmentReview?.pending &&
-      (this.session.view().connection === "ready" || this.manipulation.interaction.retainingFeedback));
+    this.selection.setEligible(isSelectionEligible(this.session.view(), this.ui.setupCompleted,
+      this.ui.alignmentReview?.pending === true, this.manipulation.interaction.retainingFeedback));
   }
 }

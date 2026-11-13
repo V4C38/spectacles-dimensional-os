@@ -1,13 +1,16 @@
+import type { ReadonlyFacts } from "@dimos-ar-client/ClientContracts";
 import * as THREE from "three";
-import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/ClientTracking";
+import type { ClientTrackingOrigin as MutableClientTrackingOrigin } from "@dimos-ar-client/localization/ClientTracking";
 import type { ARModuleSession, ARModuleSessionState } from "@dimos-ar-client/websocket/ARModuleSession";
 import type { Quat, Vec3, YawPose } from "@dimos-ar-client/ClientContracts";
-import { NavigationInteraction, NavigationPreviewCoordinator } from "@dimos-ar-client/navigation/NavigationInteraction";
+import { NavigationInteraction, NavigationPreviewCoordinator, deriveNavigationPresentation } from "@dimos-ar-client/navigation/NavigationInteraction";
 
 import { requestNavGoal } from "@dimos-ar-client/navigation/NavigationCommands";
 import { clientTrackingToWebxrPose, clientTrackingToWebxrPoint, webxrHeadingToClientTrackingPose, webxrToClientTrackingPoint } from "../utilities/WebXRCoordinates";
 import { WebXRNavGoalView, type NavFlash } from "./WebXRNavigationRenderer";
 import { FLOOR_AIM_RANGE_M, RAY_LENGTH_M, solveMeshPlacement, type MeshHit } from "../input/WebXRInteraction";
+
+type ClientTrackingOrigin = ReadonlyFacts<MutableClientTrackingOrigin>;
 export { FLASH_DURATION_S, robotDeadzoneRadiusM } from "@dimos-ar-client/navigation/NavigationInteraction";
 
 /** WebXR placement and scene binding. All navigation interaction policy lives in ClientCore. */
@@ -39,8 +42,8 @@ export class WebXRNavigationController {
   isAiming(): boolean { return this.interaction.isAiming(); }
   isDragging(): boolean { return this.interaction.isDragging(); }
   isRouteVisible(): boolean { return this.interaction.isRouteVisible(); }
-  activePath(): YawPose[] | null { return this.interaction.activePath(); }
-  previewPath(): YawPose[] | null { return this.interaction.previewPath(); }
+  activePath(): readonly Readonly<YawPose>[] | null { return this.interaction.activePath(); }
+  previewPath(): readonly Readonly<YawPose>[] | null { return this.interaction.previewPath(); }
   flash(): NavFlash | null { return this.interaction.flash(); }
   clearAim(sourceId?: string): void { this.interaction.clearAim(sourceId); this.sync(); }
   cancel(now: number): void { this.interaction.cancel(now); this.sync(); }
@@ -69,28 +72,28 @@ export class WebXRNavigationController {
   }
   private sync(): void {
     const state = this.interaction.snapshot();
-    const mainPose = state.dragging ? state : state.activeGoal.pose ?? state;
-    const pose = clientTrackingToWebxrPose(mainPose);
+    const frame = deriveNavigationPresentation(state, { showFlashDuringDrag: true });
+    const pose = clientTrackingToWebxrPose(frame.mainPose);
     this.marker.setPose(pose.position, pose.orientation);
-    if (state.visible && (!state.draft || state.activeGoal.active || state.flash)) this.marker.show(); else this.marker.hide();
-    this.marker.setBlocked(state.blocked === true);
-    this.draftMarker.setBlocked(state.blocked === true);
-    this.marker.setSelected(state.selected);
+    if (frame.mainVisible) this.marker.show(); else this.marker.hide();
+    this.marker.setBlocked(frame.blocked);
+    this.draftMarker.setBlocked(frame.blocked);
+    this.marker.setSelected(frame.selected);
     this.marker.setAiming(false);
-    this.marker.setInteraction(state.dragging, state.followingPath);
-    this.marker.setFlash(state.flash, state.feedbackProgress);
+    this.marker.setInteraction(frame.dragging, frame.following);
+    this.marker.setFlash(frame.flash, frame.feedbackProgress);
     this.marker.setProbe(null);
-    this.marker.setCancelVisible(state.cancelVisible, state.activeGoal.confirmationId);
+    this.marker.setCancelVisible(frame.cancelVisible, frame.confirmationId);
     const opacity = this.marker.circleOpacity();
-    if (state.draft && state.visible) {
-      const draft = clientTrackingToWebxrPose(state.draft);
+    if (frame.draftVisible && frame.draftPose) {
+      const draft = clientTrackingToWebxrPose(frame.draftPose);
       this.draftMarker.setPose(draft.position, draft.orientation);
       this.draftMarker.show(); this.draftMarker.setSelected(true); this.draftMarker.setAiming(true);
-      this.draftMarker.setInteraction(state.draft.held, false); this.draftMarker.setSharedOpacity(opacity);
+      this.draftMarker.setInteraction(frame.draftHeld, false); this.draftMarker.setSharedOpacity(opacity);
     } else this.draftMarker.hide();
-    const ids = new Set(state.probes.map(probe => probe.sourceId));
+    const ids = new Set(frame.probes.map(probe => probe.sourceId));
     for (const [id, view] of this.probes) if (!ids.has(id)) { view.dispose(); this.probes.delete(id); }
-    for (const probe of state.probes) {
+    for (const probe of frame.probes) {
       let view = this.probes.get(probe.sourceId);
       if (!view) { view = new WebXRNavGoalView(0.06); this.probes.set(probe.sourceId, view); this.probeRoot.add(view.probe); }
       view.setProbe(clientTrackingToWebxrPoint(probe.position)); view.setSharedOpacity(opacity);

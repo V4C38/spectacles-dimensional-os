@@ -6,7 +6,12 @@ from dataclasses import dataclass
 import re
 from typing import Any, Protocol
 
-from dimos.ar.numeric import finite_number as number
+from dimos.ar.numeric import (
+    finite_number as number,
+    finite_vector,
+    nonnegative_integer,
+    required_identifier as identifier,
+)
 from dimos.spec.utils import Spec
 
 ACTIONS = frozenset(
@@ -34,12 +39,6 @@ class ManipulationRequest:
     payload: dict[str, Any]
 
 
-def identifier(value: object, name: str) -> str:
-    if not isinstance(value, str) or not value.strip() or len(value) > 128:
-        raise ValueError(f"{name} must contain 1 to 128 characters")
-    return value
-
-
 def decode_request(data: dict[str, Any]) -> ManipulationRequest:
     request_id = identifier(data.get("request_id"), "request_id")
     group_id = identifier(data.get("group_id"), "group_id")
@@ -52,27 +51,18 @@ def decode_request(data: dict[str, Any]) -> ManipulationRequest:
             payload[field] = identifier(data[field], field)
     for field in ("sequence", "target_revision"):
         if field in data:
-            value = data[field]
-            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                raise ValueError(f"{field} must be a nonnegative integer")
-            payload[field] = value
+            payload[field] = nonnegative_integer(data[field], field)
 
     if action in {"evaluate", "plan", "update"}:
         for key, count in (("position", 3), ("orientation", 4)):
-            values = data.get(key)
-            if not isinstance(values, list) or len(values) != count:
-                raise ValueError(f"{key} must contain {count} numbers")
-            payload[key] = [number(v, key) for v in values]
+            payload[key] = list(finite_vector(data.get(key), key, count))
         if abs(sum(v * v for v in payload["orientation"]) - 1) > 1e-4:
             raise ValueError("orientation must be a unit quaternion")
     if action in {"execute", "release", "update"}:
         key = "plan_id" if action == "execute" else "token"
         payload[key] = identifier(data.get(key), key)
     if action == "update":
-        sequence = data.get("sequence")
-        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
-            raise ValueError("sequence must be a nonnegative integer")
-        payload["sequence"] = sequence
+        payload["sequence"] = nonnegative_integer(data.get("sequence"), "sequence")
         payload["ts"] = number(data.get("ts"), "ts")
     if action in {"plan", "update", "reset_joints", "prepare_shutdown"}:
         speed = number(
@@ -122,12 +112,20 @@ class ExecutionNotStartedError(ManipulationError):
     """A checked admission failure that guarantees no motion was dispatched."""
 
 
-def rejection_result(action: object, error: Exception, *, transport: bool = False) -> dict[str, Any]:
+def rejection_result(
+    action: object, error: Exception, *, transport: bool = False
+) -> dict[str, Any]:
     code = error.code if isinstance(error, ManipulationError) else spatial_error_code(str(error))
-    recoverable = (isinstance(action, str) and action in {"update", "evaluate", "plan"}
-                   and code in RECOVERABLE_CODES)
-    uncertain = (transport and isinstance(action, str)
-                 and action in {"execute", "reset_joints", "prepare_shutdown"})
+    recoverable = (
+        isinstance(action, str)
+        and action in {"update", "evaluate", "plan"}
+        and code in RECOVERABLE_CODES
+    )
+    uncertain = (
+        transport
+        and isinstance(action, str)
+        and action in {"execute", "reset_joints", "prepare_shutdown"}
+    )
     result: dict[str, Any] = {
         "status": "uncertain" if uncertain else "infeasible" if recoverable else "rejected",
         "code": "rpc_uncertain" if uncertain else code,

@@ -1,3 +1,4 @@
+import { installMenuQueries } from "./MenuQueries";
 import { V2BulkPeer } from "./V2BulkPeer";
 import { expect, type Page, type WebSocketRoute } from "@playwright/test";
 import { fileURLToPath } from "node:url";
@@ -59,6 +60,7 @@ export async function bootstrap(
     if (!socket) throw new Error("Fixture WebSocket is not connected");
     bulk.send(socket, value);
   };
+  await page.addInitScript(installMenuQueries);
   await page.addInitScript({
     path: fileURLToPath(
       new URL("../../../node_modules/iwer/build/iwer.js", import.meta.url),

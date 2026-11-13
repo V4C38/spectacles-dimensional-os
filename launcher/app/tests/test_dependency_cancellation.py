@@ -23,8 +23,8 @@ async def test_public_stop_cancels_dependency_work(runtime, monkeypatch, operati
     with pytest.raises(asyncio.CancelledError):
         await task
     assert child.returncode == 0
-    assert manager._proc is None
-    assert not manager._dependency_operation.running
+    assert manager.runtime.backend.process is None
+    assert not manager.dependencies.operation.running
     assert manager.status.phase is Phase.IDLE
     # Completion cannot resume the cancelled check.
     await asyncio.sleep(0)

@@ -107,14 +107,21 @@ def test_shell_argument_errors_stop_before_runtime_or_installation(tmp_path, scr
 def test_noninteractive_discovery_requires_an_explicit_robot_when_ambiguous(tmp_path):
     import shutil
     import subprocess
+    import sys
 
     scripts = tmp_path / "launcher/scripts"
     scripts.mkdir(parents=True)
     source = Path(__file__).resolve().parents[2] / "scripts/start.sh"
     shutil.copyfile(source, scripts / "start.sh")
+    registry = scripts.parent / "app" / "robot_sources.py"
+    registry.parent.mkdir()
+    shutil.copyfile(source.parents[1] / "app/robot_sources.py", registry)
     python = tmp_path / "bin/python3"
     python.parent.mkdir()
-    python.write_text("#!/bin/sh\nprintf 'robot-a\\t10.0.0.1\\nrobot-b\\t10.0.0.2\\n'\n")
+    python.write_text(
+        '#!/bin/sh\nif [ "$2" = "--menu" ]; then exec "$REGISTRY_PYTHON" "$@"; fi\n'
+        "printf 'robot-a\\t10.0.0.1\\nrobot-b\\t10.0.0.2\\n'\n"
+    )
     python.chmod(0o755)
     (scripts / "dimos_lib.sh").write_text(
         'find_dimos_python() { printf "%s\\n" "$TEST_PYTHON"; }\n'
@@ -125,7 +132,7 @@ def test_noninteractive_discovery_requires_an_explicit_robot_when_ambiguous(tmp_
     result = subprocess.run(
         ["/bin/bash", str(scripts / "start.sh"), "--blueprint", "unitree_go2_ar"],
         env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "CI": "1", "TEST_PYTHON": str(python),
-             "DIMOS_AR_SKIP_SYSCONFIG": "1"},
+             "DIMOS_AR_SKIP_SYSCONFIG": "1", "REGISTRY_PYTHON": sys.executable},
         capture_output=True, text=True, timeout=5, check=False,
     )
     assert result.returncode == 1

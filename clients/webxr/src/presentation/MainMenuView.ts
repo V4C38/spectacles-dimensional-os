@@ -10,7 +10,7 @@ import type { LidarDisplayMode } from "@dimos-ar-client/sensors/LidarDisplay";
 import * as xb from "xrblocks";
 import type { Vec3 } from "@dimos-ar-client/ClientContracts";
 import { markRayPassive, registerRayTarget } from "../input/WebXRInteraction";
-import { SurfaceText, ScrollableTextView } from "./TextViews";
+import { ScrollableTextView } from "./TextViews";
 import { SurfaceButton } from "./SurfaceButton";
 import { DIMOS_AR_DESIGN, toneCss } from "./DimOSARDesign";
 import { GlassSurface } from "./SurfaceMaterials";
@@ -67,6 +67,16 @@ const SETTINGS_X = CLOSE_X - ICON_SIZE - GAP;
 const SENSORS_X = SETTINGS_X - ICON_SIZE - GAP;
 
 export class MainMenuView {
+  private readonly pageViews: {
+    setup: ReturnType<MainMenuView["buildSetupPage"]>;
+    success: ReturnType<MainMenuView["buildSuccessPage"]>;
+    runtime: ReturnType<MainMenuView["buildRuntimePage"]>;
+    settings: ReturnType<MainMenuView["buildSettingsPage"]>;
+    sensors: ReturnType<MainMenuView["buildSensorsPage"]>;
+    recovery: ReturnType<MainMenuView["buildRecoveryPage"]>;
+    diagnostics: ReturnType<MainMenuView["buildDiagnosticsPage"]>;
+  };
+
   readonly panel: xb.SpatialPanel;
   private readonly wizard = new THREE.Group();
   private readonly wizardBody = new THREE.Group();
@@ -77,10 +87,6 @@ export class MainMenuView {
   private readonly fittedContent = new Map<THREE.Object3D, number>();
   private readonly success = new THREE.Group();
   private readonly preview = new SetupCameraPreviewView();
-  private readonly previewLabel: SurfaceText;
-  private readonly successDetail: SurfaceText;
-  private readonly successRing: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
-  private readonly checkJoin: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   private readonly checkStrokes: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>[] = [];
   private localizationLayout: boolean | null = null;
   private markerGuide = false;
@@ -95,46 +101,18 @@ export class MainMenuView {
   private readonly sensorControls: SurfaceButton[] = [];
   private handlersSpeed: () => number = () => 0.2;
   private readonly speedGroup = new THREE.Group();
-  private readonly speedValue: SurfaceText;
   private readonly speedSlider = new SpeedSlider(0.43 / HEIGHT);
-  private readonly rangeValue: SurfaceText;
-  private readonly rangeLabel: SurfaceText;
-  private readonly pointsValue: SurfaceText;
-  private readonly sensorStatus: SurfaceText;
   private readonly capabilityBody = new THREE.Group();
   private readonly localizationGroup = new THREE.Group();
   private readonly lidarGroup = new THREE.Group();
   private capabilityProfile: PanelProfile = RUNTIME_LAYOUTS.sensors;
   private capabilityKey = "";
   private readonly details = new THREE.Group();
-  private readonly title: SurfaceText;
-  private readonly description: SurfaceText;
   private diagnosticsUpdatedAt = -Infinity;
-  private readonly cardTitle: SurfaceText;
-  private readonly cardBody: ScrollableTextView;
   private readonly stepTabs: SurfaceButton[] = [];
-  private readonly setup: SurfaceButton;
-  private readonly back: SurfaceButton;
-  private readonly retry: SurfaceButton;
-  private readonly robotName: SurfaceText;
-  private readonly hud: SurfaceText;
-  private readonly agent: ScrollableTextView;
-  private readonly inputField: SurfaceButton;
-  private readonly inputLabel: ScrollableTextView;
-  private readonly clear: SurfaceButton;
   private readonly manualHelp = new THREE.Group();
   private readonly chat = new THREE.Group();
-  private readonly mode: SurfaceButton;
-  private readonly agentMode: SurfaceButton;
-  private readonly robotButton: SurfaceButton;
-  private readonly robotDot: THREE.Mesh<THREE.ShapeGeometry, THREE.MeshBasicMaterial>;
-  private readonly soundToggle: SurfaceButton;
   private readonly soundEnabled: () => boolean;
-  private readonly debugToggle: SurfaceButton;
-  private readonly localize: SurfaceButton;
-  private readonly estop: SurfaceButton;
-  private readonly type: SurfaceButton;
-  private readonly debug: ScrollableTextView;
   private readonly plate: GlassSurface;
   private panelShown = true;
   private panelProgress = 1;
@@ -166,124 +144,14 @@ export class MainMenuView {
     registerRayTarget(plate);
     markRayPassive(plate);
 
-    // Connection header belongs to the setup wizard.
-    label(this.header, COPY.appName, LEFT + 0.17, CONTROL_PANEL_LAYOUT.titleY, 0.32, 0.04, 28, C.ink, "left", "semibold");
-    label(this.header, COPY.setupTitle, 0, CONTROL_PANEL_LAYOUT.titleY, 0.36, 0.04, 28, C.ink, "center", "semibold");
-    this.stepTabs.push(...tabs(this.wizard, [COPY.connect, COPY.localization] as const, 0.203, [
-      () => { if (this.lastStep === "localization") handlers.onBack(); },
-      () => { if (this.lastStep === "connect") handlers.onSetup(); },
-    ]));
-    this.title = label(this.wizardBody, "", 0, 0.135, CONTENT, 0.06, 38, C.ink, "left", "semibold");
-    this.title.visible = false;
-    this.description = label(this.wizardBody, "", 0, 0.135, CONTENT, 0.03, 20, C.muted, "center");
-    this.cardTitle = label(this.wizardBody, "Ready when you are", 0, 0, CONTENT, 0.04, 23, C.ink, "center", "semibold");
-    this.cardBody = scrollLabel(this.wizardBody, "", 0, 0, CONTENT, 0.115, 18, C.muted);
-    this.back = button(this.wizardFooter, COPY.back, -THIRD_WIDTH - GAP, -0.298, THIRD_WIDTH, ACTION_HEIGHT, handlers.onBack);
-    this.retry = button(this.wizardFooter, "Retry", 0, -0.298, THIRD_WIDTH, ACTION_HEIGHT, () => this.lastStep === "localization" ? handlers.onLocalize() : handlers.onRetry());
-    this.setup = button(this.wizardFooter, COPY.continue, THIRD_WIDTH + GAP, -0.298, THIRD_WIDTH, ACTION_HEIGHT, handlers.onSetup, "primary");
-    place(this.wizardBody, this.preview, -0.225, -0.055, 0.02);
-    this.previewLabel = label(this.wizardBody, "Starting camera…", -0.225, -0.178, 0.34, 0.022, 14, C.muted, "center");
-    this.preview.visible = this.previewLabel.visible = false;
-    label(this.success, COPY.appName, LEFT + 0.17, CONTROL_PANEL_LAYOUT.titleY, 0.32, 0.04, 28, C.ink, "left", "semibold");
-    label(this.success, COPY.setupTitle, 0, CONTROL_PANEL_LAYOUT.titleY, 0.36, 0.04, 28, C.ink, "center", "semibold");
-    const successRows = SETUP_LAYOUTS.success.rows;
-    const glyphOffset = successRows.glyph - SETUP_SUCCESS_STYLE.centerYM;
-    const ring = this.successRing = new THREE.Mesh(new THREE.RingGeometry(SETUP_SUCCESS_STYLE.radiusM - SETUP_SUCCESS_STYLE.strokeM, SETUP_SUCCESS_STYLE.radiusM, SETUP_SUCCESS_STYLE.segments, 1, Math.PI / 2, -Math.PI * 2), new THREE.MeshBasicMaterial({ color: 0x30d158, transparent: true, depthWrite: false, side: THREE.DoubleSide }));
-    place(this.success, ring, 0, successRows.glyph, DIMOS_AR_DESIGN.depth.surface); ring.renderOrder = 13; ring.raycast = () => {};
-    const points = SETUP_SUCCESS_STYLE.check;
-    for (let i = 0; i < 2; i++) {
-      const [x, y] = points[i], [x2, y2] = points[i + 1];
-      const length = Math.hypot(x2 - x, y2 - y);
-      const geometry = new THREE.PlaneGeometry(length, SETUP_SUCCESS_STYLE.glyphWidthM).translate(length / 2, 0, 0);
-      const stroke = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0x30d158, transparent: true, depthWrite: false }));
-      place(this.success, stroke, x, y + glyphOffset, DIMOS_AR_DESIGN.depth.text); stroke.renderOrder = 13; stroke.rotation.z = Math.atan2(y2 - y, x2 - x);
-      stroke.raycast = () => {}; this.checkStrokes.push(stroke);
-    }
-    this.checkJoin = new THREE.Mesh(new THREE.CircleGeometry(SETUP_SUCCESS_STYLE.glyphWidthM / 2, STROKE_JOIN_SEGMENTS), new THREE.MeshBasicMaterial({ color: 0x30d158, depthWrite: false }));
-    place(this.success, this.checkJoin, points[1][0], points[1][1] + glyphOffset, DIMOS_AR_DESIGN.depth.text);
-    this.checkJoin.renderOrder = 13; this.checkJoin.raycast = () => {};
-    label(this.success, COPY.localizationComplete, 0, successRows.title, CONTENT, 0.05, 32, C.ink, "center", "semibold");
-    this.successDetail = label(this.success, "", 0, successRows.detail, CONTENT, 0.04, 20, C.muted, "center");
-    this.success.visible = false;
-
-    this.robotButton = button(this.robotBadge, "Robot · Not connected", 0, 0.465, 0.58, 0.105, handlers.onRobot);
-    (this.robotButton.mesh!.material as THREE.Material).depthWrite = true;
-    this.robotButton.name = "Robot selection button";
-    this.robotBadge.renderOrder = 12;
-    this.robotDot = rect(this.robotBadge, -0.253, 0.465, 0.012, 0.012, C.faint, 0.006, DIMOS_AR_DESIGN.depth.text);
-    this.robotDot.renderOrder = 13;
-    this.robotDot.userData.followSurface = this.robotButton;
-    this.console.add(this.chat, this.manualHelp);
-    this.robotName = label(this.console, COPY.appName, LEFT + 0.22, CONTROL_PANEL_LAYOUT.titleY, 0.42, 0.04, 28, C.ink, "left", "semibold");
-    const gear = button(this.console, "", SETTINGS_X, HEADER_Y, ICON_SIZE, ICON_SIZE, () => { this.page = "settings"; });
-    gear.name = "Global settings";
-    gearIcon(this.console, SETTINGS_X, HEADER_Y, gear);
-    const sensorButton = button(this.console, "", SENSORS_X, HEADER_Y, ICON_SIZE, ICON_SIZE, () => { this.page = "sensors"; });
-    sensorButton.name = "Capabilities button";
-    cameraIcon(this.console, SENSORS_X, HEADER_Y, sensorButton);
-    iconClose(this.console, "Close", handlers.onMenu);
-    [this.mode, this.agentMode] = tabs(this.console, [COPY.manual, COPY.agent] as const, 0.198, [() => handlers.onMode("manual"), () => handlers.onMode("agent")]);
-    const agentField = messageField(this.chat, COPY.agent, 0.052, true);
-    this.agent = agentField.content;
-    const humanField = messageField(this.chat, COPY.yourMessage, -0.088, false);
-    this.inputField = humanField.surface;
-    this.inputField.name = "Agent dictation field";
-    this.inputLabel = humanField.content;
-    this.type = button(this.chat, COPY.send, -(HALF_WIDTH + GAP) / 2, -0.196, HALF_WIDTH, ACTION_HEIGHT, () => {
-      if (this.agentEnabled && handlers.onAgentText(this.draft)) this.setDraft("");
-    }, "primary");
-    this.clear = button(this.chat, COPY.clear, (HALF_WIDTH + GAP) / 2, -0.196, HALF_WIDTH, ACTION_HEIGHT, () => this.setDraft(""));
-    surface(this.manualHelp, 0, 0, CONTENT, 0.18, 0.024, C.fill);
-    label(this.manualHelp, COPY.manualGuidance, 0, 0, CONTENT - 0.056, 0.13, 23, C.muted);
-    this.hud = label(this.console, "", 0, -0.251, CONTENT, 0.018, 13, C.muted);
-    // Keep the last row above the bottom corner curve.
-    this.estop = button(this.runtimeFooter, COPY.stop, 0, -0.298, CONTENT, ACTION_HEIGHT, handlers.onEstop, "danger");
-
-    label(this.settingsPage, COPY.settings, LEFT + 0.29, HEADER_Y, 0.56, 0.04, 28, C.ink, "left", "semibold");
-    iconClose(this.settingsPage, COPY.done, () => { this.page = "main"; });
-    this.sensorsPage.add(this.localizationGroup, this.lidarGroup);
-
-    this.localize = button(this.localizationGroup, COPY.relocalize, 0, 0, CONTENT, ACTION_HEIGHT, handlers.onRealign);
-    button(this.settingsPage, COPY.setup, 0, 0.09, CONTENT, ACTION_HEIGHT, handlers.onRestart).userData.panelRow = "robotActions";
-    this.handlersSpeed = handlers.manipulationSpeed ?? (() => 0.2);
-    this.speedGroup.position.set(0, 0.025 / HEIGHT, 0);
-    this.sensorsPage.add(this.speedGroup);
-    this.speedSlider.position.set(0, -0.025 / HEIGHT, 0);
-    this.speedSlider.userData.depthM = DIMOS_AR_DESIGN.depth.controlOverlap * 2;
-    this.speedGroup.add(this.speedSlider);
-    sectionHeading(this.speedGroup, "Movement speed", 0.02);
-    this.speedValue = label(this.speedGroup, "50%", CONTENT / 2 - 0.09, 0.02, 0.18, 0.03, 21, C.ink, "right");
-    sectionHeading(this.settingsPage, COPY.headset, -0.014).userData.panelRow = "headset";
-    this.debugToggle = button(this.settingsPage, "Debug · Off", 0, -0.084, CONTENT, ACTION_HEIGHT, handlers.onDebug);
-    button(this.settingsPage, COPY.diagnostics, 0, -0.152, CONTENT, ACTION_HEIGHT, () => { this.page = "diagnostics"; }).userData.panelRow = "diagnostics";
-
-    this.soundToggle = button(this.settingsPage, "Sound · On", 0, -0.228, CONTENT, ACTION_HEIGHT, () => handlers.onSound?.());
-
-    label(this.sensorsPage, COPY.sensors, LEFT + 0.29, HEADER_Y, 0.56, 0.04, 28, C.ink, "left", "semibold");
-    iconClose(this.sensorsPage, "Back from Sensors", () => { this.page = "main"; });
-    sectionHeading(this.lidarGroup, "LiDAR", 0).userData.panelRow = "lidar";
-    this.lidarTabs.push(...tabs(this.lidarGroup, ["Off", "Obstacles", "Full"], 0.17,
-      [() => handlers.onLidarMode?.("off"), () => handlers.onLidarMode?.("obstacles"), () => handlers.onLidarMode?.("full")]));
-    this.rangeLabel = label(this.lidarGroup, "Clearance", LEFT + 0.17, 0.08, 0.34, 0.035, 18, C.muted);
-    this.rangeValue = label(this.lidarGroup, "0.6 m", 0.14, 0.08, 0.19, 0.04, 21, C.ink, "center");
-    this.pointsValue = label(this.lidarGroup, "4000", 0.14, -0.01, 0.19, 0.04, 21, C.ink, "center");
-    label(this.lidarGroup, "Point limit", LEFT + 0.17, -0.01, 0.34, 0.035, 18, C.muted).userData.panelRow = "points";
-    for (const [row, y, action] of [["range", 0.08, handlers.onLidarRange], ["points", -0.01, handlers.onLidarPoints]] as const) {
-      for (const direction of [-1, 1]) {
-        const control = button(this.lidarGroup, direction < 0 ? "−" : "+", direction < 0 ? -0.015 : 0.31, y, 0.064, 0.064, () => action?.(direction));
-        control.userData.panelRow = row; this.sensorControls.push(control);
-      }
-    }
-    this.sensorStatus = label(this.details, "", 0, -0.15, CONTENT, 0.1, 17, C.muted);
-    label(this.recoveryPage, COPY.alignmentTitle, 0, HEADER_Y, CONTENT, 0.04, 28, C.ink, "center", "semibold");
-    label(this.recoveryPage, COPY.alignmentGuidance, 0, 0.055, CONTENT - 0.06, 0.07, 22, C.muted, "center").userData.panelRow = "guidance";
-    button(this.recoveryPage, COPY.relocalize, -(HALF_WIDTH + GAP) / 2, -0.1, HALF_WIDTH, ACTION_HEIGHT, handlers.onRealign, "primary").userData.panelRow = "actions";
-    button(this.recoveryPage, COPY.dismiss, (HALF_WIDTH + GAP) / 2, -0.1, HALF_WIDTH, ACTION_HEIGHT, () => handlers.onDismissAlignment?.()).userData.panelRow = "actions";
-
-    label(this.details, COPY.diagnostics, LEFT + 0.29, HEADER_Y, 0.56, 0.04, 28, C.ink, "left", "semibold");
-    iconClose(this.details, COPY.done, () => { this.page = "settings"; });
-    surface(this.details, 0, -0.03, CONTENT, 0.26, DIMOS_AR_DESIGN.corners.field, C.fill).userData.panelRow = "logs";
-    this.debug = scrollLabel(this.details, "", 0, -0.03, CONTENT - 0.056, 0.22, 18, C.muted);
+    const setup = this.buildSetupPage(handlers);
+    const success = this.buildSuccessPage(handlers);
+    const runtime = this.buildRuntimePage(handlers);
+    const settings = this.buildSettingsPage(handlers);
+    const sensors = this.buildSensorsPage(handlers);
+    const recovery = this.buildRecoveryPage(handlers);
+    const diagnostics = this.buildDiagnosticsPage(handlers);
+    this.pageViews = { setup, success, runtime, settings, sensors, recovery, diagnostics };
 
     const chrome = panelChrome(this.panel, RADIUS/HEIGHT, 1/HEIGHT);
     this.bar = chrome.bar; this.barZone = chrome.barZone;
@@ -304,13 +172,13 @@ export class MainMenuView {
       const activate = object.onTriggered;
       object.onTriggered = id => { if (handlers.canActivate?.(id, object.mesh!)) { activate(id); if (object.enabled) handlers.onActivate?.(); } };
     });
-    this.agent.parent!.userData.panelRow = "reply";
-    this.inputLabel.parent!.userData.panelRow = "draft";
-    for (const action of [this.type, this.clear]) action.userData.panelRow = "actions";
-    this.debugToggle.userData.panelRow = "debug"; this.soundToggle.userData.panelRow = "sound";
-    this.debug.userData.panelRow = "logs"; this.sensorStatus.userData.panelRow = "statistics";
-    this.rangeLabel.userData.panelRow = this.rangeValue.userData.panelRow = "range";
-    this.pointsValue.userData.panelRow = "points";
+    this.pageViews.runtime.agent.parent!.userData.panelRow = "reply";
+    this.pageViews.runtime.inputLabel.parent!.userData.panelRow = "draft";
+    for (const action of [this.pageViews.runtime.type, this.pageViews.runtime.clear]) action.userData.panelRow = "actions";
+    this.pageViews.settings.debugToggle.userData.panelRow = "debug"; this.pageViews.settings.soundToggle.userData.panelRow = "sound";
+    this.pageViews.diagnostics.debug.userData.panelRow = "logs"; this.pageViews.sensors.sensorStatus.userData.panelRow = "statistics";
+    this.pageViews.sensors.rangeLabel.userData.panelRow = this.pageViews.sensors.rangeValue.userData.panelRow = "range";
+    this.pageViews.sensors.pointsValue.userData.panelRow = "points";
     this.layoutRuntime();
     this.panel.scale.multiplyScalar(CONTROL_PANEL_SCALE.setup);
     this.appearanceRoot.name = "Menu appearance";
@@ -319,6 +187,153 @@ export class MainMenuView {
     this.panel.traverse(node => {
       if (node instanceof SurfaceButton) node.setSupportSurface(node.userData.supportSurface ?? plate);
     });
+  }
+
+  private buildSetupPage(handlers: MainMenuCallbacks) {
+    // Connection header belongs to the setup wizard.
+    label(this.header, COPY.appName, LEFT + 0.17, CONTROL_PANEL_LAYOUT.titleY, 0.32, 0.04, 28, C.ink, "left", "semibold");
+    label(this.header, COPY.setupTitle, 0, CONTROL_PANEL_LAYOUT.titleY, 0.36, 0.04, 28, C.ink, "center", "semibold");
+    this.stepTabs.push(...tabs(this.wizard, [COPY.connect, COPY.localization] as const, 0.203, [
+      () => { if (this.lastStep === "localization") handlers.onBack(); },
+      () => { if (this.lastStep === "connect") handlers.onSetup(); },
+    ]));
+    const title = label(this.wizardBody, "", 0, 0.135, CONTENT, 0.06, 38, C.ink, "left", "semibold");
+    title.visible = false;
+    const description = label(this.wizardBody, "", 0, 0.135, CONTENT, 0.03, 20, C.muted, "center");
+    const cardTitle = label(this.wizardBody, "Ready when you are", 0, 0, CONTENT, 0.04, 23, C.ink, "center", "semibold");
+    const cardBody = scrollLabel(this.wizardBody, "", 0, 0, CONTENT, 0.115, 18, C.muted);
+    const back = button(this.wizardFooter, COPY.back, -THIRD_WIDTH - GAP, -0.298, THIRD_WIDTH, ACTION_HEIGHT, handlers.onBack);
+    const retry = button(this.wizardFooter, "Retry", 0, -0.298, THIRD_WIDTH, ACTION_HEIGHT, () => this.lastStep === "localization" ? handlers.onLocalize() : handlers.onRetry());
+    const setup = button(this.wizardFooter, COPY.continue, THIRD_WIDTH + GAP, -0.298, THIRD_WIDTH, ACTION_HEIGHT, handlers.onSetup, "primary");
+    place(this.wizardBody, this.preview, -0.225, -0.055, 0.02);
+    const previewLabel = label(this.wizardBody, "Starting camera…", -0.225, -0.178, 0.34, 0.022, 14, C.muted, "center");
+    this.preview.visible = previewLabel.visible = false;
+    return { title, description, cardTitle, cardBody, back, retry, setup, previewLabel };
+  }
+
+  private buildSuccessPage(_handlers: MainMenuCallbacks) {
+    label(this.success, COPY.appName, LEFT + 0.17, CONTROL_PANEL_LAYOUT.titleY, 0.32, 0.04, 28, C.ink, "left", "semibold");
+    label(this.success, COPY.setupTitle, 0, CONTROL_PANEL_LAYOUT.titleY, 0.36, 0.04, 28, C.ink, "center", "semibold");
+    const successRows = SETUP_LAYOUTS.success.rows;
+    const glyphOffset = successRows.glyph - SETUP_SUCCESS_STYLE.centerYM;
+    const successRing = new THREE.Mesh(new THREE.RingGeometry(SETUP_SUCCESS_STYLE.radiusM - SETUP_SUCCESS_STYLE.strokeM, SETUP_SUCCESS_STYLE.radiusM, SETUP_SUCCESS_STYLE.segments, 1, Math.PI / 2, -Math.PI * 2), new THREE.MeshBasicMaterial({ color: 0x30d158, transparent: true, depthWrite: false, side: THREE.DoubleSide }));
+    place(this.success, successRing, 0, successRows.glyph, DIMOS_AR_DESIGN.depth.surface); successRing.renderOrder = 13; successRing.raycast = () => {};
+    const points = SETUP_SUCCESS_STYLE.check;
+    for (let i = 0; i < 2; i++) {
+      const [x, y] = points[i], [x2, y2] = points[i + 1];
+      const length = Math.hypot(x2 - x, y2 - y);
+      const geometry = new THREE.PlaneGeometry(length, SETUP_SUCCESS_STYLE.glyphWidthM).translate(length / 2, 0, 0);
+      const stroke = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0x30d158, transparent: true, depthWrite: false }));
+      place(this.success, stroke, x, y + glyphOffset, DIMOS_AR_DESIGN.depth.text); stroke.renderOrder = 13; stroke.rotation.z = Math.atan2(y2 - y, x2 - x);
+      stroke.raycast = () => {}; this.checkStrokes.push(stroke);
+    }
+    const checkJoin = new THREE.Mesh(new THREE.CircleGeometry(SETUP_SUCCESS_STYLE.glyphWidthM / 2, STROKE_JOIN_SEGMENTS), new THREE.MeshBasicMaterial({ color: 0x30d158, depthWrite: false }));
+    place(this.success, checkJoin, points[1][0], points[1][1] + glyphOffset, DIMOS_AR_DESIGN.depth.text);
+    checkJoin.renderOrder = 13; checkJoin.raycast = () => {};
+    label(this.success, COPY.localizationComplete, 0, successRows.title, CONTENT, 0.05, 32, C.ink, "center", "semibold");
+    const successDetail = label(this.success, "", 0, successRows.detail, CONTENT, 0.04, 20, C.muted, "center");
+    this.success.visible = false;
+
+    return { successRing, checkJoin, successDetail };
+  }
+
+  private buildRuntimePage(handlers: MainMenuCallbacks) {
+    const robotButton = button(this.robotBadge, "Robot · Not connected", 0, 0.465, 0.58, 0.105, handlers.onRobot);
+    (robotButton.mesh!.material as THREE.Material).depthWrite = true;
+    robotButton.name = "Robot selection button";
+    this.robotBadge.renderOrder = 12;
+    const robotDot = rect(this.robotBadge, -0.253, 0.465, 0.012, 0.012, C.faint, 0.006, DIMOS_AR_DESIGN.depth.text);
+    robotDot.renderOrder = 13;
+    robotDot.userData.followSurface = robotButton;
+    this.console.add(this.chat, this.manualHelp);
+    const robotName = label(this.console, COPY.appName, LEFT + 0.22, CONTROL_PANEL_LAYOUT.titleY, 0.42, 0.04, 28, C.ink, "left", "semibold");
+    const gear = button(this.console, "", SETTINGS_X, HEADER_Y, ICON_SIZE, ICON_SIZE, () => { this.page = "settings"; });
+    gear.name = "Global settings";
+    gearIcon(this.console, SETTINGS_X, HEADER_Y, gear);
+    const sensorButton = button(this.console, "", SENSORS_X, HEADER_Y, ICON_SIZE, ICON_SIZE, () => { this.page = "sensors"; });
+    sensorButton.name = "Capabilities button";
+    cameraIcon(this.console, SENSORS_X, HEADER_Y, sensorButton);
+    iconClose(this.console, "Close", handlers.onMenu);
+    const [mode, agentMode] = tabs(this.console, [COPY.manual, COPY.agent] as const, 0.198, [() => handlers.onMode("manual"), () => handlers.onMode("agent")]);
+    const agentField = messageField(this.chat, COPY.agent, 0.052, true);
+    const agent = agentField.content;
+    const humanField = messageField(this.chat, COPY.yourMessage, -0.088, false);
+    const inputField = humanField.surface;
+    inputField.name = "Agent dictation field";
+    const inputLabel = humanField.content;
+    const type = button(this.chat, COPY.send, -(HALF_WIDTH + GAP) / 2, -0.196, HALF_WIDTH, ACTION_HEIGHT, () => {
+      if (this.agentEnabled && handlers.onAgentText(this.draft)) this.setDraft("");
+    }, "primary");
+    const clear = button(this.chat, COPY.clear, (HALF_WIDTH + GAP) / 2, -0.196, HALF_WIDTH, ACTION_HEIGHT, () => this.setDraft(""));
+    surface(this.manualHelp, 0, 0, CONTENT, 0.18, 0.024, C.fill);
+    label(this.manualHelp, COPY.manualGuidance, 0, 0, CONTENT - 0.056, 0.13, 23, C.muted);
+    const hud = label(this.console, "", 0, -0.251, CONTENT, 0.018, 13, C.muted);
+    // Keep the last row above the bottom corner curve.
+    const estop = button(this.runtimeFooter, COPY.stop, 0, -0.298, CONTENT, ACTION_HEIGHT, handlers.onEstop, "danger");
+
+    return { robotButton, robotDot, robotName, mode, agentMode, agent, inputField, inputLabel, type, clear, hud, estop };
+  }
+
+  private buildSettingsPage(handlers: MainMenuCallbacks) {
+    label(this.settingsPage, COPY.settings, LEFT + 0.29, HEADER_Y, 0.56, 0.04, 28, C.ink, "left", "semibold");
+    iconClose(this.settingsPage, COPY.done, () => { this.page = "main"; });
+    this.sensorsPage.add(this.localizationGroup, this.lidarGroup);
+
+    const localize = button(this.localizationGroup, COPY.relocalize, 0, 0, CONTENT, ACTION_HEIGHT, handlers.onRealign);
+    button(this.settingsPage, COPY.setup, 0, 0.09, CONTENT, ACTION_HEIGHT, handlers.onRestart).userData.panelRow = "robotActions";
+    this.handlersSpeed = handlers.manipulationSpeed ?? (() => 0.2);
+    this.speedGroup.position.set(0, 0.025 / HEIGHT, 0);
+    this.sensorsPage.add(this.speedGroup);
+    this.speedSlider.position.set(0, -0.025 / HEIGHT, 0);
+    this.speedSlider.userData.depthM = DIMOS_AR_DESIGN.depth.controlOverlap * 2;
+    this.speedGroup.add(this.speedSlider);
+    sectionHeading(this.speedGroup, "Movement speed", 0.02);
+    const speedValue = label(this.speedGroup, "50%", CONTENT / 2 - 0.09, 0.02, 0.18, 0.03, 21, C.ink, "right");
+    sectionHeading(this.settingsPage, COPY.headset, -0.014).userData.panelRow = "headset";
+    const debugToggle = button(this.settingsPage, "Debug · Off", 0, -0.084, CONTENT, ACTION_HEIGHT, handlers.onDebug);
+    button(this.settingsPage, COPY.diagnostics, 0, -0.152, CONTENT, ACTION_HEIGHT, () => { this.page = "diagnostics"; }).userData.panelRow = "diagnostics";
+
+    const soundToggle = button(this.settingsPage, "Sound · On", 0, -0.228, CONTENT, ACTION_HEIGHT, () => handlers.onSound?.());
+
+    return { localize, speedValue, debugToggle, soundToggle };
+  }
+
+  private buildSensorsPage(handlers: MainMenuCallbacks) {
+    label(this.sensorsPage, COPY.sensors, LEFT + 0.29, HEADER_Y, 0.56, 0.04, 28, C.ink, "left", "semibold");
+    iconClose(this.sensorsPage, "Back from Sensors", () => { this.page = "main"; });
+    sectionHeading(this.lidarGroup, "LiDAR", 0).userData.panelRow = "lidar";
+    this.lidarTabs.push(...tabs(this.lidarGroup, ["Off", "Obstacles", "Full"], 0.17,
+      [() => handlers.onLidarMode?.("off"), () => handlers.onLidarMode?.("obstacles"), () => handlers.onLidarMode?.("full")]));
+    const rangeLabel = label(this.lidarGroup, "Clearance", LEFT + 0.17, 0.08, 0.34, 0.035, 18, C.muted);
+    const rangeValue = label(this.lidarGroup, "0.6 m", 0.14, 0.08, 0.19, 0.04, 21, C.ink, "center");
+    const pointsValue = label(this.lidarGroup, "4000", 0.14, -0.01, 0.19, 0.04, 21, C.ink, "center");
+    label(this.lidarGroup, "Point limit", LEFT + 0.17, -0.01, 0.34, 0.035, 18, C.muted).userData.panelRow = "points";
+    for (const [row, y, action] of [["range", 0.08, handlers.onLidarRange], ["points", -0.01, handlers.onLidarPoints]] as const) {
+      for (const direction of [-1, 1]) {
+        const control = button(this.lidarGroup, direction < 0 ? "−" : "+", direction < 0 ? -0.015 : 0.31, y, 0.064, 0.064, () => action?.(direction));
+        control.userData.panelRow = row; this.sensorControls.push(control);
+      }
+    }
+    const sensorStatus = label(this.details, "", 0, -0.15, CONTENT, 0.1, 17, C.muted);
+    return { rangeLabel, rangeValue, pointsValue, sensorStatus };
+  }
+
+  private buildRecoveryPage(handlers: MainMenuCallbacks) {
+    label(this.recoveryPage, COPY.alignmentTitle, 0, HEADER_Y, CONTENT, 0.04, 28, C.ink, "center", "semibold");
+    label(this.recoveryPage, COPY.alignmentGuidance, 0, 0.055, CONTENT - 0.06, 0.07, 22, C.muted, "center").userData.panelRow = "guidance";
+    button(this.recoveryPage, COPY.relocalize, -(HALF_WIDTH + GAP) / 2, -0.1, HALF_WIDTH, ACTION_HEIGHT, handlers.onRealign, "primary").userData.panelRow = "actions";
+    button(this.recoveryPage, COPY.dismiss, (HALF_WIDTH + GAP) / 2, -0.1, HALF_WIDTH, ACTION_HEIGHT, () => handlers.onDismissAlignment?.()).userData.panelRow = "actions";
+
+    return {  };
+  }
+
+  private buildDiagnosticsPage(_handlers: MainMenuCallbacks) {
+    label(this.details, COPY.diagnostics, LEFT + 0.29, HEADER_Y, 0.56, 0.04, 28, C.ink, "left", "semibold");
+    iconClose(this.details, COPY.done, () => { this.page = "settings"; });
+    surface(this.details, 0, -0.03, CONTENT, 0.26, DIMOS_AR_DESIGN.corners.field, C.fill).userData.panelRow = "logs";
+    const debug = scrollLabel(this.details, "", 0, -0.03, CONTENT - 0.056, 0.22, 18, C.muted);
+
+    return { debug };
   }
 
   private readonly appearanceRoot = new THREE.Group();
@@ -361,7 +376,7 @@ export class MainMenuView {
     const speed = this.handlersSpeed();
     this.speedSlider.setValue(speed);
     this.speedGroup.traverse(node => {if(node instanceof THREE.Mesh){node.renderOrder = node === this.speedSlider.thumb ? 83 : node.parent === this.speedSlider.thumb ? 82 : 80;for(const m of Array.isArray(node.material)?node.material:[node.material])m.depthTest=m.depthWrite=false;}});
-    setText(this.speedValue, `${Math.round(speed * 100)}%`);
+    setText(this.pageViews.settings.speedValue, `${Math.round(speed * 100)}%`);
     this.lastStep = snap.wizardStep;
     this.agentEnabled = snap.setupCompleted && snap.operatingMode === "agent" && snap.agentAvailable && snap.robotSelected;
     this.panelShown = snap.menuOpen || !snap.setupCompleted || snap.setupCelebrating === true || snap.alignmentReview?.pending === true;
@@ -369,12 +384,12 @@ export class MainMenuView {
     this.panel.userData.rayDisabled = !this.panelShown;
     this.wizard.visible = !snap.setupCompleted;
     this.success.visible = snap.setupCelebrating === true;
-    setText(this.successDetail, `${snap.robotName} is ready`);
+    setText(this.pageViews.success.successDetail, `${snap.robotName} is ready`);
     const successProgress = snap.setupSuccessProgress ?? 0;
-    this.successRing.geometry.setDrawRange(0, Math.floor(successProgress * SETUP_SUCCESS_STYLE.segments) * 6);
+    this.pageViews.success.successRing.geometry.setDrawRange(0, Math.floor(successProgress * SETUP_SUCCESS_STYLE.segments) * 6);
     const checkProgress = [0, 1].map(index => THREE.MathUtils.clamp((successProgress - 0.25) / 0.75 * 2 - index, 0, 1));
     const check = SETUP_SUCCESS_STYLE.check;
-    this.checkJoin.visible = strokeJoints2D([[...check[0], ...check[1]], [...check[1], ...check[2]]], checkProgress).length > 0;
+    this.pageViews.success.checkJoin.visible = strokeJoints2D([[...check[0], ...check[1]], [...check[1], ...check[2]]], checkProgress).length > 0;
     this.checkStrokes.forEach((stroke, index) => {
       const progress = checkProgress[index];
       stroke.scale.x = progress * progress * (3 - 2 * progress) / HEIGHT;
@@ -389,58 +404,58 @@ export class MainMenuView {
     this.console.visible = snap.setupCompleted && this.panelShown && !snap.setupCelebrating && this.page === "main" && !reviewing;
     this.settingsPage.visible = this.page === "settings" && !reviewing;
     this.sensorsPage.visible = this.page === "sensors" && !reviewing;
-    setText(this.robotButton, robotBadgeText(snap.robotName, snap.robotConnectionText ?? "Disconnected", snap.robotSelected ?? false, snap.activity ?? "Idle"));
-    this.robotButton.setEnabled(snap.robotSelectable);
-    this.robotButton.setActive(snap.robotSelected);
-    setText(this.soundToggle, `Sound · ${this.soundEnabled() ? "On" : "Off"}`);
-    this.robotDot.material.color.set(toneCss(snap.connectionTone));
-    setText(this.debugToggle, `Debug · ${snap.debugEnabled ? "On" : "Off"}`);
-    this.debugToggle.setActive(snap.debugEnabled);
-    setText(this.title, snap.wizardTitle);
-    setText(this.description, snap.wizardDescription);
+    setText(this.pageViews.runtime.robotButton, robotBadgeText(snap.robotName, snap.robotConnectionText ?? "Disconnected", snap.robotSelected ?? false, snap.activity ?? "Idle"));
+    this.pageViews.runtime.robotButton.setEnabled(snap.robotSelectable);
+    this.pageViews.runtime.robotButton.setActive(snap.robotSelected);
+    setText(this.pageViews.settings.soundToggle, `Sound · ${this.soundEnabled() ? "On" : "Off"}`);
+    this.pageViews.runtime.robotDot.material.color.set(toneCss(snap.connectionTone));
+    setText(this.pageViews.settings.debugToggle, `Debug · ${snap.debugEnabled ? "On" : "Off"}`);
+    this.pageViews.settings.debugToggle.setActive(snap.debugEnabled);
+    setText(this.pageViews.setup.title, snap.wizardTitle);
+    setText(this.pageViews.setup.description, snap.wizardDescription);
     const index = ["connect", "localization"].indexOf(snap.wizardStep);
     setText(this.stepTabs[0], snap.connectComplete ? COPY.connected : COPY.connect);
     this.stepTabs.forEach((tab, i) => tab.setActive(i === index));
     this.stepTabs[1].setEnabled(snap.connectComplete === true);
-    setText(this.cardTitle, snap.wizardCardTitle);
-    setText(this.cardBody, snap.wizardCardBody);
-    this.cardTitle.color(snap.wizardStep === "connect" && snap.connectComplete ? toneCss("success") : C.ink);
-    setText(this.setup, snap.nextLabel);
-    this.setup.setVariant(snap.nextLabel === COPY.continue ? "primary" : "default");
-    this.back.visible = snap.backVisible;
-    this.retry.visible = index === 0 || (index === 1 && !!snap.localizationIssue);
-    setText(this.retry, index === 1 ? COPY.tryAgain : COPY.reconnect);
-    setText(this.robotName, COPY.appName);
+    setText(this.pageViews.setup.cardTitle, snap.wizardCardTitle);
+    setText(this.pageViews.setup.cardBody, snap.wizardCardBody);
+    this.pageViews.setup.cardTitle.color(snap.wizardStep === "connect" && snap.connectComplete ? toneCss("success") : C.ink);
+    setText(this.pageViews.setup.setup, snap.nextLabel);
+    this.pageViews.setup.setup.setVariant(snap.nextLabel === COPY.continue ? "primary" : "default");
+    this.pageViews.setup.back.visible = snap.backVisible;
+    this.pageViews.setup.retry.visible = index === 0 || (index === 1 && !!snap.localizationIssue);
+    setText(this.pageViews.setup.retry, index === 1 ? COPY.tryAgain : COPY.reconnect);
+    setText(this.pageViews.runtime.robotName, COPY.appName);
     const speechStatus = speech?.status === "Type a message" ? COPY.microphoneUnavailable : speech?.status;
-    this.mode.setEnabled(true);
-    this.agentMode.setEnabled(snap.agentAvailable);
-    this.agentMode.setActive(snap.operatingMode === "agent");
-    this.mode.setActive(snap.operatingMode === "manual");
+    this.pageViews.runtime.mode.setEnabled(true);
+    this.pageViews.runtime.agentMode.setEnabled(snap.agentAvailable);
+    this.pageViews.runtime.agentMode.setActive(snap.operatingMode === "agent");
+    this.pageViews.runtime.mode.setActive(snap.operatingMode === "manual");
     this.chat.visible = snap.operatingMode === "agent";
     this.manualHelp.visible = snap.operatingMode === "manual";
     this.draft = speech?.prompt ?? this.draft;
-    this.inputLabel.setContent(this.draft || (speech?.recognitionAvailable === false ? COPY.microphoneUnavailable : speech?.status === "Listening" ? "Listening…" : COPY.hold), speech?.status === "Listening");
-    this.inputField.setEnabled(snap.agentAvailable && speech?.recognitionAvailable === true && speech?.status !== "Transcribing…");
-    this.inputField.setActive(speech?.status === "Listening" || speech?.status === "Starting microphone…");
-    this.type.setEnabled(this.agentEnabled && !!this.draft.trim() && speech?.status !== "Listening" && speech?.status !== "Starting microphone…" && speech?.status !== "Transcribing…");
-    this.clear.setEnabled(!!this.draft && speech?.status !== "Listening" && speech?.status !== "Starting microphone…" && speech?.status !== "Transcribing…");
-    this.agent.setContent(speech?.response || snap.agentMessage || "", false, true);
-    this.agent.color(toneCss(speech?.severity === "error" ? "error" : speech?.severity === "warn" ? "warn" : "neutral"));
+    this.pageViews.runtime.inputLabel.setContent(this.draft || (speech?.recognitionAvailable === false ? COPY.microphoneUnavailable : speech?.status === "Listening" ? "Listening…" : COPY.hold), speech?.status === "Listening");
+    this.pageViews.runtime.inputField.setEnabled(snap.agentAvailable && speech?.recognitionAvailable === true && speech?.status !== "Transcribing…");
+    this.pageViews.runtime.inputField.setActive(speech?.status === "Listening" || speech?.status === "Starting microphone…");
+    this.pageViews.runtime.type.setEnabled(this.agentEnabled && !!this.draft.trim() && speech?.status !== "Listening" && speech?.status !== "Starting microphone…" && speech?.status !== "Transcribing…");
+    this.pageViews.runtime.clear.setEnabled(!!this.draft && speech?.status !== "Listening" && speech?.status !== "Starting microphone…" && speech?.status !== "Transcribing…");
+    this.pageViews.runtime.agent.setContent(speech?.response || snap.agentMessage || "", false, true);
+    this.pageViews.runtime.agent.color(toneCss(speech?.severity === "error" ? "error" : speech?.severity === "warn" ? "warn" : "neutral"));
     const prefs = snap.lidarPreferences ?? { pointLimit: 4000, obstacleRangeM: 0.6, fullRangeM: 5 };
     this.lidarTabs.forEach((tab, i) => { tab.setActive(i === ["off", "obstacles", "full"].indexOf(snap.lidarMode)); tab.setEnabled(snap.lidarAvailable); });
     this.sensorControls.forEach(control => control.setEnabled(snap.lidarAvailable && snap.lidarMode !== "off"));
-    setText(this.rangeLabel, snap.lidarMode === "obstacles" ? "Clearance" : "Range");
-    setText(this.rangeValue, snap.lidarMode === "off" ? "—" : `${(snap.lidarMode === "obstacles" ? prefs.obstacleRangeM : prefs.fullRangeM).toFixed(1)} m`);
-    setText(this.pointsValue, String(prefs.pointLimit));
-    setText(this.sensorStatus, sensorStatusText(snap.lidarAvailable, snap.lidarReceived ?? 0, snap.cameraStatus, snap.trackingStatus, snap.surfaceCount));
-    this.estop.feedbackPressed = snap.estopPressed === true;
-    setText(this.localize, snap.hasTrackingOrigin ? COPY.relocalize : COPY.localizeRobot);
-    this.estop.setEnabled(snap.estopAvailable);
-    setText(this.hud, clip(speech?.error || snap.hudText || (snap.operatingMode === "agent" && speechStatus !== "Off" ? speechStatus ?? "" : "") || "", 100));
-    this.hud.color(toneCss(speech?.error ? "warn" : snap.hudTone ?? "muted"));
+    setText(this.pageViews.sensors.rangeLabel, snap.lidarMode === "obstacles" ? "Clearance" : "Range");
+    setText(this.pageViews.sensors.rangeValue, snap.lidarMode === "off" ? "—" : `${(snap.lidarMode === "obstacles" ? prefs.obstacleRangeM : prefs.fullRangeM).toFixed(1)} m`);
+    setText(this.pageViews.sensors.pointsValue, String(prefs.pointLimit));
+    setText(this.pageViews.sensors.sensorStatus, sensorStatusText(snap.lidarAvailable, snap.lidarReceived ?? 0, snap.cameraStatus, snap.trackingStatus, snap.surfaceCount));
+    this.pageViews.runtime.estop.feedbackPressed = snap.estopPressed === true;
+    setText(this.pageViews.settings.localize, snap.hasTrackingOrigin ? COPY.relocalize : COPY.localizeRobot);
+    this.pageViews.runtime.estop.setEnabled(snap.estopAvailable);
+    setText(this.pageViews.runtime.hud, clip(speech?.error || snap.hudText || (snap.operatingMode === "agent" && speechStatus !== "Off" ? speechStatus ?? "" : "") || "", 100));
+    this.pageViews.runtime.hud.color(toneCss(speech?.error ? "warn" : snap.hudTone ?? "muted"));
     const diagnosticsNow = performance.now() / 1000;
     if (this.details.visible && this.panel.visible && diagnosticsNow - this.diagnosticsUpdatedAt >= .2) {
-      this.debug.setContent(snap.readDebugText?.() ?? snap.debugText);
+      this.pageViews.diagnostics.debug.setContent(snap.readDebugText?.() ?? snap.debugText);
       this.diagnosticsUpdatedAt = diagnosticsNow;
     }
     const localization = snap.wizardStep === "localization" && !snap.localizationIssue && snap.localizationKind !== "unavailable";
@@ -469,7 +484,7 @@ export class MainMenuView {
     this.fittedContent.set(this.chat, layouts.agent.height);
     this.fittedContent.set(this.manualHelp, layouts.manual.height);
     this.fittedContent.set(this.wizardBody, HEIGHT);
-    this.fittedContent.set(this.hud, layouts.manual.height);
+    this.fittedContent.set(this.pageViews.runtime.hud, layouts.manual.height);
     // Headers keep their fixed top positions while each page body waits for space.
     for (const [page, profile] of [[this.settingsPage, layouts.settings],
       [this.details, layouts.diagnostics], [this.recoveryPage, layouts.alignment]] as const) {
@@ -502,8 +517,8 @@ export class MainMenuView {
       if (!runtime && !snap.setupCelebrating) this.layoutWizard(profile, capture);
     }
     const main = RUNTIME_LAYOUTS[snap.operatingMode];
-    this.hud.position.y = main.rows.status / HEIGHT;
-    this.fittedContent.set(this.hud, main.height);
+    this.pageViews.runtime.hud.position.y = main.rows.status / HEIGHT;
+    this.fittedContent.set(this.pageViews.runtime.hud, main.height);
     this.heightController.request(profile.height, !this.heightInitialized || !this.panelShown);
     this.heightInitialized = true;
     this.applyHeight();
@@ -511,14 +526,14 @@ export class MainMenuView {
 
   private layoutWizard(profile: PanelProfile, capture: boolean): void {
     const rows = profile.rows;
-    layoutText(this.description, 0, rows.intro ?? rows.provider, CONTENT, 0.03, 20);
-    layoutText(this.cardTitle, capture ? 0.19 : 0, capture ? rows.camera + 0.06 : rows.status,
+    layoutText(this.pageViews.setup.description, 0, rows.intro ?? rows.provider, CONTENT, 0.03, 20);
+    layoutText(this.pageViews.setup.cardTitle, capture ? 0.19 : 0, capture ? rows.camera + 0.06 : rows.status,
       capture ? 0.39 : CONTENT, profile === SETUP_LAYOUTS.error ? 0.065 : 0.04, 23);
-    layoutText(this.cardBody, capture ? 0.19 : 0, capture ? rows.camera - 0.025 : rows.details,
+    layoutText(this.pageViews.setup.cardBody, capture ? 0.19 : 0, capture ? rows.camera - 0.025 : rows.details,
       capture ? 0.36 : CONTENT, capture || profile === SETUP_LAYOUTS.connected ? 0.115 : profile === SETUP_LAYOUTS.entry ? 0.04 : 0.1, 18);
     this.preview.position.y = (rows.camera ?? 0) / HEIGHT;
-    this.previewLabel.position.y = (rows.previewLabel ?? 0) / HEIGHT;
-    this.preview.visible = this.previewLabel.visible = capture;
+    this.pageViews.setup.previewLabel.position.y = (rows.previewLabel ?? 0) / HEIGHT;
+    this.preview.visible = this.pageViews.setup.previewLabel.visible = capture;
     this.fittedContent.set(this.wizardBody, profile.height);
   }
 
@@ -533,7 +548,7 @@ export class MainMenuView {
       this.cornerZones[side].position.y = bottom / HEIGHT;
     }
     const footerY = panelFooterY(height) / HEIGHT;
-    for (const button of [this.setup, this.back, this.retry, this.estop]) button.position.y = footerY;
+    for (const button of [this.pageViews.setup.setup, this.pageViews.setup.back, this.pageViews.setup.retry, this.pageViews.runtime.estop]) button.position.y = footerY;
     for (const [node, required] of this.fittedContent) {
       const fits = height + 1e-8 >= required;
       node.userData.rayDisabled = !fits;
@@ -571,7 +586,7 @@ export class MainMenuView {
   updateCameraPreview(frame: CameraPreviewFrame, deltaS: number): void {
     if (this.localizationLayout !== true || !this.panelShown) return;
     this.preview.update(frame, deltaS, this.markerGuide);
-    setText(this.previewLabel, this.preview.status);
+    setText(this.pageViews.setup.previewLabel, this.preview.status);
   }
 
   private disposed = false;
@@ -633,16 +648,16 @@ export class MainMenuView {
   }
 
   scrollView(object: THREE.Object3D | undefined): ScrollableTextView | null {
-    if (object === this.inputField.mesh) return this.inputLabel;
+    if (object === this.pageViews.runtime.inputField.mesh) return this.pageViews.runtime.inputLabel;
     return object?.userData.scrollView instanceof ScrollableTextView ? object.userData.scrollView : null;
   }
 
   isEmergencyTarget(object: THREE.Object3D | undefined): boolean {
-    return object === this.estop.mesh && this.estop.enabled;
+    return object === this.pageViews.runtime.estop.mesh && this.pageViews.runtime.estop.enabled;
   }
 
   isSpeechTarget(object: THREE.Object3D | undefined): boolean {
-    return object === this.inputField.mesh && this.inputField.enabled;
+    return object === this.pageViews.runtime.inputField.mesh && this.pageViews.runtime.inputField.enabled;
   }
 
   canInteract(object: THREE.Object3D, point: THREE.Vector3): boolean {

@@ -62,7 +62,8 @@ def test_scene_replacement_preserves_environment_obstacles_and_removes_retired_o
 
     monitor = SimpleNamespace(
         world=SimpleNamespace(get_obstacles=lambda: list(obstacles.values())),
-        remove_obstacle=remove, add_obstacle=add,
+        remove_obstacle=remove,
+        add_obstacle=add,
     )
     synchronize_scene(monitor, pickle.dumps([SimpleNamespace(name="table")]))
     assert set(obstacles) == {"table"}
@@ -93,7 +94,9 @@ def test_next_target_replaces_timed_out_transport_and_uses_the_current_scene(mon
 
     workers, children, threads, requests = [], [], [], []
     release = threading.Event()
-    response = PlanResult(PlanStatus.SUCCEEDED, "new target checked", SimpleNamespace(plan_id="new-target-plan"))
+    response = PlanResult(
+        PlanStatus.SUCCEEDED, "new target checked", SimpleNamespace(plan_id="new-target-plan")
+    )
 
     def factory(config):
         worker = object.__new__(PlanningWorker)
@@ -111,8 +114,12 @@ def test_next_target_replaces_timed_out_transport_and_uses_the_current_scene(mon
             if index == 0:
                 release.wait(2)
             try:
-                reply = response if index else PlanResult(
-                    PlanStatus.SUCCEEDED, "obsolete", SimpleNamespace(plan_id="old-target-plan")
+                reply = (
+                    response
+                    if index
+                    else PlanResult(
+                        PlanStatus.SUCCEEDED, "obsolete", SimpleNamespace(plan_id="old-target-plan")
+                    )
                 )
                 send(child, (True, reply))
             except OSError:
@@ -156,7 +163,9 @@ def test_next_target_replaces_timed_out_transport_and_uses_the_current_scene(mon
 
 
 @pytest.mark.parametrize("advisory", [False, True])
-def test_shutdown_during_replacement_startup_cannot_publish_or_resurrect_a_worker(monkeypatch, advisory):
+def test_shutdown_during_replacement_startup_cannot_publish_or_resurrect_a_worker(
+    monkeypatch, advisory
+):
     from types import SimpleNamespace
 
     from dimos.ar.manipulation.adapter import DimOSManipulationAdapter
@@ -222,8 +231,10 @@ def test_concurrent_replacement_requests_share_one_worker_startup(monkeypatch, a
     config.model_copy = lambda **kwargs: config
     adapter = DimOSManipulationAdapter(SimpleNamespace(config=config))
     workers = []
-    threads = [threading.Thread(target=lambda: workers.append(adapter._get_worker(advisory=advisory)))
-               for _ in range(2)]
+    threads = [
+        threading.Thread(target=lambda: workers.append(adapter._get_worker(advisory=advisory)))
+        for _ in range(2)
+    ]
     try:
         for thread in threads:
             thread.start()
@@ -252,6 +263,7 @@ def test_module_shutdown_closes_worker_owner_before_waiting_for_startup_thread(m
     native._adapter = DimOSManipulationAdapter(native)
     native._runtime = ManipulationRuntime(native._adapter)
     native._closing = False
+    native._shutdown_lock = threading.Lock()
     native._lifecycle_stop = threading.Event()
     native._auxiliary_thread = native._watchdog_thread = None
     entered, release = threading.Event(), threading.Event()
@@ -305,6 +317,7 @@ def test_closed_worker_owner_rejects_module_restart_before_native_effects(monkey
     native._adapter = DimOSManipulationAdapter(native)
     native._runtime = ManipulationRuntime(native._adapter)
     native._closing = False
+    native._shutdown_lock = threading.Lock()
     native._lifecycle_stop = threading.Event()
     native._lifecycle_thread = native._auxiliary_thread = native._watchdog_thread = None
     native_start = Mock()
@@ -313,8 +326,10 @@ def test_closed_worker_owner_rejects_module_restart_before_native_effects(monkey
     if closed_by == "stop":
         native.stop()
     else:
-        monkeypatch.setattr("dimos.ar.manipulation.adapter.PlanningWorker",
-                            Mock(side_effect=RuntimeError("planning startup failed")))
+        monkeypatch.setattr(
+            "dimos.ar.manipulation.adapter.PlanningWorker",
+            Mock(side_effect=RuntimeError("planning startup failed")),
+        )
         with pytest.raises(RuntimeError, match="planning startup failed"):
             native._adapter.prepare_feedback()
     closing = native._closing

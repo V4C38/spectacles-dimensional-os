@@ -39,7 +39,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --blueprint)
       if [[ $# -lt 2 || -z "${2:-}" ]]; then
-        echo "--blueprint requires unitree_go2_ar or unitree_go2_ar_agentic" >&2
+        echo "--blueprint requires a registered blueprint ID" >&2
         exit 1
       fi
       BLUEPRINT_FLAG="$2"
@@ -137,16 +137,16 @@ export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
 LAN_IP="$(detect_lan_ip)"
 export DIMOS_AR_LAN_IP="${LAN_IP}"
 
-STACK_IDS=(
-  "unitree_go2_ar"
-  "unitree_go2_ar_agentic"
-  "openyam_ar_planner"
-)
-MENU_LABELS=(
-  "Unitree Go2"
-  "Unitree Go2 Agentic"
-  "OpenYAM AR Planner"
-)
+# The Python registry owns blueprint facts for shell, API and browser consumers.
+STACK_IDS=()
+MENU_LABELS=()
+STACK_MANIPULATION=()
+BLUEPRINT_MENU="$("${PYTHON}" "${SCRIPT_DIR}/../app/robot_sources.py" --menu)"
+while IFS=$'\t' read -r blueprint_id blueprint_label blueprint_manipulation; do
+  STACK_IDS+=("${blueprint_id}")
+  MENU_LABELS+=("${blueprint_label}")
+  STACK_MANIPULATION+=("${blueprint_manipulation}")
+done <<< "${BLUEPRINT_MENU}"
 
 # Interactive arrow-key menu: up/down to move, Enter to select.
 # Usage: arrow_menu "Prompt line" "option 1" "option 2" ...
@@ -254,29 +254,26 @@ resolve_robot_ip() {
 }
 
 if [[ -n "${BLUEPRINT_FLAG}" ]]; then
-  case "${BLUEPRINT_FLAG}" in
-    unitree_go2_ar)
-      SELECTED_INDEX=0
-      ;;
-    unitree_go2_ar_agentic)
-      SELECTED_INDEX=1
-      ;;
-    openyam_ar_planner)
-      SELECTED_INDEX=2
-      ;;
-    *)
-      echo "Unknown blueprint: ${BLUEPRINT_FLAG} (expected unitree_go2_ar, unitree_go2_ar_agentic, or openyam_ar_planner)" >&2
-      exit 1
-      ;;
-  esac
+  SELECTED_INDEX=-1
+  for index in "${!STACK_IDS[@]}"; do
+    if [[ "${STACK_IDS[$index]}" == "${BLUEPRINT_FLAG}" ]]; then
+      SELECTED_INDEX=$index
+      break
+    fi
+  done
+  if [[ ${SELECTED_INDEX} -lt 0 ]]; then
+    echo "Unknown blueprint: ${BLUEPRINT_FLAG} (expected ${STACK_IDS[*]})" >&2
+    exit 1
+  fi
 else
   arrow_menu "Choose the blueprint to run (↑/↓ then Enter):" "${MENU_LABELS[@]}"
 fi
 
 SELECTED_BLUEPRINT="${STACK_IDS[$SELECTED_INDEX]}"
 STACK_LABEL="${MENU_LABELS[$SELECTED_INDEX]}"
+MANIPULATION="${STACK_MANIPULATION[$SELECTED_INDEX]}"
 
-if [[ "${SELECTED_BLUEPRINT}" == "openyam_ar_planner" ]]; then
+if [[ "${MANIPULATION}" == "1" ]]; then
   unset ROBOT_IP
 elif [[ -z "${OPENAI_API_KEY:-}" ]]; then
   echo "Warning: OPENAI_API_KEY is unset — agent mode will not work until it is set." >&2
@@ -292,7 +289,7 @@ fi
 # DimOS GlobalConfig reads ROBOT_IP (or a .env file) to open the robot
 # connection; without it the connection module aborts with "IP address must be
 # provided". Auto-discover unless the caller pinned ROBOT_IP via --robot-ip or env.
-if [[ "${SELECTED_BLUEPRINT}" != "openyam_ar_planner" && -z "${ROBOT_IP:-}" ]]; then
+if [[ "${MANIPULATION}" != "1" && -z "${ROBOT_IP:-}" ]]; then
   resolve_robot_ip
 fi
 
@@ -352,7 +349,7 @@ echo ""
 
 # Native dotenv loading uses the current launcher credential file.
 cd "${ROOT}/launcher"
-if [[ "${SELECTED_BLUEPRINT}" == "openyam_ar_planner" && -z "${REPLAY_DB:-}" ]]; then
+if [[ "${MANIPULATION}" == "1" && -z "${REPLAY_DB:-}" ]]; then
   exec "${PYTHON}" "${SCRIPT_DIR}/supervise-arm.py" -- "${RUN_CMD[@]}" < /dev/null
 fi
 exec "${RUN_CMD[@]}" < /dev/null 2> >(grep -v '^objc\[' >&2)

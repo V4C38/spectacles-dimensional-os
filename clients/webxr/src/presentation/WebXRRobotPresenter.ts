@@ -1,3 +1,4 @@
+import type { ReadonlyFacts } from "@dimos-ar-client/ClientContracts";
 import { RobotBoundsAnimation, ROBOT_LABEL_STYLE } from "@dimos-ar-client/presentation/WorldPresentation";
 import { RobotMarkerLabel } from "./RobotMarkerLabel";
 
@@ -5,7 +6,7 @@ import * as THREE from "three";
 import { AdaptiveDashedLineRenderer } from "./AdaptiveDashedLineRenderer";
 import { FLOOR_MARKER_STYLE, ROBOT_LINE_STYLE, toneHex } from "./DimOSARDesign";
 import { Text } from "troika-three-text";
-import { type ClientTrackingOrigin, odomToClientTrackingPose } from "@dimos-ar-client/localization/ClientTracking";
+import { type ClientTrackingOrigin as MutableClientTrackingOrigin } from "@dimos-ar-client/localization/ClientTracking";
 
 import type { ARModuleSessionState } from "@dimos-ar-client/websocket/ARModuleSession";
 import type { Quat, Vec3 } from "@dimos-ar-client/ClientContracts";
@@ -19,7 +20,9 @@ import { disposeTextResources } from "./SceneResources";
 import { indicatorMaterial } from "./PoseIndicatorMaterial";
 import { MarkerCorrectionRenderer } from "./MarkerCorrectionRenderer";
 
-import { deriveRobotMarkerApplyInput, getRobotActivityState, robotTitleText, type RobotMarkerApplyInput } from "@dimos-ar-client/robot/RobotPresentation";
+import { deriveRobotMarkerApplyInput, projectRobotPose, robotFloorOffset, getRobotActivityState, robotTitleText, type RobotMarkerApplyInput } from "@dimos-ar-client/robot/RobotPresentation";
+
+type ClientTrackingOrigin = ReadonlyFacts<MutableClientTrackingOrigin>;
 
 export type RobotFeedback = {
   tone: StatusTone;
@@ -354,7 +357,7 @@ export class WebXRRobotPresenter {
   private applyLocalized(
     input: Extract<RobotMarkerApplyInput, { mode: "localizedOdom" }>,
   ): void {
-    const tracking = odomToClientTrackingPose(input.pose, input.origin);
+    const tracking = projectRobotPose(input);
     const webxr = clientTrackingToWebxrPose(tracking);
     this.targetPosition.fromArray(webxr.position);
     this.targetRotation.fromArray(webxr.orientation);
@@ -417,7 +420,7 @@ export class WebXRRobotPresenter {
     this.object.visible = true;
   }
 
-  private updateBounds(bounds: Vec3, baseHeight: number): void {
+  private updateBounds(bounds: Readonly<Vec3>, baseHeight: number): void {
     const key = [...bounds, baseHeight].join(",");
     if (key === this.boundsKey) return;
     this.boundsKey = key;
@@ -445,10 +448,7 @@ export class WebXRRobotPresenter {
   }
 
   private updateFloorOffset(): void {
-    const offset = new THREE.Vector3(0, -this.baseHeightM, 0).applyQuaternion(
-      this.object.quaternion,
-    );
-    this.floorOffset = offset.toArray() as Vec3;
+    this.floorOffset = [...robotFloorOffset(this.object.quaternion.toArray() as Quat, this.baseHeightM, "y")];
   }
 
   private updateLabelPosition(): void {

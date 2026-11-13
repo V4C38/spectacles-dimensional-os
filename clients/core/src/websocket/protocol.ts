@@ -61,8 +61,8 @@ export function encodeEstopRequest(): string {
 export function encodeNavGoalRequest(request: {
   preview?: boolean;
   preview_id?: string;
-  position: Vec3;
-  orientation: Quat;
+  position: Readonly<Vec3>;
+  orientation: Readonly<Quat>;
   epoch: string; lease_id: string; sequence: number;
 }): string {
   if (request.preview !== undefined && typeof request.preview !== "boolean") throw new Error("Field 'preview' must be boolean");
@@ -121,8 +121,8 @@ export const HUMAN_INPUT_MAX_CHARS = 4000;
 export const NAV_JOYSTICK_MAX_DURATION_S = 2.0;
 
 export function encodeClientPose(pose: {
-  position: Vec3;
-  orientation: Quat;
+  position: Readonly<Vec3>;
+  orientation: Readonly<Quat>;
   ts: number;
 }): string {
   return encodeText({
@@ -898,7 +898,7 @@ function requireQuat(data: Record<string, unknown>, key: string): Quat {
   return requireQuatValue([values[0], values[1], values[2], values[3]], key);
 }
 
-function requireVec3Value(value: Vec3, key: string): Vec3 {
+function requireVec3Value(value: Readonly<Vec3>, key: string): Vec3 {
   if (!Array.isArray(value) || value.length !== 3) {
     throw new Error(`Field '${key}' must be a 3-element array`);
   }
@@ -909,7 +909,7 @@ function requireVec3Value(value: Vec3, key: string): Vec3 {
   ];
 }
 
-function requireQuatValue(value: Quat, key: string): Quat {
+function requireQuatValue(value: Readonly<Quat>, key: string): Quat {
   if (!Array.isArray(value) || value.length !== 4) {
     throw new Error(`Field '${key}' must be a 4-element quaternion [qx, qy, qz, qw]`);
   }
@@ -923,7 +923,7 @@ function requireQuatValue(value: Quat, key: string): Quat {
   return orientation;
 }
 
-function requireNonZeroQuatValue(value: Quat, key: string): Quat {
+function requireNonZeroQuatValue(value: Readonly<Quat>, key: string): Quat {
   return requireQuatValue(value, key);
 }
 

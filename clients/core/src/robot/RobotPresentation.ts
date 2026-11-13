@@ -1,7 +1,7 @@
-import type { ClientTrackingOrigin } from "../localization/ClientTracking";
+import { odomToClientTrackingPose, rotateVecByQuat, type ClientTrackingOrigin } from "../localization/ClientTracking";
 import type { ARModuleSessionState } from "../websocket/ARModuleSession";
 import { deriveSessionLinkPhase, NO_ROBOT_CONNECTED_LABEL } from "../presentation/ControlPanelPresentation";
-import type { Pose, RobotDescription } from "../ClientContracts";
+import type { Pose, RobotDescription, ReadonlyFacts, Vec3, Quat } from "../ClientContracts";
 
 /** The single robot selection owner. Views receive facts; hover never changes selection. */
 export class RobotSelection {
@@ -33,21 +33,21 @@ export type RobotMarkerApplyInput =
   | { mode: "localizedPending" }
   | {
       mode: "unlocalizedFallbackPosition";
-      robot: RobotDescription | null;
+      robot: ReadonlyFacts<RobotDescription> | null;
       view: ARModuleSessionState;
     }
   | {
       mode: "localizedOdom";
-      robot: RobotDescription;
-      pose: Pose;
-      origin: ClientTrackingOrigin;
+      robot: ReadonlyFacts<RobotDescription>;
+      pose: ReadonlyFacts<Pose>;
+      origin: ReadonlyFacts<ClientTrackingOrigin>;
       view: ARModuleSessionState;
     };
 
 export function deriveRobotMarkerApplyInput(input: {
   setupCompleted: boolean;
   view: ARModuleSessionState;
-  origin: ClientTrackingOrigin | null;
+  origin: ReadonlyFacts<ClientTrackingOrigin> | null;
 }): RobotMarkerApplyInput {
   if (!input.setupCompleted || input.view.capabilities?.navigation.available !== true) {
     return { mode: "hidden" };
@@ -88,4 +88,21 @@ export function robotTitleText(view: ARModuleSessionState): string {
     return NO_ROBOT_CONNECTED_LABEL;
   }
   return view.hello?.robot.display_name ?? NO_ROBOT_CONNECTED_LABEL;
+}
+
+
+/** Localized pose policy stays in Core; the host converts units/axes and applies smoothing. */
+export function projectRobotPose(
+  input: Extract<RobotMarkerApplyInput, { mode: "localizedOdom" }>,
+): ReadonlyFacts<{ position: Vec3; orientation: Quat }> {
+  return odomToClientTrackingPose(input.pose, input.origin);
+}
+
+/** Rotated base-to-floor offset, in metres in the caller's coordinate basis. */
+export function robotFloorOffset(
+  orientation: Readonly<Quat>,
+  baseHeightM: number,
+  upAxis: "y" | "z" = "z",
+): Readonly<Vec3> {
+  return rotateVecByQuat(orientation, upAxis === "y" ? [0, -baseHeightM, 0] : [0, 0, -baseHeightM]);
 }

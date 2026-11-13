@@ -1,3 +1,4 @@
+import type { ReadonlyFacts } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 import { availableCapabilityLabels, localizationGuidance, localizationKind, localizationProviderLabel, localizationCaptureStatus, deriveSessionLinkPhase, NO_ROBOT_CONNECTED_LABEL, sessionLinkStatus, type SessionLinkPhase, type StatusText } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
 import { SetupFlow } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/SetupFlow";
 import { getRobotActivityState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotPresentation";
@@ -5,7 +6,7 @@ import { SETUP_PANEL_SCALE } from "./SpecsPanelPresentation";
 import { SpecsConnectionController } from "./SpecsConnectionController";
 require("LensStudio:TextInputModule");
 
-import type { ClientTrackingOrigin, ClientTrackingOriginStore } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import type { ClientTrackingOrigin as MutableClientTrackingOrigin, ClientTrackingOriginStore } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 import type { LocalizationCaptureEpisode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/LocalizationCaptureEpisode";
 
 import type { ARModuleSession, ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/ARModuleSession";
@@ -16,6 +17,8 @@ import { DEFAULT_SCALE_ANIMATION_VERSION_KEY,nextAnimationVersion,scaleIn } from
 import type { SpecsWebSocketTransport } from "../websocket/SpecsWebSocketTransport";
 import { SetupWizardStep,SetupWizardView } from "./SetupWizardView";
 import { COLOR_ERROR,COLOR_WARN,getFrameComponent,placePanelInFront,setPanelFollowing,statusToneColor } from "./UIKit";
+
+type ClientTrackingOrigin = ReadonlyFacts<MutableClientTrackingOrigin>;
 
 const WIZARD_STEP_TITLES = {
   [SetupWizardStep.Connect]: "Connect",

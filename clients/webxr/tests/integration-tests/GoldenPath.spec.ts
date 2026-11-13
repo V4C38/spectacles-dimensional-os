@@ -97,7 +97,7 @@ test("comparable hand golden path", async ({ page }, info) => {
     });
     await flow.step("localization_capture", () => activateButton(page), async () =>
       (await snapshot(page)).wizardStep === "localization" &&
-      await appValue(page, "app.mainMenu.preview.userData.frameVersion > 0"));
+      await appValue(page, "app.mainMenu.panel.getObjectByName('Localization camera preview')?.userData.frameVersion > 0"));
     await flow.step("localization_success", async () => {
       await page.evaluate(() => { const w = window as any; w.questDevice.hands.right.position.set(0.8, 1.2, -0.3); });
       await runtime.completeLocalization();
@@ -149,7 +149,7 @@ test("comparable hand golden path", async ({ page }, info) => {
       expect(runtime.commands.some(c => c.type === "user_message_request")).toBe(false);
       await activateRuntimeButton(page, "Send to agent");
     }, async () => runtime.commands.some(c => c.type === "user_message_request" && c.text === shared.fixtures.transcript) &&
-      await appValue(page, "app.mainMenu.agent.text.includes('requested location')"));
+      await appValue(page, "w.integrationMenuQueries.response(app.mainMenu, app.client.speech.snapshot().response)?.text.includes('requested location')"));
     await flow.step("sensors_full", async () => {
       await activateRuntimeButton(page, "Manual");
       await activateRuntimeButton(page, "Capabilities button");

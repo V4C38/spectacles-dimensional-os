@@ -92,7 +92,7 @@ async def runtime(
     monkeypatch.setattr(mgr, "_build_webxr", AsyncMock())
     monkeypatch.setattr(mgr, "planner_status", AsyncMock(return_value={"ready": True}))
     monkeypatch.setattr(mgr, "can_status", AsyncMock(return_value={"ready": True}))
-    monkeypatch.setattr(mgr, "_stop_one", stop)
+    monkeypatch.setattr(mgr.runtime, "_stop_one", stop)
     try:
         yield mgr, children, spawn
     finally:

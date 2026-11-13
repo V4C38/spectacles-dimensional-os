@@ -4,11 +4,6 @@ import type { LidarDisplayPreferences, LidarDisplayMode } from "DimOSARClient.ls
 
 export type OperatingMode = import("DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts").InteractionSnapshot["mode"];
 
-export class UIPresentationState {
-  debugModeEnabled = false;
-  setDebugMode(enabled: boolean): void { this.debugModeEnabled = enabled; }
-}
-
 /** Facts for native views; page selection and frame placement stay in the host. */
 export interface SpecsUISnapshot {
   localizationAvailable?: boolean;

@@ -44,7 +44,7 @@ async def test_start_armodule_injects_secret_env(tmp_path: Path) -> None:
     with (
         patch.object(mgr, "port_in_use", return_value=False),
         patch.object(mgr, "_configure_system_if_needed", new=AsyncMock()),
-        patch.object(mgr, "_spawn", new=fake_spawn),
+        patch.object(mgr.runtime, "_spawn", new=fake_spawn),
     ):
         await mgr.start_armodule(blueprint="unitree_go2_ar", client="specs")
 
@@ -61,7 +61,7 @@ async def test_start_armodule_injects_secret_env(tmp_path: Path) -> None:
 async def test_start_armodule_pins_checked_dimos_python(tmp_path: Path) -> None:
     _scripts(tmp_path)
     mgr = ProcessManager(root=tmp_path)
-    mgr.status.dimos_python = "/tmp/dimos/.venv/bin/python3"
+    mgr.dependencies.update_status(dimos_python="/tmp/dimos/.venv/bin/python3")
     captured: dict[str, str] = {}
 
     async def fake_spawn(argv, *, env):  # type: ignore[no-untyped-def]
@@ -70,7 +70,7 @@ async def test_start_armodule_pins_checked_dimos_python(tmp_path: Path) -> None:
     with (
         patch.object(mgr, "port_in_use", return_value=False),
         patch.object(mgr, "_configure_system_if_needed", new=AsyncMock()),
-        patch.object(mgr, "_spawn", new=fake_spawn),
+        patch.object(mgr.runtime, "_spawn", new=fake_spawn),
     ):
         await mgr.start_armodule(blueprint="unitree_go2_ar", client="specs")
 
@@ -95,7 +95,7 @@ async def test_start_armodule_drops_inherited_dimos_python(
     with (
         patch.object(mgr, "port_in_use", return_value=False),
         patch.object(mgr, "_configure_system_if_needed", new=AsyncMock()),
-        patch.object(mgr, "_spawn", new=fake_spawn),
+        patch.object(mgr.runtime, "_spawn", new=fake_spawn),
     ):
         await mgr.start_armodule(blueprint="unitree_go2_ar", client="specs")
 
@@ -114,7 +114,7 @@ async def test_start_armodule_defaults_log_level_to_info(tmp_path: Path) -> None
     with (
         patch.object(mgr, "port_in_use", return_value=False),
         patch.object(mgr, "_configure_system_if_needed", new=AsyncMock()),
-        patch.object(mgr, "_spawn", new=fake_spawn),
+        patch.object(mgr.runtime, "_spawn", new=fake_spawn),
     ):
         await mgr.start_armodule(blueprint="unitree_go2_ar", client="specs")
 

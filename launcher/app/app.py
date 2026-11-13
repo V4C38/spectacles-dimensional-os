@@ -18,11 +18,13 @@ from urllib.parse import urlsplit
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from apriltag_assets import decode_marker_id, ensure_pdf, ensure_png
 from armodule import ProcessManager
 from config import (
+    DEFAULT_LOG_LEVEL,
+    LOG_LEVELS,
     env_path,
     merge_env,
     normalize_log_level,
@@ -32,7 +34,14 @@ from config import (
 )
 from discovery import discover_devices, validate_replay
 from robot_profiles import RobotProfiles
-from robot_sources import SourceBody, SourceSelectionRequired, resolve_robot_source
+from robot_sources import (
+    BLUEPRINTS,
+    SourceBody,
+    SourceSelectionRequired,
+    blueprint_definition,
+    blueprint_metadata,
+    resolve_robot_source,
+)
 from tag_config import (
     DEFAULT_MOUNT,
     LOCALIZATION_POLICY_DEFAULTS,
@@ -104,8 +113,13 @@ class StartBody(BaseModel):
     takeover_pids: list[int] | None = None
     source: SourceBody
     profile_id: str
-    blueprint: Literal["unitree_go2_ar", "unitree_go2_ar_agentic", "openyam_ar_planner"]
+    blueprint: str = Field(json_schema_extra={"enum": list(BLUEPRINTS)})
     client: Literal["specs", "webxr"] = "specs"
+
+    @field_validator("blueprint")
+    @classmethod
+    def known_blueprint(cls, value: str) -> str:
+        return blueprint_definition(value).id
 
 
 class MountBody(BaseModel):
@@ -145,7 +159,16 @@ class SettingsBody(BaseModel):
     vps_vendor: Literal["multiset"] = "multiset"
     map_code: str | None = None
     mounts: list[MountBody] | None = None
-    dimos_log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] | None = None
+    dimos_log_level: str | None = Field(
+        default=None, json_schema_extra={"enum": [*sorted(LOG_LEVELS), None]}
+    )
+
+    @field_validator("dimos_log_level")
+    @classmethod
+    def known_log_level(cls, value: str | None) -> str | None:
+        if value is not None and value not in LOG_LEVELS:
+            raise ValueError("Unknown log level")
+        return value
 
 
 def _blank_to_none(value: str | None) -> str | None:
@@ -172,6 +195,9 @@ def settings_payload(profile_id: str | None = None) -> dict[str, Any]:
         "mounts": ui["mounts"],
         **{key: ui[key] for key in LOCALIZATION_POLICY_DEFAULTS},
         "defaults": {
+            "blueprints": blueprint_metadata(),
+            "log_levels": sorted(LOG_LEVELS),
+            "log_level": DEFAULT_LOG_LEVEL,
             "mounts": [dict(DEFAULT_MOUNT)],
             "preset_marker_ids": list(PRESET_MARKER_IDS),
             "localization": dict(LOCALIZATION_POLICY_DEFAULTS),
@@ -403,8 +429,7 @@ async def api_planner_status() -> dict[str, Any]:
 
 @app.put("/api/settings")
 async def api_settings_put(body: SettingsBody) -> dict[str, Any]:
-    phase = manager.status.phase.value
-    if phase in ("starting", "running", "stopping"):
+    if not manager.can_edit_configuration:
         raise HTTPException(
             status_code=409, detail="stop ARModule before editing settings"
         )
@@ -482,7 +507,7 @@ async def api_apriltag_decode(file: Annotated[UploadFile, File()]) -> dict[str, 
 @app.post("/api/armodule/start")
 async def api_armodule_start(body: StartBody) -> dict[str, Any]:
     source = body.source
-    robot = "openyam" if body.blueprint == "openyam_ar_planner" else "unitree_go2"
+    robot = blueprint_definition(body.blueprint).robot
     devices = (await api_discovery(robot))["devices"] if source.mode in {"auto", "device"} else []
     try:
         resolved = resolve_robot_source(robot, source, devices)
@@ -495,10 +520,10 @@ async def api_armodule_start(body: StartBody) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     robot_ip, can_port, simulation, replay = resolved.robot_ip, resolved.can_port, resolved.simulation, resolved.replay
     if replay:
-        if not manager.status.dimos_python:
+        if not manager.selected_python:
             raise HTTPException(status_code=409, detail="Select a DimOS environment first")
         try:
-            info = await validate_replay(manager.status.dimos_python, replay, robot, source.streams)
+            info = await validate_replay(manager.selected_python, replay, robot, source.streams)
             if info["needs_selection"]:
                 raise ValueError("Select recording streams before starting")
             source.streams = info["streams"]
@@ -633,7 +658,7 @@ async def api_delete_robot_profile(profile_id: str) -> dict[str, bool]:
 
 @app.get("/api/discovery")
 async def api_discovery(robot: Literal["unitree_go2", "openyam"]) -> dict[str, Any]:
-    python = manager.status.dimos_python
+    python = manager.selected_python
     if not python:
         raise HTTPException(status_code=409, detail="Select a DimOS environment first")
     try:
@@ -643,7 +668,7 @@ async def api_discovery(robot: Literal["unitree_go2", "openyam"]) -> dict[str, A
 
 
 def _require_profile_editable() -> None:
-    if manager.status.phase.value in {"starting", "running", "stopping"}:
+    if not manager.can_edit_configuration:
         raise HTTPException(status_code=409, detail="Stop ARModule before editing profiles")
 
 
@@ -655,10 +680,10 @@ class ReplayBody(BaseModel):
 
 @app.post("/api/replay/inspect")
 async def api_inspect_replay(body: ReplayBody) -> dict[str, Any]:
-    if not manager.status.dimos_python:
+    if not manager.selected_python:
         raise HTTPException(status_code=409, detail="Select a DimOS environment first")
     try:
-        return await validate_replay(manager.status.dimos_python, body.path, body.robot, body.streams)
+        return await validate_replay(manager.selected_python, body.path, body.robot, body.streams)
     except (ValueError, OSError, TimeoutError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

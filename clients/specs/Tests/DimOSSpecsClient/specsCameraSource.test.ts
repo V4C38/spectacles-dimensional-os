@@ -137,3 +137,10 @@ it("serializes native encodes across cancellation and requests fresh pixels for 
   expect(f.source.diagnostics()).toMatchObject({ maxInFlight: 1, inFlight: 0, encodes: 2, discarded: 1 });
   f.source.stop();
 });
+
+import { CAMERA_HISTORY_TRACE } from "../../../core/tests/support/CameraHistoryTrace";
+it.each(CAMERA_HISTORY_TRACE)("camera adapter contract: $name", trace => {
+  const result = lookupPoseSample(trace.times.map((t, index) => sample(t, index * 100, 0, 0)), trace.timestamp);
+  if (trace.expectedX === null) expect(result).toBeNull();
+  else expect(result!.position.x / 100).toBeCloseTo(trace.expectedX);
+});

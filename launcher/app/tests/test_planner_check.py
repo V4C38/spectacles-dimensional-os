@@ -1,5 +1,6 @@
 """Dependency probes do not start hardware or depend on the launcher's Python environment."""
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -67,7 +68,7 @@ async def test_planner_probe_uses_selected_python_caches_and_never_owns_runtime(
     tmp_path, monkeypatch
 ):
     manager = ProcessManager(root=tmp_path)
-    manager.status.dimos_python = "/selected/venv/bin/python3"
+    manager.dependencies.update_status(dimos_python="/selected/venv/bin/python3")
     proc = AsyncMock(returncode=0)
     proc.communicate.return_value = (
         b'{"ready":true,"state":"ready","message":"Planner ready"}\n',
@@ -79,8 +80,8 @@ async def test_planner_probe_uses_selected_python_caches_and_never_owns_runtime(
     assert (await manager.planner_status())["ready"]
     spawn.assert_awaited_once()
     assert spawn.call_args.args[0] == "/selected/venv/bin/python3"
-    assert manager._proc is None
-    manager.status.dimos_python = "/other/python3"
+    assert manager.runtime.backend.process is None
+    manager.dependencies.update_status(dimos_python="/other/python3")
     await manager.planner_status()
     assert spawn.await_count == 2
 
@@ -100,7 +101,7 @@ async def test_planner_start_failure_has_no_process_side_effects(tmp_path, monke
     with pytest.raises(ValueError, match="does not match"):
         await manager.start_armodule(blueprint="openyam_ar_planner", client="webxr")
     cleanup.assert_not_awaited()
-    assert manager._proc is None
+    assert manager.runtime.backend.process is None
 
 
 @pytest.mark.asyncio
@@ -108,7 +109,48 @@ async def test_dependency_install_does_not_stop_external_runtime(tmp_path, monke
     manager = ProcessManager(root=tmp_path)
     monkeypatch.setattr(manager, "_running_dimos_pids", AsyncMock(return_value=[123]))
     installer = AsyncMock()
-    monkeypatch.setattr(manager, "_run_tracked", installer)
+    monkeypatch.setattr(manager.dependencies, "_run_tracked", installer)
     with pytest.raises(RuntimeError, match="Stop DimOS yourself"):
         await manager.run_setup(dimos_python="/selected/python", manipulation=True)
     installer.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_late_planner_result_cannot_advertise_readiness_for_a_new_interpreter(
+    tmp_path, monkeypatch
+):
+    manager = ProcessManager(root=tmp_path)
+    manager.dependencies.update_status(dimos_python="/old/python")
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def probe(*args, **kwargs):
+        started.set()
+        await release.wait()
+        return {"ready": True, "state": "ready", "message": "old environment"}
+
+    monkeypatch.setattr("armodule.run_json_probe", probe)
+    pending = asyncio.create_task(manager.planner_status())
+    await started.wait()
+    manager.dependencies.update_status(dimos_python="/new/python")
+    release.set()
+    assert not (await pending)["ready"]
+    assert not manager.snapshot()["planner"]["ready"]
+
+
+def test_status_is_derived_and_cannot_be_mutated_by_observers(tmp_path):
+    from dataclasses import FrozenInstanceError
+
+    from armodule import Phase
+
+    manager = ProcessManager(root=tmp_path)
+    previous = manager.status
+    manager.dependencies.update_status(check_ok=True, phase=Phase.READY)
+    assert previous.check_ok is None
+    assert manager.status.check_ok is True
+    with pytest.raises(FrozenInstanceError):
+        manager.status.phase = Phase.ERROR
+    manager.runtime.update_status(phase=Phase.STARTING)
+    assert manager.status.phase is Phase.STARTING
+    assert manager.status.check_ok is True
+    manager.runtime.update_status(phase=None)
+    assert manager.status.phase is Phase.READY

@@ -11,7 +11,7 @@ import { clientTrackingToSpecsPoint,specsToClientTrackingPoint } from "../Script
 import { IntegrationArmGolden } from "./IntegrationArmGolden";
 import { INTEGRATION_CATALOG as CATALOG } from "./IntegrationCatalog";
 import { IntegrationInput } from "./IntegrationInput";
-import { IntegrationV2Fixture } from "./IntegrationV2Fixture";
+import { IntegrationV2Fixture, installFixtureCamera } from "./IntegrationV2Fixture";
 const CAMERA_FIXTURE = requireAsset("./CameraFixture.png") as Texture;
 type Step = {
   id: string;
@@ -26,6 +26,8 @@ export class ReviewScenario extends BaseScriptComponent {
   root: any;
   peer!: IntegrationV2Fixture;
   input: IntegrationInput | null = null;
+  private restoreCamera: (() => void) | null = null;
+  private lidarPreferencesConfigured = false;
   steps: Step[] = [];
   index = -1;
   elapsed = 0;
@@ -62,7 +64,11 @@ export class ReviewScenario extends BaseScriptComponent {
   onAwake(): void {
     if (!integrationTestsEnabled(this.getSceneObject())) return;
     this.createEvent("OnStartEvent").bind(() => this.createEvent("UpdateEvent").bind(() => this.tick()));
-    this.createEvent("OnDestroyEvent").bind(() => this.input?.restore());
+    this.createEvent("OnDestroyEvent").bind(() => {
+      this.input?.restore();
+      this.restoreCamera?.();
+      this.restoreCamera = null;
+    });
   }
   emit(value: Record<string, unknown>): void { emitReviewEvent(value); }
   check(name: string, passed: boolean, caseId = this.activeCase): void {
@@ -127,22 +133,19 @@ export class ReviewScenario extends BaseScriptComponent {
       }
     };
     root.transport.sendBinary = () => { throw new Error("v2 control channel cannot carry binary data"); };
-    root.cameraSource.start = () => { };
-    root.cameraSource.stop = () => { };
-    root.episode.capture = {
-      start: () => { }, stop: () => { }, capture: async () => {
-        if (this.captureFailure)
-          throw new Error("fixture camera unavailable");
-        this.captureTs = Math.max(getTime(), this.captureTs + 0.001);
-        return { ts_capture: this.captureTs, jpeg: new Uint8Array([255, 216, 255, 217]),
-          intrinsics: { fx: 500, fy: 500, cx: 320, cy: 240, width: 640, height: 480, distortion_model: "none", distortion: [] },
-          camera_position: [0, 0, 0], camera_orientation: [0, 0, 0, 1] };
-      },
-    };
+    this.restoreCamera = installFixtureCamera(root.cameraSource, async (canEncode = () => true) => {
+      if (!canEncode()) throw new Error("Fixture camera capture no longer eligible");
+      if (this.captureFailure) throw new Error("fixture camera unavailable");
+      this.captureTs = Math.max(getTime(), this.captureTs + 0.001);
+      return { ts_capture: this.captureTs, jpeg: new Uint8Array([255, 216, 255, 217]),
+        intrinsics: { fx: 500, fy: 500, cx: 320, cy: 240, width: 640, height: 480, distortion_model: "none", distortion: [] },
+        camera_position: [0, 0, 0], camera_orientation: [0, 0, 0, 1] };
+    });
     root.uiPresenter.setupWizardController.deps.previewTexture = () => CAMERA_FIXTURE;
     root.uiPresenter.setupWizardController.deps.ipRelayClient.resolve = async () => null;
-    root.uiPresenter.lidarDisplay.store = { read: () => null, write: () => { } };
-    Object.assign(root.uiPresenter.lidarDisplay.preferences, { pointLimit: CATALOG.fixtures.pointLimit, obstacleRangeM: 0.6, fullRangeM: 5 });
+    // Keep fixture preference commands out of persistent device settings. The
+    // existing adapter object stays installed; the owner still applies its policy.
+    root.uiPresenter.lidarDisplay.store.write = () => {};
     root.speechController.draft.deps.recognition = {
       start: (text: any, error: any, end: any, started: () => void) => { this.recognitionText = text; this.recognitionError = error; this.recognitionEnd = end; started(); },
       stop: () => { this.recognitionText = null; }, finish: () => this.recognitionEnd?.(),
@@ -279,6 +282,11 @@ export class ReviewScenario extends BaseScriptComponent {
       this.emit({ type: "host", action: "update_framing", aspect, bounds: this.captureBounds(this.activeCase) });
     }
     this.armGolden?.tick();
+    const display = this.root.uiPresenter.lidarDisplay;
+    if (!this.lidarPreferencesConfigured && display.mode !== "off") {
+      display.adjustPoints((CATALOG.fixtures.pointLimit - display.preferences.pointLimit) / 250);
+      this.lidarPreferencesConfigured = true;
+    }
     const pending = this.deferred.filter(row => row.at <= this.clock);
     this.deferred = this.deferred.filter(row => row.at > this.clock);
     for (const row of pending)

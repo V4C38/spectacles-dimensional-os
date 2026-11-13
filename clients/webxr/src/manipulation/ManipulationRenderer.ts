@@ -1,11 +1,12 @@
+import type { ReadonlyFacts } from "@dimos-ar-client/ClientContracts";
 import * as THREE from "three";
 import { indicatorMaterial } from "../presentation/PoseIndicatorMaterial";
 import { registerRayTarget } from "../input/WebXRInteraction";
 import { EndEffectorStatusView } from "../presentation/NotificationPill";
-import { endEffectorAngles, endEffectorDisplayPose, ARM_VISUAL_STYLE, armPointDisplacement, armLinkWeight, armLinkPresentation, ArmMeshFade, manipulationActivePlan, manipulationPathOpacity, ManipulationPreviewPlayback, type ManipulationSnapshot } from "@dimos-ar-client/manipulation/ManipulationPresentation";
+import { endEffectorAngles, ARM_VISUAL_STYLE, armPointDisplacement, armLinkWeight, armLinkPresentation, ArmMeshFade, ManipulationPreviewPlayback, type ManipulationSnapshot } from "@dimos-ar-client/manipulation/ManipulationPresentation";
 
 import { ARM_PANEL_STYLE } from "@dimos-ar-client/presentation/ControlPanelPresentation";
-import { ArmPresentationSampler, ArmTrajectoryProgress } from "@dimos-ar-client/manipulation/ArmPresentation";
+import { ManipulationFramePresenter } from "@dimos-ar-client/manipulation/ArmPresentation";
 import { Text } from "troika-three-text";
 import { disposeTextResources, UI_FONT_REGULAR, syncText } from "../presentation/SceneResources";
 
@@ -13,13 +14,12 @@ import { ROBOT_LABEL_STYLE, WORLD_DASH_STYLE } from "@dimos-ar-client/presentati
 import { webxrToClientTrackingPoint, clientTrackingToWebxrPose } from "../utilities/WebXRCoordinates";
 
 
-import { type ClientTrackingOrigin, odomToClientTrackingPose } from "@dimos-ar-client/localization/ClientTracking";
+import { type ClientTrackingOrigin as MutableClientTrackingOrigin, odomToClientTrackingPose } from "@dimos-ar-client/localization/ClientTracking";
 
 
-import type { ManipulationPlan, ManipulationPose, ManipulationState } from "@dimos-ar-client/manipulation/ManipulationTypes";
-import { composePose, linkPoses, manipulationPlanPath } from "@dimos-ar-client/manipulation/ModelKinematics";
+import type { ManipulationPlan as MutableManipulationPlan, ManipulationPose as MutableManipulationPose, ManipulationState as MutableManipulationState } from "@dimos-ar-client/manipulation/ManipulationTypes";
+import { composePose, linkPoses } from "@dimos-ar-client/manipulation/ModelKinematics";
 
-import type { Vec3 } from "@dimos-ar-client/ClientContracts";
 import { AdaptiveDashedLineRenderer } from "../presentation/AdaptiveDashedLineRenderer";
 
 
@@ -27,6 +27,11 @@ import { AdaptiveDashedLineRenderer } from "../presentation/AdaptiveDashedLineRe
 import { ManipulationControlsView } from "./ManipulationControlsView";
 import { ManipulationModelRenderer } from "./ManipulationModelRenderer";
 import { MarkerCorrectionRenderer } from "../presentation/MarkerCorrectionRenderer";
+
+type ManipulationState = ReadonlyFacts<MutableManipulationState>;
+type ManipulationPlan = ReadonlyFacts<MutableManipulationPlan>;
+type ManipulationPose = ReadonlyFacts<MutableManipulationPose>;
+type ClientTrackingOrigin = ReadonlyFacts<MutableClientTrackingOrigin>;
 
 /** Tool interaction stays on top; environment depth never modifies this material. */
 export class EndEffectorHandleRenderer {
@@ -83,7 +88,7 @@ export interface ManipulationRenderInput {
     revision: number;
     pose: ManipulationPose;
     message: string;
-    failedJoints?: string[];
+    failedJoints?: readonly string[];
   } | null;
 }
 
@@ -109,7 +114,6 @@ export class ManipulationRenderer {
   );
   readonly path = this.pathStroke.object;
   private pathKey = "";
-  private pathDistances: number[] = [];
   private lastFrameTime = 0;
   private readonly meshFade = new ArmMeshFade();
   private readonly pointFade = new ArmMeshFade();
@@ -127,21 +131,19 @@ export class ManipulationRenderer {
   readonly measuredHandle = new EndEffectorHandleRenderer();
   get previewRequested(): boolean { return this.preview.previewRequested; }
   set previewRequested(value: boolean) {
-    if (value && !this.preview.previewRequested) this.preview.togglePreview();
-    else this.preview.previewRequested = value;
+    this.preview.setRequested(value);
   }
   readonly viewerPosition = new THREE.Vector3();
   handDragging = false;
   private readonly basePosition = new THREE.Vector3();
-  private readonly sampler = new ArmPresentationSampler();
-  private readonly trajectoryProgress = new ArmTrajectoryProgress();
+  private readonly framePresenter: ManipulationFramePresenter;
   readonly statusView = new EndEffectorStatusView();
-  private selectedBefore = false;
   pinned = false;
   eeHovered = false;
   hoveredAction: string | null = null;
   hoveredLink: string | null = null;
   constructor(private readonly preview = new ManipulationPreviewPlayback()) {
+    this.framePresenter = new ManipulationFramePresenter(preview);
     this.object.name = "Manipulation";
     this.path.userData.environmentDepth = true;
     this.path.raycast = () => {};
@@ -213,8 +215,7 @@ export class ManipulationRenderer {
     const recorded = state?.read_only === true;
     this.modelRenderer.tick(now, (fresh || recorded) && !!state?.available && !!origin);
     if (intent.retainingFeedback && origin && !recorded) {
-      this.preview.hold(now);
-      this.sampler.hold(now);
+      this.framePresenter.hold(now);
       for (const [key, button] of this.controlsView.buttons) button.setEnabled(key === "estop" || key === "stop");
       this.speedSlider.hit.userData.interactionEnabled = false;
       if(target) this.place(this.handle.object,target,origin);
@@ -227,7 +228,7 @@ export class ManipulationRenderer {
     }
     this.object.visible = !!origin && (!!state?.available || this.modelRenderer.model !== null);
     if (!state?.available || !state.model || !origin) {
-      this.trajectoryProgress.reset();
+      this.framePresenter.reset();
       this.previewRequested = false;
       this.meshFade.reset();
       this.measuredHandle.object.visible = false;
@@ -247,48 +248,26 @@ export class ManipulationRenderer {
     if (this.modelRenderer.model?.revision !== state.model.revision) {
       this.modelRenderer.rebuild(state.model);
       this.pathKey = "";
-      this.sampler.reset();
-      this.trajectoryProgress.reset();
+      this.framePresenter.reset();
     }
-    const model = state.model,
-      observed = groupId ? state.observations?.[groupId] : null;
-    const activeGroup = state.groups?.find(group => group.id === groupId);
-    const rootPose = state.root_pose ?? { position: [0, 0, 0], orientation: [0, 0, 0, 1] } as ManipulationPose;
-    const targetVisible =
-      !recorded && !!target &&
-      (selected || state.following === true || intent.dragging === true || intent.finishing === true || intent.sharedDraft === true);
-    const offset = intent.targetOffset;
-    const displaced = targetVisible && offset;
-    const dragging = intent.dragging === true;
-    const executing = intent.executing;
-    const base = clientTrackingToWebxrPose(
-      odomToClientTrackingPose(rootPose, origin),
-    );
+    const model = state.model;
+    const frame = this.framePresenter.sample({
+      model, state, groupId, origin, now, selected, intent, target, solution, plan,
+      desiredGripper: input.desiredGripper,
+      rejection: input.rejection,
+    });
+    const { observed, group, root: rootPose, displaced,
+      measured, proposed: preview, observedValues: all } = frame;
+    const dragging = intent.dragging;
+    const playing = frame.playback.playing;
+    const base = clientTrackingToWebxrPose(odomToClientTrackingPose(rootPose, origin));
     this.basePosition.fromArray(base.position);
     this.baseMarker.position.copy(this.basePosition);
-    if (selected !== this.selectedBefore) {
-      this.previewRequested = false;
-    }
-    this.selectedBefore = selected;
-    const stateText = intent.activity;
-    this.controlsView.baseLabel.setFeedback(
-      robotTitle,
-      stateText,
+    this.controlsView.baseLabel.setFeedback(robotTitle, intent.activity,
       `Movement speed ${Math.round(input.speedScale * 100)}%`,
-      !fresh ? 0xff9f0a : state.stopped ? 0xff453a : 0x30d158,
-    );
+      !fresh ? 0xff9f0a : state.stopped ? 0xff453a : 0x30d158);
     const dtOutline = Math.max(0, Math.min(0.1, now - this.lastFrameTime));
     this.lastFrameTime = now;
-    const activePlan = recorded ? null : manipulationActivePlan(state, plan, executing);
-    if (dragging || state.stopped || (!activePlan && !intent.planning))
-      this.previewRequested = false;
-    const playback = this.preview.sample(activePlan, now);
-    const playing = playback.playing;
-    const sampled = this.sampler.sample({ model, state, group: activeGroup, origin, now,
-      selected, dragging, rejected: !!input.rejection, solution: recorded ? null : solution, plan: activePlan, playback,
-      opening: selected ? input.desiredGripper ?? observed?.gripper : observed?.gripper });
-    if (sampled.contextChanged) this.trajectoryProgress.reset();
-    const { measured, proposed: preview, observedValues: all } = sampled;
     for (const [name, ghost] of this.modelRenderer.ghosts) {
       ghost.visible = fresh;
       this.place(ghost, composePose(rootPose, preview[name]), origin);
@@ -345,68 +324,15 @@ export class ManipulationRenderer {
       if (preview)
         this.place(ghost, composePose(rootPose, preview[name]), origin);
     }
-    const group = state.groups?.find((g) => g.id === groupId);
     this.handle.collider.userData.interactionEnabled = intent.canManipulate;
-    this.path.visible =
-      (displaced || (!!activePlan && (playing || executing))) &&
-      !!group?.tip_frame;
-    this.pathStroke.setStyle(
-      WORLD_DASH_STYLE.widthM * 0.65,
-      manipulationPathOpacity(intent, !selected && state.following === true && !input.rejection, !!activePlan),
-    );
-    if (!activePlan && targetVisible && target && observed?.pose) {
-      const start = clientTrackingToWebxrPose(
-        odomToClientTrackingPose(observed.pose, origin),
-      );
-      const end = clientTrackingToWebxrPose(
-        odomToClientTrackingPose(target, origin),
-      );
-      this.pathStroke.setSegments([start.position, end.position], true);
-      this.pathKey = "";
-    }
-    const pathTime =
-      activePlan && executing
-        ? fresh && observed?.joints
-          ? this.trajectoryProgress.advance(
-              activePlan,
-              observed.joints,
-              new Set(
-                model.joints
-                  .filter((j) => j.kind === "continuous")
-                  .map((j) => j.name),
-              ),
-              state.operation_id ?? activePlan.plan_id,
-            )
-          : this.trajectoryProgress.time
-        : 0;
-    if (!activePlan || !executing) this.trajectoryProgress.reset();
-    const pathKey =
-      activePlan && group?.tip_frame
-        ? JSON.stringify([
-            activePlan.plan_id,
-            model.revision,
-            group.tip_frame,
-            origin,
-            rootPose,
-          ])
-        : "";
-    if (activePlan && group?.tip_frame && pathKey !== this.pathKey) {
+    this.path.visible = frame.path.visible && !!group?.tip_frame;
+    this.pathStroke.setStyle(WORLD_DASH_STYLE.widthM * 0.65, frame.pathOpacity);
+    const pathKey = JSON.stringify([frame.path.revision, origin]);
+    if (pathKey !== this.pathKey) {
       this.pathKey = pathKey;
-      const points = manipulationPlanPath(model, activePlan, group.tip_frame, all, rootPose)
-        .map(position => new THREE.Vector3(...clientTrackingToWebxrPose(
-          odomToClientTrackingPose({ position, orientation: [0, 0, 0, 1] }, origin),
-        ).position));
-      this.pathDistances = [0];
-      for (let i = 1; i < points.length; i++) this.pathDistances.push(this.pathDistances[i - 1] + points[i].distanceTo(points[i - 1]));
-      this.pathStroke.setSegments(
-        points
-          .slice(0, -1)
-          .flatMap((point, i) => [
-            point.toArray() as Vec3,
-            points[i + 1].toArray() as Vec3,
-          ]),
-        true,
-      );
+      const points = frame.path.points.map(position => clientTrackingToWebxrPose(
+        odomToClientTrackingPose({ position, orientation: [0, 0, 0, 1] }, origin)).position);
+      this.pathStroke.setSegments(points.slice(0, -1).flatMap((point, i) => [point, points[i + 1]]), true);
     }
     const targetMaterial = this.handle.visual.material as THREE.ShaderMaterial;
     targetMaterial.uniforms.uCenterColor.value.setHex(intent.blocked || !fresh || input.rejection ? ARM_VISUAL_STYLE.warningColor : 0xb3b3b3);
@@ -421,10 +347,7 @@ export class ManipulationRenderer {
     if (observed?.pose)
       this.place(
         this.handle.object,
-        endEffectorDisplayPose(observed.pose, target, {
-          selected, following: state.following === true, dragging,
-          finishing: intent.finishing === true, offset, sharedDraft: intent.sharedDraft,
-        })!,
+        frame.endEffectorPose!,
         origin,
       );
 
@@ -455,11 +378,7 @@ export class ManipulationRenderer {
       for (const joint of model.joints) if (["revolute", "continuous"].includes(joint.kind) && all[joint.name] != null)
         debug(joint.name, composePose(rootPose, rawPoses[joint.child]), all[joint.name]);
     }
-    if (activePlan && this.pathDistances.length) {
-      const cursor = Math.min(this.pathDistances.length - 1, pathTime / Math.max(1e-6, activePlan.duration) * (this.pathDistances.length - 1));
-      const lower = Math.floor(cursor), upper = Math.min(this.pathDistances.length - 1, lower + 1);
-      this.pathStroke.setStartDistance(this.pathDistances[lower] + (this.pathDistances[upper] - this.pathDistances[lower]) * (cursor - lower));
-    } else this.pathStroke.setStartDistance(0);
+    this.pathStroke.setStartDistance(frame.path.startDistanceM);
     this.controlsView.apply({
       intent,
       handDragging: this.handDragging,
@@ -479,8 +398,7 @@ export class ManipulationRenderer {
     this.statusView.update(
       this.handle.object.position,
       now,
-      { blocked: intent.blocked === true, fresh, stopped: intent.stopped,
-        moving: intent.executing || intent.resetting, rejection: input.rejection },
+      frame.status,
     );
     this.statusView.faceViewer(this.viewerPosition);
 

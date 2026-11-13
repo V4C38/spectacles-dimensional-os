@@ -66,7 +66,7 @@ export class Flow {
             );
           return {
             ui: app?.client.ui.snapshot(),
-            elapsed: app?.client.ui.successElapsedS,
+            successProgress: app?.client.ui.snapshot().setupSuccessProgress,
             tracking: app?.tracking,
             source: app?.menuAnchor.source?.handedness,
             navigation: app?.client.navigation.interaction.snapshot(),

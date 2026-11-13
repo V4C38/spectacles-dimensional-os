@@ -1,6 +1,7 @@
 import asyncio
 import json
 import threading
+import time
 
 import pytest
 
@@ -12,12 +13,21 @@ from dimos.ar.manipulation.service import ManipulationService
 @pytest.mark.parametrize("action", ["evaluate", "update"])
 def test_advisory_outcomes_identify_the_attempted_pose_and_source_revision(status, action):
     replies = []
-    service = ManipulationService(object(), lambda _, frame: replies.append(json.loads(frame)), lambda _: None)
+    service = ManipulationService(
+        object(), lambda _, frame: replies.append(json.loads(frame)), lambda _: None
+    )
     service.connect("owner")
-    request = ManipulationRequest("sample", action, "arm", {
-        "position": [1, 2, 3], "orientation": [0, 0, 0, 1],
-        "target_revision": 9, "advisory_target_revision": 7,
-    })
+    request = ManipulationRequest(
+        "sample",
+        action,
+        "arm",
+        {
+            "position": [1, 2, 3],
+            "orientation": [0, 0, 0, 1],
+            "target_revision": 9,
+            "advisory_target_revision": 7,
+        },
+    )
     service._reply("owner", request, {"status": status, "pose": None})
     assert replies[0]["sample_pose"] == {"position": [1, 2, 3], "orientation": [0, 0, 0, 1]}
     assert replies[0]["pose"] is None
@@ -229,6 +239,8 @@ async def test_recorded_ik_rpc_exceptions_reach_wire_as_recoverable_results(acti
             **({"sequence": 7} if action == "update" else {}),
         }
     ]
+
+
 async def test_motion_rpc_failure_is_uncertain_and_reported_after_disconnect():
     from unittest.mock import Mock
 
@@ -439,8 +451,10 @@ async def test_old_idle_snapshot_cannot_retire_accepted_execution(snapshot_durin
     _arm_grab(module, "a", planning=True)
     await asyncio.gather(*service._tasks)
     request = ManipulationRequest("execute", "execute", "arm", {})
-    module._interaction.begin_manipulation_motion(request.request_id)
-    module._interaction.observe_manipulation_snapshot({"available": True, "execution": "executing"})
+    module._interaction_controller.state.begin_manipulation_motion(request.request_id)
+    module._interaction_controller.state.observe_manipulation_snapshot(
+        {"available": True, "execution": "executing"}
+    )
     try:
         if snapshot_during_command:
             service.submit(request, "a")
@@ -461,14 +475,14 @@ async def test_old_idle_snapshot_cannot_retire_accepted_execution(snapshot_durin
         assert all(body.get("execution") != "idle" for body in published)
         _release_arm_grab(module)
         _arm_grab(module, "b")
-        assert module._interaction.authority is None
-        assert module._interaction.motion_busy
+        assert module._interaction_controller.state.authority is None
+        assert module._interaction_controller.state.motion_busy
 
         runtime.state = {"available": True, "execution": "completed", "operation_id": None}
         await asyncio.wait_for(completed.wait(), 1)
-        assert not module._interaction.motion_busy
+        assert not module._interaction_controller.state.motion_busy
         _arm_grab(module, "b")
-        assert module._interaction.authority.client_id == "b"
+        assert module._interaction_controller.state.authority.client_id == "b"
     finally:
         command_release.set()
         packing_release.set()
@@ -480,7 +494,9 @@ async def test_old_idle_snapshot_cannot_retire_accepted_execution(snapshot_durin
 @pytest.mark.parametrize("action", ["update", "evaluate", "plan", "gripper"])
 async def test_continuous_input_does_not_starve_snapshot_publication(action):
     packing_entered, packing_release, published = (
-        asyncio.Event(), asyncio.Event(), asyncio.Event()
+        asyncio.Event(),
+        asyncio.Event(),
+        asyncio.Event(),
     )
     observed = []
 
@@ -502,8 +518,11 @@ async def test_continuous_input_does_not_starve_snapshot_publication(action):
         published.set()
 
     service = ManipulationService(
-        Runtime(), lambda *args: None, lambda _: None,
-        on_snapshot=on_snapshot, prepare_outbound=pack,
+        Runtime(),
+        lambda *args: None,
+        lambda _: None,
+        on_snapshot=on_snapshot,
+        prepare_outbound=pack,
     )
     service.start()
     try:
@@ -511,7 +530,8 @@ async def test_continuous_input_does_not_starve_snapshot_publication(action):
         for sequence in range(3):
             await service._dispatch(
                 ManipulationRequest(str(sequence), action, "arm", {"ts": 1, "sequence": sequence}),
-                "a", 0,
+                "a",
+                0,
             )
         packing_release.set()
         await asyncio.wait_for(published.wait(), 1)
@@ -552,7 +572,10 @@ async def test_retired_optional_plan_preserves_fresh_feedback_and_availability()
             received.set()
 
     service = ManipulationService(
-        Runtime(), lambda *args: None, broadcast, on_snapshot=observed.append,
+        Runtime(),
+        lambda *args: None,
+        broadcast,
+        on_snapshot=observed.append,
     )
     service._assets["plan"] = ("older", {"plan_id": "older"})
     service.start()
@@ -600,7 +623,9 @@ async def test_duplicate_gripper_id_changes_hardware_only_once():
             pass
 
     replies = []
-    service = ManipulationService(Runtime(), lambda _, message: replies.append(message), lambda _: None)
+    service = ManipulationService(
+        Runtime(), lambda _, message: replies.append(message), lambda _: None
+    )
     service.connect("a")
     request = ManipulationRequest("squeeze-1", "gripper", "arm", {"value": 0})
     try:
@@ -638,7 +663,11 @@ async def test_shared_following_renewals_refresh_native_input_with_new_sequences
 
     service = ManipulationService(Runtime(), lambda *_: None, lambda _: None)
     service.connect("a")
-    service._shared_tokens["a"] = ("lease", "token")
+    service._reply(
+        "a",
+        ManipulationRequest("acquire", "acquire", "arm", {"authority_lease": "lease"}),
+        {"token": "token"},
+    )
     body = {"authority_lease": "lease", "sequence": 1, "ts": 0}
     try:
         service.follow_shared("a", "arm", body)
@@ -666,10 +695,18 @@ async def test_retired_shared_follow_token_is_reported_instead_of_silently_stall
             pass
 
     replies = []
-    service = ManipulationService(Runtime(), lambda _, message: replies.append(json.loads(message)), lambda _: None)
+    service = ManipulationService(
+        Runtime(), lambda _, message: replies.append(json.loads(message)), lambda _: None
+    )
     service.connect("a")
     try:
-        await service._dispatch(ManipulationRequest("shared-follow-expired-1", "update", "arm", {"sequence": 1, "ts": 0}), "a", 0)
+        await service._dispatch(
+            ManipulationRequest(
+                "shared-follow-expired-1", "update", "arm", {"sequence": 1, "ts": 0}
+            ),
+            "a",
+            0,
+        )
         assert replies[0]["status"] == "rejected"
         assert replies[0]["code"] == "retired"
     finally:
@@ -682,7 +719,9 @@ async def test_advisory_timing_counts_outcomes_timeouts_and_maximum_duration(mon
     from unittest.mock import Mock
 
     now = [100.0]
-    monkeypatch.setattr("dimos.ar.manipulation.service.time", SimpleNamespace(monotonic=lambda: now[0]))
+    monkeypatch.setattr(
+        "dimos.ar.manipulation.service.time", SimpleNamespace(monotonic=lambda: now[0])
+    )
     service = ManipulationService(object(), lambda *_: None, lambda _: None)
     timing = service._advisory_timing = Mock()
     outcomes = [
@@ -720,7 +759,9 @@ async def test_advisory_pending_age_preserves_equal_request_ids_from_different_c
     from unittest.mock import Mock
 
     now = [100.0]
-    monkeypatch.setattr("dimos.ar.manipulation.service.time", SimpleNamespace(monotonic=lambda: now[0]))
+    monkeypatch.setattr(
+        "dimos.ar.manipulation.service.time", SimpleNamespace(monotonic=lambda: now[0])
+    )
     service = ManipulationService(object(), lambda *_: None, lambda _: None)
     timing = service._advisory_timing = Mock()
     release = {client: asyncio.Event() for client in ("a", "b")}
@@ -759,3 +800,72 @@ async def test_advisory_pending_age_preserves_equal_request_ids_from_different_c
         release["b"].set()
         await asyncio.gather(first, second)
     assert not service._advisory_started
+
+
+@pytest.mark.asyncio
+async def test_shared_follow_cache_waits_for_ack_survives_suspend_and_retires_on_disconnect():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    native = SimpleNamespace(ar_manipulation_suspend=lambda *_: None)
+    service = ManipulationService(native, lambda *_: None, lambda _: None)
+    service._quiescent = True
+    service.submit = Mock()
+    service.connect("a")
+    body = {"authority_lease": "lease", "sequence": 12, "ts": 0}
+    try:
+        service.follow_shared("a", "arm", body)
+        service.submit.assert_not_called()
+        service._reply(
+            "a",
+            ManipulationRequest("grab", "acquire", "arm", {"authority_lease": "lease"}),
+            {"status": "acquired", "token": "token"},
+        )
+        first, client = service.submit.call_args.args
+        assert client == "a"
+        assert first.payload["token"] == "token"
+        assert first.payload["sequence"] == 1
+        service.suspend("a", time.monotonic() + 1)
+        await asyncio.gather(*tuple(service._tasks))
+        service.connect("a")
+        service.follow_shared("a", "arm", body)
+        assert service.submit.call_args.args[0].payload["sequence"] == 2
+        service.disconnect("a")
+        service.connect("a")
+        service.submit.reset_mock()
+        service.follow_shared("a", "arm", body)
+        service.submit.assert_not_called()
+        service._reply(
+            "a",
+            ManipulationRequest("grab-new", "acquire", "arm", {"authority_lease": "lease"}),
+            {"status": "acquired", "token": "new-token"},
+        )
+        fresh = service.submit.call_args.args[0]
+        assert fresh.payload["token"] == "new-token"
+        assert fresh.payload["sequence"] == 1
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_late_acquisition_ack_cannot_restore_a_disconnected_follow_token():
+    from unittest.mock import Mock
+
+    service = ManipulationService(object(), lambda *_: None, lambda _: None)
+    service._quiescent = True
+    service.submit = Mock()
+    body = {"authority_lease": "old-lease", "sequence": 1, "ts": 0}
+    service.connect("a")
+    service.follow_shared("a", "arm", body)
+    service.disconnect("a")
+    service._reply(
+        "a",
+        ManipulationRequest("old-grab", "acquire", "arm", {"authority_lease": "old-lease"}),
+        {"status": "acquired", "token": "retired-token"},
+    )
+    try:
+        service.connect("a")
+        service.follow_shared("a", "arm", body)
+        service.submit.assert_not_called()
+    finally:
+        await service.close()

@@ -1,3 +1,4 @@
+import { appendFixtureUpload, fixtureBinaryPackets } from "../../../../tools/integration-tests/support/IntegrationBulk";
 import type { BindableWebSocketTransport, WebSocketTransportHandlers } from "../../src/ClientContracts";
 
 /** An explicit paired v2 peer for tests that focus on session/camera behavior. */
@@ -24,10 +25,7 @@ export class PairedBulk implements BindableWebSocketTransport {
   }
   sendBinary(data: Uint8Array) {
     if (!this.upload) throw new Error("No upload");
-    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-    if (view.getUint32(0, true) !== 0x32425241 || view.getUint32(4, true) !== this.upload.id || view.getUint32(8, true) !== this.upload.offset) throw new Error("Invalid upload chunk");
-    this.upload.bytes.set(data.subarray(12), this.upload.offset); this.upload.offset += data.byteLength - 12;
-    if (this.upload.offset === this.upload.bytes.length) {
+    if (appendFixtureUpload(this.upload, data)) {
       const upload = this.upload; this.upload = null; this.uploaded(upload.bytes);
       this.receive({ type: "bulk_upload_result", upload_id: upload.id, status: "accepted" });
     }
@@ -35,10 +33,6 @@ export class PairedBulk implements BindableWebSocketTransport {
   receive(value: object) { this.handlers.onTransportText(JSON.stringify(value) + "\n"); }
   lidar(data: Uint8Array) {
     this.receive({ type: "bulk_binary_begin", kind: "lidar", epoch: "fixture-epoch", id: 1, total_bytes: data.length });
-    for (let offset = 0; offset < data.length; offset += 16372) {
-      const payload = data.subarray(offset, offset + 16372), packet = new Uint8Array(payload.length + 12), view = new DataView(packet.buffer);
-      view.setUint32(0, 0x32425241, true); view.setUint32(4, 1, true); view.setUint32(8, offset, true); packet.set(payload, 12);
-      this.handlers.onTransportBinary(packet);
-    }
+    for (const packet of fixtureBinaryPackets(data)) this.handlers.onTransportBinary(packet);
   }
 }

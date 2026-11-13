@@ -23,13 +23,15 @@ export async function activateButton(
 ): Promise<void> {
   await expect
     .poll(() =>
-      page.evaluate(() => {
-        const w = window as any,
-          menu = w.xb.core.scene.children.find(
-            (o: any) => o.client?.manipulation,
-          ).mainMenu;
-        return menu.panelProgress >= 0.999 && menu.heightController.height === menu.heightController.target;
-      }),
+      page.evaluate((field) => {
+        const w = window as any;
+        const app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
+        const snap = app.client.ui.snapshot();
+        const label = field === "retry" ? snap.wizardStep === "localization" ? "Try again" : "Reconnect" : snap.nextLabel;
+        try { w.integrationMenuQueries.button(app.mainMenu, label); }
+        catch { return false; }
+        return w.integrationMenuQueries.settled(app.mainMenu);
+      }, field),
     )
     .toBe(true);
   const activationCount = await page.evaluate(
@@ -38,7 +40,10 @@ export async function activateButton(
       const app = w.xb.core.scene.children.find(
         (object: any) => object.client?.manipulation,
       );
-      const button = app.mainMenu[field];
+      const snap = app.client.ui.snapshot();
+      const label = field === "retry" ? snap.wizardStep === "localization" ? "Try again" : "Reconnect" : snap.nextLabel;
+      const button = w.integrationMenuQueries.button(app.mainMenu, label);
+      w.integrationSetupButton = button;
       if (button.userData.integrationActivationCount === undefined) {
         button.userData.integrationActivationCount = 0;
         const triggered = button.onTriggered;
@@ -64,13 +69,7 @@ export async function activateButton(
   // Wait for the actual XR input ray to hover this button before pressing it.
   await expect
     .poll(() =>
-      page.evaluate((field) => {
-        const w = window as any;
-        const app = w.xb.core.scene.children.find(
-          (object: any) => object.client?.manipulation,
-        );
-        return app.mainMenu[field].ux.isHovered();
-      }, field),
+      page.evaluate(() => (window as any).integrationSetupButton.ux.isHovered()),
     )
     .toBe(true);
   // XR Blocks fires onTriggered on release. Wait for sampled XR frames on both
@@ -79,24 +78,12 @@ export async function activateButton(
   await setSelection(page, 0);
   await expect
     .poll(() =>
-      page.evaluate((field) => {
-        const w = window as any;
-        const app = w.xb.core.scene.children.find(
-          (object: any) => object.client?.manipulation,
-        );
-        return app.mainMenu[field].userData.integrationActivationCount;
-      }, field),
+      page.evaluate(() => (window as any).integrationSetupButton.userData.integrationActivationCount),
     )
     .toBe(activationCount + 1);
   await expect
     .poll(() =>
-      page.evaluate((field) => {
-        const w = window as any,
-          app = w.xb.core.scene.children.find(
-            (o: any) => o.client?.manipulation,
-          );
-        return app.mainMenu[field].ux.isSelected();
-      }, field),
+      page.evaluate(() => (window as any).integrationSetupButton.ux.isSelected()),
     )
     .toBe(false);
 }
@@ -112,22 +99,9 @@ export async function pointRuntimeButton(
         const menu = w.xb.core.scene.children.find(
           (object: any) => object.client?.manipulation,
         ).mainMenu;
-        let targetVisible = false;
-        menu.panel.traverse((object: any) => {
-          if (!object.ux || (object.name !== name && object.text !== name)) return;
-          let visible = true;
-          for (let node = object; node; node = node.parent)
-            visible = visible && node.visible && node.userData.rayDisabled !== true;
-          targetVisible ||= visible;
-        });
-        return (
-          targetVisible &&
-          menu.panelProgress >= 0.999 &&
-          menu.heightController.height === menu.heightController.target &&
-          [...menu.pageTransitions.values()].every(
-            (state: any) => state.progress === (state.target ? 1 : 0),
-          )
-        );
+        try { w.integrationMenuQueries.button(menu, name); }
+        catch { return false; }
+        return w.integrationMenuQueries.settled(menu);
       }, name),
     )
     .toBe(true);
@@ -136,17 +110,7 @@ export async function pointRuntimeButton(
     const app = w.xb.core.scene.children.find(
       (object: any) => object.client?.manipulation,
     );
-    let button: any;
-    app.mainMenu.panel.traverse((object: any) => {
-      if (object.ux && (object.name === name || object.text === name)) {
-        let visible = true;
-        for (let node = object; node; node = node.parent)
-          visible =
-            visible && node.visible && node.userData.rayDisabled !== true;
-        if (visible) button = object;
-      }
-    });
-    if (!button) throw new Error(`Missing runtime button: ${name}`);
+    const button = w.integrationMenuQueries.button(app.mainMenu, name);
     w.runtimeButton = button;
     const position = button.getWorldPosition(button.position.clone());
     const input =
@@ -366,19 +330,17 @@ export async function scrollResponse(page: Page): Promise<void> {
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const app = (window as any).xb.core.scene.children.find(
-          (o: any) => o.client?.manipulation,
-        );
-        return app.mainMenu.agent.maxScroll;
+        const w = window as any;
+        const app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
+        const view = w.integrationMenuQueries.response(app.mainMenu, app.client.speech.snapshot().response);
+        if (view) w.integrationResponseView = view;
+        return view?.maxScroll ?? 0;
       }),
     )
     .toBeGreaterThan(0);
   await page.evaluate(() => {
-    const w = window as any,
-      app = w.xb.core.scene.children.find(
-        (o: any) => o.client?.manipulation,
-      ),
-      view = app.mainMenu.agent;
+    const w = window as any;
+    const view = w.integrationResponseView;
     const target = view.bodyHit,
       p = target.getWorldPosition(target.position.clone()),
       q = target.getWorldQuaternion(target.quaternion.clone());
@@ -395,7 +357,7 @@ export async function scrollResponse(page: Page): Promise<void> {
           );
         return (
           app.interaction.hit(w.xb.core.input.rightController)?.object ===
-          app.mainMenu.agent.bodyHit
+          w.integrationResponseView.bodyHit
         );
       }),
     )
@@ -415,12 +377,7 @@ export async function scrollResponse(page: Page): Promise<void> {
   await setSelection(page, 0);
   await expect
     .poll(() =>
-      page.evaluate(() => {
-        const app = (window as any).xb.core.scene.children.find(
-          (o: any) => o.client?.manipulation,
-        );
-        return app.mainMenu.agent.scrollOffset;
-      }),
+      page.evaluate(() => (window as any).integrationResponseView.scrollOffset),
     )
     .toBeGreaterThan(0);
 }
@@ -428,11 +385,11 @@ export async function scrollResponse(page: Page): Promise<void> {
 export async function pointIndexAtButton(page: Page, label: string, distance: number): Promise<void> {
   await expect.poll(() => page.evaluate(() => {
     const app = (window as any).xb.core.scene.children.find((o: any) => o.client?.manipulation);
-    return app.mainMenu.panelProgress >= .999 && app.mainMenu.heightController.height === app.mainMenu.heightController.target;
+    return (window as any).integrationMenuQueries.settled(app.mainMenu);
   })).toBe(true);
   await page.evaluate(async ({ label, distance }) => {
     const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
-    const button = app.mainMenu.panel.getObjectByName(`Button: ${label}`);
+    const button = w.integrationMenuQueries.button(app.mainMenu, label).mesh;
     await new Promise<void>(resolve => app.session.requestAnimationFrame((_time: number, frame: XRFrame) => {
       const source = Array.from(app.session.inputSources as XRInputSource[]).find(s => s.hand && s.handedness === "right")!;
       const tip = frame.getJointPose!(source.hand!.get("index-finger-tip")!, app.reference)!.transform.position;

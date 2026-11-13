@@ -16,7 +16,14 @@ from typing import Any, Literal, cast
 from uuid import uuid4
 
 from dimos.ar.manipulation.protocol import ManipulationRequest
-from dimos.ar.numeric import finite_number
+from dimos.ar.numeric import (
+    finite_number,
+    finite_vector,
+    nonnegative_integer,
+    quaternion_yaw,
+    required_identifier,
+    wrapped_angle,
+)
 
 LEASE_DURATION_S = 0.5
 MAX_REQUESTS_PER_CLIENT = 128
@@ -165,7 +172,12 @@ class InteractionCoordinator:
 
     @property
     def motion_busy(self) -> bool:
-        return bool(self._pending_arm_motion) or self._arm_native_busy or self._arm_uncertain or self._arm_stop_pending
+        return (
+            bool(self._pending_arm_motion)
+            or self._arm_native_busy
+            or self._arm_uncertain
+            or self._arm_stop_pending
+        )
 
     @property
     def authority(self) -> Authority | None:
@@ -173,8 +185,12 @@ class InteractionCoordinator:
 
     @property
     def mode_change_available(self) -> bool:
-        return not (self._authority is not None or self._agent_busy
-                    or self.motion_busy or self.following_tail is not None)
+        return not (
+            self._authority is not None
+            or self._agent_busy
+            or self.motion_busy
+            or self.following_tail is not None
+        )
 
     def connect(self, client_id: str) -> None:
         self._clients.add(client_id)
@@ -296,8 +312,7 @@ class InteractionCoordinator:
 
     @staticmethod
     def _navigation_yaw(orientation: tuple[float, float, float, float]) -> float:
-        x, y, z, w = orientation
-        return math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+        return quaternion_yaw(orientation)
 
     def _preview_matches_target(
         self,
@@ -322,7 +337,7 @@ class InteractionCoordinator:
             return False
         yaw = self._navigation_yaw(target.orientation)
         delta = yaw - pose[3]
-        yaw_error = abs(math.atan2(math.sin(delta), math.cos(delta)))
+        yaw_error = abs(wrapped_angle(delta))
         return bool(
             math.dist(target.position, pose[:3]) < NAV_PREVIEW_POSITION_TOLERANCE_M
             and yaw_error < NAV_PREVIEW_YAW_TOLERANCE_RAD
@@ -339,21 +354,39 @@ class InteractionCoordinator:
             # Keep the parked target at the endpoint the server will actually
             # finish, including when the last local pointer sample was invalid.
             target = self.target
-            if (tail is not None and target is not None
-                    and target.domain == "manipulation"
-                    and target.group_id == tail.get("group_id")):
+            if (
+                tail is not None
+                and target is not None
+                and target.domain == "manipulation"
+                and target.group_id == tail.get("group_id")
+            ):
                 position, orientation = tail.get("position"), tail.get("orientation")
-                if (isinstance(position, (list, tuple)) and len(position) == 3
-                        and isinstance(orientation, (list, tuple)) and len(orientation) == 4
-                        and all(isinstance(v, (int, float)) and math.isfinite(v)
-                                for v in (*position, *orientation))):
+                if (
+                    isinstance(position, (list, tuple))
+                    and len(position) == 3
+                    and isinstance(orientation, (list, tuple))
+                    and len(orientation) == 4
+                    and all(
+                        isinstance(v, (int, float)) and math.isfinite(v)
+                        for v in (*position, *orientation)
+                    )
+                ):
                     p = (float(position[0]), float(position[1]), float(position[2]))
-                    q = (float(orientation[0]), float(orientation[1]),
-                         float(orientation[2]), float(orientation[3]))
+                    q = (
+                        float(orientation[0]),
+                        float(orientation[1]),
+                        float(orientation[2]),
+                        float(orientation[3]),
+                    )
                     if p != target.position or q != target.orientation:
                         self._targets[(target.domain, target.group_id)] = replace(
-                            target, position=p, orientation=q, revision=target.revision + 1,
-                            sample_ts=self._clock(), phase="draft")
+                            target,
+                            position=p,
+                            orientation=q,
+                            revision=target.revision + 1,
+                            sample_ts=self._clock(),
+                            phase="draft",
+                        )
             self.following_tail = copy.deepcopy(tail)
             self._revision += 1
 
@@ -367,8 +400,9 @@ class InteractionCoordinator:
         previous = self._targets.get(key)
         if previous is None or previous.gripper == value:
             return
-        target = replace(previous, gripper=value, revision=previous.revision + 1,
-                         sample_ts=self._clock())
+        target = replace(
+            previous, gripper=value, revision=previous.revision + 1, sample_ts=self._clock()
+        )
         self._targets[key] = target
         self._revision += 1
 
@@ -378,10 +412,10 @@ class InteractionCoordinator:
             return
         execution = snapshot.get("execution")
         self.set_following_tail(snapshot.get("following_tail"))
-        self._arm_native_busy = (
-            snapshot.get("operation") in {"resetting", "parking"}
-            or execution in {"accepted", "executing", "uncertain", "fault"}
-        )
+        self._arm_native_busy = snapshot.get("operation") in {
+            "resetting",
+            "parking",
+        } or execution in {"accepted", "executing", "uncertain", "fault"}
         # Live following is scoped to the editing lease; a normal release must
         # allow immediate takeover while native handoff finishes asynchronously.
         # Accepted execution/reset/parking and unresolved stop outcomes retain
@@ -399,17 +433,26 @@ class InteractionCoordinator:
             self._arm_uncertain = self._arm_stop_pending = False
         self._update_manipulation_busy(previous_busy)
 
-    def observe_manipulation_result(self, request: ManipulationRequest, result: dict[str, Any]) -> None:
+    def observe_manipulation_result(
+        self, request: ManipulationRequest, result: dict[str, Any]
+    ) -> None:
         previous_busy = self.motion_busy
         retired = self._arm_retired_motion
         revision = request.payload.get("authority_revision", -1)
-        if (retired is not None and request.payload.get("authority_epoch") == retired[0]
-                and revision <= retired[1]):
+        if (
+            retired is not None
+            and request.payload.get("authority_epoch") == retired[0]
+            and revision <= retired[1]
+        ):
             self._pending_arm_motion.discard(request.request_id)
             self._update_manipulation_busy(previous_busy)
             return
-        if (request.action == "cancel" and request.request_id in self._pending_arm_motion
-                and result.get("status") in {"cancelled", "completed", "aborted", "no_execution", "succeeded"}):
+        if (
+            request.action == "cancel"
+            and request.request_id in self._pending_arm_motion
+            and result.get("status")
+            in {"cancelled", "completed", "aborted", "no_execution", "succeeded"}
+        ):
             self._arm_retired_motion = (self.epoch, revision)
             self._pending_arm_motion.clear()
             self._arm_native_busy = self._arm_uncertain = self._arm_stop_pending = False
@@ -417,13 +460,17 @@ class InteractionCoordinator:
             return
         if request.action == "gripper" and result.get("status") == "completed":
             authority = self._authority
-            if (request.payload.get("authority_epoch") == self.epoch
-                    and (authority is None or authority.lease_id == request.payload.get("authority_lease"))):
+            if request.payload.get("authority_epoch") == self.epoch and (
+                authority is None or authority.lease_id == request.payload.get("authority_lease")
+            ):
                 self.set_manipulation_gripper(request.group_id, request.payload["value"])
         if request.action in {"execute", "reset_joints", "prepare_shutdown", "cancel"}:
             self._pending_arm_motion.discard(request.request_id)
-            if (result.get("status") in {"uncertain", "fault"}
-                    or (request.action == "cancel" and result.get("status") not in {"cancelled", "completed", "aborted", "no_execution", "succeeded"})):
+            if result.get("status") in {"uncertain", "fault"} or (
+                request.action == "cancel"
+                and result.get("status")
+                not in {"cancelled", "completed", "aborted", "no_execution", "succeeded"}
+            ):
                 self._arm_uncertain = True
             if result.get("status") == "accepted":
                 self._arm_native_busy = True
@@ -492,9 +539,7 @@ class InteractionCoordinator:
         self.active_goal = copy.deepcopy(frame)
         self._revision += 1
 
-    def preflight(
-        self, client_id: str, request: InteractionRequest
-    ) -> InteractionResult | None:
+    def preflight(self, client_id: str, request: InteractionRequest) -> InteractionResult | None:
         if client_id not in self._clients:
             return self._result(request, "rejected", "connection_retired")
         cache = self._requests[client_id]
@@ -692,7 +737,9 @@ class InteractionCoordinator:
             and previous.speed_scale == speed
             and previous.gripper == gripper
         ):
-            self._targets[self._active_target_key] = replace(previous, phase=phase, sequence=sequence)
+            self._targets[self._active_target_key] = replace(
+                previous, phase=phase, sequence=sequence
+            )
             if previous.phase != phase:
                 self._revision += 1
             return
@@ -760,18 +807,14 @@ def identifier(data: dict[str, Any], key: str, *, required: bool = False) -> str
     value = data.get(key)
     if value is None and not required:
         return None
-    if not isinstance(value, str) or not value.strip() or len(value) > 128:
-        raise ValueError(f"{key} must contain 1 to 128 characters")
-    return value
+    return required_identifier(value, key)
 
 
 def sequence(data: dict[str, Any], key: str = "sequence") -> int | None:
     value = data.get(key)
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ValueError(f"{key} must be a nonnegative integer")
-    return value
+    return nonnegative_integer(value, key)
 
 
 def decode_interaction_request(data: dict[str, Any]) -> InteractionRequest:
@@ -798,7 +841,7 @@ def decode_interaction_request(data: dict[str, Any]) -> InteractionRequest:
         raw = data[name]
         if not isinstance(raw, list) or len(raw) != length:
             raise ValueError(f"{name} must contain {length} finite numbers")
-        pose.append(tuple(finite_number(v, name) for v in raw))
+        pose.append(finite_vector(raw, name, length))
     if len(pose) == 1:
         raise ValueError("position and orientation must be supplied together")
     if pose and math.hypot(*pose[1]) < 1e-6:

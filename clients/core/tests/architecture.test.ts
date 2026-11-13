@@ -1,67 +1,50 @@
-import { readdirSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { expect, it } from "vitest";
+import { checkProject, dependencies, importViolation, runtimeCycles } from "../../../tools/architecture/check.mjs";
 
-const core = fileURLToPath(new URL("../src", import.meta.url));
-const platformPackages = ["three", "three-mesh-bvh", "xrblocks", "iwer", "@types/three"];
+const root = fileURLToPath(new URL("../src/", import.meta.url));
 
-function imports(file: string, source: string): string[] {
-  const result: string[] = [];
-  const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
-  const add = (node: ts.Node | undefined) => {
-    if (node && ts.isStringLiteralLike(node)) result.push(node.text);
-  };
-  const visit = (node: ts.Node) => {
-    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) add(node.moduleSpecifier);
-    if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference))
-      add(node.moduleReference.expression);
-    if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) add(node.argument.literal);
-    if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-        ts.isIdentifier(node.expression) && node.expression.text === "require")) add(node.arguments[0]);
-    ts.forEachChild(node, visit);
-  };
-  visit(tree);
-  return result;
-}
-
-function violations(file: string, source: string): string[] {
-  return imports(file, source).filter(specifier => {
-    if (specifier.startsWith(".")) {
-      const target = relative(core, resolve(dirname(file), specifier));
-      return target === ".." || target.startsWith(`..${sep}`) || isAbsolute(target);
-    }
-    return specifier.startsWith("LensStudio:") || /\.lspkg(?:\/|$)/.test(specifier) ||
-      platformPackages.some(name => specifier === name || specifier.startsWith(name + "/"));
-  });
-}
-
-function scripts(directory: string): string[] {
-  return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
-    const path = join(directory, entry.name);
-    return entry.isDirectory() ? scripts(path) : entry.name.endsWith(".ts") ? [path] : [];
-  });
-}
-
-it("keeps portable ClientCore imports inside its source boundary and independent of host SDKs", () => {
-  const failures = scripts(core).flatMap(file => violations(file, readFileSync(file, "utf8"))
-    .map(specifier => `${relative(core, file)} imports ${specifier}`));
-  expect(failures).toEqual([]);
+it("keeps Core portable and free of runtime import cycles", () => {
+  expect(checkProject(ts, root, "core")).toEqual([]);
 });
 
-it("detects static, re-exported, runtime and type dependencies without matching prose", () => {
+it("finds every import form without matching comments or string examples", () => {
   const source = `
-    import { Host } from "../DimOSSpecsClient/Host";
+    import { Host } from "../Host";
     export type { Native } from "LensStudio:Native";
     const renderer = import("three");
     type Mesh = import("three").Mesh;
     const input = require("xrblocks");
-    import type { Portable } from "./websocket/protocolTypes";
+    import Alias = require("sdk");
+    import { type Vec3 } from "./ClientContracts";
+    export { type Pose } from "./ClientContracts";
     // import { NotCode } from "three";
     const example = 'require("three")';
   `;
-  expect(violations(join(core, "example.ts"), source)).toEqual([
-    "../DimOSSpecsClient/Host", "LensStudio:Native", "three", "three", "xrblocks",
+  expect(dependencies(ts, "example.ts", source)).toEqual([
+    { specifier: "../Host", runtime: true }, { specifier: "LensStudio:Native", runtime: false },
+    { specifier: "three", runtime: true }, { specifier: "three", runtime: false },
+    { specifier: "xrblocks", runtime: true }, { specifier: "sdk", runtime: true },
+    { specifier: "./ClientContracts", runtime: false }, { specifier: "./ClientContracts", runtime: false },
   ]);
+});
+
+it("rejects escaping paths, raw Specs Core imports, test fixtures and wrong SDKs", () => {
+  const file = root + "agent/example.ts";
+  const violation = (kind: string, specifier: string, runtime = true) =>
+    importViolation(kind, file, root, { specifier, runtime });
+  expect(violation("core", "../../host")).toBeTruthy();
+  expect(violation("core", "@scope/sdk")).toBeTruthy();
+  expect(violation("core", "../ClientContracts")).toBeNull();
+  expect(violation("specs", "@dimos-ar-client/ClientContracts")).toBeTruthy();
+  expect(violation("webxr", "LensStudio:Native")).toBeTruthy();
+  expect(violation("webxr", "../../Tests/Fixture")).toBeTruthy();
+  expect(violation("webxr", "../presentation/Menu")).toBeTruthy();
+  expect(violation("specs", "../presentation/UIPresentationState", false)).toBeNull();
+});
+
+it("detects runtime cycles but permits repeated shared dependencies", () => {
+  expect(runtimeCycles(new Map([["A", ["B"]], ["B", ["C"]], ["C", ["A"]]]))).toEqual([["A", "B", "C", "A"]]);
+  expect(runtimeCycles(new Map([["A", ["B", "C"]], ["B", ["C"]], ["C", []]]))).toEqual([]);
 });

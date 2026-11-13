@@ -1,10 +1,10 @@
 import type { ClientTrackingOriginStore } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 import type { LocalizationCaptureEpisode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/LocalizationCaptureEpisode";
-import { localizationCaptureStatus, deriveSessionLinkPhase, sessionLinkTransitionLog, type SessionLinkPhase } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
+import { OperatingModeController, localizationCaptureStatus, deriveSessionLinkPhase, sessionLinkTransitionLog, type SessionLinkPhase } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
 import { SetupFlow } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/SetupFlow";
 import { deriveRobotMarkerApplyInput, getRobotActivityState, type RobotSelection } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotPresentation";
 
-import { LidarDisplayController, LIDAR_PRESETS, requestLidarSettings } from "DimOSARClient.lspkg/Scripts/DimOSARClient/sensors/LidarDisplay";
+import { LidarDisplayController } from "DimOSARClient.lspkg/Scripts/DimOSARClient/sensors/LidarDisplay";
 
 import type { ARModuleSession, ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/ARModuleSession";
 
@@ -12,7 +12,7 @@ import { SpecsAgentController } from "../agent/SpecsAgentController";
 import type { IpRelayClient } from "../websocket/IpRelayClient";
 import { DEFAULT_SCALE_ANIMATION_VERSION_KEY,nextAnimationVersion,scaleIn,scaleOut } from "../utilities/AnimationUtilities";
 import type { SpecsWebSocketTransport } from "../websocket/SpecsWebSocketTransport";
-import { UIPresentationState, type OperatingMode, type SpecsUISnapshot } from "./UIPresentationState";
+import { type OperatingMode, type SpecsUISnapshot } from "./UIPresentationState";
 import { MainMenuView } from "./MainMenuView";
 import { RUNTIME_PANEL_SCALE } from "./SpecsPanelPresentation";
 import type { RobotPresenter } from "./RobotPresenter";
@@ -69,11 +69,11 @@ export class UIPresenter extends BaseScriptComponent {
   wristMenuRoot: SceneObject;
 
   private disposed = false;
-  private fallbackMode: OperatingMode = "manual";
+  private readonly modeController = new OperatingModeController();
   private menuMotionEvent: SceneEvent | null = null;
   private deps: UIPresenterDeps | null = null;
   private lidarDisplay: LidarDisplayController | null = null;
-  private readonly appState = new UIPresentationState();
+  private debugEnabled = false;
   private setupWizardController: SetupWizardController | null = null;
   private mainMenuView: MainMenuView | null = null;
   private uiLogger = new HudMessageController();
@@ -81,8 +81,6 @@ export class UIPresenter extends BaseScriptComponent {
   private uiState = -1;
   private isEditorMode = false;
   private linkPhase: SessionLinkPhase = "disconnected";
-  private wizardLidarOffSent = false;
-  private postWizardLidarSent = false;
   private unlocalizedUiPrepared = false;
   private setupFlow: SetupFlow | null = null;
   private get setupCompleted(): boolean { return this.setupFlow?.completed ?? false; }
@@ -91,12 +89,11 @@ export class UIPresenter extends BaseScriptComponent {
 
   public getOperatingMode(): OperatingMode {
     const view = this.requireDeps().session.view();
-    const mode = view.interaction?.mode ?? this.fallbackMode;
-    return mode === "agent" && view.capabilities?.agent.available !== true ? "manual" : mode;
+    return this.modeController.effective(view);
   }
 
   public getDebugMode(): boolean {
-    return this.appState.debugModeEnabled;
+    return this.debugEnabled;
   }
 
   public attachVoice(speechController: SpecsAgentController, tts: SpecsTextToSpeech): void {
@@ -196,9 +193,7 @@ export class UIPresenter extends BaseScriptComponent {
       );
     }
 
-    if (view.state?.lidar) {
-      this.lidarDisplay?.observe(view);
-    }
+    this.lidarDisplay?.observe(view);
   }
 
   public invalidateSetupBaseline(): void { this.setupWizardController?.invalidateBaseline(); }
@@ -228,7 +223,7 @@ export class UIPresenter extends BaseScriptComponent {
     deps.robotPresenter.apply(input, {
       mainUi: this.mainUIFrame,
       fallbackUniformScale: this.mainUiFallbackScale(),
-      appState: this.appState,
+      debugEnabled: this.debugEnabled,
     });
   }
 
@@ -299,8 +294,7 @@ export class UIPresenter extends BaseScriptComponent {
     deps.onModeChanged();
     deps.episode.reset();
     deps.robotPresenter.reset();
-    this.wizardLidarOffSent = false;
-    this.postWizardLidarSent = false;
+    this.lidarDisplay?.resetSetup();
     this.closeMenu();
     this.setupWizardController?.realign();
   }
@@ -327,7 +321,7 @@ export class UIPresenter extends BaseScriptComponent {
 
   private finishWizard(): void {
     this.mainMenuView?.showPage("main");
-    this.postWizardLidarSent = false;
+    this.lidarDisplay?.resetPostSetup();
     const view = this.requireDeps().session.view();
     if (!view.hasTrackingOrigin && this.isEditorMode) {
       this.setUIState(1, { immediate: true });
@@ -364,8 +358,7 @@ export class UIPresenter extends BaseScriptComponent {
       onModeButtonPressed: (mode) => {
         const accessible = this.requireDeps().session.view().capabilities?.agent.available === true;
         const next = mode === "agent" && !accessible ? "manual" : mode;
-        if (deps.session.view().interaction) deps.session.collaboration.setMode(next);
-        else this.fallbackMode = next;
+        this.modeController.set(deps.session.view(), next, mode => deps.session.collaboration.setMode(mode));
         this.deps?.speechController?.syncEnabled();
         this.deps?.onModeChanged();
       },
@@ -383,7 +376,7 @@ export class UIPresenter extends BaseScriptComponent {
       onSend: () => { this.deps?.speechController?.submit(); },
       onClear: () => this.deps?.speechController?.setDraft(""),
       onDebugModeChanged: (enabled) => {
-        this.appState.setDebugMode(enabled);
+        this.debugEnabled = enabled;
         this.refreshHud();
       },
     });
@@ -403,13 +396,12 @@ export class UIPresenter extends BaseScriptComponent {
       throw new Error("UIPresenter: setup wizard controller missing");
     }
     nextAnimationVersion(this.setupWizardPanel, DEFAULT_SCALE_ANIMATION_VERSION_KEY);
-    this.wizardLidarOffSent = false;
-    this.postWizardLidarSent = false;
+    this.lidarDisplay?.resetSetup();
     this.unlocalizedUiPrepared = false;
     this.wristMenuController?.closeImmediate();
     this.setUIState(0, { immediate: true });
     const deps = this.requireDeps();
-    if (!deps.session.view().interaction) this.fallbackMode = "manual";
+    this.modeController.reset(deps.session.view());
     deps.speechController?.reset();
     deps.onModeChanged();
     this.refreshHud();
@@ -417,38 +409,9 @@ export class UIPresenter extends BaseScriptComponent {
     controller.start(true);
   }
 
-  private ensureWizardLidarOff(): void {
-    if (this.wizardLidarOffSent) {
-      return;
-    }
-    const session = this.requireDeps().session;
-    if (session.view().connection !== "ready") {
-      return;
-    }
-    try {
-      requestLidarSettings(session, LIDAR_PRESETS.off);
-      this.wizardLidarOffSent = true;
-    } catch {
-      // retry on next tick
-    }
-  }
+  private ensureWizardLidarOff(): void { this.lidarDisplay?.syncSetup(false); }
 
-  private sendPostWizardLidarDefault(): void {
-    if (this.postWizardLidarSent) {
-      return;
-    }
-    const session = this.requireDeps().session;
-    if (session.view().connection !== "ready") {
-      return;
-    }
-
-    try {
-      this.lidarDisplay?.setMode("obstacles");
-      this.postWizardLidarSent = true;
-    } catch {
-      // retry on next refresh
-    }
-  }
+  private sendPostWizardLidarDefault(): void { this.lidarDisplay?.syncSetup(true); }
 
   private refreshHud(): void {
     this.requireDeps();
@@ -458,7 +421,7 @@ export class UIPresenter extends BaseScriptComponent {
 
   private refreshRobotLabels(): void {
     const deps = this.requireDeps();
-    deps.robotPresenter.refreshLabels(this.appState, deps.session.view(), {
+    deps.robotPresenter.refreshLabels(this.debugEnabled, deps.session.view(), {
       asrRunning: deps.speechController?.asrRunning ?? false,
       ttsPlaying: deps.tts?.isPlaying ?? false,
       status: deps.speechController?.snapshot().status,

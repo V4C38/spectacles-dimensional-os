@@ -1,9 +1,9 @@
 import { getRobotActivityState, type RobotActivityState, type RobotSelection } from "@dimos-ar-client/robot/RobotPresentation";
 
-import { availableFeatures, localizationGuidance, localizationProviderLabel, localizationKind, localizationCaptureStatus, deriveSessionLinkPhase, sessionLinkStatus, sessionLinkTransitionLog, type SessionLinkPhase, type StatusTone } from "@dimos-ar-client/presentation/ControlPanelPresentation";
+import { OperatingModeController, availableFeatures, localizationGuidance, localizationProviderLabel, localizationKind, localizationCaptureStatus, deriveSessionLinkPhase, sessionLinkStatus, sessionLinkTransitionLog, type SessionLinkPhase, type StatusTone } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 export { availableFeatures } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 import { SetupFlow, type SetupStep } from "@dimos-ar-client/presentation/SetupFlow";
-import { LidarDisplayController, type LidarDisplayPreferences, LIDAR_PRESETS, requestLidarSettings, type LidarDisplayMode } from "@dimos-ar-client/sensors/LidarDisplay";
+import { LidarDisplayController, type LidarDisplayPreferences, type LidarDisplayMode } from "@dimos-ar-client/sensors/LidarDisplay";
 import { readLidarPreferences, saveLidarPreferences } from "../sensors/BrowserLidarPreferences";
 
 import type { LocalizationCaptureEpisode } from "@dimos-ar-client/localization/LocalizationCaptureEpisode";
@@ -72,10 +72,9 @@ export class WebXRUIPresenter {
   manipulationDiagnostics: () => string = () => "—";
   private get openedFromRuntime(): boolean { return this.flow.openedFromRuntime; }
   private localizationError: string | null = null;
-  private fallbackMode: OperatingMode = "manual";
+  private readonly modeController = new OperatingModeController({ resetFallbackWithSharedState: true });
   get operatingMode(): OperatingMode {
-    const mode = this.session.view().interaction?.mode ?? this.fallbackMode;
-    return mode === "agent" && this.session.view().capabilities?.agent.available !== true ? "manual" : mode;
+    return this.modeController.effective(this.session.view());
   }
   get setupCelebrating(): boolean { return this.successElapsedS !== null && this.successElapsedS < 1.5; }
   get lidarMode(): LidarDisplayMode { return this.sensors.mode; }
@@ -100,8 +99,6 @@ export class WebXRUIPresenter {
   private hudText: string | null = null;
   private hudTone: StatusTone | null = null;
   private hudUntil = 0;
-  private wizardLidarOffSent = false;
-  private postWizardLidarSent = false;
   private nowS = 0;
   private lastRobotName = "Robot";
   private successElapsedS: number | null = null;
@@ -116,15 +113,13 @@ export class WebXRUIPresenter {
     private readonly stopFeedback: () => boolean = () => false,
   ) {
     this.flow = new SetupFlow(session, episode);
-    this.sensors = new LidarDisplayController(session, { read: readLidarPreferences, write: saveLidarPreferences });
+    this.sensors = new LidarDisplayController(session, { read: readLidarPreferences, write: saveLidarPreferences }, true, { resetSetupOnDisconnect: true });
   }
 
   onSessionView(view: ARModuleSessionState, prev: ARModuleSessionState | null, now: number): void {
     this.nowS = now;
     if (view.connection !== "ready") {
       this.successElapsedS = null;
-      this.wizardLidarOffSent = false;
-      this.postWizardLidarSent = false;
     }
     if (view.hello) this.lastRobotName = view.hello.robot.display_name;
     const prevPhase = prev ? deriveSessionLinkPhase(prev) : this.linkPhase;
@@ -236,7 +231,7 @@ export class WebXRUIPresenter {
     this.flow.finish();
     this.successElapsedS = success ? 0 : null;
     this.menuOpen = false;
-    this.postWizardLidarSent = false;
+    this.sensors.resetPostSetup();
     this.requestStateIfReady();
     this.sendPostWizardLidarDefault();
   }
@@ -270,9 +265,8 @@ export class WebXRUIPresenter {
     this.successElapsedS = null;
     this.flow.restart(this.setupCompleted);
     this.localizationError = null;
-    this.fallbackMode = "manual";
-    this.wizardLidarOffSent = false;
-    this.postWizardLidarSent = false;
+    this.modeController.reset(this.session.view());
+    this.sensors.resetSetup();
     this.menuOpen = true;
     this.hudText = null;
     this.hudTone = null;
@@ -283,11 +277,7 @@ export class WebXRUIPresenter {
   }
 
   setOperatingMode(mode: OperatingMode): void {
-    if (mode === "agent" && this.session.view().capabilities?.agent.available !== true) {
-      throw new Error("hello.capabilities.agent is not available");
-    }
-    if (this.session.view().interaction) this.session.collaboration.setMode(mode);
-    else this.fallbackMode = mode;
+    this.modeController.set(this.session.view(), mode, next => this.session.collaboration.setMode(next));
   }
 
   setLidarMode(mode: LidarDisplayMode): void { this.sensors.setMode(mode); }
@@ -322,30 +312,7 @@ export class WebXRUIPresenter {
     this.session.requestState();
   }
 
-  private ensureWizardLidarOff(): void {
-    if (this.wizardLidarOffSent || this.session.view().connection !== "ready") {
-      return;
-    }
-    try {
-      requestLidarSettings(this.session, LIDAR_PRESETS.off);
-      this.wizardLidarOffSent = true;
-    } catch {
-      return;
-    }
-  }
+  private ensureWizardLidarOff(): void { this.sensors.syncSetup(false); }
 
-  private sendPostWizardLidarDefault(): void {
-    if (this.postWizardLidarSent || this.session.view().connection !== "ready") {
-      return;
-    }
-    if (this.session.view().capabilities?.lidar.available !== true) {
-      return;
-    }
-    try {
-      this.sensors.setMode("obstacles");
-      this.postWizardLidarSent = true;
-    } catch {
-      return;
-    }
-  }
+  private sendPostWizardLidarDefault(): void { this.sensors.syncSetup(true); }
 }

@@ -260,3 +260,13 @@ it("recovers from denied permission without retaining a stream or poisoning the 
     f.source.dispose();
   }
 });
+
+import { CAMERA_HISTORY_TRACE } from "../../core/tests/support/CameraHistoryTrace";
+it.each(CAMERA_HISTORY_TRACE)("camera adapter contract: $name", trace => {
+  const history = trace.times.map((t, index) => ({ t, position: [index, 0, 0] as [number, number, number],
+    orientation: [0, 0, 0, 1] as [number, number, number, number] }));
+  const result = lookupPoseSample(history, trace.timestamp);
+  const expected = "webxrExpectedX" in trace ? trace.webxrExpectedX : trace.expectedX;
+  if (expected === null) expect(result).toBeNull();
+  else expect(result?.position[0]).toBeCloseTo(expected);
+});

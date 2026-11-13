@@ -43,15 +43,46 @@ function sameFiles(left, right) {
   return left && right && JSON.stringify(Object.entries(left).sort()) === JSON.stringify(Object.entries(right).sort());
 }
 
-export function nativeProvenanceMatches(value) {
+export function nativeProvenanceMatches(value, canonicalRoot = resolve(repositoryRoot, "clients/specs")) {
   try {
     return value?.publicationEligible === true
-      && resolve(value.selectedRoot) === resolve(repositoryRoot, "clients/specs")
+      && resolve(value.selectedRoot) === resolve(canonicalRoot)
       && resolve(value.workspaceRoot) !== resolve(value.selectedRoot)
       && sameFiles(value.productionFiles, value.selectedFiles)
       && sameFiles(nativeProjectFiles(value.selectedRoot), value.selectedFiles)
       && sameFiles(nativeProjectFiles(value.workspaceRoot), value.workspaceFiles);
   } catch { return false; }
+}
+
+/** Bind a disposable workspace to the exact selected production input manifest. */
+export function beginNativeProvenance(selectedRoot, workspaceRoot, canonicalRoot) {
+  const marker = JSON.parse(readFileSync(join(workspaceRoot, ".specs-review.json"), "utf8"));
+  const selectedFiles = nativeProjectFiles(selectedRoot);
+  const workspaceFiles = nativeProjectFiles(workspaceRoot);
+  const productionFiles = marker.productionFiles ?? null;
+  const expected = { ...(productionFiles ?? workspaceFiles), ...(marker.sceneOverlays ?? {}) };
+  return {
+    selectedRoot: resolve(selectedRoot), workspaceRoot: resolve(workspaceRoot),
+    selectedFiles, productionFiles, workspaceFiles,
+    publicationEligible: resolve(selectedRoot) === resolve(canonicalRoot)
+      && resolve(workspaceRoot) !== resolve(selectedRoot)
+      && Boolean(sameFiles(productionFiles, selectedFiles) && sameFiles(expected, workspaceFiles)),
+  };
+}
+
+export function beforeNativeSceneOverlay(value) {
+  if (!sameFiles(nativeProjectFiles(value.selectedRoot), value.selectedFiles)
+      || !sameFiles(nativeProjectFiles(value.workspaceRoot), value.workspaceFiles))
+    value.publicationEligible = false;
+  return value;
+}
+
+export function recordNativeSceneOverlay(value) {
+  const scene = join(value.workspaceRoot, "Assets/Scene.scene");
+  if (!existsSync(scene)) return value;
+  const digest = createHash("sha256").update(readFileSync(scene)).digest("hex");
+  value.workspaceFiles["Assets/Scene.scene"] = digest;
+  return value;
 }
 
 /** Publish only a fully verified run; replacing one client's video is atomic. */

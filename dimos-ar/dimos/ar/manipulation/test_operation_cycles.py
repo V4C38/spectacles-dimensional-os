@@ -3,7 +3,7 @@
 from types import MethodType, SimpleNamespace
 
 from dimos.ar.manipulation.adapter import DimOSManipulationAdapter
-from dimos.ar.manipulation.operation import ManipulationOperation
+from dimos.ar.manipulation.operation import ActiveOperation, DeferredGripper, ManipulationOperation
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
 from dimos.control.task import CoordinatorState, JointStateSnapshot
 from dimos.control.tasks.gripper_task.gripper_task import (
@@ -142,7 +142,9 @@ def test_failed_gripper_has_one_terminal_outcome_and_next_plan_clears_it():
     module.adapter.set_gripper_position = lambda *_, **__: SimpleNamespace(
         status=SimpleNamespace(name="FAILED"), message="Gripper command rejected"
     )
-    module.operation = ManipulationOperation(id="bad", final_gripper=("arm", 1, {"joint": 0.3}))
+    module.operation = ManipulationOperation(
+        active=ActiveOperation(id="bad", final_gripper=DeferredGripper("arm", 1, {"joint": 0.3}))
+    )
     module.advance()
     assert module.operation.failed_id == "bad"
     assert module.operation.completed_id is None

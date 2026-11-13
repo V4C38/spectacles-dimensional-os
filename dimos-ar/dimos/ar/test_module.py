@@ -74,7 +74,7 @@ def _authorized_request(module, message, client_id):
         if message.preview
         else "live"
     )
-    owner = module._interaction
+    owner = module._interaction_controller.state
     owner.connect(client_id)
     if owner.authority is None:
         fields = (
@@ -90,7 +90,7 @@ def _authorized_request(module, message, client_id):
         message,
         epoch=owner.epoch,
         lease_id=owner.authority.lease_id,
-        sequence=module._native_sequences.get(owner.authority.lease_id, -1) + 1,
+        sequence=module._interaction_controller.last_native_sequence(owner.authority.lease_id) + 1,
     )
 
 
@@ -445,12 +445,12 @@ def test_estop_request_clears_navigation_and_publishes_stop() -> None:
 
 def test_estop_publishes_idle_state_before_native_path_has_started() -> None:
     module = _module_with_policy([])
-    module._interaction.set_active_goal(
+    module._interaction_controller.state.set_active_goal(
         {"type": "nav_goal", "pose": [2, 0, 0, 0], "path_poses": [], "ts": 1}
     )
     assert module._nav_goal_coordinator.nav_state().state == "idle"
     module._on_estop_request(SimpleNamespace(), None)  # type: ignore[arg-type]
-    assert module._interaction.active_goal is None
+    assert module._interaction_controller.state.active_goal is None
     frames = [json.loads(frame) for frame in module._ws_server.broadcasts]
     assert any(frame["type"] == "state" and frame["nav"]["state"] == "idle" for frame in frames)
 
@@ -674,9 +674,9 @@ def test_user_message_request_requires_capability_and_transport() -> None:
     assert published == []
 
     module.human_input = SimpleNamespace(transport=object(), publish=published.append)
-    module._interaction.connect("c1")
-    module._interaction.handle(
-        "c1", InteractionRequest("agent-mode", "mode", module._interaction.epoch, mode="agent")
+    module._interaction_controller.state.connect("c1")
+    module._interaction_controller.state.handle(
+        "c1", InteractionRequest("agent-mode", "mode", module._interaction_controller.state.epoch, mode="agent")
     )
     module._on_user_message_request(UserMessageRequest(text="go"), None, "c1")  # type: ignore[arg-type]
     assert published == ["go"]
@@ -1077,14 +1077,14 @@ def test_normal_arm_release_allows_takeover_before_native_handoff_poll() -> None
         {"available": True, "following": True, "execution": "idle", "operation_id": None}
     )
     _arm_grab(module, "b")
-    assert module._interaction.authority.client_id == "a"
+    assert module._interaction_controller.state.authority.client_id == "a"
     _release_arm_grab(module)
-    assert module._interaction.authority is None
+    assert module._interaction_controller.state.authority is None
 
     # There is deliberately no native following=False/tail snapshot here. The
     # replacement grab must supersede the old native generation immediately.
     _arm_grab(module, "b")
-    assert module._interaction.authority.client_id == "b"
+    assert module._interaction_controller.state.authority.client_id == "b"
     calls = module._manipulation_service.revoke.call_args_list
     assert calls[-2].args[3] == "released"
     assert calls[-1].args[3] == "superseded"
@@ -1095,14 +1095,14 @@ def test_normal_arm_release_allows_takeover_before_native_handoff_poll() -> None
 def test_accepted_arm_operation_blocks_takeover_after_editing_release(action: str) -> None:
     module = _arm_module_with_two_clients()
     _arm_grab(module, "a", planning=True)
-    authority, target = module._interaction.authority, module._interaction.target
+    authority, target = module._interaction_controller.state.authority, module._interaction_controller.state.target
     assert authority is not None and target is not None
     request = ManipulationRequest(
         "accepted-motion",
         action,
         "arm",
         {
-            "epoch": module._interaction.epoch,
+            "epoch": module._interaction_controller.state.epoch,
             "lease_id": authority.lease_id,
             "target_revision": target.revision,
             "plan_id": "checked-plan",
@@ -1113,9 +1113,9 @@ def test_accepted_arm_operation_blocks_takeover_after_editing_release(action: st
     module._manipulation_service.submit.assert_called_once()
     _release_arm_grab(module)
     _arm_grab(module, "b")
-    assert module._interaction.authority is None
-    assert module._interaction.motion_busy
-    assert module._interaction.manipulation_motion_pending("accepted-motion")
+    assert module._interaction_controller.state.authority is None
+    assert module._interaction_controller.state.motion_busy
+    assert module._interaction_controller.state.manipulation_motion_pending("accepted-motion")
 
 
 @pytest.mark.parametrize("guard", ["_arm_uncertain", "_arm_stop_pending"])
@@ -1125,10 +1125,10 @@ def test_following_snapshot_does_not_clear_unknown_or_stopping_motion(
 ) -> None:
     module = _arm_module_with_two_clients()
     if guard == "_arm_stop_pending":
-        module._interaction.request_manipulation_stop()
+        module._interaction_controller.state.request_manipulation_stop()
     else:
         from dimos.ar.manipulation.protocol import ManipulationRequest
-        module._interaction.observe_manipulation_result(
+        module._interaction_controller.state.observe_manipulation_result(
             ManipulationRequest("uncertain", "execute", "arm", {}), {"status": "uncertain"}
         )
     module._on_manipulation_snapshot(
@@ -1142,8 +1142,8 @@ def test_following_snapshot_does_not_clear_unknown_or_stopping_motion(
         }
     )
     _arm_grab(module, "b")
-    assert module._interaction.authority is None
-    assert module._interaction.motion_busy
+    assert module._interaction_controller.state.authority is None
+    assert module._interaction_controller.state.motion_busy
 
 
 def test_old_disconnect_does_not_stop_a_valid_suspended_successor():
@@ -1159,17 +1159,17 @@ def test_old_disconnect_does_not_stop_a_valid_suspended_successor():
     module._ws_server.connection_count = 0
     service = Mock()
     module._manipulation_service = service
-    module._interaction.connect("old")
-    module._interaction.connect("current")
+    module._interaction_controller.state.connect("old")
+    module._interaction_controller.state.connect("current")
     request = InteractionRequest(
-        "grab", "acquire", epoch=module._interaction.epoch, acquisition_id="acq",
+        "grab", "acquire", epoch=module._interaction_controller.state.epoch, acquisition_id="acq",
         kind="manipulation_following", source_id="right", group_id="arm",
         position=(0.2, 0, 0), orientation=(0, 0, 0, 1),
     )
-    assert module._interaction.handle("current", request).status == "accepted"
+    assert module._interaction_controller.state.handle("current", request).status == "accepted"
     module._on_client_suspend("current", time.monotonic() + 1)
     module._on_client_disconnect(None, "old")
-    assert module._interaction.authority.client_id == "current"
+    assert module._interaction_controller.state.authority.client_id == "current"
     service.emergency_stop.assert_not_called()
 
 

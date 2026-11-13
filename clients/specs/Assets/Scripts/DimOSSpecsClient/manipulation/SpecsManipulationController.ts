@@ -1,16 +1,20 @@
+import type { ReadonlyFacts } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 import { CursorControllerProvider } from "SpectaclesInteractionKit.lspkg/Providers/CursorControllerProvider/CursorControllerProvider";
 import { InteractionManager } from "SpectaclesInteractionKit.lspkg/Core/InteractionManager/InteractionManager";
 import { InteractorInputType } from "SpectaclesInteractionKit.lspkg/Core/Interactor/Interactor";
 import { ManipulationInputCapture, ManipulationPressEdges, ManipulationGesture } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationInput";
-import type { ManipulationPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationTypes";
+import type { ManipulationPose as MutableManipulationPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationTypes";
 import { specsToClientTrackingPose } from "../utilities/SpecsCoordinates";
-import { sameTrackingReference, type ClientTrackingOrigin, clientTrackingToOdomPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import { sameTrackingReference, type ClientTrackingOrigin as MutableClientTrackingOrigin, clientTrackingToOdomPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 
 
 import { ManipulationController } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationController";
 
 import type { ARModuleSession } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/ARModuleSession";
 import { ManipulationRenderer } from "./ManipulationRenderer";
+
+type ManipulationPose = ReadonlyFacts<MutableManipulationPose>;
+type ClientTrackingOrigin = ReadonlyFacts<MutableClientTrackingOrigin>;
 
 export interface ManipulationInputPort {
   begin(pose: ManipulationPose): boolean;
@@ -133,8 +137,15 @@ export class SpecsManipulationController {
     if (!this.core.interaction.dragging && this.input.capture.owner !== null) this.input.reset();
     this.input.tick(active);
     this.renderer.localizationAvailable = this.session.view().capabilities?.localization.available === true;
-    this.renderer.apply(this.session.view().manipulation, supported ? origin : null, this.selected, active, getTime(), this.camera,
-      this.session.view().hello?.robot.display_name ?? "Arm");
+    this.renderer.apply({
+      state: view.manipulation,
+      origin: supported ? origin : null,
+      selected: this.selected,
+      enabled: active,
+      now: getTime(),
+      camera: this.camera,
+      title: view.hello?.robot.display_name ?? "Arm",
+    });
     this.input.updateCursor();
   }
   dispose(): void { this.suspend(); this.core.dispose(); this.renderer.dispose(); }

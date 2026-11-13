@@ -16,7 +16,9 @@ export class LocalizationTrackingReporter {
     private readonly clock: ClientClock) {}
 
   reset(): void {
-    this.reference = this.newReference(); this.travel.reset(); this.tracking.clearTracking?.();
+    this.reference = this.newReference();
+    this.travel.reset();
+    this.tracking.clearTracking?.();
     this.origins.beginTrackingReference(this.reference);
   }
   publish(active: boolean, force = false): void {
@@ -24,14 +26,19 @@ export class LocalizationTrackingReporter {
     this.origins.beginTrackingReference(this.reference);
     try {
       if (active) this.travel.sample(this.tracking.trackingPosition?.() ?? this.tracking.cameraOptical().position, this.clock.now());
-    } catch { active = false; }
+    } catch {
+      active = false;
+    }
     if (!active) this.travel.pause();
-    const alignment = this.origins.mapAlignment?.id ?? null, now = this.clock.now();
+    const alignment = this.origins.mapAlignment?.id ?? null;
+    const now = this.clock.now();
     if (!force && active === this.reportedActive && alignment === this.reportedAlignment && now - this.lastReport < 1) return;
     const message: LocalizationTracking = { type: "localization_tracking", tracking_reference_id: this.reference,
       travel_m: this.travel.total, active, ...(alignment ? { alignment_id: alignment } : {}) };
     this.session.sendText(encodeText(message));
-    this.lastReport = now; this.reportedActive = active; this.reportedAlignment = alignment;
+    this.lastReport = now;
+    this.reportedActive = active;
+    this.reportedAlignment = alignment;
   }
   pause(): void { this.travel.pause(); }
   progress(request: LocalizationObservationsRequest | null, phase: LocalizationCaptureProgress["phase"], active: boolean, timestamp?: number): void {
@@ -47,17 +54,24 @@ export class LocalizationTrackingReporter {
 
 /** Horizontal physical travel in one headset tracking reference, independent of AR corrections. */
 export class HeadsetTravel {
-  total = 0;
+  private distance = 0;
+  get total(): number { return this.distance; }
   private anchor: Vec3 | null = null;
   private lastAt: number | null = null;
   private history: { at: number; travel: number }[] = [];
-  sample(position: Vec3, now: number): void {
-    if (position.some(value => !Number.isFinite(value)) || !Number.isFinite(now)) { this.pause(); return; }
+  sample(position: Readonly<Vec3>, now: number): void {
+    if (position.some(value => !Number.isFinite(value)) || !Number.isFinite(now)) {
+      this.pause();
+      return;
+    }
     if (this.lastAt !== null && now - this.lastAt < 0.1) return;
     if (this.lastAt === null || now - this.lastAt > 0.5) this.anchor = null;
     if (this.anchor) {
       const distance = Math.hypot(position[0] - this.anchor[0], position[1] - this.anchor[1]);
-      if (distance >= 0.05) { this.total += distance; this.anchor = [...position]; }
+      if (distance >= 0.05) {
+        this.distance += distance;
+        this.anchor = [...position];
+      }
     } else this.anchor = [...position];
     this.lastAt = now;
     this.history.push({ at: now, travel: this.total });
@@ -67,6 +81,13 @@ export class HeadsetTravel {
     for (let i = this.history.length - 1; i >= 0; i--) if (this.history[i].at <= timestamp) return this.history[i].travel;
     return this.history[0]?.travel ?? this.total;
   }
-  pause(): void { this.anchor = null; this.lastAt = null; }
-  reset(): void { this.pause(); this.total = 0; this.history = []; }
+  pause(): void {
+    this.anchor = null;
+    this.lastAt = null;
+  }
+  reset(): void {
+    this.pause();
+    this.distance = 0;
+    this.history = [];
+  }
 }

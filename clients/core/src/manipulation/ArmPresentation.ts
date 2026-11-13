@@ -1,10 +1,11 @@
-import type { ManipulationModel, ManipulationPlan, ManipulationState, ManipulationGroup } from "./ManipulationTypes";
+import type { ReadonlyFacts, Vec3 } from "../ClientContracts";
+import type { ManipulationModel, ManipulationPlan, ManipulationState, ManipulationGroup, ManipulationPose } from "./ManipulationTypes";
 import type { ClientTrackingOrigin } from "../localization/ClientTracking";
-import { jointDelta, linkPoses } from "./ModelKinematics";
-import { manipulationObservedJoints, manipulationProposedJoints } from "./ManipulationPresentation";
+import { jointDelta, linkPoses, manipulationPlanPath } from "./ModelKinematics";
+import { manipulationObservedJoints, manipulationProposedJoints, manipulationActivePlan, endEffectorDisplayPose, manipulationPathOpacity, ManipulationPreviewPlayback, type ManipulationSnapshot, type ManipulationRejection, type EndEffectorStatusInput } from "./ManipulationPresentation";
 
 /** Context changes describe a different coordinate system, never a new packet or UI mode. */
-export function armMotionContext(revision: string, group: string | null, origin: ClientTrackingOrigin): string {
+export function armMotionContext(revision: string, group: string | null, origin: ReadonlyFacts<ClientTrackingOrigin>): string {
   const sign = origin.orientation[3] < 0 ? -1 : 1;
   return JSON.stringify([revision, group, ...origin.position.map(v => Math.round(v * 1e6)),
     ...origin.orientation.map(v => Math.round(v * sign * 1e6))]);
@@ -38,9 +39,9 @@ export class ArmJointFilter {
     this.signature = ""; this.receivedAt = null; this.playbackFrom = null; this.sampledAt = null;
   }
 
-  sample(model: ManipulationModel, target: Record<string, number>, key: string, now: number,
+  sample(model: ReadonlyFacts<ManipulationModel>, target: Readonly<Record<string, number>>, key: string, now: number,
     initialIntervalS = this.defaultIntervalS, sampleId?: string | number,
-    measuredVelocity?: Record<string, number>): Record<string, number> {
+    measuredVelocity?: Readonly<Record<string, number>>): Record<string, number> {
     this.playbackFrom = null;
     this.sampledAt = now;
     if (key !== this.key) { this.reset(); this.key = key; }
@@ -101,7 +102,7 @@ export class ArmJointFilter {
     return {...this.values};
   }
 
-  playback(model: ManipulationModel, target: Record<string, number>, key: string, now: number, elapsed: number): Record<string, number> {
+  playback(model: ReadonlyFacts<ManipulationModel>, target: Readonly<Record<string, number>>, key: string, now: number, elapsed: number): Record<string, number> {
     if (key !== this.key) { this.reset(); this.key = key; }
     this.playbackFrom ??= {...this.values};
     const t = Math.max(0, Math.min(1, elapsed / .05));
@@ -123,26 +124,32 @@ export class ArmTrajectoryProgress {
   private key = "";
   private segment = 0;
   private fraction = 0;
-  time = 0;
+  private elapsed = 0;
+  get time(): number { return this.elapsed; }
 
   reset(): void {
     this.key = "";
-    this.segment = this.fraction = this.time = 0;
+    this.segment = this.fraction = this.elapsed = 0;
   }
 
-  advance(
-    plan: ManipulationPlan,
-    measured: Record<string, number>,
-    continuous: ReadonlySet<string>,
-    operation: string,
-  ): number {
+  /** Identity changes retire progress even when no fresh measurement is available. */
+  beginTrajectory(plan: ReadonlyFacts<ManipulationPlan>, operation: string): void {
     const key = `${operation}:${plan.plan_id}`;
     if (key !== this.key) {
       this.reset();
       this.key = key;
     }
+  }
+
+  advance(
+    plan: ReadonlyFacts<ManipulationPlan>,
+    measured: Readonly<Record<string, number>>,
+    continuous: ReadonlySet<string>,
+    operation: string,
+  ): number {
+    this.beginTrajectory(plan, operation);
     if (!plan.joint_names.every((name) => Number.isFinite(measured[name])))
-      return this.time;
+      return this.elapsed;
     let best = Infinity;
     for (let i = this.segment; i < plan.trajectory.length - 1; i++) {
       const a = plan.trajectory[i],
@@ -172,10 +179,10 @@ export class ArmTrajectoryProgress {
         best = error;
         this.segment = i;
         this.fraction = fraction;
-        this.time = Math.max(this.time, a.time + fraction * (b.time - a.time));
+        this.elapsed = Math.max(this.elapsed, a.time + fraction * (b.time - a.time));
       }
     }
-    return this.time;
+    return this.elapsed;
   }
 }
 
@@ -191,10 +198,10 @@ export class ArmPresentationSampler {
   hold(now: number): void { this.measuredFilter.hold(now); this.proposedFilter.hold(now); }
 
   sample(input: {
-    model: ManipulationModel; state: ManipulationState; group: ManipulationGroup | undefined;
-    origin: ClientTrackingOrigin; now: number; selected: boolean; dragging: boolean;
-    rejected: boolean; solution: Record<string, number> | null; opening: number | null | undefined;
-    plan: ManipulationPlan | null; playback: { playing: boolean; time: number };
+    model: ReadonlyFacts<ManipulationModel>; state: ReadonlyFacts<ManipulationState>; group: ReadonlyFacts<ManipulationGroup> | undefined;
+    origin: ReadonlyFacts<ClientTrackingOrigin>; now: number; selected: boolean; dragging: boolean;
+    rejected: boolean; solution: Readonly<Record<string, number>> | null; opening: number | null | undefined;
+    plan: ReadonlyFacts<ManipulationPlan> | null; playback: { playing: boolean; time: number };
   }) {
     const { model, state, group, origin, now, selected, solution, plan, playback } = input;
     const context = armMotionContext(model.revision, group?.id ?? null, origin);
@@ -211,5 +218,150 @@ export class ArmPresentationSampler {
       ? this.proposedFilter.playback(model, values, context, now, playback.time)
       : this.proposedFilter.sample(model, values, context, now, .1, source);
     return { observedValues, measured: linkPoses(model, filtered), proposed: linkPoses(model, proposed), contextChanged };
+  }
+}
+
+export interface ArmPathInput {
+  model: ReadonlyFacts<ManipulationModel>;
+  plan: ReadonlyFacts<ManipulationPlan> | null;
+  group: ReadonlyFacts<ManipulationGroup> | undefined;
+  root: ReadonlyFacts<ManipulationPose>;
+  observedValues: Readonly<Record<string, number>>;
+  observedJoints: Readonly<Record<string, number>> | null | undefined;
+  fresh: boolean;
+  executing: boolean;
+  displaced: boolean;
+  playing: boolean;
+  target: ReadonlyFacts<ManipulationPose> | null;
+  observedPose: ReadonlyFacts<ManipulationPose> | null | undefined;
+  operationId?: string | null;
+}
+export interface ArmPathFrame {
+  readonly points: readonly Readonly<Vec3>[];
+  readonly revision: number;
+  readonly visible: boolean;
+  readonly startDistanceM: number;
+}
+
+/** One odom-space trajectory cache and feedback projection shared by both renderers. */
+export class ArmPathPresentation {
+  private readonly progress = new ArmTrajectoryProgress();
+  private key = "";
+  private points: readonly Readonly<Vec3>[] = [];
+  private distances: number[] = [];
+  private revision = 0;
+
+  reset(): void {
+    this.progress.reset();
+    this.key = "";
+    this.points = [];
+    this.distances = [];
+    this.revision++;
+  }
+  sample(input: ArmPathInput): ArmPathFrame {
+    const { model, plan, group, root } = input;
+    if (!plan || !input.executing) this.progress.reset();
+    let time = 0;
+    if (plan && input.executing) {
+      this.progress.beginTrajectory(plan, input.operationId ?? plan.plan_id);
+      time = input.fresh && input.observedJoints
+        ? this.progress.advance(plan, input.observedJoints,
+          new Set(model.joints.filter(joint => joint.kind === "continuous").map(joint => joint.name)),
+          input.operationId ?? plan.plan_id)
+        : this.progress.time;
+    }
+    const hasTrajectory = !!plan && !!group?.tip_frame;
+    const key = hasTrajectory
+      ? JSON.stringify([plan.plan_id, model.revision, group.tip_frame, root])
+      : JSON.stringify([input.displaced ? input.observedPose?.position : null,
+        input.displaced ? input.target?.position : null]);
+    if (key !== this.key) {
+      this.key = key;
+      if (hasTrajectory) this.points = manipulationPlanPath(model, plan, group.tip_frame, input.observedValues, root);
+      else if (input.displaced && input.target && input.observedPose) {
+        this.points = [[...input.observedPose.position], [...input.target.position]];
+      } else this.points = [];
+      this.distances = this.points.length ? [0] : [];
+      for (let i = 1; i < this.points.length; i++) {
+        const a = this.points[i - 1], b = this.points[i];
+        this.distances.push(this.distances[i - 1] + Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]));
+      }
+      this.revision++;
+    }
+    let startDistanceM = 0;
+    if (plan && this.distances.length) {
+      const cursor = Math.max(0, Math.min(this.distances.length - 1,
+        time / Math.max(1e-6, plan.duration) * (this.distances.length - 1)));
+      const lower = Math.floor(cursor), upper = Math.min(this.distances.length - 1, lower + 1);
+      startDistanceM = this.distances[lower] + (this.distances[upper] - this.distances[lower]) * (cursor - lower);
+    }
+    return { points: this.points, revision: this.revision,
+      visible: this.points.length >= 2 && (input.displaced || hasTrajectory && (input.playing || input.executing)),
+      startDistanceM };
+  }
+}
+
+export interface ManipulationFrameInput {
+  model: ReadonlyFacts<ManipulationModel>;
+  state: ReadonlyFacts<ManipulationState>;
+  groupId: string | null;
+  origin: ReadonlyFacts<ClientTrackingOrigin>;
+  now: number;
+  selected: boolean;
+  intent: ManipulationSnapshot;
+  target: ReadonlyFacts<ManipulationPose> | null;
+  solution: Readonly<Record<string, number>> | null;
+  plan: ReadonlyFacts<ManipulationPlan> | null;
+  desiredGripper: number | null;
+  rejection: ReadonlyFacts<ManipulationRejection> | null;
+}
+
+/** Orchestrates shared arm presentation; renderers convert poses and upload SDK resources. */
+export class ManipulationFramePresenter {
+  private readonly sampler = new ArmPresentationSampler();
+  private readonly path = new ArmPathPresentation();
+  private selectedBefore = false;
+  constructor(readonly preview = new ManipulationPreviewPlayback()) {}
+
+  hold(now: number): void { this.preview.hold(now); this.sampler.hold(now); }
+  reset(): void {
+    this.preview.reset();
+    this.sampler.reset();
+    this.path.reset();
+    this.selectedBefore = false;
+  }
+  sample(input: ManipulationFrameInput) {
+    const { model, state, origin, now, selected, intent } = input;
+    const recorded = state.read_only === true;
+    const group = state.groups?.find(candidate => candidate.id === input.groupId);
+    const observed = group ? state.observations?.[group.id] : undefined;
+    const root: ReadonlyFacts<ManipulationPose> = state.root_pose ?? {
+      position: [0, 0, 0], orientation: [0, 0, 0, 1],
+    };
+    const activePlan = recorded ? null : manipulationActivePlan(state, input.plan, intent.executing);
+    if (selected !== this.selectedBefore || intent.dragging || state.stopped || (!activePlan && !intent.planning)) {
+      this.preview.setRequested(false);
+    }
+    this.selectedBefore = selected;
+    const playback = this.preview.sample(activePlan, now);
+    const sampled = this.sampler.sample({ model, state, group, origin, now, selected,
+      dragging: intent.dragging, rejected: !!input.rejection, solution: recorded ? null : input.solution,
+      opening: selected ? input.desiredGripper : observed?.gripper ?? null, plan: activePlan, playback });
+    if (sampled.contextChanged) this.path.reset();
+    const targetVisible = !recorded && !!input.target &&
+      (selected || state.following === true || intent.dragging || intent.finishing === true || intent.sharedDraft === true);
+    const displaced = targetVisible && intent.targetOffset;
+    const path = this.path.sample({ model, plan: activePlan, group, root, observedValues: sampled.observedValues,
+      observedJoints: observed?.joints, fresh: intent.fresh, executing: intent.executing, displaced,
+      playing: playback.playing, target: input.target, observedPose: observed?.pose, operationId: state.operation_id });
+    const endEffectorPose = endEffectorDisplayPose(observed?.pose, recorded ? null : input.target, {
+      selected, following: state.following === true, dragging: intent.dragging,
+      finishing: intent.finishing === true, offset: intent.targetOffset, sharedDraft: intent.sharedDraft,
+    });
+    const status: EndEffectorStatusInput = { blocked: intent.blocked === true, fresh: intent.fresh,
+      stopped: intent.stopped, moving: intent.executing || intent.resetting, rejection: input.rejection };
+    return { group, observed, root, activePlan, targetVisible, displaced, playback, ...sampled, path,
+      pathOpacity: manipulationPathOpacity(intent, !selected && state.following === true && !input.rejection, !!activePlan),
+      endEffectorPose, status };
   }
 }

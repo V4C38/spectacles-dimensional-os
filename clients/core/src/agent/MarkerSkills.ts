@@ -1,3 +1,4 @@
+import type { ReadonlyFacts } from "../ClientContracts";
 import { odomToClientTrackingPoint, type ClientTrackingOrigin } from "../localization/ClientTracking";
 
 import type { Vec3 } from "../ClientContracts";
@@ -37,7 +38,7 @@ export function parseRemoveArMarkerArgs(args: Record<string, unknown>): RemoveAr
 
 export function composePlaceArMarker(
   args: PlaceArMarkerArgs,
-  origin: ClientTrackingOrigin,
+  origin: ReadonlyFacts<ClientTrackingOrigin>,
 ): ComposedPlaceArMarker {
   return {
     position: odomToClientTrackingPoint([args.x, args.y, args.z], origin),

@@ -31,7 +31,7 @@ async def test_webxr_waits_for_readiness_and_starts_once(runtime, line: str) -> 
     await asyncio.wait_for(
         mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr"), timeout=1
     )
-    task = mgr._webxr_start_task
+    task = mgr.runtime.pending_webxr_start
     assert task is not None
     assert spawn.await_count == 1
     assert mgr.status.webxr_url is None
@@ -58,13 +58,13 @@ async def test_webxr_waits_for_readiness_and_starts_once(runtime, line: str) -> 
 async def test_stop_before_readiness_cancels_webxr(runtime) -> None:
     mgr, _children, spawn = runtime
     await mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr")
-    task = mgr._webxr_start_task
-    ready = mgr._armodule_ready
+    task = mgr.runtime.pending_webxr_start
+    ready = mgr.runtime.backend.ready
     await asyncio.wait_for(mgr.stop_armodule(), timeout=1)
     ready.set()
     assert task.cancelled()
-    assert mgr._webxr_start_task is None
-    assert mgr._proc is None
+    assert mgr.runtime.pending_webxr_start is None
+    assert mgr.runtime.backend.process is None
     assert spawn.await_count == 1
     assert mgr.status.webxr_url is None
 
@@ -75,10 +75,10 @@ async def test_webxr_output_publishes_network_url_when_probe_is_unknown(
 ) -> None:
     mgr, children, _spawn = runtime
     await mgr.start_armodule(blueprint="openyam_ar_planner", client="webxr")
-    mgr.status.host_ip = "unknown"
+    mgr.observe_host_ip("unknown")
     await parsed(mgr, children[0], "Manipulation runtime ready")
     await parsed(mgr, children[0], READY)
-    await asyncio.wait_for(mgr._webxr_start_task, timeout=1)
+    await asyncio.wait_for(mgr.runtime.pending_webxr_start, timeout=1)
     children[1].output("  ➜  Network: https://192.168.1.181:5173/")
 
     async def address_published() -> None:
@@ -104,7 +104,7 @@ async def test_exit_during_startup_never_launches_webxr(
     await asyncio.wait_for(error_status(mgr), timeout=1)
     assert spawn.await_count == 1
     assert mgr.status.phase == Phase.ERROR
-    assert mgr._webxr_start_task is None
+    assert mgr.runtime.pending_webxr_start is None
     assert mgr.status.webxr_url is None
 
 
@@ -112,29 +112,29 @@ async def test_exit_during_startup_never_launches_webxr(
 async def test_restart_ignores_old_readiness_and_exit(runtime) -> None:
     mgr, children, spawn = runtime
     await mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr")
-    old_proc = mgr._proc
-    old_ready = mgr._armodule_ready
-    old_task = mgr._webxr_start_task
+    old_proc = mgr.runtime.backend.process
+    old_ready = mgr.runtime.backend.ready
+    old_task = mgr.runtime.pending_webxr_start
     # Stop while readiness has arrived but the WebXR task cannot acquire the lock.
     async with mgr._lock:
         await parsed(mgr, children[0], READY)
-        await mgr._stop_children_unlocked()
+        await mgr.runtime._stop_children_unlocked()
     assert old_task.cancelled()
 
     await mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr")
-    new_task = mgr._webxr_start_task
+    new_task = mgr.runtime.pending_webxr_start
     old_ready.set()
     # A retired reader must neither release the new gate nor change its status.
     stale = Child()
     stale.output(READY)
     stale.finish(1)
-    await mgr._read_stream(
+    await mgr.runtime._read_stream(
         cast(asyncio.subprocess.Process, stale),
-        ready=mgr._armodule_ready,
+        ready=mgr.runtime.backend.ready,
     )
-    await mgr._finalize_exit("old process failed", expected_proc=old_proc)
+    await mgr.runtime._finalize_exit("old process failed", expected_proc=old_proc)
     assert mgr.status.phase == Phase.STARTING
-    assert not mgr._armodule_ready.is_set()
+    assert not mgr.runtime.backend.ready.is_set()
     assert spawn.await_count == 2
     await parsed(mgr, children[1], READY)
     await asyncio.wait_for(new_task, timeout=1)
@@ -145,13 +145,13 @@ async def test_restart_ignores_old_readiness_and_exit(runtime) -> None:
 async def test_webxr_spawn_failure_preserves_armodule(runtime) -> None:
     mgr, children, spawn = runtime
     await mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr")
-    task = mgr._webxr_start_task
+    task = mgr.runtime.pending_webxr_start
     spawn.side_effect = OSError("npm could not start")
     await parsed(mgr, children[0], READY)
     await asyncio.wait_for(task, timeout=1)
     assert children[0].returncode is None
-    assert mgr._proc is not None
-    assert mgr._webxr_start_task is None
+    assert mgr.runtime.backend.process is not None
+    assert mgr.runtime.pending_webxr_start is None
     assert mgr.status.phase == Phase.RUNNING
     assert mgr.status.webxr_phase == "error"
     assert mgr.status.webxr_error == "npm could not start"
@@ -162,16 +162,16 @@ async def test_webxr_spawn_failure_preserves_armodule(runtime) -> None:
 async def test_webxr_exit_preserves_current_armodule(runtime) -> None:
     mgr, children, _spawn = runtime
     await mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr")
-    task = mgr._webxr_start_task
+    task = mgr.runtime.pending_webxr_start
     await parsed(mgr, children[0], READY)
     await asyncio.wait_for(task, timeout=1)
     children[1].finish(1)
-    await asyncio.wait_for(mgr._webxr_reader_task, timeout=1)
+    await asyncio.wait_for(mgr.runtime.webxr.reader, timeout=1)
     assert children[0].returncode is None
     assert mgr.status.phase == Phase.RUNNING
     assert mgr.status.webxr_phase == "error"
     assert mgr.status.webxr_url is None
-    assert mgr._proc is not None
+    assert mgr.runtime.backend.process is not None
 
 
 @pytest.mark.asyncio
@@ -180,7 +180,7 @@ async def test_specs_start_does_not_wait_for_readiness(runtime) -> None:
     await asyncio.wait_for(
         mgr.start_armodule(blueprint="unitree_go2_ar", client="specs"), timeout=1
     )
-    assert mgr._webxr_start_task is None
+    assert mgr.runtime.pending_webxr_start is None
     await parsed(mgr, children[0], READY)
     assert mgr.status.phase == Phase.RUNNING
     assert spawn.await_count == 1
@@ -196,7 +196,7 @@ async def test_production_build_failure_never_publishes_webxr(
         mgr, "_build_webxr", AsyncMock(side_effect=RuntimeError("build failed"))
     )
     await mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr")
-    task = mgr._webxr_start_task
+    task = mgr.runtime.pending_webxr_start
     await parsed(mgr, children[0], READY)
     await asyncio.wait_for(task, timeout=1)
     assert spawn.await_count == 1
@@ -212,10 +212,10 @@ async def test_openyam_waits_for_manipulation_not_just_websocket(runtime):
     await mgr.start_armodule(blueprint="openyam_ar_planner", client="webxr")
     await parsed(mgr, children[0], READY)
     assert mgr.status.phase == Phase.STARTING
-    assert not mgr._armodule_ready.is_set()
+    assert not mgr.runtime.backend.ready.is_set()
     assert spawn.await_count == 1
     await parsed(mgr, children[0], "Manipulation runtime ready")
-    await asyncio.wait_for(mgr._webxr_start_task, timeout=1)
+    await asyncio.wait_for(mgr.runtime.pending_webxr_start, timeout=1)
     assert spawn.await_count == 2
     assert mgr.status.phase == Phase.RUNNING
 
@@ -232,7 +232,7 @@ async def test_stop_during_build_is_not_blocked_by_process_lock(runtime, monkeyp
     monkeypatch.setattr(mgr, "_build_webxr", build)
     await mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr")
     await parsed(mgr, children[0], READY)
-    task = mgr._webxr_start_task
+    task = mgr.runtime.pending_webxr_start
     await asyncio.wait_for(entered.wait(), timeout=1)
     await asyncio.wait_for(mgr.stop_armodule(), timeout=1)
     assert task.cancelled()
@@ -254,7 +254,7 @@ async def test_backend_failure_during_build_retains_gateway_and_primary_error(
     monkeypatch.setattr(mgr, "_build_webxr", build)
     await mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr")
     await parsed(mgr, children[0], READY)
-    task = mgr._webxr_start_task
+    task = mgr.runtime.pending_webxr_start
     await asyncio.wait_for(entered.wait(), timeout=1)
     await parsed(
         mgr,
@@ -276,7 +276,7 @@ async def test_gateway_only_and_backend_have_independent_lifetimes(runtime):
     mgr, children, spawn = runtime
     await mgr.start_webxr()
     gateway = children[0]
-    assert mgr._proc is None
+    assert mgr.runtime.backend.process is None
     assert mgr.status.webxr_phase == "running"
     await mgr.start_armodule(blueprint="unitree_go2_ar", client="specs")
     await parsed(mgr, children[1], READY)
@@ -364,7 +364,7 @@ async def test_gateway_dependency_install_is_cancelled_without_orphan(runtime, m
     await asyncio.wait_for(mgr.stop_webxr(), timeout=1)
     assert task.cancelled()
     assert children[0].returncode == 0
-    assert mgr._webxr_proc is None
+    assert mgr.runtime.webxr.process is None
     assert mgr.status.webxr_phase == "stopped"
     assert spawn.await_count == 1
 
@@ -373,7 +373,7 @@ async def test_gateway_dependency_install_is_cancelled_without_orphan(runtime, m
 async def test_running_backend_failure_retains_gateway_and_reports_error(runtime):
     mgr, children, _spawn = runtime
     await mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr")
-    starting = mgr._webxr_start_task
+    starting = mgr.runtime.pending_webxr_start
     assert starting is not None
     await parsed(mgr, children[0], READY)
     await starting
@@ -381,8 +381,8 @@ async def test_running_backend_failure_retains_gateway_and_reports_error(runtime
     children[0].finish(1)
     await asyncio.wait_for(error_status(mgr), 1)
     assert gateway.returncode is None
-    assert mgr._webxr_proc is gateway
-    assert mgr._proc is None
+    assert mgr.runtime.webxr.process is gateway
+    assert mgr.runtime.backend.process is None
     assert mgr.status.phase is Phase.ERROR
 
 
@@ -420,13 +420,13 @@ async def test_start_does_not_inspect_or_signal_unrelated_dimos(runtime, monkeyp
 async def test_cancelled_setup_reaps_its_child_without_stopping_gateway(runtime):
     mgr, children, _ = runtime
     await mgr.start_webxr()
-    gateway = mgr._webxr_proc
-    task = asyncio.create_task(mgr._run_tracked(["setup"], env={}))
+    gateway = mgr.runtime.webxr.process
+    task = asyncio.create_task(mgr.dependencies._run_tracked(["setup"], env={}))
     while len(children) < 2:
         await asyncio.sleep(0)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
     assert children[1].returncode == 0
-    assert mgr._proc is None
-    assert mgr._webxr_proc is gateway and gateway.returncode is None
+    assert mgr.runtime.backend.process is None
+    assert mgr.runtime.webxr.process is gateway and gateway.returncode is None

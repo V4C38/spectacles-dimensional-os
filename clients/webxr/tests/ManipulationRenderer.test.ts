@@ -513,7 +513,7 @@ it("keeps the selected mesh moving between sparse live IK updates throughout a h
   const renderer = new ManipulationRenderer();
   const moving = structuredClone(state);
   moving.model!.asset_url = "/moving.glb";
-  moving.model!.joints[0] = { ...moving.model!.joints[0], name: "j", kind: "revolute" };
+  moving.model!.joints = moving.model!.joints.map((joint, index) => index === 0 ? { ...joint, name: "j", kind: "revolute" } : joint);
   moving.groups![0].joint_names = ["j"];
   moving.observations!.arm.joints = { j: 0 };
   let solution = { j: 0 }, previous = new THREE.Quaternion(), moved = 0, largestStep = 0;

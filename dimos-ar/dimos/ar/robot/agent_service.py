@@ -9,6 +9,7 @@ from typing import Any
 from langchain_core.messages import AIMessage
 from langchain_core.messages.base import BaseMessage
 
+from dimos.ar.numeric import finite_number
 from dimos.ar.robot.odometry_correction import correct_odom_xy, uncorrect_odom_xy
 from dimos.ar.websocket.protocol import ClientPose, encode_agent_message, encode_agent_skill
 
@@ -200,11 +201,9 @@ def _textual_ai_message(msg: BaseMessage) -> str | None:
 
 
 def _finite_number(value: object, name: str) -> str | None:
-    if (
-        not isinstance(value, (int, float))
-        or isinstance(value, bool)
-        or not math.isfinite(float(value))
-    ):
+    try:
+        finite_number(value, name)
+    except ValueError:
         return f"{name} must be a finite number"
     return None
 

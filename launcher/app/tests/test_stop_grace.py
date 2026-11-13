@@ -22,7 +22,7 @@ async def test_shutdown_grace(tmp_path: Path, monkeypatch, label: str, grace: fl
         await awaitable
 
     with patch("armodule.os.killpg") as killpg, patch("armodule.asyncio.wait_for", wait_for):
-        assert await mgr._stop_one(proc, label)
+        assert await mgr.runtime._stop_one(proc, label)
     killpg.assert_called_once_with(4242, signal.SIGINT)
 
 
@@ -38,7 +38,7 @@ async def test_configurable_grace_still_forces_exit(tmp_path: Path, monkeypatch)
         raise TimeoutError
 
     with patch("armodule.os.killpg") as killpg, patch("armodule.asyncio.wait_for", wait_for):
-        await mgr._stop_one(proc, "ARModule")
+        await mgr.runtime._stop_one(proc, "ARModule")
     assert [call.args[1] for call in killpg.call_args_list] == [signal.SIGINT, signal.SIGKILL]
     assert proc.wait.await_count == 2
 
@@ -53,7 +53,7 @@ def test_invalid_grace(tmp_path: Path, monkeypatch, value: str) -> None:
 @pytest.mark.asyncio
 async def test_force_stop_bypasses_pending_grace_lock(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
-    mgr._stopping_pids.add(42424242)
+    mgr.runtime.stopping_pids.add(42424242)
     await mgr._lock.acquire()
     try:
         process_list = Mock(communicate=AsyncMock(return_value=(b"", b"")))
@@ -84,7 +84,7 @@ async def test_force_stop_reaches_child_in_a_separate_session(tmp_path: Path) ->
     assert process.stdout is not None
     child = int(await asyncio.wait_for(process.stdout.readline(), 2))
     mgr = ProcessManager(root=tmp_path)
-    mgr._proc = process
+    mgr.runtime.backend.process = process
     await mgr._lock.acquire()
     try:
         await asyncio.wait_for(mgr.stop_armodule(force=True), 2.5)

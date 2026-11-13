@@ -1105,3 +1105,64 @@ it("keeps the request gate deadline through suspension but grants a replacement 
   f.clock.nowS = 6.2; f.controller.tick(); expect(f.controller.view().phase).toBe("idle");
   expect(f.transport.binaries).toHaveLength(0); f.controller.dispose();
 });
+
+it("preserves runtime retry cooldown across visibility suspension", async () => {
+  const f = makeController(false, { retryDelaysS: [5], stopWhileAwaitingResult: true });
+  f.originStore.restore(T([0, 0, 0]));
+  deliverPose(f.session, [0, 0, 1]);
+  const request: LocalizationObservationsRequest = { result_timeout_s: 15,
+    type: "localization_observations_request", capture_id: "fixture-capture",
+    capture_policy: "robot_los_required", observation_count: 1 };
+  deliverRequest(f.session, request);
+  f.controller.tick();
+  await settleCapture();
+  deliverRequest(f.session, request);
+  expect(f.controller.view().phase).toBe("waiting_for_retry");
+  f.clock.nowS = 1;
+  f.controller.suspend();
+  f.controller.resume();
+  f.controller.tick();
+  expect(f.controller.view().phase).toBe("waiting_for_retry");
+  expect(f.capture.calls).toBe(1);
+  f.clock.nowS = 5;
+  f.controller.tick();
+  f.controller.tick();
+  await settleCapture();
+  expect(f.capture.calls).toBe(2);
+});
+
+it("uses the submission owner's deadline throughout delayed upload and result wait", async () => {
+  const f = makeController();
+  const send = f.transport.bulk.sendBinary.bind(f.transport.bulk);
+  const packets: Uint8Array[] = [];
+  f.transport.bulk.sendBinary = data => packets.push(data);
+  deliverRequest(f.session, { result_timeout_s: 15, type: "localization_observations_request",
+    capture_id: "fixture-capture", capture_policy: "any_angle", observation_count: 1 });
+  f.controller.tick();
+  await settleCapture();
+  expect(f.session.localizationResultDeadline()).toBe(45);
+  f.clock.nowS = 16;
+  f.controller.tick();
+  expect(f.controller.view().phase).toBe("awaiting_result");
+  f.clock.nowS = 20;
+  packets.forEach(send);
+  expect(f.session.localizationResultDeadline()).toBe(35);
+  f.clock.nowS = 34.9;
+  f.controller.tick();
+  expect(f.controller.view().phase).toBe("awaiting_result");
+  f.clock.nowS = 35;
+  f.controller.tick();
+  expect(f.controller.view()).toMatchObject({ phase: "failed", lastError: "result timeout" });
+  expect(f.session.localizationResultDeadline()).toBeNull();
+});
+
+it("does not keep waiting on a submission retired outside the capture episode", async () => {
+  const f = makeController();
+  deliverRequest(f.session, { result_timeout_s: 15, type: "localization_observations_request",
+    capture_id: "fixture-capture", capture_policy: "any_angle", observation_count: 1 });
+  f.controller.tick();
+  await settleCapture();
+  f.session.cancelLocalizationSubmission();
+  f.controller.tick();
+  expect(f.controller.view()).toMatchObject({ phase: "failed", lastError: "result timeout" });
+});

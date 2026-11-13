@@ -31,7 +31,7 @@ async def test_run_config_is_passed_to_child_and_removed_on_stop(runtime):
     manager, _, spawn = runtime
     await manager.start_armodule(blueprint="unitree_go2_ar", client="specs",
                                  armodule_config={"robot_display_name": "Desk"})
-    target = manager._run_config_path
+    target = manager.runtime.backend.config_path
     assert target is not None
     argv = list(spawn.call_args.args)
     assert argv[argv.index("--config") + 1] == str(target)
@@ -44,22 +44,22 @@ async def test_spawn_failure_cleans_owned_config(runtime, monkeypatch):
     from unittest.mock import AsyncMock
 
     manager, _, _ = runtime
-    original_spawn = manager._spawn
+    original_spawn = manager.runtime._spawn
     target = None
     async def fail(*args, **kwargs):
         nonlocal target
-        target = manager._run_config_path
+        target = manager.runtime.backend.config_path
         raise OSError("spawn failed")
-    monkeypatch.setattr(manager, "_spawn", AsyncMock(side_effect=fail))
+    monkeypatch.setattr(manager.runtime, "_spawn", AsyncMock(side_effect=fail))
     with pytest.raises(OSError, match="spawn failed"):
         await manager.start_armodule(blueprint="unitree_go2_ar", client="specs")
     assert target is not None and not target.exists()
-    assert manager._run_config_path is None
+    assert manager.runtime.backend.config_path is None
     from armodule import Phase
     assert manager.status.phase is Phase.ERROR
     assert manager.status.error == "spawn failed"
-    assert manager._proc is None
-    monkeypatch.setattr(manager, "_spawn", original_spawn)
+    assert manager.runtime.backend.process is None
+    monkeypatch.setattr(manager.runtime, "_spawn", original_spawn)
     await manager.start_armodule(blueprint="unitree_go2_ar", client="specs")
     assert manager.status.phase is Phase.STARTING
-    assert manager._proc is not None
+    assert manager.runtime.backend.process is not None

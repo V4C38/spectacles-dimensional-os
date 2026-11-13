@@ -9,6 +9,7 @@ from integration_catalog import write_lens_catalog
 def review_code(path: Path, entry_name: str = "IntegrationScenario") -> str:
     return (path.read_text(encoding="utf-8")
             .replace("../../Assets/Scripts/", "../Scripts/")
+            .replace("../../../../tools/integration-tests/support/", "./")
             .replace(f'"./{entry_name}"', '"./ReviewScenario"')
             .replace(f"'./{entry_name}'", "'./ReviewScenario'"))
 
@@ -26,13 +27,17 @@ def prepare_harness(destination: Path, harness: Path) -> None:
     while pending:
         source = pending.pop().read_text(encoding="utf-8")
         for name in re.findall(
-            r"(?:\bfrom\s*|\bimport\s*)[\"']\./(Integration\w+)[\"']", source
+            r"(?:\bfrom\s*|\bimport\s*)[\"'](?:\./|\.\./\.\./\.\./\.\./tools/integration-tests/support/)(Integration\w+)[\"']", source
         ):
             if name in {harness.stem, "IntegrationCatalog"} or name in helpers:
                 continue
             helper = harness.with_name(name + ".ts")
             if name == "IntegrationArmFixture" and not helper.is_file():
                 helper = Path(__file__).resolve().parents[2] / "core/tests/support/IntegrationArmFixture.ts"
+            if not helper.is_file():
+                shared = Path(__file__).resolve().parents[3] / "tools/integration-tests/support" / (name + ".ts")
+                if shared.is_file():
+                    helper = shared
             helpers[name] = helper
             pending.append(helper)
     for stale in review_dir.glob("Integration*.ts"):

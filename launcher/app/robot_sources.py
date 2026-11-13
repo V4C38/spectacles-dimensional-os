@@ -1,19 +1,60 @@
 """Resolve explicit launcher source choices before starting child processes."""
 
 import ipaddress
+import json
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-BLUEPRINT_CLI = {
-    "unitree_go2_ar": "dimos-ar.unitree-go2-ar",
-    "unitree_go2_ar_agentic": "dimos-ar.unitree-go2-ar-agentic",
-    "openyam_ar_planner": "dimos-ar.openyam-ar-planner",
+
+@dataclass(frozen=True)
+class BlueprintDefinition:
+    id: str
+    robot: Literal["unitree_go2", "openyam"]
+    cli: str
+    label: str
+    description: str
+    agent: bool = False
+    manipulation: bool = False
+
+
+# This order is also the launcher menu order. Consumers derive facts from here.
+BLUEPRINTS = {
+    item.id: item for item in (
+        BlueprintDefinition(
+            "unitree_go2_ar", "unitree_go2", "dimos-ar.unitree-go2-ar", "Unitree Go2",
+            "Unitree Go2 with ARModule\nManual Mode: place navigation goals from the headset.",
+        ),
+        BlueprintDefinition(
+            "unitree_go2_ar_agentic", "unitree_go2", "dimos-ar.unitree-go2-ar-agentic",
+            "Unitree Go2 Agentic",
+            "Unitree Go2 with ARModule\nManual Mode: place navigation goals from the headset."
+            "\nAgent Mode: voice commands via LLM and MCP (API key required)",
+            agent=True,
+        ),
+        BlueprintDefinition(
+            "openyam_ar_planner", "openyam", "dimos-ar.openyam-ar-planner", "OpenYAM AR Planner",
+            "OpenYAM · manipulation: plan/review/execute or grab the end effector to follow.",
+            manipulation=True,
+        ),
+    )
 }
+BLUEPRINT_CLI = {key: item.cli for key, item in BLUEPRINTS.items()}
+
+
+def blueprint_definition(blueprint: str) -> BlueprintDefinition:
+    try:
+        return BLUEPRINTS[blueprint]
+    except KeyError as exc:
+        raise ValueError("Unknown robot blueprint") from exc
+
+
+def blueprint_metadata() -> list[dict[str, Any]]:
+    return [asdict(item) for item in BLUEPRINTS.values()]
 
 
 class SourceBody(BaseModel):
@@ -48,9 +89,8 @@ class ResolvedRobotSource:
     replay: str | None = None
 
     def cli_arguments(self, blueprint: str) -> tuple[str, ...]:
-        if blueprint not in BLUEPRINT_CLI:
-            raise ValueError("Unknown robot blueprint")
-        if blueprint == "openyam_ar_planner":
+        definition = blueprint_definition(blueprint)
+        if definition.manipulation:
             if self.replay:
                 return ("run", "dimos-ar.openyam-ar-replay")
             if self.simulation:
@@ -98,6 +138,13 @@ def resolve_robot_source(
 
 
 if __name__ == "__main__":
+    if sys.argv[1] == "--metadata":
+        print(json.dumps(blueprint_metadata()))
+        raise SystemExit(0)
+    if sys.argv[1] == "--menu":
+        for definition in BLUEPRINTS.values():
+            print(f"{definition.id}\t{definition.label}\t{int(definition.manipulation)}")
+        raise SystemExit(0)
     source = ResolvedRobotSource(
         robot_ip="simulated" if sys.argv[2] == "1" else None,
         simulation=os.environ.get("DIMOS_AR_SIMULATION") == "1",

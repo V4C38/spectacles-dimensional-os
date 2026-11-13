@@ -6,7 +6,6 @@ vi.mock("../../Assets/Scripts/DimOSSpecsClient/presentation/SetupWizardControlle
 
 vi.mock("../../Assets/Scripts/DimOSSpecsClient/presentation/MainMenuView", () => ({ MainMenuView: class {} }));
 
-import { UIPresentationState } from "../../Assets/Scripts/DimOSSpecsClient/presentation/UIPresentationState";
 import { UIPresenter } from "../../Assets/Scripts/DimOSSpecsClient/presentation/UIPresenter";
 import { scaleIn, scaleOut } from "../../Assets/Scripts/DimOSSpecsClient/utilities/AnimationUtilities";
 import { flushAnimations } from "../mocks/animate";
@@ -14,8 +13,6 @@ import { flushAnimations } from "../mocks/animate";
 describe("HUD logging", () => {
   it("keeps debug pose updates out of the console", () => {
     const presenter = new UIPresenter();
-    const appState = new UIPresentationState();
-    appState.debugModeEnabled = true;
     const view = {
       connection: "ready", hasTrackingOrigin: true,
       hello: { robot: { display_name: "Unitree Go2" } },
@@ -25,7 +22,7 @@ describe("HUD logging", () => {
     const logConsole = vi.fn();
     const refreshLabels = vi.fn();
     Object.assign(presenter, {
-      appState, setupFlow: { completed: true },
+      debugEnabled: true, setupFlow: { completed: true },
       uiLogger: { tick: vi.fn(), logConsole },
       deps: {
         session: { view: () => view },
@@ -225,7 +222,7 @@ it.each([true, false])("restart preserves the shared owner and resets only fallb
   const presenter = new UIPresenter();
   const interaction = shared ? { mode: "agent" } : null;
   const start = vi.fn();
-  Object.assign(presenter, { setupWizardPanel: {}, mainUIFrame: {}, fallbackMode: "agent",
+  Object.assign(presenter, { setupWizardPanel: {}, mainUIFrame: {},
     setupWizardController: { start }, setUIState: vi.fn(), sendPostWizardLidarDefault: vi.fn(),
     deps: { session: { view: () => ({ interaction, capabilities: { agent: { available: true } } }) },
       onModeChanged: vi.fn(), robotPresenter: { reset: vi.fn() } } });

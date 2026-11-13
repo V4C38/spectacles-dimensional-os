@@ -1,3 +1,4 @@
+import { appendFixtureUpload, fixtureAsset, fixtureBinaryPackets } from "../../../../../tools/integration-tests/support/IntegrationBulk";
 import type { Page, WebSocketRoute } from "@playwright/test";
 
 type Value = Record<string, any>;
@@ -17,9 +18,8 @@ export class V2BulkPeer {
       ws.onMessage(raw => {
         if (typeof raw !== "string") {
           const upload = this.upload;
-          if (!upload || raw.length < 12 || raw.readUInt32LE(0) !== 0x32425241 || raw.readUInt32LE(4) !== upload.id || raw.readUInt32LE(8) !== upload.offset) throw new Error("Invalid fixture upload");
-          raw.copy(upload.bytes, upload.offset, 12); upload.offset += raw.length - 12;
-          if (upload.offset === upload.bytes.length) {
+          if (appendFixtureUpload(upload, raw)) {
+            if (!upload) throw new Error("Invalid fixture upload");
             this.upload = null;
             if (upload.captureId === this.captureId) this.onUpload(upload.bytes);
             this.bulk({ type: "bulk_upload_result", upload_id: upload.id,
@@ -62,11 +62,7 @@ export class V2BulkPeer {
   }
   lidar(data: Buffer): void {
     this.bulk({ type: "bulk_binary_begin", kind: "lidar", epoch: "fixture-epoch", id: 1, total_bytes: data.length });
-    for (let offset = 0; offset < data.length; offset += 16372) {
-      const payload = data.subarray(offset, offset + 16372), packet = Buffer.alloc(payload.length + 12);
-      packet.writeUInt32LE(0x32425241, 0); packet.writeUInt32LE(1, 4); packet.writeUInt32LE(offset, 8); payload.copy(packet, 12);
-      this.socket!.send(packet);
-    }
+    for (const packet of fixtureBinaryPackets(data)) this.socket!.send(Buffer.from(packet));
   }
   private prepare(message: Value): Value {
     const result = { ...message };
@@ -79,23 +75,9 @@ export class V2BulkPeer {
     return result;
   }
   private asset(kind: string, value: Value) {
-    const serialized = JSON.stringify(value);
-    let hash = 2166136261; for (let i = 0; i < serialized.length; i++) hash = Math.imul(hash ^ serialized.charCodeAt(i), 16777619);
-    const id = `${kind}-${hash >>> 0}`, ref = { epoch: "fixture-epoch", id, revision: String(hash >>> 0) };
-    if (this.assets.has(id)) return ref;
-    const metadata = { ...value }, fields = kind === "model" ? ["links", "joints"] : [kind === "route" ? "path_poses" : "trajectory"];
-    for (const field of fields) delete metadata[field];
-    const pieces: Value[] = [{ metadata }];
-    for (const field of fields) {
-      const key = field === "links" || field === "joints" ? field : "points";
-      let items: unknown[] = [];
-      for (const item of value[field] ?? []) {
-        if (items.length && Buffer.byteLength(JSON.stringify({ [key]: [...items, item] })) > 14000) { pieces.push({ [key]: items }); items = []; }
-        items.push(item);
-      }
-      if (items.length) pieces.push({ [key]: items });
-    }
-    const records = pieces.map((data, part) => ({ type: "bulk_record", ...ref, kind, part, parts: pieces.length, data }));
+    const { ref, records } = fixtureAsset(kind, value, { maximumPartSize: 14000, measure: Buffer.byteLength }, this.assets);
+    const id = ref.id;
+    if (!records) return ref;
     if (this.assets.size >= 64) this.assets.delete(this.assets.keys().next().value!);
     this.assets.set(id, records);
     if (this.ready) for (const record of records) this.bulk(record); else this.waiting.push(records);

@@ -229,8 +229,8 @@ def test_shared_ik_evaluation_does_not_authorize_execution():
         "a", _request("evaluate", position=[0.2, 0, 0], orientation=[0, 0, 0, 1])
     )
     assert reply["status"] == "feasible"
-    assert module.evaluation["target_revision"] == 7
-    assert module.evaluation["joints"] == {"joint": 0.2}
+    assert module.evaluation.target_revision == 7
+    assert module.evaluation.joints == {"joint": 0.2}
     assert module.operation.plan is None
     with pytest.raises(ValueError, match="retired or replaced"):
         module.command("a", _request("execute", plan_id="not-a-checked-plan"))
@@ -294,21 +294,31 @@ def test_target_edit_revokes_older_work_but_admits_the_edit_revision():
         _request("evaluate", revision=2, target=8, position=[0.3, 0, 0], orientation=[0, 0, 0, 1]),
     )
     assert reply["status"] == "feasible"
-    assert module.evaluation["target_revision"] == 8
+    assert module.evaluation.target_revision == 8
 
 
 def test_independent_local_ik_result_cannot_validate_the_current_canonical_target():
     module = runtime()
     module.evaluation = None
     module.adapter.ready = True
-    module.adapter.evaluate = Mock(return_value=SimpleNamespace(
-        success=True, message="valid",
-        target_joints=SimpleNamespace(name=["joint"], position=[0.2]), group_poses={},
-    ))
-    result = module.command("a", _request(
-        "evaluate", advisory_current=False, advisory_target_revision=6,
-        position=[0.2, 0, 0], orientation=[0, 0, 0, 1],
-    ))
+    module.adapter.evaluate = Mock(
+        return_value=SimpleNamespace(
+            success=True,
+            message="valid",
+            target_joints=SimpleNamespace(name=["joint"], position=[0.2]),
+            group_poses={},
+        )
+    )
+    result = module.command(
+        "a",
+        _request(
+            "evaluate",
+            advisory_current=False,
+            advisory_target_revision=6,
+            position=[0.2, 0, 0],
+            orientation=[0, 0, 0, 1],
+        ),
+    )
     assert result["status"] == "feasible"
     assert result["sample_pose"] == {"position": [0.2, 0, 0], "orientation": [0, 0, 0, 1]}
     assert module.evaluation is None
@@ -331,15 +341,21 @@ def test_slow_full_plan_does_not_block_fast_advisory_ik():
 
     module.adapter.plan_to_poses.side_effect = plan
     module.adapter.evaluate = lambda *_: SimpleNamespace(
-        success=True, message="valid",
-        target_joints=SimpleNamespace(name=["joint"], position=[0.2]), group_poses={},
+        success=True,
+        message="valid",
+        target_joints=SimpleNamespace(name=["joint"], position=[0.2]),
+        group_poses={},
     )
     worker = threading.Thread(target=lambda: module.dispatch("a", _plan_request()))
     worker.start()
     try:
         assert entered.wait(1)
-        reply = module.dispatch("a", _request("evaluate", revision=2, target=8,
-                                position=[0.2, 0, 0], orientation=[0, 0, 0, 1]))
+        reply = module.dispatch(
+            "a",
+            _request(
+                "evaluate", revision=2, target=8, position=[0.2, 0, 0], orientation=[0, 0, 0, 1]
+            ),
+        )
         assert reply["status"] == "feasible"
         assert worker.is_alive()
     finally:
@@ -352,8 +368,9 @@ def test_late_old_release_cannot_retire_successor_execution():
     _planning_backend(module)
     module.command("a", _plan_request())
     module.revoke_authority("robot-reference", "grab-a", 2, "released")
-    result = module.command("b", _request("execute", revision=3, lease=None,
-                                           plan_id="checked-plan"))
+    result = module.command(
+        "b", _request("execute", revision=3, lease=None, plan_id="checked-plan")
+    )
     assert result["status"] == "accepted"
     operation = module.operation.id
     generation = module.session.generation

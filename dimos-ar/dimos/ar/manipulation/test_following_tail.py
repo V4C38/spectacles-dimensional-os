@@ -119,8 +119,8 @@ def test_control_plane_loss_stops_tail_and_accepted_execution(tail_runtime, exec
     module, now, observation, _request = tail_runtime
     if execution:
         module.following_tail = None
-        module.operation.id = "accepted"
-        module.operation.kind = "executing"
+        module.operation.begin("accepted")
+        module.operation.active.kind = "executing"
     now[0] += 0.501
     observation.joints.ts = time.time()
     module.advance()

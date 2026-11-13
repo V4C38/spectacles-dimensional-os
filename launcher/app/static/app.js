@@ -1,9 +1,55 @@
-import { sourceRequest, replayRobot, replayPreferenceKey } from "./source-selection.mjs";
+import { sourceRequest, replayPreferenceKey, LaunchConfiguration, HardwareDiscovery } from "./source-selection.mjs";
 import { logConsole } from "./log-console.mjs";
-import { settingsWriter, profilesForRobot } from "./persistence.mjs";
+import { settingsWriter, profilesForRobot, ProfileSettingsEditor, LauncherPreferences } from "./persistence.mjs";
 import { launcherPresentation } from "./presentation.mjs";
 (() => {
   const $ = (id) => document.getElementById(id);
+
+  class LauncherConnection {
+    constructor() {
+      this.status = {};
+      this.revision = 0;
+      this.source = null;
+      this.timer = null;
+      this.onVisible = () => { if (!document.hidden) this.refreshHardware(); };
+    }
+    refreshHardware() { void refreshCan(); void refreshPlanner(); }
+    publish(status) { applyStatus(status); }
+    observe(status) {
+      this.revision++;
+      this.status = status || {};
+    }
+    applyResponse(status, revision) {
+      if (this.revision === revision && (status.phase || "check_ok" in status)) this.publish(status);
+    }
+    start() {
+      if (this.source) return;
+      this.source = new EventSource("/api/events");
+      this.source.onmessage = event => {
+        let data;
+        try { data = JSON.parse(event.data); } catch (_) { return; }
+        if (data.type === "log") appendLog(data.line);
+        else if (data.type === "status") this.publish(data);
+      };
+      const initialRevision = this.revision;
+      const source = this.source;
+      void fetch("/api/status").then(response => response.json()).then(status => {
+        if (this.source === source && this.revision === initialRevision) this.publish(status);
+      }).catch(() => {});
+      this.timer = setInterval(() => this.refreshHardware(), 5000);
+      document.addEventListener("visibilitychange", this.onVisible);
+    }
+    stop() {
+      this.source?.close?.();
+      this.source = null;
+      clearInterval(this.timer);
+      document.removeEventListener("visibilitychange", this.onVisible);
+      editor.cancelScheduled();
+      hardware.requests.clear();
+      editor.requests.clear();
+      preferences.requests.clear();
+    }
+  }
 
   const stateValue = $("stateValue");
   const stateDetail = $("stateDetail");
@@ -63,32 +109,16 @@ import { launcherPresentation } from "./presentation.mjs";
 
   const { appendLog, clearLog, copyLog, applyLogFilter } = logConsole({ logEl, logFilterLevel, logFilterSource, copyLogBtn });
 
-  let client = "webxr";
-  let blueprint = "unitree_go2_ar";
-  let robotProfileId = null;
-  let robotProfiles = [];
-  let profileLoadGeneration = 0;
-  let lastStatus = {};
-  let canStatus = { ready: false, state: "checking", message: "Checking can0…" };
-  let plannerStatus = { ready: false, state: "checking", message: "Checking manipulation dependencies…" };
-  let resolvedCan = "can0";
-  let discoveryGeneration = 0;
-  let discoveryPending = false;
-  let go2DiscoveryState = {text: "Not scanned", phase: ""};
-  let canCheckPending = false;
-  let plannerCheckPending = false;
-  let canSetupPending = false;
-  let plannerPython = null;
+  const configuration = new LaunchConfiguration({ blueprint: blueprintSelect.value });
+  const hardware = new HardwareDiscovery(fetch);
+  const preferences = new LauncherPreferences();
+  const service = new LauncherConnection();
   let keyVisible = false;
   let multisetVisible = false;
-
 
   const DEFAULT_MOUNT = {};
 
   let presetMarkerIds = [];
-  let mounts = [{ ...DEFAULT_MOUNT }];
-  let settingsReady = false;
-  let persistTimer = null;
 
   const FIELD_META = [
     { field: "print_size_mm", label: "Print size (mm)", step: 1, min: 20, max: 200 },
@@ -100,46 +130,32 @@ import { launcherPresentation } from "./presentation.mjs";
     { field: "roll_deg", label: "Roll (°)", step: 1 },
   ];
 
-  const BLUEPRINTS = {
-    openyam_ar_planner: { info: "OpenYAM · manipulation: plan/review/execute or grab the end effector to follow." },
-    unitree_go2_ar: {
-      info: "Unitree Go2 with ARModule\nManual Mode: place navigation goals from the headset.",
-    },
-    unitree_go2_ar_agentic: {
-      info: "Unitree Go2 with ARModule\nManual Mode: place navigation goals from the headset.\nAgent Mode: voice commands via LLM and MCP (API key required)",
-      agent: true,
-    },
-  };
-
   const savedBlueprint = localStorage.getItem("dimos.blueprint");
-  if (savedBlueprint && BLUEPRINTS[savedBlueprint]) blueprintSelect.value = savedBlueprint;
+  let metadataReady = false;
+  const editor = new ProfileSettingsEditor(settingsWriter({
+    request: body => fetch("/api/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }),
+    saved: (profileId, data) => editor.saved(profileId, data),
+    failed: error => appendLog(`Settings save failed: ${error.message || error}`),
+  }));
 
-  const LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR"];
-
-  let playbackRobot = null;
-  const replayStreams = {};
-  let replayInspectionGeneration = 0;
-  let preferencesEdited = false;
-  let preferencesSave = Promise.resolve();
-  const launcherPreferences = { go2_source: "auto", openyam_source: "auto", replay: "", openyam_replay: "", openyam_playback: "simulator" };
-  const discoveredRobots = {go2: [], openyam: []};
   function applyBlueprintInfo() {
-    blueprint = blueprintSelect.value;
-    const spec = BLUEPRINTS[blueprint] || {};
-    blueprintInfo.textContent = spec.info || "";
-    const manipulation = blueprint === "openyam_ar_planner";
+    configuration.selectBlueprint(blueprintSelect.value);
+    const spec = configuration.spec;
+    if (!spec) return;
+    blueprintInfo.textContent = spec.description || "";
+    const manipulation = spec.manipulation;
 
 
-
-    const rememberedSource = launcherPreferences[`${manipulation ? "openyam" : "go2"}_source`] || "auto";
+    const rememberedSource = preferences.values[`${configuration.replayRobot}_source`] || "auto";
     renderSourceOptions(rememberedSource);
     $("editConnection").disabled = configIsLocked() || manipulation;
     $("connectionEditor").classList.add("hidden");
     syncSource();
 
-
     document.querySelectorAll("[data-client=specs]").forEach(button => { button.disabled = configIsLocked(); });
-    if (settingsReady) {
+    if (editor.settingsReady) {
       void refreshRobotProfiles();
       if (rememberedSource.startsWith("device:")) void refreshRobotDiscovery();
     }
@@ -156,17 +172,17 @@ import { launcherPresentation } from "./presentation.mjs";
       const option = document.createElement("option"); option.value = value; option.textContent = label;
       select.insertBefore(option, select.querySelector('[value="simulated"]'));
     };
-    for (const device of discoveredRobots[replayRobot(blueprint)]) add(`device:${device.id}`, device.label || device.id);
+    for (const device of (hardware.discoveredRobots[configuration.replayRobot] || [])) add(`device:${device.id}`, device.label || device.id);
     if (!manipulationSelected() && (robotIp.value.trim() || selected === "manual")) add("manual", `${robotIp.value.trim()} (manual)`);
     if (selected.startsWith("device:") && ![...select.options].some(option => option.value === selected)) add(selected, `${selected.slice(7)} (${missing})`);
     select.value = selected;
   }
 
-  function manipulationSelected() { return blueprint === "openyam_ar_planner"; }
+  function manipulationSelected() { return configuration.manipulation; }
   function presentation() {
-    return launcherPresentation({ status: lastStatus, manipulation: manipulationSelected(),
-      simulated: $("robotSource").value === "simulated", can: canStatus, planner: plannerStatus,
-      settingUp: Boolean(canSetupPending || lastStatus.can_setup_running || canStatus.setting_up) });
+    return launcherPresentation({ status: service.status, manipulation: manipulationSelected(),
+      simulated: $("robotSource").value === "simulated", can: hardware.canStatus, planner: hardware.plannerStatus,
+      settingUp: Boolean(hardware.requests.busy("canSetup") || service.status.can_setup_running || hardware.canStatus.setting_up) });
   }
   function canRequired() { return presentation().canRequired; }
   function syncHardwareSetup() {
@@ -176,74 +192,71 @@ import { launcherPresentation } from "./presentation.mjs";
     card.classList.toggle("hidden", !selected);
     $("webrtcCard").classList.toggle("hidden", selected);
     const simulated = $("robotSource").value === "simulated";
-    $("webrtcSummary").textContent = simulated ? "Not required" : go2DiscoveryState.text;
-    $("webrtcSummary").dataset.phase = simulated ? "" : go2DiscoveryState.phase;
-    $("discoverWebrtc").disabled = configIsLocked() || simulated || discoveryPending || lastStatus.check_ok !== true;
-    $("discoverWebrtc").textContent = discoveryPending ? "Scanning…" : "Discover";
-    const missing = canRequired() && !canStatus.ready;
+    $("webrtcSummary").textContent = simulated ? "Not required" : hardware.go2DiscoveryState.text;
+    $("webrtcSummary").dataset.phase = simulated ? "" : hardware.go2DiscoveryState.phase;
+    $("discoverWebrtc").disabled = configIsLocked() || simulated || hardware.requests.busy("discovery") || service.status.check_ok !== true;
+    $("discoverWebrtc").textContent = hardware.requests.busy("discovery") ? "Scanning…" : "Discover";
+    const missing = canRequired() && !hardware.canStatus.ready;
     card.classList.toggle("needs-setup", missing);
-    const canNotRequired = mock || canStatus.state === "not_required";
-    const canPhase = canNotRequired ? "" : canStatus.state === "error" ? "error" : canStatus.ready ? "ready" : canStatus.state === "checking" ? "checking" : "needs_setup";
-    $("canSummary").textContent = canNotRequired ? "Not required" : canStatus.ready ? "Ready · 1 Mbit/s" : canStatus.state === "checking" ? "Checking…" : canStatus.state === "error" ? "Error" : "Setup needed";
+    const canNotRequired = mock || hardware.canStatus.state === "not_required";
+    const canPhase = canNotRequired ? "" : hardware.canStatus.state === "error" ? "error" : hardware.canStatus.ready ? "ready" : hardware.canStatus.state === "checking" ? "checking" : "needs_setup";
+    $("canSummary").textContent = canNotRequired ? "Not required" : hardware.canStatus.ready ? "Ready · 1 Mbit/s" : hardware.canStatus.state === "checking" ? "Checking…" : hardware.canStatus.state === "error" ? "Error" : "Setup needed";
     $("canSummary").dataset.phase = canPhase;
     $("canStatus").dataset.phase = canPhase;
-    $("canStatus").classList.toggle("hidden", !canNotRequired && canStatus.ready);
-    $("canStatus").textContent = mock ? "Not required for simulated connection." : canStatus.message;
-    const settingUp = canSetupPending || lastStatus.can_setup_running || canStatus.setting_up;
+    $("canStatus").classList.toggle("hidden", !canNotRequired && hardware.canStatus.ready);
+    $("canStatus").textContent = mock ? "Not required for simulated connection." : hardware.canStatus.message;
+    const settingUp = hardware.requests.busy("canSetup") || service.status.can_setup_running || hardware.canStatus.setting_up;
     $("canSetupBtn").textContent = settingUp ? "Setting up…" : "Set up CAN";
-    $("canSetupBtn").disabled = !selected || mock || configIsLocked() || settingUp || canNotRequired || lastStatus.check_ok !== true || ["checking", "installing"].includes(lastStatus.phase);
+    $("canSetupBtn").disabled = !selected || mock || configIsLocked() || settingUp || canNotRequired || service.status.check_ok !== true || ["checking", "installing"].includes(service.status.phase);
     $("plannerStatus").classList.toggle("hidden", !selected);
-    $("plannerStatus").textContent = plannerStatus.message || "Checking manipulation dependencies…";
-    $("plannerStatus").dataset.phase = plannerStatus.state === "error" ? "error" : plannerStatus.ready ? "ready" : "checking";
+    $("plannerStatus").textContent = hardware.plannerStatus.message || "Checking manipulation dependencies…";
+    $("plannerStatus").dataset.phase = hardware.plannerStatus.state === "error" ? "error" : hardware.plannerStatus.ready ? "ready" : "checking";
     renderControls();
   }
 
-  async function refreshCan() {
-    if (!manipulationSelected() || canCheckPending || canSetupPending || document.hidden) return;
-    canCheckPending = true;
-    try {
-      const response = await fetch(`/api/can/status?interface=${encodeURIComponent($("robotSource").value.startsWith("device:") ? $("robotSource").value.slice(7) : resolvedCan)}`);
-      if (!response.ok) throw new Error("CAN status check failed");
-      canStatus = await response.json();
-    } catch (error) { canStatus = {ready: false, state: "error", message: String(error)}; }
-    finally { canCheckPending = false; syncHardwareSetup(); }
+  function environmentScope() {
+    return JSON.stringify([configuration.selectionRevision, configuration.blueprint, hardware.plannerPython]);
   }
-  async function refreshPlanner() {
-    if (!manipulationSelected() || plannerCheckPending || document.hidden) return;
-    plannerCheckPending = true;
-    try {
-      const response = await fetch("/api/planner/status");
-      if (!response.ok) throw new Error("Planner dependency check failed");
-      plannerStatus = await response.json();
-    } catch (error) { plannerStatus = {ready: false, state: "error", message: String(error)}; }
-    finally { plannerCheckPending = false; syncHardwareSetup(); }
+  function canScope() {
+    return JSON.stringify([environmentScope(), $("robotSource").value, hardware.resolvedCan]);
   }
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) { void refreshCan(); void refreshPlanner(); } });
-  setInterval(() => { void refreshCan(); void refreshPlanner(); }, 5000);
-  $("canSetupBtn").addEventListener("click", async () => {
-    if (canSetupPending || configIsLocked()) return;
-    const result = $("canSetupResult");
-    result.classList.remove("hidden");
-    result.textContent = "Checking CAN configuration…";
-    result.dataset.phase = "checking";
-    canSetupPending = true; syncHardwareSetup();
-    try {
-      const response = await fetch(`/api/can/setup?interface=${encodeURIComponent($("robotSource").value.startsWith("device:") ? $("robotSource").value.slice(7) : resolvedCan)}`, {method: "POST"});
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || "CAN setup failed");
-      canStatus = data;
-      result.textContent = `Already set up on ${data.interface || resolvedCan}`;
-      result.dataset.phase = "ready";
-    } catch (error) {
-      result.textContent = `CAN setup failed: ${error}`;
-      result.dataset.phase = "error";
-      appendLog(`CAN setup: ${error}`);
-      canStatus = {ready: false, state: "error", message: String(error)};
-    } finally { canSetupPending = false; syncHardwareSetup(); }
-  });
+  function replayScope() {
+    return JSON.stringify([environmentScope(), $("robotSource").value, $("playbackSource").value, $("replayPath").value.trim()]);
+  }
+  function canInterface() {
+    const selection = $("robotSource").value;
+    return selection.startsWith("device:") ? selection.slice(7) : hardware.resolvedCan;
+  }
+
+  function refreshCan() {
+    return hardware.refreshCan({
+      enabled: manipulationSelected() && !document.hidden,
+      scope: canScope, interface: canInterface(), changed: syncHardwareSetup,
+    });
+  }
+  function refreshPlanner() {
+    return hardware.refreshPlanner({
+      enabled: manipulationSelected() && !document.hidden,
+      scope: environmentScope, changed: syncHardwareSetup,
+    });
+  }
+  $("canSetupBtn").addEventListener("click", () => hardware.setupCan({
+    enabled: !configIsLocked(), scope: canScope, interface: canInterface(), changed: syncHardwareSetup,
+    progress: ({ phase, data, error }) => {
+      const result = $("canSetupResult");
+      result.classList.remove("hidden");
+      result.dataset.phase = phase;
+      if (phase === "checking") result.textContent = "Checking CAN configuration…";
+      else if (phase === "ready") result.textContent = `Already set up on ${data.interface || hardware.resolvedCan}`;
+      else {
+        result.textContent = `CAN setup failed: ${error}`;
+        appendLog(`CAN setup: ${error}`);
+      }
+    },
+  }));
 
   function fiducialConfigured() {
-    return mounts.length > 0;
+    return editor.mounts.length > 0;
   }
 
   function vpsConfigured() {
@@ -264,7 +277,7 @@ import { launcherPresentation } from "./presentation.mjs";
   }
 
   function agentNotSetup() {
-    return Boolean(BLUEPRINTS[blueprint]?.agent) && !apiKey.value.trim();
+    return Boolean(configuration.spec?.agent) && !apiKey.value.trim();
   }
 
   function syncConfigCards(render = true) {
@@ -278,7 +291,7 @@ import { launcherPresentation } from "./presentation.mjs";
     agentSummary.textContent = agentMissing ? "incomplete" : "";
     agentSummary.dataset.phase = agentMissing ? "needs_setup" : "";
 
-    logSummary.textContent = logLevel.value || "INFO";
+    logSummary.textContent = logLevel.value || configuration.defaultLogLevel;
     logSummary.dataset.phase = "";
     if (render) renderControls();
   }
@@ -299,11 +312,7 @@ import { launcherPresentation } from "./presentation.mjs";
 
   function schedulePersist() {
     if (configIsLocked()) return;
-    clearTimeout(persistTimer);
-    persistTimer = setTimeout(() => {
-      persistTimer = null;
-      void saveSettings();
-    }, 400);
+    editor.schedule(settingsBody);
   }
 
   const policyDefaults = {};
@@ -316,7 +325,7 @@ import { launcherPresentation } from "./presentation.mjs";
 
   function settingsBody() {
     return {
-      profile_id: robotProfileId,
+      profile_id: editor.robotProfileId,
       ...Object.fromEntries(Object.entries(policyInputs).map(([key, input]) => [key, Number(input.value)])),
       openai_api_key: apiKey.value.trim() || null,
       multiset_client_id: multisetClientId.value.trim() || null,
@@ -325,31 +334,33 @@ import { launcherPresentation } from "./presentation.mjs";
       vps: vpsEnabled.checked,
       vps_vendor: vpsVendor.value || "multiset",
       map_code: mapCode.value.trim() || null,
-      mounts,
-      dimos_log_level: logLevel.value || "INFO",
+      mounts: editor.mounts,
+      dimos_log_level: logLevel.value || configuration.defaultLogLevel,
     };
   }
 
-  const writer = settingsWriter({
-    request: body => fetch("/api/settings", {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    }),
-    saved: (profileId, data) => {
-      const profile = robotProfiles.find(p => p.id === profileId);
-      if (profile) profile.settings = { ...profile.settings, ...data };
-    },
-    failed: error => appendLog(`Settings save failed: ${error.message || error}`),
-  });
-  function saveSettings() {
-    clearTimeout(persistTimer); persistTimer = null;
-    if (!settingsReady || !robotProfileId) return Promise.resolve(null);
-    return writer.save(settingsBody());
-  }
-  async function flushSettings() {
-    return saveSettings();
-  }
+  function saveSettings() { return editor.save(settingsBody()); }
+  async function flushSettings() { return saveSettings(); }
 
   function applySettingsPayload(data) {
+    if (!metadataReady) {
+      configuration.selectBlueprint(savedBlueprint || blueprintSelect.value);
+      configuration.configure(data.defaults);
+      blueprintSelect.replaceChildren(...data.defaults.blueprints.map(spec => {
+        const option = document.createElement("option");
+        option.value = spec.id;
+        option.textContent = spec.label;
+        return option;
+      }));
+      blueprintSelect.value = configuration.blueprint;
+      logLevel.replaceChildren(...configuration.logLevels.map(level => {
+        const option = document.createElement("option");
+        option.value = level;
+        option.textContent = level;
+        return option;
+      }));
+      metadataReady = true;
+    }
     Object.assign(policyDefaults, data.defaults.localization);
     if (data.defaults?.mounts?.[0]) {
       Object.assign(DEFAULT_MOUNT, cloneMount(data.defaults.mounts[0]));
@@ -358,7 +369,7 @@ import { launcherPresentation } from "./presentation.mjs";
       presetMarkerIds = [...data.defaults.preset_marker_ids];
     }
     const loaded = Array.isArray(data.mounts) && data.mounts.length ? data.mounts : [DEFAULT_MOUNT];
-    mounts = loaded.map((item) => cloneMount(item));
+    editor.mounts = loaded.map((item) => cloneMount(item));
     fiducialEnabled.checked = Boolean(data.fiducial_marker);
     vpsEnabled.checked = Boolean(data.vps);
     vpsVendor.value = data.vps_vendor || "multiset";
@@ -369,8 +380,8 @@ import { launcherPresentation } from "./presentation.mjs";
       apiKey.value = data.openai_api_key || "";
     }
     if (document.activeElement !== logLevel && "dimos_log_level" in data) {
-      const level = String(data.dimos_log_level || "INFO").toUpperCase();
-      logLevel.value = LOG_LEVELS.includes(level) ? level : "INFO";
+      const level = String(data.dimos_log_level || configuration.defaultLogLevel).toUpperCase();
+      logLevel.value = configuration.logLevels.includes(level) ? level : configuration.defaultLogLevel;
     }
     if (document.activeElement !== multisetClientId && "multiset_client_id" in data) {
       multisetClientId.value = data.multiset_client_id || "";
@@ -381,7 +392,7 @@ import { launcherPresentation } from "./presentation.mjs";
     Object.entries(policyInputs).forEach(([key, input]) => {
       if (document.activeElement !== input) input.value = String(data[key] ?? policyDefaults[key]);
     });
-    settingsReady = true;
+    editor.settingsReady = true;
     syncLocalizationPanels();
     renderMountEditor();
     applyBlueprintInfo();
@@ -470,7 +481,7 @@ import { launcherPresentation } from "./presentation.mjs";
 
   function usedMarkerIds(exceptIndex) {
     return new Set(
-      mounts
+      editor.mounts
         .map((item, index) => (index === exceptIndex ? null : item.marker_id))
         .filter((id) => id != null)
     );
@@ -503,7 +514,7 @@ import { launcherPresentation } from "./presentation.mjs";
       appendLog(`Fiducial marker ID ${markerId} is already in the list`);
       return false;
     }
-    mounts[index] = { ...mounts[index], marker_id: markerId };
+    editor.mounts[index] = { ...editor.mounts[index], marker_id: markerId };
     return true;
   }
 
@@ -527,15 +538,15 @@ import { launcherPresentation } from "./presentation.mjs";
   }
 
   function renderMountEditor() {
-    if (!settingsReady) {
+    if (!editor.settingsReady) {
       tagList.replaceChildren();
       return;
     }
     tagList.replaceChildren();
-    mounts.forEach((mount, index) => {
+    editor.mounts.forEach((mount, index) => {
       const card = document.createElement("details");
       card.className = "tag-card";
-      if (index === mounts.length - 1) card.open = true;
+      if (index === editor.mounts.length - 1) card.open = true;
 
       const summary = document.createElement("summary");
       summary.className = "tag-summary";
@@ -549,7 +560,7 @@ import { launcherPresentation } from "./presentation.mjs";
       metaWrap.append(title, subtitle);
 
       const syncMarker = () => {
-        const current = mounts[index];
+        const current = editor.mounts[index];
         const id = current.marker_id;
         const size = Number(current.print_size_mm.toFixed(6));
         previewImg.src = `/api/apriltag/${id}.png`;
@@ -594,7 +605,7 @@ import { launcherPresentation } from "./presentation.mjs";
       typeSelect.addEventListener("change", () => {
         if (configIsLocked()) return;
         if (typeSelect.value === "upload") {
-          typeSelect.value = String(mounts[index].marker_id); uploadInput.click(); return;
+          typeSelect.value = String(editor.mounts[index].marker_id); uploadInput.click(); return;
         }
         if (!assignMarkerId(index, Number(typeSelect.value))) return;
         renderMountEditor(); schedulePersist();
@@ -621,7 +632,7 @@ import { launcherPresentation } from "./presentation.mjs";
         label.textContent = meta.label;
         const control = makeNumInput(meta, mount[meta.field], (next) => {
           if (configIsLocked()) return;
-          mounts[index] = { ...mounts[index], [meta.field]: next };
+          editor.mounts[index] = { ...editor.mounts[index], [meta.field]: next };
           syncMarker();
           schedulePersist();
         });
@@ -641,12 +652,12 @@ import { launcherPresentation } from "./presentation.mjs";
       removeBtn.type = "button";
       removeBtn.className = "btn ghost tag-remove";
       removeBtn.textContent = "Remove";
-      removeBtn.disabled = configIsLocked() || mounts.length === 1;
+      removeBtn.disabled = configIsLocked() || editor.mounts.length === 1;
       removeBtn.title =
-        mounts.length === 1 ? "Keep at least one fiducial marker" : "Remove this marker";
+        editor.mounts.length === 1 ? "Keep at least one fiducial marker" : "Remove this marker";
       removeBtn.addEventListener("click", () => {
-        if (configIsLocked() || mounts.length === 1) return;
-        mounts = mounts.filter((_, i) => i !== index);
+        if (configIsLocked() || editor.mounts.length === 1) return;
+        editor.mounts = editor.mounts.filter((_, i) => i !== index);
         renderMountEditor();
         schedulePersist();
       });
@@ -673,9 +684,9 @@ import { launcherPresentation } from "./presentation.mjs";
       case "installing":
         return { label: "Installing", detail: "", phase: "installing" };
       case "starting":
-        return { label: "Starting", detail: `Booting ${blueprint}…`, phase: "starting" };
+        return { label: "Starting", detail: `Booting ${configuration.blueprint}…`, phase: "starting" };
       case "running":
-        return { label: "Running", detail: `${blueprint} ARModule listening`, phase: "running" };
+        return { label: "Running", detail: `${configuration.blueprint} ARModule listening`, phase: "running" };
       case "stopping":
         return { label: "Stopping", detail: "Shutting down ARModule…", phase: "stopping" };
       case "error":
@@ -710,11 +721,11 @@ import { launcherPresentation } from "./presentation.mjs";
 
   function renderControls() {
     const view = presentation();
-    applyHeader(lastStatus, view);
+    applyHeader(service.status, view);
     depsSummary.textContent = view.dependencyText;
     depsSummary.dataset.phase = view.dependencyPhase;
     syncInstallBanner(view);
-    startBtn.disabled = view.startDisabled || !settingsReady || !robotProfileId;
+    startBtn.disabled = view.startDisabled || !editor.settingsReady || !editor.robotProfileId || editor.requests.busy("start");
     stopBtn.disabled = false;
     stopBtn.textContent = view.stopLabel;
     stopBtn.classList.toggle("danger", view.stopDanger);
@@ -742,8 +753,8 @@ import { launcherPresentation } from "./presentation.mjs";
     installBanner.classList.toggle("needs-setup", needsInstall || view.hardwareMissing);
 
     const versionBits = [];
-    if (lastStatus.dimos_version) versionBits.push(`DimOS ${lastStatus.dimos_version}`);
-    if (lastStatus.dimos_ref) versionBits.push(lastStatus.dimos_ref);
+    if (service.status.dimos_version) versionBits.push(`DimOS ${service.status.dimos_version}`);
+    if (service.status.dimos_ref) versionBits.push(service.status.dimos_ref);
     dimosVersionHint.textContent = versionBits.join(" · ");
     dimosVersionHint.classList.toggle("hidden", versionBits.length === 0);
   }
@@ -768,7 +779,7 @@ import { launcherPresentation } from "./presentation.mjs";
 
   function applyConnectionStatus(status) {
     setText(hostIp, status.host_ip);
-    const isWebxr = client === "webxr";
+    const isWebxr = configuration.client === "webxr";
     $("hostIpRow").classList.remove("hidden");
     $("pinRow").classList.toggle("hidden", isWebxr);
     setText(pinValue, isWebxr ? null : status.pin);
@@ -781,15 +792,12 @@ import { launcherPresentation } from "./presentation.mjs";
   }
 
   function applyStatus(status) {
-    lastStatus = status || {};
-    if (status.planner) plannerStatus = status.planner;
-    const nextPython = status.dimos_python || null;
-    const environmentChanged = nextPython !== plannerPython;
-    plannerPython = nextPython;
+    service.observe(status);
+    const environmentChanged = hardware.observeStatus(status);
 
-    if (["starting", "running", "stopping"].includes(lastStatus.phase) && status.client) {
-      client = status.client;
-      document.querySelectorAll("[data-client]").forEach(btn => btn.classList.toggle("active", btn.dataset.client === client));
+    if (["starting", "running", "stopping"].includes(service.status.phase) && status.client) {
+      configuration.selectClient(status.client);
+      document.querySelectorAll("[data-client]").forEach(btn => btn.classList.toggle("active", btn.dataset.client === configuration.client));
     }
     applyConnectionStatus(status);
 
@@ -800,21 +808,21 @@ import { launcherPresentation } from "./presentation.mjs";
       warningText.classList.add("hidden");
     }
 
-    if (status.error && lastStatus.phase !== "error") {
+    if (status.error && service.status.phase !== "error") {
       errorText.textContent = status.error;
       errorText.classList.remove("hidden");
     } else {
       errorText.classList.add("hidden");
     }
 
-    if (!settingsReady && "openai_api_key" in status && document.activeElement !== apiKey) {
+    if (!editor.settingsReady && "openai_api_key" in status && document.activeElement !== apiKey) {
       apiKey.value = status.openai_api_key || "";
     }
-    if (!settingsReady && "multiset_client_id" in status && document.activeElement !== multisetClientId) {
+    if (!editor.settingsReady && "multiset_client_id" in status && document.activeElement !== multisetClientId) {
       multisetClientId.value = status.multiset_client_id || "";
     }
     if (
-      !settingsReady && "multiset_client_secret" in status &&
+      !editor.settingsReady && "multiset_client_secret" in status &&
       document.activeElement !== multisetClientSecret
     ) {
       multisetClientSecret.value = status.multiset_client_secret || "";
@@ -905,17 +913,23 @@ import { launcherPresentation } from "./presentation.mjs";
       if (configIsLocked()) return;
       document.querySelectorAll("[data-client]").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
-      client = btn.dataset.client;
-      applyConnectionStatus(lastStatus);
+      configuration.selectClient(btn.dataset.client);
+      applyConnectionStatus(service.status);
     });
   });
 
   blueprintSelect.addEventListener("change", async () => {
     if (configIsLocked()) return;
+    const request = editor.requests.begin("blueprint", () => JSON.stringify([environmentScope(), blueprintSelect.value]));
     const saved = await flushSettings();
-    if (robotProfileId && !saved) { blueprintSelect.value = blueprint; return; }
-    blueprint = blueprintSelect.value;
-    localStorage.setItem("dimos.blueprint", blueprint);
+    if (!request.current()) return;
+    request.finish();
+    if (editor.robotProfileId && !saved) {
+      blueprintSelect.value = configuration.blueprint;
+      return;
+    }
+    configuration.selectBlueprint(blueprintSelect.value);
+    localStorage.setItem("dimos.blueprint", configuration.blueprint);
     applyBlueprintInfo();
   });
 
@@ -941,7 +955,7 @@ import { launcherPresentation } from "./presentation.mjs";
 
   restoreTagsBtn.addEventListener("click", () => {
     if (configIsLocked()) return;
-    mounts = [cloneMount(DEFAULT_MOUNT)];
+    editor.mounts = [cloneMount(DEFAULT_MOUNT)];
     renderMountEditor();
     schedulePersist();
   });
@@ -952,9 +966,9 @@ import { launcherPresentation } from "./presentation.mjs";
       appendLog(`Fiducial marker ID ${markerId} is already in the list`);
       return;
     }
-    const template = cloneMount(mounts[0] || DEFAULT_MOUNT);
+    const template = cloneMount(editor.mounts[0] || DEFAULT_MOUNT);
     template.marker_id = markerId;
-    mounts = [...mounts, template];
+    editor.mounts = [...editor.mounts, template];
     renderMountEditor();
     schedulePersist();
   });
@@ -968,13 +982,12 @@ import { launcherPresentation } from "./presentation.mjs";
       addUploadInput.click();
       return;
     }
-    const template = cloneMount(mounts[0] || DEFAULT_MOUNT);
+    const template = cloneMount(editor.mounts[0] || DEFAULT_MOUNT);
     template.marker_id = nextId;
-    mounts = [...mounts, template];
+    editor.mounts = [...editor.mounts, template];
     renderMountEditor();
     schedulePersist();
   });
-
 
   document.querySelectorAll('input[name="setupMode"]').forEach((el) => {
     el.addEventListener("change", syncSetupMode);
@@ -1001,10 +1014,9 @@ import { launcherPresentation } from "./presentation.mjs";
   logFilterLevel.addEventListener("change", applyLogFilter);
   logFilterSource.addEventListener("change", applyLogFilter);
 
-  let dimosPickerOpen = false;
   dimosPython.addEventListener("click", async () => {
-    if (dimosPickerOpen) return;
-    dimosPickerOpen = true;
+    if (editor.requests.busy("pythonPicker")) return;
+    const request = editor.requests.begin("pythonPicker", () => JSON.stringify([environmentScope(), dimosPython.value]));
     try {
       const res = await fetch("/api/browse-dimos-install", {
         method: "POST",
@@ -1012,15 +1024,16 @@ import { launcherPresentation } from "./presentation.mjs";
         body: JSON.stringify({ path: dimosPython.value }),
       });
       const data = await res.json().catch(() => ({}));
+      if (!request.current()) return;
       if (!res.ok) {
         appendLog(`File chooser error: ${data.detail || res.statusText}`);
       } else if (data.path) {
         dimosPython.value = data.path;
       }
     } catch (err) {
-      appendLog(`File chooser error: ${err}`);
+      if (request.current()) appendLog(`File chooser error: ${err}`);
     } finally {
-      dimosPickerOpen = false;
+      request.finish();
     }
   });
 
@@ -1037,8 +1050,9 @@ import { launcherPresentation } from "./presentation.mjs";
             clone_dir: cloneDir.value.trim(),
             dimos_ref: dimosRef.value.trim() || "main",
           };
-    body.manipulation = blueprint === "openyam_ar_planner";
+    body.manipulation = configuration.manipulation;
     installBtn.disabled = true;
+    const revision = service.revision;
     try {
       const res = await fetch("/api/setup", {
         method: "POST",
@@ -1050,7 +1064,7 @@ import { launcherPresentation } from "./presentation.mjs";
         appendLog(`Setup error: ${data.detail || res.statusText}`);
         installBtn.disabled = false;
       }
-      if (data.phase || "check_ok" in data) applyStatus(data);
+      service.applyResponse(data, revision);
       void refreshCan(); void refreshPlanner();
     } catch (err) {
       appendLog(`Setup error: ${err}`);
@@ -1065,16 +1079,27 @@ import { launcherPresentation } from "./presentation.mjs";
 
   startBtn.addEventListener("click", async () => {
     startBtn.disabled = true;
-    if (!(await saveSettings())) { startBtn.disabled = false; return; }
-    await saveLauncherPreferences().catch(error => appendLog(`Could not save launcher preferences: ${error}`));
+    const selection = () => JSON.stringify([environmentScope(), configuration.client, editor.robotProfileId,
+      $("robotSource").value, robotIp.value, $("replayPath").value, $("playbackSource").value]);
+    const request = editor.requests.begin("start", selection);
+    const saved = await saveSettings();
+    if (!request.current()) return;
+    if (!saved) {
+      request.finish();
+      renderControls();
+      return;
+    }
+    await saveLauncherPreferences().catch(reportPreferencesError);
+    if (!request.current()) return;
     const body = {
-      blueprint,
-      client,
-      profile_id: robotProfileId,
+      blueprint: configuration.blueprint,
+      client: configuration.client,
+      profile_id: editor.robotProfileId,
       source: sourceRequest({ selection: $("robotSource").value, address: robotIp.value,
         replay: $("replayPath").value, playback: $("playbackSource").value,
-        streams: replayStreams[replayRobot(blueprint)] || {} }),
+        streams: preferences.replayStreams[configuration.replayRobot] || {} }),
     };
+    const revision = service.revision;
     try {
       const res = await fetch("/api/armodule/start", {
         method: "POST",
@@ -1082,10 +1107,10 @@ import { launcherPresentation } from "./presentation.mjs";
         body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
+      if (!res.ok && request.current()) {
         const detail = data.detail;
         if (Array.isArray(detail?.devices)) {
-          discoveredRobots[replayRobot(blueprint)] = detail.devices;
+          hardware.discoveredRobots[configuration.replayRobot] = detail.devices;
           renderSourceOptions();
         }
         if (detail?.suggest_simulated) { $("robotSource").value = "simulated"; syncSource(); }
@@ -1093,18 +1118,21 @@ import { launcherPresentation } from "./presentation.mjs";
         appendLog(`Start error: ${detail?.message || detail || res.statusText}`);
         startBtn.disabled = false;
       }
-      if (data.phase) applyStatus(data);
+      service.applyResponse(data, revision);
     } catch (err) {
-      appendLog(`Start error: ${err}`);
-      startBtn.disabled = false;
+      if (request.current()) appendLog(`Start error: ${err}`);
+    } finally {
+      request.finish();
+      renderControls();
     }
   });
 
   stopBtn.addEventListener("click", async () => {
+    const revision = service.revision;
     try {
       const res = await fetch(`/api/armodule/stop?force=${stopBtn.textContent === "Force stop"}`, { method: "POST" });
       const data = await res.json().catch(() => ({}));
-      if (data.phase) applyStatus(data);
+      service.applyResponse(data, revision);
     } catch (err) {
       appendLog(`Stop error: ${err}`);
     }
@@ -1113,17 +1141,22 @@ import { launcherPresentation } from "./presentation.mjs";
   async function loadConfig() {
     try {
       const res = await fetch("/api/settings");
-      if (res.ok) { applySettingsPayload(await res.json()); applyRobotProfile(); }
-    } catch (_) {
-      /* ignore */
+      if (!res.ok) throw new Error("Could not load launcher settings");
+      applySettingsPayload(await res.json());
+      applyRobotProfile();
+      void loadLauncherPreferences();
+    } catch (error) {
+      appendLog(`Settings load failed: ${error}`);
     }
   }
 
   async function loadDimosRefs() {
+    const request = editor.requests.begin("refs", () => dimosRef.value);
     try {
       const res = await fetch("/api/dimos-refs");
       if (!res.ok) return;
       const data = await res.json();
+      if (!request.current()) return;
       const refs = data.refs || ["main"];
       const selected = dimosRef.value || data.default || "main";
       dimosRef.replaceChildren(
@@ -1136,66 +1169,50 @@ import { launcherPresentation } from "./presentation.mjs";
       );
       dimosRef.value = refs.includes(selected) ? selected : refs[0];
     } catch (_) {
-      /* ignore */
-    }
-  }
-
-  function connectEvents() {
-    const source = new EventSource("/api/events");
-    source.onmessage = (ev) => {
-      let data;
-      try {
-        data = JSON.parse(ev.data);
-      } catch (_) {
-        return;
-      }
-      if (data.type === "log") {
-        appendLog(data.line);
-      } else if (data.type === "status") {
-        applyStatus(data);
-      }
-    };
-    source.onerror = () => {
-      // Browser will reconnect; avoid spamming the log.
-    };
+      // Ref suggestions are optional; the selected value remains usable offline.
+    } finally { request.finish(); }
   }
 
   loadConfig();
   loadDimosRefs();
-  connectEvents();
-  fetch("/api/status")
-    .then((r) => r.json())
-    .then(applyStatus)
-    .catch(() => {});
+  service.start();
+  window.addEventListener("pagehide", () => service.stop());
+  window.addEventListener("pageshow", event => { if (event.persisted) service.start(); });
 
-  async function refreshRobotProfiles(preferredId = robotProfileId) {
-    const generation = ++profileLoadGeneration;
-    const robot = blueprint === "openyam_ar_planner" ? "openyam" : "unitree_go2";
+  async function refreshRobotProfiles(preferredId = editor.robotProfileId) {
+    const robot = configuration.robot;
+    if (!robot) return;
+    const request = editor.requests.begin("load", () => configuration.selectionRevision);
     let profiles;
-    try { profiles = await profilesForRobot(fetch, robot, !configIsLocked()); }
-    catch (error) { appendLog(error.message); return; }
-    if (generation !== profileLoadGeneration || robot !== (manipulationSelected() ? "openyam" : "unitree_go2")) return;
-    robotProfiles = profiles;
-    if (!profiles.length) { robotProfileId = null; return; }
-    const select = $("robotProfileSelect"); select.replaceChildren();
-    for (const profile of robotProfiles) {
+    try { profiles = await profilesForRobot(fetch, robot, !configIsLocked(), request.current); }
+    catch (error) {
+      if (request.current()) appendLog(error.message);
+      request.finish();
+      return;
+    }
+    if (!request.current()) return;
+    request.finish();
+    const remembered = localStorage.getItem(`dimos.profile.${robot}`);
+    editor.setProfiles(profiles, preferredId, remembered);
+    if (!profiles.length) return;
+    const select = $("robotProfileSelect");
+    select.replaceChildren();
+    for (const profile of editor.robotProfiles) {
       const option = document.createElement("option"); option.value = profile.id; option.textContent = profile.name; select.append(option);
     }
-    const remembered = localStorage.getItem(`dimos.profile.${robot}`);
-    robotProfileId = robotProfiles.some(p => p.id === preferredId) ? preferredId : robotProfiles.some(p => p.id === remembered) ? remembered : robotProfiles[0].id;
-    localStorage.setItem(`dimos.profile.${robot}`, robotProfileId);
-    select.value = robotProfileId;
+    localStorage.setItem(`dimos.profile.${robot}`, editor.robotProfileId);
+    select.value = editor.robotProfileId;
     applyRobotProfile();
   }
   function applyRobotProfile() {
-    const profile = robotProfiles.find(p => p.id === robotProfileId);
+    const profile = editor.robotProfiles.find(p => p.id === editor.robotProfileId);
     if (!profile) return;
     $("robotProfileName").value = profile.name;
     const settings = profile.settings;
     fiducialEnabled.checked = settings.fiducial_marker;
     vpsEnabled.checked = settings.vps;
     mapCode.value = settings.map_code || "";
-    mounts = settings.mounts.map(cloneMount);
+    editor.mounts = settings.mounts.map(cloneMount);
     Object.entries(policyInputs).forEach(([key, input]) => {
       input.value = String(settings[key] ?? policyDefaults[key]);
     });
@@ -1203,20 +1220,28 @@ import { launcherPresentation } from "./presentation.mjs";
   }
   $("robotProfileSelect").addEventListener("change", async () => {
     if (configIsLocked()) return;
-    if ((persistTimer || robotProfileId) && !(await flushSettings())) { $("robotProfileSelect").value = robotProfileId; return; }
-    robotProfileId = $("robotProfileSelect").value;
-    localStorage.setItem(`dimos.profile.${blueprint === "openyam_ar_planner" ? "openyam" : "unitree_go2"}`, robotProfileId);
+    const select = $("robotProfileSelect");
+    const request = editor.requests.begin("switch", () => JSON.stringify([environmentScope(), select.value]));
+    const saved = await flushSettings();
+    if (!request.current()) return;
+    request.finish();
+    if (editor.robotProfileId && !saved) {
+      select.value = editor.robotProfileId;
+      return;
+    }
+    editor.robotProfileId = select.value;
+    localStorage.setItem(`dimos.profile.${configuration.robot}`, editor.robotProfileId);
     applyRobotProfile();
   });
   function syncSource() {
     const simulated = $("robotSource").value === "simulated";
 
     $("replayRow").classList.toggle("hidden", !simulated);
-    const robot = replayRobot(blueprint);
-    if (robot !== playbackRobot) {
-      playbackRobot = robot;
-      $("replayPath").value = launcherPreferences[replayPreferenceKey(robot)] || "";
-      $("playbackSource").value = robot === "openyam" ? launcherPreferences.openyam_playback || "simulator" : "recording";
+    const robot = configuration.replayRobot;
+    if (robot !== preferences.playbackRobot) {
+      preferences.playbackRobot = robot;
+      $("replayPath").value = preferences.values[replayPreferenceKey(robot)] || "";
+      $("playbackSource").value = robot === "openyam" ? preferences.values.openyam_playback || "simulator" : "recording";
       $("replayStreams").replaceChildren();
       $("replayStatus").textContent = "";
     }
@@ -1224,43 +1249,28 @@ import { launcherPresentation } from "./presentation.mjs";
     $("replayName").textContent = $("replayPath").value || (manipulationSelected() ? "Choose a recording" : "Default recording");
     $("editReplay").disabled = configIsLocked() || $("playbackSource").value !== "recording";
 
-
     syncHardwareSetup();
     if (manipulationSelected()) void refreshCan();
   }
-  robotIp.addEventListener("change", () => { void saveLauncherPreferences(); });
+  robotIp.addEventListener("change", () => { void saveLauncherPreferences().catch(reportPreferencesError); });
   $("robotSource").addEventListener("change", () => {
-    launcherPreferences[`${replayRobot(blueprint)}_source`] = $("robotSource").value;
+    preferences.values[`${configuration.replayRobot}_source`] = $("robotSource").value;
     syncSource();
-    void saveLauncherPreferences();
+    void saveLauncherPreferences().catch(reportPreferencesError);
   });
-  async function refreshRobotDiscovery() {
-    if (configIsLocked() || discoveryPending) return;
-    discoveryPending = true;
-    if (!manipulationSelected()) go2DiscoveryState = {text: "Scanning…", phase: "checking"};
-    syncHardwareSetup();
-    const generation = ++discoveryGeneration;
-    let selected = $("robotSource").value;
-    const requestedPython = plannerPython;
-    const requestedBlueprint = blueprint;
-    $("discoveryStatus").textContent = "Scanning…";
-    try {
-      const response = await fetch(`/api/discovery?robot=${manipulationSelected() ? "openyam" : "unitree_go2"}`);
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || "Discovery failed");
-      if (blueprint !== requestedBlueprint || requestedPython !== plannerPython || generation !== discoveryGeneration) return;
-      selected = $("robotSource").value;
-      if (manipulationSelected() && selected === "auto" && data.devices.length === 1) {
-        resolvedCan = data.devices[0].address; void refreshCan();
-      }
-      discoveredRobots[replayRobot(blueprint)] = data.devices;
-      if (!manipulationSelected()) go2DiscoveryState = {text: data.devices.length ? `${data.devices.length} found` : "None found", phase: data.devices.length ? "ready" : "needs_setup"};
-      renderSourceOptions(selected, "unavailable");
-      $("discoveryStatus").textContent = data.devices.length ? `${data.devices.length} connection(s) found` : "No devices found. Check the connection and try Discover again.";
-    } catch (error) {
-      $("discoveryStatus").textContent = String(error);
-      if (blueprint === requestedBlueprint && !manipulationSelected()) go2DiscoveryState = {text: "Discovery failed", phase: "error"};
-    } finally { discoveryPending = false; syncHardwareSetup(); }
+  function refreshRobotDiscovery() {
+    return hardware.discover({
+      enabled: !configIsLocked() && !!configuration.robot, robot: configuration.robot,
+      auto: () => $("robotSource").value === "auto", scope: environmentScope, changed: syncHardwareSetup,
+      progress: ({ phase, error }) => { $("discoveryStatus").textContent = phase === "checking" ? "Scanning…" : String(error); },
+      received: data => {
+        if (configuration.manipulation) void refreshCan();
+        renderSourceOptions($("robotSource").value, "unavailable");
+        $("discoveryStatus").textContent = data.devices.length
+          ? `${data.devices.length} connection(s) found`
+          : "No devices found. Check the connection and try Discover again.";
+      },
+    });
   }
   $("discoverWebrtc").addEventListener("click", refreshRobotDiscovery);
   $("refreshRobots").addEventListener("click", refreshRobotDiscovery);
@@ -1277,21 +1287,24 @@ import { launcherPresentation } from "./presentation.mjs";
   });
   $("editReplay").addEventListener("click", () => $("replayEditor").classList.toggle("hidden"));
   $("playbackSource").addEventListener("change", () => {
-    if (manipulationSelected()) launcherPreferences.openyam_playback = $("playbackSource").value;
-    syncSource(); void saveLauncherPreferences();
+    if (manipulationSelected()) preferences.values.openyam_playback = $("playbackSource").value;
+    syncSource(); void saveLauncherPreferences().catch(reportPreferencesError);
   });
   async function inspectReplay() {
-    const generation = ++replayInspectionGeneration;
+    const request = preferences.requests.begin("inspect", replayScope);
     const path = $("replayPath").value.trim();
-    if (!path) return;
-    const robot = replayRobot(blueprint);
+    if (!path) {
+      request.finish();
+      return;
+    }
+    const robot = configuration.replayRobot;
     $("replayStatus").textContent = "Checking recording…";
     try {
-      const response = await fetch("/api/replay/inspect", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({path, robot: robot === "go2" ? "unitree_go2" : robot, streams: replayStreams[robot] || {}})});
+      const response = await fetch("/api/replay/inspect", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({path, robot: robot === "go2" ? "unitree_go2" : robot, streams: preferences.replayStreams[robot] || {}})});
       const data = await response.json();
-      if (generation !== replayInspectionGeneration || robot !== playbackRobot || path !== $("replayPath").value.trim()) return;
+      if (!request.current()) return;
       if (!response.ok) throw new Error(data.detail || "Invalid recording");
-      replayStreams[robot] = data.streams;
+      preferences.replayStreams[robot] = data.streams;
       $("replayStreams").replaceChildren();
       for (const [role, choices] of Object.entries(data.candidates)) {
         if (choices.length < 2) continue;
@@ -1300,60 +1313,64 @@ import { launcherPresentation } from "./presentation.mjs";
         const empty = document.createElement("option"); empty.value = ""; empty.textContent = "Choose stream"; select.append(empty);
         for (const name of choices) { const option = document.createElement("option"); option.value = name; option.textContent = name; select.append(option); }
         select.value = data.streams[role] || "";
-        select.addEventListener("change", () => { if (select.value) replayStreams[robot][role] = select.value; else delete replayStreams[robot][role]; void inspectReplay(); });
+        select.addEventListener("change", () => { if (select.value) preferences.replayStreams[robot][role] = select.value; else delete preferences.replayStreams[robot][role]; void inspectReplay(); });
         label.append(select); $("replayStreams").append(label);
       }
       $("replayStatus").textContent = data.needs_selection ? "Choose streams before starting." : "Recording ready · read-only · 1×";
-      void saveLauncherPreferences();
-    } catch (error) { $("replayStatus").textContent = String(error); }
+      void saveLauncherPreferences().catch(reportPreferencesError);
+    } catch (error) {
+      if (request.current()) $("replayStatus").textContent = String(error);
+    } finally { request.finish(); }
   }
   $("replayPath").addEventListener("change", () => {
-    const robot = replayRobot(blueprint);
+    const robot = configuration.replayRobot;
     const path = $("replayPath").value.trim();
-    if (path === (launcherPreferences[replayPreferenceKey(robot)] || "")) return;
-    replayStreams[robot] = {};
-    launcherPreferences[replayPreferenceKey(robot)] = path;
-    syncSource(); void saveLauncherPreferences(); void inspectReplay();
+    if (path === (preferences.values[replayPreferenceKey(robot)] || "")) return;
+    preferences.replayStreams[robot] = {};
+    preferences.values[replayPreferenceKey(robot)] = path;
+    syncSource(); void saveLauncherPreferences().catch(reportPreferencesError); void inspectReplay();
   });
   $("browseReplay").addEventListener("click", async () => {
     if (configIsLocked()) return;
+    const request = preferences.requests.begin("browse", replayScope);
     try {
       const response = await fetch("/api/browse-replay", { method: "POST" });
       const data = await response.json();
+      if (!request.current()) return;
       if (!response.ok) throw new Error(data.detail || "Could not select recording");
       if (data.path) { $("replayPath").value = data.path; $("replayPath").dispatchEvent(new Event("change")); }
-    } catch (error) { $("discoveryStatus").textContent = String(error); }
+    } catch (error) {
+      if (request.current()) $("discoveryStatus").textContent = String(error);
+    } finally { request.finish(); }
   });
   $("defaultReplay").addEventListener("click", () => {
-    $("replayPath").value = ""; launcherPreferences[replayPreferenceKey(playbackRobot)] = "";
-    replayStreams[playbackRobot] = {}; replayInspectionGeneration++;
+    $("replayPath").value = ""; preferences.values[replayPreferenceKey(preferences.playbackRobot)] = "";
+    preferences.replayStreams[preferences.playbackRobot] = {};
+    preferences.requests.cancel("inspect");
     $("replayStreams").replaceChildren(); $("replayStatus").textContent = "";
-    syncSource(); void saveLauncherPreferences();
+    syncSource(); void saveLauncherPreferences().catch(reportPreferencesError);
   });
-  void fetch("/api/launcher-preferences").then(async response => {
-    if (!response.ok) throw new Error((await response.json()).detail || "Could not load saved preferences");
-    return response.json();
-  }).then(preferences => {
-    if (configIsLocked() || preferencesEdited) return;
-    for (const key of Object.keys(launcherPreferences)) {
-      if (typeof preferences[key] === "string") launcherPreferences[key] = preferences[key];
+  async function loadLauncherPreferences() {
+    try {
+      const response = await fetch("/api/launcher-preferences");
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Could not load saved preferences");
+      if (configIsLocked() || !preferences.hydrate(data)) return;
+      if (typeof data.manual_ip === "string") robotIp.value = data.manual_ip;
+      const value = preferences.values[`${configuration.replayRobot}_source`] || "auto";
+      renderSourceOptions(value);
+      syncSource();
+      if (value.startsWith("device:")) void refreshRobotDiscovery();
+    } catch (error) {
+      if (!preferences.edited) appendLog(`Could not load launcher preferences: ${error}`);
     }
-    Object.assign(replayStreams, preferences.replay_streams || {});
-    playbackRobot = null;
-    if (typeof preferences.manual_ip === "string") robotIp.value = preferences.manual_ip;
-    const value = launcherPreferences[`${replayRobot(blueprint)}_source`] || "auto";
-    renderSourceOptions(value); syncSource();
-    if (value.startsWith("device:")) void refreshRobotDiscovery();
-  }).catch(error => appendLog(`Could not load launcher preferences: ${error}`));
-  async function saveLauncherPreferences() {
-    preferencesEdited = true;
-    launcherPreferences[`${replayRobot(blueprint)}_source`] = $("robotSource").value;
-    const body = JSON.stringify({ ...launcherPreferences, replay_streams: replayStreams, manual_ip: robotIp.value.trim() });
-    preferencesSave = preferencesSave.catch(() => {}).then(async () => {
-      const response = await fetch("/api/launcher-preferences", {method: "PUT", headers: {"Content-Type": "application/json"}, body});
-      if (!response.ok) throw new Error("Could not save launcher preferences");
-    });
-    return preferencesSave;
+  }
+  function reportPreferencesError(error) { appendLog(`Could not save launcher preferences: ${error}`); }
+  function saveLauncherPreferences() {
+    preferences.values[`${configuration.replayRobot}_source`] = $("robotSource").value;
+    return preferences.save(body => fetch("/api/launcher-preferences", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body,
+    }), robotIp.value.trim());
   }
   $("profileEdit").addEventListener("click", () => {
     if (configIsLocked()) return;
@@ -1362,7 +1379,7 @@ import { launcherPresentation } from "./presentation.mjs";
     $("profileEdit").setAttribute("aria-expanded", String(!editor.classList.contains("hidden")));
     if (!editor.classList.contains("hidden")) $("robotProfileName").focus();
   });
-  const closeProfileEditor = () => { $("robotProfileName").value = robotProfiles.find(profile => profile.id === robotProfileId)?.name || ""; $("deleteProfileConfirm").classList.add("hidden"); $("profileEditor").classList.add("hidden"); $("profileEdit").setAttribute("aria-expanded", "false"); };
+  const closeProfileEditor = () => { $("robotProfileName").value = editor.robotProfiles.find(profile => profile.id === editor.robotProfileId)?.name || ""; $("deleteProfileConfirm").classList.add("hidden"); $("profileEditor").classList.add("hidden"); $("profileEdit").setAttribute("aria-expanded", "false"); };
   $("profileDone").addEventListener("click", closeProfileEditor);
   document.addEventListener("click", event => {
     if (!$("profileEditor").contains(event.target) && !$("profileEdit").contains(event.target)) closeProfileEditor();
@@ -1370,26 +1387,62 @@ import { launcherPresentation } from "./presentation.mjs";
   document.addEventListener("keydown", event => { if (event.key === "Escape") closeProfileEditor(); });
   $("cancelProfileName").addEventListener("click", () => { applyRobotProfile(); closeProfileEditor(); });
   $("robotProfileName").addEventListener("keydown", event => { if (event.key === "Enter") $("saveProfileName").click(); });
+  function profileScope() {
+    return JSON.stringify([configuration.blueprint, editor.robotProfileId]);
+  }
   $("saveProfileName").addEventListener("click", async () => {
-    if (configIsLocked() || !robotProfileId) return;
-    const response = await fetch(`/api/robot-profiles/${robotProfileId}`, { method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name: $("robotProfileName").value}) });
-    if (!response.ok) { $("profileError").textContent = "Could not save profile name. Use 1–80 characters."; $("profileError").classList.remove("hidden"); return; }
-    $("profileError").classList.add("hidden");
-    await refreshRobotProfiles(); closeProfileEditor();
+    if (configIsLocked() || !editor.robotProfileId || editor.requests.busy("rename")) return;
+    const id = editor.robotProfileId;
+    const request = editor.requests.begin("rename", profileScope);
+    try {
+      const response = await fetch(`/api/robot-profiles/${id}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: $("robotProfileName").value }),
+      });
+      if (!request.current()) return;
+      if (!response.ok) throw new Error("Could not save profile name. Use 1–80 characters.");
+      $("profileError").classList.add("hidden");
+      await refreshRobotProfiles();
+      if (request.current()) closeProfileEditor();
+    } catch (error) {
+      if (!request.current()) return;
+      $("profileError").textContent = String(error);
+      $("profileError").classList.remove("hidden");
+    } finally { request.finish(); }
   });
   async function createRobotProfile() {
-    if (configIsLocked()) return;
-    if (!(await saveSettings())) return;
-    const response = await fetch("/api/robot-profiles", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({robot: blueprint === "openyam_ar_planner" ? "openyam" : "unitree_go2",  source_id: null}) });
-    const created = await response.json();
-    if (!response.ok) { appendLog("Profile creation failed"); return; }
-    await refreshRobotProfiles(created.id);
+    if (configIsLocked() || editor.requests.busy("create")) return;
+    const robot = configuration.robot;
+    const request = editor.requests.begin("create", environmentScope);
+    try {
+      const saved = await saveSettings();
+      if (!request.current() || !saved) return;
+      const response = await fetch("/api/robot-profiles", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ robot, source_id: null }),
+      });
+      const created = await response.json();
+      if (!request.current()) return;
+      if (!response.ok) throw new Error("Profile creation failed");
+      await refreshRobotProfiles(created.id);
+    } catch (error) {
+      if (request.current()) appendLog(String(error));
+    } finally { request.finish(); }
   }
-  $("newRobotProfile").addEventListener("click", () => createRobotProfile());
+  $("newRobotProfile").addEventListener("click", createRobotProfile);
   $("deleteRobotProfile").addEventListener("click", () => $("deleteProfileConfirm").classList.remove("hidden"));
   $("confirmDeleteProfile").addEventListener("click", async () => {
-    if (configIsLocked() || !robotProfileId) return;
-    const response = await fetch(`/api/robot-profiles/${robotProfileId}`, {method: "DELETE"});
-    if (response.ok) { $("deleteProfileConfirm").classList.add("hidden"); await refreshRobotProfiles(null); } else appendLog("Profile deletion failed");
+    if (configIsLocked() || !editor.robotProfileId || editor.requests.busy("delete")) return;
+    const id = editor.robotProfileId;
+    const request = editor.requests.begin("delete", profileScope);
+    try {
+      const response = await fetch(`/api/robot-profiles/${id}`, { method: "DELETE" });
+      if (!request.current()) return;
+      if (!response.ok) throw new Error("Profile deletion failed");
+      $("deleteProfileConfirm").classList.add("hidden");
+      await refreshRobotProfiles(null);
+    } catch (error) {
+      if (request.current()) appendLog(String(error));
+    } finally { request.finish(); }
   });
 })();

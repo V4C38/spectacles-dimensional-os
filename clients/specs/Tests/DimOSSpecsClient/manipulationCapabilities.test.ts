@@ -11,7 +11,7 @@ function fixture(navigation: boolean, manipulation: boolean) {
     manipulation: state };
   const interaction = { retainingFeedback: false, available: true, dragging: false };
   const core = { interaction, tick: vi.fn(), suspend: vi.fn() };
-  const renderer = { apply: vi.fn() };
+  const renderer = { apply: vi.fn<SpecsManipulationController["renderer"]["apply"]>() };
   const input = { reset: vi.fn(), tick: vi.fn(), updateCursor: vi.fn(), capture: { owner: null } };
   let currentOrigin: typeof origin | null = origin;
   const controller = Object.assign(Object.create(SpecsManipulationController.prototype), {
@@ -25,7 +25,9 @@ it.each([[true, false], [false, true], [true, true], [false, false]])(
     const f = fixture(navigation, manipulation);
     f.controller.tick(true);
     expect(f.core.tick).toHaveBeenLastCalledWith(manipulation);
-    expect(f.renderer.apply.mock.calls.at(-1)![1]).toBe(manipulation ? origin : null);
+    expect(f.renderer.apply).toHaveBeenLastCalledWith(expect.objectContaining({
+      origin: manipulation ? origin : null, enabled: manipulation, state: f.state,
+    }));
     expect(f.input.tick).toHaveBeenLastCalledWith(manipulation);
   },
 );
@@ -39,8 +41,10 @@ it("hides cached arm feedback and clears input when the blueprint loses manipula
   f.controller.tick(true);
   expect(f.core.suspend).toHaveBeenCalledOnce();
   expect(f.input.reset).toHaveBeenCalledOnce();
-  expect(f.renderer.apply.mock.calls.at(-1)![1]).toBeNull();
-  expect(f.renderer.apply.mock.calls.at(-1)![0].model).toBe(f.state.model);
+  expect(f.renderer.apply).toHaveBeenLastCalledWith(expect.objectContaining({
+    origin: null, state: f.state, enabled: false,
+  }));
+  expect(f.renderer.apply.mock.lastCall?.[0].state?.model).toBe(f.state.model);
 });
 it("retains the arm on feedback loss while its capability remains available", () => {
   const f = fixture(true, true);
@@ -49,7 +53,9 @@ it("retains the arm on feedback loss while its capability remains available", ()
   f.loseOrigin();
   f.controller.tick(false);
   expect(f.core.suspend).not.toHaveBeenCalled();
-  expect(f.renderer.apply.mock.calls.at(-1)![1]).toBe(origin);
+  expect(f.renderer.apply).toHaveBeenLastCalledWith(expect.objectContaining({
+    origin, state: f.state, enabled: true,
+  }));
 });
 
 it("retains the arm through transient unknown capabilities during reconnect", () => {
@@ -62,5 +68,7 @@ it("retains the arm through transient unknown capabilities during reconnect", ()
   f.loseOrigin();
   f.controller.tick(false);
   expect(f.core.suspend).not.toHaveBeenCalled();
-  expect(f.renderer.apply.mock.calls.at(-1)![1]).toBe(origin);
+  expect(f.renderer.apply).toHaveBeenLastCalledWith(expect.objectContaining({
+    origin, state: f.state, enabled: true,
+  }));
 });

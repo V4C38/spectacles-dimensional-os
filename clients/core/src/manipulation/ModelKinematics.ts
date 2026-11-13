@@ -1,21 +1,12 @@
-import { rotateVecByQuat, multiplyRotation } from "../localization/ClientTracking";
-import type { Quat, Vec3 } from "../ClientContracts";
+import { composePose } from "../localization/ClientTracking";
+import type { Quat, Vec3, ReadonlyFacts } from "../ClientContracts";
 import type { ManipulationModel, ManipulationPlan, ManipulationPose, ManipulationGroup } from "./ManipulationTypes";
 
-export function composePose(
-  a: ManipulationPose,
-  b: ManipulationPose,
-): ManipulationPose {
-  const p = rotateVecByQuat(a.orientation, b.position);
-  return {
-    position: p.map((v, i) => v + a.position[i]) as Vec3,
-    orientation: multiplyRotation(a.orientation, b.orientation),
-  };
-}
+export { composePose, inversePose } from "../localization/ClientTracking";
 /** Visual FK only, using the configured model descriptor; never used for control. */
 export function linkPoses(
-  model: ManipulationModel,
-  values: Record<string, number>,
+  model: ReadonlyFacts<ManipulationModel>,
+  values: Readonly<Record<string, number>>,
 ): Record<string, ManipulationPose> {
   const poses: Record<string, ManipulationPose> = {
     [model.root]: { position: [0, 0, 0], orientation: [0, 0, 0, 1] },
@@ -59,7 +50,7 @@ export function linkPoses(
   return poses;
 }
 export function samplePlan(
-  plan: ManipulationPlan,
+  plan: ReadonlyFacts<ManipulationPlan>,
   time: number,
 ): Record<string, number> {
   let a = plan.trajectory[0],
@@ -81,21 +72,15 @@ export function samplePlan(
   );
 }
 
-export function manipulationPlanPath(model: ManipulationModel, plan: ManipulationPlan,
-  tip: string, values: Record<string, number>, root: ManipulationPose, startTime = 0): Vec3[] {
+export function manipulationPlanPath(model: ReadonlyFacts<ManipulationModel>, plan: ReadonlyFacts<ManipulationPlan>,
+  tip: string, values: Readonly<Record<string, number>>, root: ReadonlyFacts<ManipulationPose>, startTime = 0): Vec3[] {
   const count = Math.min(240, Math.max(2, Math.ceil(plan.duration * 30)));
   return Array.from({ length: count + 1 }, (_, i) => composePose(root,
     linkPoses(model, { ...values, ...samplePlan(plan, startTime + (plan.duration - startTime) * i / count) })[tip]).position);
 }
 
-export function inversePose(pose: ManipulationPose): ManipulationPose {
-  const q = pose.orientation;
-  const inverse: Quat = [-q[0], -q[1], -q[2], q[3]];
-  return { position: rotateVecByQuat(inverse, pose.position.map(v => -v) as Vec3), orientation: inverse };
-}
-
 export function toolSubtree(
-  model: ManipulationModel,
+  model: ReadonlyFacts<ManipulationModel>,
   tipFrame: string,
 ): {
   root: string;
@@ -116,8 +101,8 @@ export function toolSubtree(
 
 /** Map normalized opening only to this group's independent finger joints. */
 export function gripperJointValues(
-  model: ManipulationModel,
-  group: ManipulationGroup | undefined,
+  model: ReadonlyFacts<ManipulationModel>,
+  group: ReadonlyFacts<ManipulationGroup> | undefined,
   opening: number | null | undefined,
 ): Record<string, number> {
   if (opening == null || !group?.has_gripper || !group.tip_frame) return {};

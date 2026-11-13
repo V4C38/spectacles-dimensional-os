@@ -1,3 +1,4 @@
+import type { ReadonlyFacts } from "../ClientContracts";
 import type { ManipulationPose, ManipulationGroup, ManipulationModel, ManipulationPlan, ManipulationState } from "./ManipulationTypes";
 import { gripperJointValues, samplePlan, composePose, inversePose } from "./ModelKinematics";
 import type { Vec3 } from "../ClientContracts";
@@ -5,8 +6,8 @@ import type { ClientNotification } from "../presentation/NotificationCenter";
 
 export const MANIPULATION_PLAN_INTERVAL_S = 0.05;
 export function poseChanged(
-  a: ManipulationPose,
-  b: ManipulationPose,
+  a: ReadonlyFacts<ManipulationPose>,
+  b: ReadonlyFacts<ManipulationPose>,
   distance = 0.01,
   angle = Math.PI / 60,
 ): boolean {
@@ -26,8 +27,8 @@ export function poseChanged(
 
 /** Hysteresis is based on raw observed poses, never on presentation smoothing. */
 export function targetIsOffset(
-  target: ManipulationPose | null,
-  measured: ManipulationPose | null | undefined,
+  target: ReadonlyFacts<ManipulationPose> | null,
+  measured: ReadonlyFacts<ManipulationPose> | null | undefined,
   wasOffset = false,
 ): boolean {
   return (
@@ -44,7 +45,7 @@ export function targetIsOffset(
 
 export interface ManipulationRejection {
   revision: number;
-  pose: ManipulationPose;
+  pose: ReadonlyFacts<ManipulationPose>;
   message: string;
   failedJoints?: string[];
 }
@@ -158,22 +159,28 @@ export function shortManipulationStatus(message: string): string {
 }
 
 export class ManipulationPreviewPlayback {
-  previewRequested = false;
+  private requested = false;
+  get previewRequested(): boolean { return this.requested; }
   private previewId: string | null = null;
   private started = 0;
   private sampledAt: number | null = null;
   hold(now: number): void { if(this.sampledAt!==null) this.started+=now-this.sampledAt; this.sampledAt=now; }
   private pendingStart = false;
-  togglePreview(): void { this.previewRequested = !this.previewRequested; this.pendingStart = this.previewRequested; }
-  reset(): void { this.previewRequested = false; this.previewId = null; this.pendingStart = false; }
-  sample(plan: ManipulationPlan | null, now: number): { playing: boolean; time: number } {
+  setRequested(requested: boolean): void {
+    if (requested && !this.requested) this.pendingStart = true;
+    if (!requested) this.pendingStart = false;
+    this.requested = requested;
+  }
+  togglePreview(): void { this.setRequested(!this.requested); }
+  reset(): void { this.requested = false; this.previewId = null; this.pendingStart = false; }
+  sample(plan: ReadonlyFacts<ManipulationPlan> | null, now: number): { playing: boolean; time: number } {
     if (plan?.plan_id !== this.previewId || this.pendingStart) {
       this.previewId = plan?.plan_id ?? null; this.started = now; this.pendingStart = false;
     }
     this.sampledAt = now;
     const time = Math.max(0, now - this.started);
     const playing = this.previewRequested && !!plan && time <= plan.duration;
-    if (plan && time > plan.duration) this.previewRequested = false;
+    if (plan && time > plan.duration) this.requested = false;
     return { playing, time: playing ? time : plan?.duration ?? 0 };
   }
 }
@@ -207,33 +214,33 @@ export function manipulationPathOpacity(intent: ManipulationSnapshot,
 
 /** A reviewed endpoint cannot replace live IK while a new drag is active. */
 export function manipulationPreviewPlan(
-  plan: ManipulationPlan | null,
+  plan: ReadonlyFacts<ManipulationPlan> | null,
   selected: boolean,
   dragging: boolean,
   rejected: boolean,
-): ManipulationPlan | null {
+): ReadonlyFacts<ManipulationPlan> | null {
   return selected && !dragging && !rejected ? plan : null;
 }
 
 
 export function manipulationObservedJoints(
-  model: ManipulationModel, state: ManipulationState, group: ManipulationGroup | undefined,
+  model: ReadonlyFacts<ManipulationModel>, state: ReadonlyFacts<ManipulationState>, group: ReadonlyFacts<ManipulationGroup> | undefined,
 ): Record<string, number> {
   const observed = group ? state.observations?.[group.id] : null;
   return Object.assign({}, ...Object.values(state.observations ?? {}).map(row => row.joints ?? {}),
     gripperJointValues(model, group, observed?.gripper));
 }
 
-export function manipulationActivePlan(state: ManipulationState, draft: ManipulationPlan | null,
-  executing: boolean): ManipulationPlan | null {
+export function manipulationActivePlan(state: ReadonlyFacts<ManipulationState>, draft: ReadonlyFacts<ManipulationPlan> | null,
+  executing: boolean): ReadonlyFacts<ManipulationPlan> | null {
   return state.stopped ? null : (executing ? state.plan : draft) ?? null;
 }
 
 /** Both renderers articulate the same measured base, live IK, reviewed endpoint and gripper draft. */
 export function manipulationProposedJoints(
-  model: ManipulationModel, group: ManipulationGroup | undefined, measured: Record<string, number>,
+  model: ReadonlyFacts<ManipulationModel>, group: ReadonlyFacts<ManipulationGroup> | undefined, measured: Record<string, number>,
   input: {
-    plan: ManipulationPlan | null;
+    plan: ReadonlyFacts<ManipulationPlan> | null;
     playback: { playing: boolean; time: number };
     selected: boolean;
     dragging: boolean;
@@ -255,7 +262,7 @@ export const ARM_VISUAL_STYLE = {
   color: 0xcbd9df, errorColor: 0xff453a, warningColor: 0xffcc00,
 } as const;
 
-export function armLinkWeight(current: ManipulationPose, proposed: ManipulationPose): number {
+export function armLinkWeight(current: ReadonlyFacts<ManipulationPose>, proposed: ReadonlyFacts<ManipulationPose>): number {
   const distance = Math.hypot(...current.position.map((v, i) => v - proposed.position[i]));
   const angle = 2 * Math.acos(Math.min(1, Math.abs(current.orientation.reduce((n, v, i) => n + v * proposed.orientation[i], 0))));
   const t = Math.max(0, Math.min(1, (Math.max(distance / 0.10, angle / (Math.PI / 6)) - 0.06) / 0.94));
@@ -337,7 +344,7 @@ export class ArmMeshFade {
 }
 
 /** Resolve the two rigid transforms once per link, rather than once per vertex. */
-export function armPointDisplacement(measured: ManipulationPose, proposed: ManipulationPose): (x: number, y: number, z: number) => number {
+export function armPointDisplacement(measured: ReadonlyFacts<ManipulationPose>, proposed: ReadonlyFacts<ManipulationPose>): (x: number, y: number, z: number) => number {
   const coefficients = armTransformDifference(measured, proposed);
   const r = coefficients.slice(0, 9), p = coefficients.slice(9);
   if (r.every(v => Math.abs(v)<1e-12) && p.every(v => Math.abs(v)<1e-12)) return () => 0;
@@ -349,7 +356,7 @@ export function armPointDisplacement(measured: ManipulationPose, proposed: Manip
 }
 
 /** ROS roll/pitch/yaw relative to the robot base, in degrees. */
-export function endEffectorAngles(base: ManipulationPose, ee: ManipulationPose): string {
+export function endEffectorAngles(base: ReadonlyFacts<ManipulationPose>, ee: ReadonlyFacts<ManipulationPose>): string {
   const [x,y,z,w] = composePose(inversePose(base), ee).orientation;
   const roll = Math.atan2(2*(w*x+y*z), 1-2*(x*x+y*y));
   const pitch = Math.asin(Math.max(-1, Math.min(1, 2*(w*y-z*x))));
@@ -359,10 +366,10 @@ export function endEffectorAngles(base: ManipulationPose, ee: ManipulationPose):
 
 /** A retained target is displayed only while its interaction is active. */
 export function endEffectorDisplayPose(
-  measured: ManipulationPose | null | undefined,
-  target: ManipulationPose | null | undefined,
+  measured: ReadonlyFacts<ManipulationPose> | null | undefined,
+  target: ReadonlyFacts<ManipulationPose> | null | undefined,
   input: { selected: boolean; following: boolean; dragging: boolean; finishing: boolean; offset: boolean; sharedDraft?: boolean },
-): ManipulationPose | null | undefined {
+): ReadonlyFacts<ManipulationPose> | null | undefined {
   const active = input.selected || input.following || input.dragging || input.finishing || input.sharedDraft;
   return active && (input.offset || input.dragging) && target ? target : measured;
 }
@@ -379,7 +386,7 @@ export class ArmOpacityCadence {
 }
 
 /** Difference of rigid transforms in the caller's coordinate and unit convention. */
-export function armTransformDifference(measured: ManipulationPose, proposed: ManipulationPose): number[] {
+export function armTransformDifference(measured: ReadonlyFacts<ManipulationPose>, proposed: ReadonlyFacts<ManipulationPose>): number[] {
   const rotation = ([x,y,z,w]: readonly number[]) => [
     1-2*(y*y+z*z),2*(x*y-z*w),2*(x*z+y*w),
     2*(x*y+z*w),1-2*(x*x+z*z),2*(y*z-x*w),

@@ -1,7 +1,8 @@
+import { CapturePoseHistory, lookupPoseSample as lookupSharedPose } from "@dimos-ar-client/localization/CapturePoseHistory";
 import type { EncodeResponse } from "./JpegWorker";
 import type { CameraCaptureSource, CameraTrackingSource, ClientClock, LocalizationObservation, Quat, Vec3 } from "@dimos-ar-client/ClientContracts";
 
-import { rotateVecByQuat } from "@dimos-ar-client/localization/ClientTracking";
+import { composePose } from "@dimos-ar-client/localization/ClientTracking";
 import { webxrOpticalToClientTrackingPose } from "../utilities/WebXRCoordinates";
 import { reportDiagnostic } from "../diagnostics/Diagnostics";
 import { frameTimeToClientClock } from "../utilities/BrowserClientClock";
@@ -61,40 +62,12 @@ export function selectFrameTimestamp(metadata: VideoFrameMetadata): number {
   throw new Error("frame timestamp is missing");
 }
 
-export function lookupPoseSample(
-  buffer: readonly WebXRPoseSample[],
-  ts: number,
-): WebXRPoseSample | null {
-  if (buffer.length === 0) {
-    return null;
-  }
-  let before: WebXRPoseSample | null = null;
-  let after: WebXRPoseSample | null = null;
-  for (const sample of buffer) {
-    if (sample.t <= ts) {
-      before = sample;
-    } else if (!after) {
-      after = sample;
-      break;
-    }
-  }
-  if (before && after && after.t > before.t) {
-    if (ts - before.t > STALE_POSE_S || after.t - ts > STALE_POSE_S) return null;
-    const alpha = (ts - before.t) / (after.t - before.t);
-    return {
-      t: ts,
-      position: lerpVec3(before.position, after.position, alpha),
-      orientation: slerpQuat(before.orientation, after.orientation, alpha),
-    };
-  }
-  const nearest = before ?? after ?? buffer[buffer.length - 1];
-  if (Math.abs(nearest.t - ts) > STALE_POSE_S) {
-    return null;
-  }
-  return nearest;
+export function lookupPoseSample(buffer: readonly WebXRPoseSample[], ts: number): WebXRPoseSample | null {
+  const sample = lookupSharedPose(buffer, ts, { maxNearestAgeS: STALE_POSE_S, maxBracketAgeS: STALE_POSE_S });
+  return sample ? { t: sample.t, position: [...sample.position], orientation: [...sample.orientation] } : null;
 }
 
-type FrozenFrame = { ts: number; pose: WebXRPoseSample; encoded: ReturnType<JpegEncoder["encode"]> };
+type FrozenFrame = { ts: number; pose: { readonly t: number; readonly position: Readonly<Vec3>; readonly orientation: Readonly<Quat> }; encoded: ReturnType<JpegEncoder["encode"]> };
 
 export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSource {
   private readonly clock: ClientClock;
@@ -105,7 +78,7 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
   private staleCaptures = 0;
   private readonly performanceNow: () => number;
   private readonly videoFactory: () => HTMLVideoElement;
-  private readonly poseBuffer: WebXRPoseSample[] = [];
+  private readonly poseHistory = new CapturePoseHistory(POSE_BUFFER_CAPACITY, { maxNearestAgeS: STALE_POSE_S, maxBracketAgeS: STALE_POSE_S });
   private stream: MediaStream | null = null;
   private video: HTMLVideoElement | null = null;
   private operation = new AbortController();
@@ -144,21 +117,20 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
   }
 
   samplePose(position: Vec3, orientation: Quat, timestamp = this.clock.now()): void {
-    this.poseBuffer.push({ t: timestamp, position: [...position], orientation: [...orientation] });
-    if (this.poseBuffer.length > POSE_BUFFER_CAPACITY) this.poseBuffer.shift();
+    this.poseHistory.sample({ t: timestamp, position, orientation });
   }
 
   // Stream start/stop belongs to the capture episode; tracking invalidation only retires poses.
-  clearTracking(): void { this.poseBuffer.length = 0; this.staleCaptures = 0; }
+  clearTracking(): void { this.poseHistory.clear(); this.staleCaptures = 0; }
 
   trackingPosition(): Vec3 {
-    const latest = this.poseBuffer[this.poseBuffer.length - 1];
+    const latest = this.poseHistory.latest();
     if (!latest || this.clock.now() - latest.t > STALE_POSE_S) throw new Error("no current viewer pose");
     return webxrOpticalToClientTrackingPose(latest).position;
   }
 
   cameraOptical(): { position: Vec3; orientation: Quat } {
-    const latest = this.poseBuffer[this.poseBuffer.length - 1];
+    const latest = this.poseHistory.latest();
     if (!latest || this.clock.now() - latest.t > STALE_POSE_S) throw new Error("no current viewer pose");
     requireUsableProfile(this.profileOf());
     return composeOptical(latest, this.profileOf());
@@ -192,7 +164,7 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
         this.waiting = null;
         try {
           const ts = frameTimeToClientClock(selectFrameTimestamp(metadata), this.clock, this.performanceNow());
-          const pose = lookupPoseSample(this.poseBuffer, ts);
+          const pose = this.poseHistory.read(ts);
           if (!pose) throw new Error("no viewer pose for capture timestamp");
           // encode() draws synchronously here, before the video advances. The asynchronous
           // JPEG completion cannot change the pixels, timestamp, profile or sampled pose.
@@ -320,13 +292,8 @@ function bounded<T>(pending: Promise<T>, signal: AbortSignal, timeoutMs: number)
   });
 }
 
-export function composeOptical(pose: WebXRPoseSample, profile: HmdCalibrationProfile): { position: Vec3; orientation: Quat } {
-  const extra = profile.T_viewer_optical;
-  const offset = rotateVecByQuat(pose.orientation, extra.position);
-  return webxrOpticalToClientTrackingPose({
-    position: [pose.position[0] + offset[0], pose.position[1] + offset[1], pose.position[2] + offset[2]],
-    orientation: quatMultiply(pose.orientation, extra.orientation),
-  });
+export function composeOptical(pose: { readonly t?: number; readonly position: readonly [number, number, number]; readonly orientation: readonly [number, number, number, number] }, profile: HmdCalibrationProfile): { position: Vec3; orientation: Quat } {
+  return webxrOpticalToClientTrackingPose(composePose(pose, profile.T_viewer_optical));
 }
 
 function createVideoElement(): HTMLVideoElement {
@@ -335,51 +302,6 @@ function createVideoElement(): HTMLVideoElement {
   video.playsInline = true;
   video.autoplay = true;
   return video;
-}
-
-function lerpVec3(a: Vec3, b: Vec3, t: number): Vec3 {
-  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
-}
-
-function slerpQuat(a: Quat, b: Quat, t: number): Quat {
-  let dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
-  let bAdj: Quat = b;
-  if (dot < 0) {
-    bAdj = [-b[0], -b[1], -b[2], -b[3]];
-    dot = -dot;
-  }
-  if (dot > 0.9995) {
-    return normalizeQuatTuple([
-      a[0] + (bAdj[0] - a[0]) * t,
-      a[1] + (bAdj[1] - a[1]) * t,
-      a[2] + (bAdj[2] - a[2]) * t,
-      a[3] + (bAdj[3] - a[3]) * t,
-    ]);
-  }
-  const theta = Math.acos(Math.min(1, dot));
-  const sinTheta = Math.sin(theta);
-  const w1 = Math.sin((1 - t) * theta) / sinTheta;
-  const w2 = Math.sin(t * theta) / sinTheta;
-  return [
-    a[0] * w1 + bAdj[0] * w2,
-    a[1] * w1 + bAdj[1] * w2,
-    a[2] * w1 + bAdj[2] * w2,
-    a[3] * w1 + bAdj[3] * w2,
-  ];
-}
-
-function normalizeQuatTuple(q: Quat): Quat {
-  const length = Math.hypot(q[0], q[1], q[2], q[3]);
-  return [q[0] / length, q[1] / length, q[2] / length, q[3] / length];
-}
-
-function quatMultiply(a: Quat, b: Quat): Quat {
-  return [
-    a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
-    a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
-    a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
-    a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
-  ];
 }
 
 export function browserMediaPort(): CameraMediaPort {

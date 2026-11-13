@@ -125,7 +125,7 @@ export class AdaptiveStrokeRenderer extends WorldMeshRenderer {
     pass.widthScale = widthCm / this.baseWidth; pass.startDistance = startDistance;
   }
   minimumPixels = 2;
-  segments(points: readonly Vec3[], widthCm: number, opacity: number,
+  segments(points: readonly Readonly<Vec3>[], widthCm: number, opacity: number,
     dashCm: number = WORLD_DASH_STYLE.dashM * 100, gapCm: number = WORLD_DASH_STYLE.gapM * 100,
     continuous = false, color: readonly [number, number, number] = [1, 1, 1], opacities?: readonly number[]): void {
     this.baseWidth = widthCm; this.style(widthCm, 1);

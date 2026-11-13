@@ -68,3 +68,37 @@ class NativeEventsTests(unittest.TestCase):
         events.feed(b'I UpdateDispatcher: Er')
         with self.assertRaisesRegex(ReviewError, "runtime error"):
             events.feed(b'ror in event "frame": Error: failed\n')
+
+
+class CaptureSessionTests(unittest.TestCase):
+    def test_poll_retains_partial_events_and_handles_log_truncation(self):
+        from native_recording import CaptureSession
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            logfile = root / "editor.log"
+            logfile.write_bytes(b"old project\n")
+            session = CaptureSession(Path("recorder"), 1, root, 60, root / "focus", logfile)
+            with logfile.open("ab") as stream:
+                stream.write(b'I SPECS_REVIEW {"type":"res')
+            self.assertEqual(session.poll(), [])
+            with logfile.open("ab") as stream:
+                stream.write(b'ult","passed":true}\n')
+            self.assertEqual(session.poll(), [{"type": "result", "passed": True}])
+            logfile.write_bytes(b'I SPECS_REVIEW {"type":"complete","passed":true}\n')
+            session.poll()
+            self.assertTrue(session.collected.completion["passed"])
+            self.assertNotIn(b"old project", (root / "native.log").read_bytes())
+            self.assertEqual(len(json.loads((root / "events.json").read_text())), 2)
+
+    def test_runtime_failure_bytes_are_retained_before_decode_raises(self):
+        from native_recording import CaptureSession
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            logfile = root / "editor.log"
+            logfile.touch()
+            session = CaptureSession(Path("recorder"), 1, root, 60, root / "focus", logfile)
+            failure = b'E TypeError: failed rendering\n'
+            logfile.write_bytes(failure)
+            with self.assertRaisesRegex(ReviewError, "runtime error"):
+                session.poll()
+            self.assertEqual((root / "native.log").read_bytes(), failure)

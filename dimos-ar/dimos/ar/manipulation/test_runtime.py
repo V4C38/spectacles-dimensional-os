@@ -6,6 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 from dimos.ar.manipulation.model import ReferencePose
+from dimos.ar.manipulation.operation import DeferredGripper, FollowingTarget
 from dimos.ar.manipulation.runtime import ManipulationRuntime
 from test_support.manipulation import command, runtime
 
@@ -204,8 +205,8 @@ def test_deferred_gripper_requires_success_and_confirmed_endpoint(
     module.adapter.ready = True
     module.adapter.ready = True
     module.descriptor = {}
-    module.operation.id = "operation"
-    module.operation.final_gripper = ("arm", 1.0, {"joint": 0.3})
+    module.operation.begin("operation")
+    module.operation.active.final_gripper = DeferredGripper("arm", 1.0, {"joint": 0.3})
     module.session.stopped = stopped
     observed = module.adapter.get_state().groups["arm"]
     observed.joints.name = ["joint"]
@@ -243,13 +244,19 @@ def test_follow_factory_uses_the_model_velocity_limits(monkeypatch):
         )
         + "</robot>"
     )
-    monkeypatch.setattr(type(model.model), "load", lambda _model: SimpleNamespace(xml=xml, joints=[SimpleNamespace(name=name, acceleration=1.0) for name in limits]))
+    monkeypatch.setattr(
+        type(model.model),
+        "load",
+        lambda _model: SimpleNamespace(
+            xml=xml, joints=[SimpleNamespace(name=name, acceleration=1.0) for name in limits]
+        ),
+    )
     captured = {}
     monkeypatch.setattr(following, "SpeedScaledPoseTargetSolver", lambda config: SimpleNamespace())
     monkeypatch.setattr(
         following,
         "SpeedScaledCartesianIKTask",
-        lambda name, config, **kwargs: (captured.update(config=config) or SimpleNamespace()),
+        lambda name, config, **kwargs: captured.update(config=config) or SimpleNamespace(),
     )
     following.create_task(
         TaskConfig(
@@ -283,8 +290,8 @@ def test_deferred_gripper_uses_the_official_coordinator_bridge():
     module.adapter.ready = True
     module.adapter.ready = True
     module.descriptor = {}
-    module.operation.id = "operation"
-    module.operation.final_gripper = ("arm", 1.0, {"joint": 0.3})
+    module.operation.begin("operation")
+    module.operation.active.final_gripper = DeferredGripper("arm", 1.0, {"joint": 0.3})
     observed = module.adapter.get_state().groups["arm"]
     observed.joints.name, observed.joints.position = ["joint"], [0.3]
     observed.end_effector_pose = None
@@ -366,6 +373,7 @@ def test_already_zero_requires_settling_without_another_trajectory(monkeypatch):
     token = command(module, "acquire")["token"]
     command(module, "release", token=token)
     module.adapter.set_estop.assert_not_called()
+
 
 def test_reset_requires_new_measurements_and_recovers_from_stale_feedback(monkeypatch):
     module, _, _ = zero_fixture(monkeypatch, refresh=False)
@@ -632,6 +640,7 @@ def test_quiesced_teardown_does_not_cancel_into_a_closed_coordinator(monkeypatch
     native._runtime = ManipulationRuntime(native._adapter)
     native._runtime.session.quiesced = True
     native._closing = False
+    native._shutdown_lock = threading.Lock()
     native._lifecycle_stop = threading.Event()
     native._lifecycle_thread = None
     native._auxiliary_thread = None
@@ -686,8 +695,8 @@ def test_following_expires_without_polling_even_when_feedback_is_missing():
 
 def test_deferred_gripper_does_not_use_republished_stale_feedback():
     module = runtime()
-    module.operation.id = "execution"
-    module.operation.final_gripper = ("arm", 1.0, {"joint": 0.3})
+    module.operation.begin("execution")
+    module.operation.active.final_gripper = DeferredGripper("arm", 1.0, {"joint": 0.3})
     module.adapter.get_state().execution_status.name = "COMPLETED"
     module.adapter.get_state().groups["arm"].joints = SimpleNamespace(
         ts=time.time() - 10, name=["joint"], position=[0.3]
@@ -695,7 +704,7 @@ def test_deferred_gripper_does_not_use_republished_stale_feedback():
     module.adapter.set_gripper_position = Mock()
     module.advance()
     module.adapter.set_gripper_position.assert_not_called()
-    assert module.operation.final_gripper is not None
+    assert module.operation.active.final_gripper is not None
 
 
 @pytest.mark.parametrize("speed", [0.001, 0.049, 0.05, 0.2, 1.0])
@@ -723,8 +732,8 @@ def test_snapshot_does_not_actuate_a_completed_deferred_gripper():
     module = runtime()
     module.adapter.ready = True
     module.descriptor = {}
-    module.operation.id = "execution"
-    module.operation.final_gripper = ("arm", 1.0, {"joint": 0.3})
+    module.operation.begin("execution")
+    module.operation.active.final_gripper = DeferredGripper("arm", 1.0, {"joint": 0.3})
     state = module.adapter.get_state()
     state.error = None
     state.execution_status.name = "COMPLETED"
@@ -942,7 +951,8 @@ def test_openyam_reset_accepts_fresh_settled_feedback_inside_configured_toleranc
 def test_stop_and_watchdog_do_not_wait_for_execution_admission(blocked_method):
     module = runtime()
     module.operation.plan = {
-        "plan_id": "checked", "joint_names": ["joint"],
+        "plan_id": "checked",
+        "joint_names": ["joint"],
         "trajectory": [{"positions": [0.2]}],
     }
     entered, release = threading.Event(), threading.Event()
@@ -955,8 +965,11 @@ def test_stop_and_watchdog_do_not_wait_for_execution_admission(blocked_method):
         return original(*args, **kwargs)
 
     setattr(module.adapter, blocked_method, blocked)
-    thread = threading.Thread(target=lambda: replies.append(module.dispatch(
-        "a", {"action": "execute", "group_id": "arm", "plan_id": "checked"})))
+    thread = threading.Thread(
+        target=lambda: replies.append(
+            module.dispatch("a", {"action": "execute", "group_id": "arm", "plan_id": "checked"})
+        )
+    )
     thread.start()
     try:
         assert entered.wait(1)
@@ -975,10 +988,15 @@ def test_stop_and_watchdog_do_not_wait_for_execution_admission(blocked_method):
         module.adapter.execute.assert_not_called()
 
 
-@pytest.mark.parametrize("action,method", [("acquire", "cancel"), ("gripper", "set_gripper_position"), ("resume", "reset")])
+@pytest.mark.parametrize(
+    "action,method",
+    [("acquire", "cancel"), ("gripper", "set_gripper_position"), ("resume", "reset")],
+)
 def test_stop_retires_blocked_native_commands_without_waiting_for_their_effect(action, method):
     module = runtime()
-    module.adapter.set_gripper_position = Mock(return_value=SimpleNamespace(succeeded=True, message="ok"))
+    module.adapter.set_gripper_position = Mock(
+        return_value=SimpleNamespace(succeeded=True, message="ok")
+    )
     module.session.stopped = action == "resume"
     entered, release = threading.Event(), threading.Event()
     replies = []
@@ -994,8 +1012,18 @@ def test_stop_retires_blocked_native_commands_without_waiting_for_their_effect(a
         return original(*args, **kwargs)
 
     setattr(module.adapter, method, blocked)
-    worker = threading.Thread(target=lambda: replies.append(module.dispatch(
-        "a", {"action": action, "group_id": "arm", **({"value": 1.0} if action == "gripper" else {})})))
+    worker = threading.Thread(
+        target=lambda: replies.append(
+            module.dispatch(
+                "a",
+                {
+                    "action": action,
+                    "group_id": "arm",
+                    **({"value": 1.0} if action == "gripper" else {}),
+                },
+            )
+        )
+    )
     worker.start()
     try:
         assert entered.wait(1)
@@ -1014,8 +1042,8 @@ def test_stop_retires_blocked_native_commands_without_waiting_for_their_effect(a
 
 def test_stop_does_not_wait_for_blocked_operation_observation():
     module = runtime()
-    module.operation.id = "operation"
-    module.operation.kind = "executing"
+    module.operation.begin("operation")
+    module.operation.active.kind = "executing"
     entered, release = threading.Event(), threading.Event()
     original = module.adapter.get_state
 
@@ -1050,10 +1078,12 @@ def test_stop_is_independent_of_tail_and_reconnect_effects(path, blocked_effect)
     observed = module.adapter.get_state().groups["arm"]
     observed.joints.name, observed.joints.position = ["joint"], [0.0]
     if path == "tail":
-        module.following_tail = FollowingTail(1, "arm", 1, "robot", body, {"joint": 0.2}, time.monotonic())
+        module.following_tail = FollowingTail(
+            1, "arm", 1, "robot", body, {"joint": 0.2}, time.monotonic()
+        )
     else:
         command(module, "acquire")
-        module._following_target = ("arm", body, None, 1)
+        module._following_target = FollowingTarget("arm", body, None, 1)
         module.suspend("a", time.monotonic() + 1)
     entered, release = threading.Event(), threading.Event()
     original = module.adapter.get_state
@@ -1100,18 +1130,35 @@ def test_disconnected_client_tombstones_remain_bounded():
 def test_stop_does_not_wait_for_held_sample_or_retirement_rpc(action):
     module = runtime()
     token = command(module, "acquire")["token"]
-    body = {"action": "update", "group_id": "arm", "token": token, "sequence": 1,
-            "ts": time.time(), "position": [0.2, 0, 0], "orientation": [0, 0, 0, 1]}
-    module.adapter.evaluate = Mock(return_value=SimpleNamespace(
-        success=True, message="valid", target_joints=SimpleNamespace(name=["joint"], position=[0.2]),
-        group_poses={},
-    ))
+    body = {
+        "action": "update",
+        "group_id": "arm",
+        "token": token,
+        "sequence": 1,
+        "ts": time.time(),
+        "position": [0.2, 0, 0],
+        "orientation": [0, 0, 0, 1],
+    }
+    module.adapter.evaluate = Mock(
+        return_value=SimpleNamespace(
+            success=True,
+            message="valid",
+            target_joints=SimpleNamespace(name=["joint"], position=[0.2]),
+            group_poses={},
+        )
+    )
     if action == "advisory":
         module.command("a", body)
     if action == "revoke":
         module.authority().epoch, module.authority().lease = "epoch", "lease"
     entered, release = threading.Event(), threading.Event()
-    blocked = "set_target" if action == "update" else "set_validated_target" if action == "advisory" else "clear"
+    blocked = (
+        "set_target"
+        if action == "update"
+        else "set_validated_target"
+        if action == "advisory"
+        else "clear"
+    )
     count = 0
 
     def effect(_task, method, *args):
@@ -1123,6 +1170,7 @@ def test_stop_does_not_wait_for_held_sample_or_retirement_rpc(action):
                 assert release.wait(3)
 
     module.adapter.task_invoke = Mock(side_effect=effect)
+
     def work():
         if action == "update":
             module.dispatch("a", body)
@@ -1150,10 +1198,15 @@ def test_zero_operation_native_effects_do_not_hold_stop_lock(effect):
     module = runtime()
     observed = module.adapter.get_state().groups["arm"]
     observed.joints.name, observed.joints.position = ["joint"], [0.3]
-    module.adapter.list_planning_groups = Mock(return_value=[SimpleNamespace(id="arm", joint_names=["joint"])])
-    module.adapter.plan_to_joints = Mock(return_value=SimpleNamespace(
-        succeeded=True, plan=SimpleNamespace(plan_id="zero", trajectory=SimpleNamespace(duration=0.1))
-    ))
+    module.adapter.list_planning_groups = Mock(
+        return_value=[SimpleNamespace(id="arm", joint_names=["joint"])]
+    )
+    module.adapter.plan_to_joints = Mock(
+        return_value=SimpleNamespace(
+            succeeded=True,
+            plan=SimpleNamespace(plan_id="zero", trajectory=SimpleNamespace(duration=0.1)),
+        )
+    )
     entered, release = threading.Event(), threading.Event()
     original = getattr(module.adapter, effect)
     calls = 0
@@ -1168,8 +1221,11 @@ def test_zero_operation_native_effects_do_not_hold_stop_lock(effect):
 
     setattr(module.adapter, effect, blocked)
     replies = []
-    worker = threading.Thread(target=lambda: replies.append(module.dispatch(
-        "a", {"action": "reset_joints", "group_id": "arm"})))
+    worker = threading.Thread(
+        target=lambda: replies.append(
+            module.dispatch("a", {"action": "reset_joints", "group_id": "arm"})
+        )
+    )
     worker.start()
     try:
         assert entered.wait(1)
@@ -1186,8 +1242,8 @@ def test_zero_operation_native_effects_do_not_hold_stop_lock(effect):
 
 def test_control_lease_watchdog_stops_while_lifecycle_observation_is_blocked():
     module = runtime()
-    module.operation.id = "operation"
-    module.operation.kind = "executing"
+    module.operation.begin("operation")
+    module.operation.active.kind = "executing"
     entered, release = threading.Event(), threading.Event()
     original = module.adapter.get_state
 
@@ -1228,8 +1284,15 @@ def test_held_following_continues_while_an_independent_gripper_rpc_is_pending():
     worker.start()
     try:
         assert entered.wait(1)
-        result = command(module, "update", token=token, sequence=1, ts=time.time(),
-                         position=[0.2, 0, 0], orientation=[0, 0, 0, 1])
+        result = command(
+            module,
+            "update",
+            token=token,
+            sequence=1,
+            ts=time.time(),
+            position=[0.2, 0, 0],
+            orientation=[0, 0, 0, 1],
+        )
         assert result["status"] == "following"
         assert module.session.token == token
         assert module.adapter.task_invoke.call_args.args[1] == "set_target"
@@ -1248,8 +1311,11 @@ def test_scene_retirement_rejects_execution_without_latching_an_emergency_stop()
     adapter._plan_scene = b"old-scene"
     adapter.scene_snapshot = Mock(return_value=b"new-scene")
     module.adapter.execute = adapter.execute
-    module.operation.plan = {"plan_id": "checked", "joint_names": ["joint"],
-                             "trajectory": [{"positions": [0.2]}]}
+    module.operation.plan = {
+        "plan_id": "checked",
+        "joint_names": ["joint"],
+        "trajectory": [{"positions": [0.2]}],
+    }
     result = module.dispatch("a", {"action": "execute", "group_id": "arm", "plan_id": "checked"})
     assert result["code"] == "retired"
     assert result["status"] == "rejected"
@@ -1260,11 +1326,16 @@ def test_scene_retirement_rejects_execution_without_latching_an_emergency_stop()
     assert module.operation.plan is None
 
 
-@pytest.mark.parametrize("failure", [RuntimeError("native response lost"), ValueError("unknown backend failure")])
+@pytest.mark.parametrize(
+    "failure", [RuntimeError("native response lost"), ValueError("unknown backend failure")]
+)
 def test_unknown_execution_failure_latches_stop(failure):
     module = runtime()
-    module.operation.plan = {"plan_id": "checked", "joint_names": ["joint"],
-                             "trajectory": [{"positions": [0.2]}]}
+    module.operation.plan = {
+        "plan_id": "checked",
+        "joint_names": ["joint"],
+        "trajectory": [{"positions": [0.2]}],
+    }
     module.adapter.execute.side_effect = failure
     with pytest.raises(type(failure)):
         command(module, "execute", plan_id="checked")
@@ -1277,8 +1348,11 @@ def test_lifecycle_does_not_replace_an_unfinished_execution_admission(monkeypatc
     from dimos.ar.manipulation.operation import ManipulationOperation
 
     module = runtime()
-    module.operation.plan = {"plan_id": "checked", "joint_names": ["joint"],
-                             "trajectory": [{"positions": [0.2]}]}
+    module.operation.plan = {
+        "plan_id": "checked",
+        "joint_names": ["joint"],
+        "trajectory": [{"positions": [0.2]}],
+    }
     entered, release = threading.Event(), threading.Event()
     accepted = module.adapter.execute.return_value
 
@@ -1294,7 +1368,9 @@ def test_lifecycle_does_not_replace_an_unfinished_execution_admission(monkeypatc
     monkeypatch.setattr(ManipulationOperation, "advance", advance)
     module.adapter.execute.side_effect = execute
     replies = []
-    worker = threading.Thread(target=lambda: replies.append(command(module, "execute", plan_id="checked")))
+    worker = threading.Thread(
+        target=lambda: replies.append(command(module, "execute", plan_id="checked"))
+    )
     worker.start()
     try:
         assert entered.wait(1)
@@ -1305,15 +1381,19 @@ def test_lifecycle_does_not_replace_an_unfinished_execution_admission(monkeypatc
         worker.join(3)
     assert replies[0]["status"] == "accepted"
     assert not module.operation.admitting
-    assert module.operation.started_at is not None
+    assert module.operation.active.started_at is not None
 
 
 def test_target_retirement_during_endpoint_computation_cannot_dispatch_execution():
     from test_support.manipulation import _request
 
     module = runtime()
-    module.operation.plan = {"plan_id": "checked", "target_revision": 7,
-                             "joint_names": ["joint"], "trajectory": [{"positions": [0.2]}]}
+    module.operation.plan = {
+        "plan_id": "checked",
+        "target_revision": 7,
+        "joint_names": ["joint"],
+        "trajectory": [{"positions": [0.2]}],
+    }
     entered, release = threading.Event(), threading.Event()
 
     def endpoint(*args):
@@ -1322,7 +1402,9 @@ def test_target_retirement_during_endpoint_computation_cannot_dispatch_execution
 
     module.adapter.endpoint_pose = endpoint
     replies = []
-    worker = threading.Thread(target=lambda: replies.append(module.dispatch("a", _request("execute", plan_id="checked"))))
+    worker = threading.Thread(
+        target=lambda: replies.append(module.dispatch("a", _request("execute", plan_id="checked")))
+    )
     worker.start()
     try:
         assert entered.wait(1)
@@ -1339,9 +1421,14 @@ def test_target_retirement_during_endpoint_computation_cannot_dispatch_execution
 @pytest.mark.parametrize("status", ["UNCERTAIN", "FAULT"])
 def test_uncertain_execution_receipt_stops_native_motion_before_returning(status):
     module = runtime()
-    module.operation.plan = {"plan_id": "checked", "joint_names": ["joint"],
-                             "trajectory": [{"positions": [0.2]}]}
-    module.adapter.execute.return_value = SimpleNamespace(status=SimpleNamespace(name=status), message="unknown admission")
+    module.operation.plan = {
+        "plan_id": "checked",
+        "joint_names": ["joint"],
+        "trajectory": [{"positions": [0.2]}],
+    }
+    module.adapter.execute.return_value = SimpleNamespace(
+        status=SimpleNamespace(name=status), message="unknown admission"
+    )
     result = command(module, "execute", plan_id="checked")
     assert result["status"] == status.lower()
     module.adapter.set_estop.assert_called_once_with(True)
@@ -1351,8 +1438,11 @@ def test_uncertain_execution_receipt_stops_native_motion_before_returning(status
 
 def test_late_uncertain_execution_receipt_cannot_stop_a_successor():
     module = runtime()
-    module.operation.plan = {"plan_id": "checked", "joint_names": ["joint"],
-                             "trajectory": [{"positions": [0.2]}]}
+    module.operation.plan = {
+        "plan_id": "checked",
+        "joint_names": ["joint"],
+        "trajectory": [{"positions": [0.2]}],
+    }
     entered, release = threading.Event(), threading.Event()
 
     def execute(**kwargs):
@@ -1362,8 +1452,11 @@ def test_late_uncertain_execution_receipt_cannot_stop_a_successor():
 
     module.adapter.execute.side_effect = execute
     results = []
-    worker = threading.Thread(target=lambda: results.append(module.dispatch(
-        "a", {"action": "execute", "group_id": "arm", "plan_id": "checked"})))
+    worker = threading.Thread(
+        target=lambda: results.append(
+            module.dispatch("a", {"action": "execute", "group_id": "arm", "plan_id": "checked"})
+        )
+    )
     worker.start()
     try:
         assert entered.wait(1)
@@ -1395,8 +1488,9 @@ def test_retired_gripper_authority_after_feedback_wait_cannot_actuate():
 
     module.adapter.get_state = observe
     results = []
-    worker = threading.Thread(target=lambda: results.append(module.dispatch(
-        "a", _request("gripper", value=1.0))))
+    worker = threading.Thread(
+        target=lambda: results.append(module.dispatch("a", _request("gripper", value=1.0)))
+    )
     worker.start()
     try:
         assert entered.wait(1)
@@ -1407,3 +1501,38 @@ def test_retired_gripper_authority_after_feedback_wait_cannot_actuate():
     assert results[0]["code"] == "retired"
     module.adapter.set_gripper_position.assert_not_called()
     module.adapter.set_estop.assert_not_called()
+
+
+def test_blocked_gripper_acknowledgement_cannot_publish_uncommitted_lifecycle_progress():
+    module = runtime()
+    active = module.operation.begin("move", "executing")
+    active.final_gripper = DeferredGripper("arm", 1.0, {"joint": 0.3})
+    observed = module.adapter.get_state().groups["arm"]
+    observed.joints = SimpleNamespace(ts=time.time(), name=["joint"], position=[0.3])
+    observed.gripper_position = 0.0
+    module.adapter.get_state().execution_status.name = "COMPLETED"
+    entered, release = threading.Event(), threading.Event()
+
+    def set_gripper(*_args, **_kwargs):
+        entered.set()
+        assert release.wait(3)
+        return SimpleNamespace(status=SimpleNamespace(name="SUCCEEDED"))
+
+    module.adapter.set_gripper_position = set_gripper
+    worker = threading.Thread(target=module.advance)
+    worker.start()
+    try:
+        assert entered.wait(1)
+        # Observation runs on a detached active record: polling cannot expose a
+        # new phase until its native effect has returned and identity is checked.
+        assert module.operation.published_phase == "motion"
+        assert module.operation.active.final_gripper is not None
+        module.emergency_stop()
+        module.operation.begin("successor", "executing")
+    finally:
+        release.set()
+        worker.join(3)
+    assert not worker.is_alive()
+    assert module.operation.id == "successor"
+    assert module.operation.published_phase == "motion"
+    assert module.operation.outcome is None

@@ -1,3 +1,5 @@
+import { composePose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import { CapturePoseHistory, lookupPoseSample as lookupSharedPose, type PoseSample as TrackingPoseSample } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/CapturePoseHistory";
 import type { CameraCaptureSource, CameraTrackingSource, Intrinsics, LocalizationObservation, Quat, Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 
 import { specsToClientTrackingPose, quatFromMat4Rotation } from "../utilities/SpecsCoordinates";
@@ -16,7 +18,7 @@ export type PoseSample = {
 export class SpecsCameraSource implements CameraTrackingSource, CameraCaptureSource {
   private readonly stream: Pick<SpecsCameraStream, "start" | "stop" | "requestNextFrame" | "deviceCamera">;
   private readonly cameraObject: SceneObject;
-  private readonly poseBuffer: PoseSample[] = [];
+  private readonly poseHistory = new CapturePoseHistory(POSE_BUFFER_CAPACITY, { maxNearestAgeS: STALE_POSE_S, maxBracketAgeS: Infinity });
   private generation = 0;
   private encoding: Promise<Uint8Array> | null = null;
   private readonly metrics = { captures: 0, encodes: 0, discarded: 0, jpegBytes: 0, encodeMs: 0, inFlight: 0, maxInFlight: 0 };
@@ -33,29 +35,25 @@ export class SpecsCameraSource implements CameraTrackingSource, CameraCaptureSou
 
   samplePose(): void {
     const transform = this.cameraObject.getTransform();
-    this.poseBuffer.push({
-      t: getTime(),
-      position: transform.getWorldPosition(),
-      rotation: transform.getWorldRotation(),
-    });
-    if (this.poseBuffer.length > POSE_BUFFER_CAPACITY) {
-      this.poseBuffer.shift();
-    }
+    const position = transform.getWorldPosition();
+    const rotation = transform.getWorldRotation();
+    this.poseHistory.sample({ t: getTime(), position: [position.x, position.y, position.z], orientation: [rotation.x, rotation.y, rotation.z, rotation.w] });
   }
 
-  clearTracking(): void { this.poseBuffer.length = 0; }
+  clearTracking(): void { this.poseHistory.clear(); }
 
   trackingPosition(): Vec3 {
-    const latest = this.poseBuffer[this.poseBuffer.length - 1];
+    const sample = this.poseHistory.latest();
+    const latest = sample ? nativePoseSample(sample) : null;
     if (!latest || getTime() - latest.t > STALE_POSE_S) throw new Error("no current headset pose");
     return specsWorldPoseToTracking(latest.position, latest.rotation).position;
   }
 
   cameraOptical(): { position: Vec3; orientation: Quat } {
-    if (this.poseBuffer.length === 0) {
+    if (!this.poseHistory.latest()) {
       throw new Error("no camera pose sample");
     }
-    const latest = this.poseBuffer[this.poseBuffer.length - 1];
+    const latest = nativePoseSample(this.poseHistory.latest()!);
     const optical = composeDeviceOptical(latest, this.ensureDeviceCamera()?.pose ?? null);
     return specsCameraOpticalPoseToTracking(optical.position, optical.rotation);
   }
@@ -101,7 +99,8 @@ export class SpecsCameraSource implements CameraTrackingSource, CameraCaptureSou
     if (!Number.isFinite(frame.timestampSeconds) || frame.timestampSeconds <= 0) {
       throw new Error("Camera frame is missing a valid exposure timestamp");
     }
-    const pose = lookupPoseSample(this.poseBuffer, frame.timestampSeconds);
+    const sample = this.poseHistory.read(frame.timestampSeconds);
+    const pose = sample ? nativePoseSample(sample) : null;
     if (!pose) {
       throw new Error("no camera pose for capture timestamp");
     }
@@ -140,33 +139,17 @@ export class SpecsCameraSource implements CameraTrackingSource, CameraCaptureSou
   }
 }
 
+function nativePoseSample(sample: { t: number; position: readonly number[]; orientation: readonly number[] }): PoseSample {
+  return { t: sample.t, position: new vec3(...sample.position as [number, number, number]),
+    rotation: new quat(sample.orientation[3], sample.orientation[0], sample.orientation[1], sample.orientation[2]) };
+}
+
 export function lookupPoseSample(buffer: readonly PoseSample[], ts: number): PoseSample | null {
-  if (buffer.length === 0) {
-    return null;
-  }
-  let before: PoseSample | null = null;
-  let after: PoseSample | null = null;
-  for (const sample of buffer) {
-    if (sample.t <= ts) {
-      before = sample;
-    } else if (!after) {
-      after = sample;
-      break;
-    }
-  }
-  if (before && after && after.t > before.t) {
-    const alpha = (ts - before.t) / (after.t - before.t);
-    return {
-      t: ts,
-      position: vec3.lerp(before.position, after.position, alpha),
-      rotation: quat.slerp(before.rotation, after.rotation, alpha),
-    };
-  }
-  const nearest = before ?? after ?? buffer[buffer.length - 1];
-  if (Math.abs(nearest.t - ts) > STALE_POSE_S) {
-    return null;
-  }
-  return nearest;
+  const samples: TrackingPoseSample[] = buffer.map(sample => ({ t: sample.t,
+    position: [sample.position.x, sample.position.y, sample.position.z],
+    orientation: [sample.rotation.x, sample.rotation.y, sample.rotation.z, sample.rotation.w] }));
+  const sample = lookupSharedPose(samples, ts, { maxNearestAgeS: STALE_POSE_S, maxBracketAgeS: Infinity });
+  return sample ? nativePoseSample(sample) : null;
 }
 
 export function scaleCameraIntrinsics(deviceCamera: DeviceCamera, texture: Texture): Intrinsics {
@@ -196,9 +179,16 @@ export function composeDeviceOptical(
   }
   const extrinsicPos = new vec3(extrinsic.column3.x, extrinsic.column3.y, extrinsic.column3.z);
   const extrinsicRot = quatFromMat4Rotation(extrinsic);
+  const composed = composePose({
+    position: [devicePose.position.x, devicePose.position.y, devicePose.position.z],
+    orientation: [devicePose.rotation.x, devicePose.rotation.y, devicePose.rotation.z, devicePose.rotation.w],
+  }, {
+    position: [extrinsicPos.x, extrinsicPos.y, extrinsicPos.z],
+    orientation: [extrinsicRot.x, extrinsicRot.y, extrinsicRot.z, extrinsicRot.w],
+  });
   return {
-    position: devicePose.position.add(devicePose.rotation.multiplyVec3(extrinsicPos)),
-    rotation: devicePose.rotation.multiply(extrinsicRot),
+    position: new vec3(...composed.position),
+    rotation: new quat(composed.orientation[3], composed.orientation[0], composed.orientation[1], composed.orientation[2]),
   };
 }
 

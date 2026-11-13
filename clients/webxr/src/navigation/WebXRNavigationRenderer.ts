@@ -1,3 +1,4 @@
+import type { ReadonlyFacts } from "@dimos-ar-client/ClientContracts";
 import { ARM_VISUAL_STYLE } from "@dimos-ar-client/manipulation/ManipulationPresentation";
 import { NAVIGATION_OUTCOME_STYLE, strokeJoints2D, STROKE_JOIN_SEGMENTS, WORLD_DASH_STYLE, circleStrokeSegments, NAVIGATION_CANCEL_STYLE, navigationCancelReveal, NAVIGATION_PREVIEW_ARROW_STYLE, ROUTE_STYLE } from "@dimos-ar-client/presentation/WorldPresentation";
 import * as THREE from "three";
@@ -13,11 +14,13 @@ import { GlassSurface, buttonSurfaceBacking, tintButtonBacking } from "../presen
 
 
 
-import { type ClientTrackingOrigin, odomToClientTrackingYawPose } from "@dimos-ar-client/localization/ClientTracking";
+import { type ClientTrackingOrigin as MutableClientTrackingOrigin, odomToClientTrackingYawPose } from "@dimos-ar-client/localization/ClientTracking";
 
 
 import { clientTrackingToWebxrPoint } from "../utilities/WebXRCoordinates";
-import { anchorPathStart, clipPathToCircles, filletPathCorners, rangePathY, routeRibbon, type RouteCircle } from "@dimos-ar-client/presentation/RoutePathGeometry";
+import { prepareRoutePath, routeRibbon, type RouteCircle } from "@dimos-ar-client/presentation/RoutePathGeometry";
+
+type ClientTrackingOrigin = ReadonlyFacts<MutableClientTrackingOrigin>;
 
 export type { NavFlash } from "@dimos-ar-client/navigation/NavigationInteraction";
 
@@ -403,7 +406,7 @@ export class WebXRRouteRenderer {
   }
 
   apply(
-    path: YawPose[] | null,
+    path: readonly Readonly<YawPose>[] | null,
     origin: ClientTrackingOrigin | null,
     visible: boolean,
     floorY: number | null,
@@ -414,7 +417,7 @@ export class WebXRRouteRenderer {
       this.object.visible = false;
       return;
     }
-    let converted: Vec3[] = path.map((pose) => {
+    const converted: Vec3[] = path.map((pose) => {
       const tracking = odomToClientTrackingYawPose(pose, origin);
       return clientTrackingToWebxrPoint([tracking[0], tracking[1], tracking[2]]);
     });
@@ -423,12 +426,16 @@ export class WebXRRouteRenderer {
     this.dashed.object.visible = !solid;
     this.solid.visible = solid;
     this.dashed.setStyle(ROUTE_STYLE.strokeM, style.preview ? ROUTE_STYLE.previewOpacity : ROUTE_STYLE.confirmedOpacity);
-    if (style.startCircle) converted = anchorPathStart(converted, style.startCircle.center);
-    if (style.endCircle) converted[converted.length - 1] = [...style.endCircle.center];
-    const clearance = (circle?: RouteCircle): RouteCircle | undefined => circle && ({ ...circle, radius: circle.radius + (solid ? width / 2 : 0) });
-    const clipped = clipPathToCircles(filletPathCorners(converted), clearance(style.startCircle), clearance(style.endCircle));
-    if (clipped.length < 2) { this.hide(); return; }
-    const processed = rangePathY(clipped, style.startCircle?.center[1] ?? floorY, style.endCircle?.center[1] ?? goalY);
+    const prepared = prepareRoutePath(converted, {
+      startCircle: style.startCircle,
+      endCircle: style.endCircle,
+      floorY,
+      goalY,
+      solid,
+      widthM: width,
+    });
+    const processed = prepared.points;
+    if (processed.length < 2) { this.hide(); return; }
     if (solid) {
       const ribbon = routeRibbon(processed, width);
       const positions = this.solid.geometry.getAttribute("position") as THREE.BufferAttribute | undefined;
@@ -441,8 +448,7 @@ export class WebXRRouteRenderer {
       this.solid.geometry.computeBoundingSphere();
     }
     if (!solid) this.dashed.setSegments(processed.slice(0, -1).flatMap((p, i) => [p, processed[i + 1]]), true);
-    const total = processed.reduce((length, point, i) => length + (i ? Math.hypot(...point.map((value, axis) => value - processed[i - 1][axis])) : 0), 0);
-    if (total <= 1e-6) { this.hide(); return; }
+    if (prepared.lengthM <= 1e-6) { this.hide(); return; }
     this.object.visible = true;
   }
 

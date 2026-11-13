@@ -1,11 +1,14 @@
+import type { ReadonlyFacts } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable";
 import { robotOutlineFrame, FLOOR_MARKER_STYLE, ROBOT_LINE_STYLE, ROBOT_LABEL_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldPresentation";
 import type { StatusTone } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
 import type { RobotDescription } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 import { AdaptiveStrokeRenderer, WorldMeshRenderer, circleMesh, sphereMesh } from "./WorldMeshRenderer";
 import { createRobotLabelText, COLOR_WHITE } from "./UIKit";
-import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import type { ClientTrackingOrigin as MutableClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 import { MarkerCorrectionRenderer } from "./MarkerCorrectionRenderer";
+
+type ClientTrackingOrigin = ReadonlyFacts<MutableClientTrackingOrigin>;
 
 const POSE_MATERIAL = requireAsset("../../../Materials/PoseIndicator.mat") as Material;
 
@@ -31,7 +34,7 @@ export class RobotWorldRenderer {
   private hovered = false;
   private progress = 0;
   private selectionProgress = 0;
-  private robot: RobotDescription | null = null;
+  private robot: ReadonlyFacts<RobotDescription> | null = null;
   private floorShown = false;
   private opacity = FLOOR_MARKER_STYLE.idleOpacity as number;
 
@@ -66,7 +69,7 @@ export class RobotWorldRenderer {
   }
 
   dispose(): void { this.root.destroy(); }
-  setRobot(robot: RobotDescription | null): void {
+  setRobot(robot: ReadonlyFacts<RobotDescription> | null): void {
     this.robot = robot;
     this.colliderRoot.enabled = this.markerRoot.enabled = robot !== null;
     if (!robot) { this.reset(); this.connector.hide(); return; }

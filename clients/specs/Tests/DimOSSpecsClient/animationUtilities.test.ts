@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { scaleIn, scaleOut, nextAnimationVersion, DEFAULT_SCALE_ANIMATION_VERSION_KEY, lerpVec3 } from "../../Assets/Scripts/DimOSSpecsClient/utilities/AnimationUtilities";
 import { advanceAnimations, flushAnimations } from "../mocks/animate";
-import { exponentialSmoothAlpha, interpolatePose } from "../../Assets/Scripts/DimOSSpecsClient/utilities/RuntimePoseSmoothing";
+import { exponentialSmoothAlpha, interpolatePose, RuntimePoseSmoothing } from "../../Assets/Scripts/DimOSSpecsClient/utilities/RuntimePoseSmoothing";
 
 describe("lerpVec3", () => {
   it("interpolates at midpoint", () => {
@@ -29,6 +29,22 @@ describe("exponentialSmoothAlpha", () => {
 });
 
 describe("interpolatePose", () => {
+  it("adapts shared shortest-arc interpolation back to native quaternion order", () => {
+    const result = interpolatePose(vec3.zero(), new vec3(10, 20, 30), quat.quatIdentity(),
+      new quat(-Math.SQRT1_2, 0, -Math.SQRT1_2, 0), Math.log(2), 1);
+    expect([result.position.x, result.position.y, result.position.z]).toEqual([5, 10, 15]);
+    expect(result.rotation.w).toBeCloseTo(Math.cos(Math.PI / 8));
+    expect(result.rotation.y).toBeCloseTo(Math.sin(Math.PI / 8));
+  });
+
+  it("does not advance runtime tracking without a positive frame delta", () => {
+    const smoothing = new RuntimePoseSmoothing();
+    smoothing.setTarget({ position: new vec3(5, 5, 5), rotation: quat.quatIdentity() }, false);
+    const current = { position: vec3.zero(), rotation: quat.quatIdentity() };
+    expect(smoothing.tick(current, 0)).toBeNull();
+    expect(smoothing.tick(current, -1)).toBeNull();
+  });
+
   it("returns target when dt is zero", () => {
     const pos = new vec3(0, 0, 0);
     const targetPos = new vec3(5, 5, 5);
@@ -36,7 +52,8 @@ describe("interpolatePose", () => {
     const targetRot = new quat(0.707, 0, 0.707, 0);
     const result = interpolatePose(pos, targetPos, rot, targetRot, 0, 10);
     expect(result.position).toEqual(targetPos);
-    expect(result.rotation.w).toBeCloseTo(targetRot.w, 5);
+    expect(result.rotation.w).toBe(targetRot.w);
+    expect(result.rotation.y).toBe(targetRot.y);
   });
 });
 

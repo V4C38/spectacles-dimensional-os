@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from dimos.ar.manipulation.operation import ManipulationOperation
+from dimos.ar.manipulation.operation import ActiveOperation, DeferredGripper, ManipulationOperation
 
 
 def test_near_endpoint_requires_fresh_settled_feedback_and_confirmed_stop(monkeypatch):
@@ -24,12 +24,10 @@ def test_near_endpoint_requires_fresh_settled_feedback_and_confirmed_stop(monkey
     )
     backend.cancel.return_value = SimpleNamespace(status=SimpleNamespace(name="ABORTED"))
     operation = ManipulationOperation(
-        id="move",
-        kind="executing",
+        active=ActiveOperation(
+            id="move", kind="executing", endpoint_pose=target, group="arm", started_at=0.0
+        ),
         plan={"duration": 1.0},
-        endpoint_pose=target,
-        group="arm",
-        started_at=0.0,
     )
     assert not operation.advance(backend, stopped=False, feedback_max_age_s=0.5)
     clock[0] += 0.4
@@ -70,12 +68,14 @@ def test_final_endpoint_stall_retires_execution_without_applying_gripper(monkeyp
     )
     backend.cancel.return_value = SimpleNamespace(status=SimpleNamespace(name="ABORTED"))
     operation = ManipulationOperation(
-        id="move",
-        kind="executing",
-        endpoint_pose=target,
-        group="arm",
-        started_at=0,
-        final_gripper=("arm", 1, {"joint": 0.5}),
+        active=ActiveOperation(
+            id="move",
+            kind="executing",
+            endpoint_pose=target,
+            group="arm",
+            started_at=0,
+            final_gripper=DeferredGripper("arm", 1, {"joint": 0.5}),
+        )
     )
     assert not operation.advance(backend, stopped=False, feedback_max_age_s=0.5)
     clock[0] += 2.1

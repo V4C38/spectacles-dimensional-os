@@ -25,6 +25,9 @@ unitree-go2-ar-agentic = "dimos.ar.blueprints:unitree_go2_ar_agentic"
 where = ["."]
 include = ["dimos.ar*"]
 
+[tool.setuptools.package-data]
+"dimos.ar.localization" = ["defaults.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["dimos/ar", "tools"]
 pythonpath = ["."]

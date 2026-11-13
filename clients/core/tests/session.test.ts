@@ -778,3 +778,49 @@ it("exposes navigation facts through the canonical interaction snapshot", () => 
   expect(view.nav_goal).toBeNull(); expect(view.nav_preview).toBeNull();
   expect(view.interaction!.active_goal).toBeNull(); expect(view.interaction!.preview).toBeNull();
 });
+
+it("drains preceding coalesced facts before immediate messages", () => {
+  const { session, transport } = makeSession();
+  handshake(session, transport);
+  const observed: (number | undefined)[] = [];
+  session.subscribeOutbound(message => {
+    if (message.type === "agent_message") observed.push(session.view().state?.server.connected_clients);
+  });
+  session.onTransportText(JSON.stringify({ ...STATE, server: { connected_clients: 7 } }) + "\n" +
+    JSON.stringify({ type: "agent_message", text: "ready" }) + "\n");
+  expect(observed).toEqual([7]);
+  expect(session.diagnostics().control.pending).toBe(0);
+});
+
+it("leaves control facts queued when a tick uses its decode budget", () => {
+  const { session, transport, clock } = makeSession();
+  handshake(session, transport);
+  session.tick();
+  session.subscribeOutbound(message => {
+    if (message.type === "state") clock.nowS += .003;
+  });
+  session.onTransportText(JSON.stringify({ ...STATE, server: { connected_clients: 9 } }) + "\n" +
+    JSON.stringify({ type: "pose", position: [1, 2, 3], orientation: [0, 0, 0, 1], ts: 1 }) + "\n");
+  session.tick();
+  expect(session.view().state?.server.connected_clients).toBe(9);
+  expect(session.view().pose).toBeNull();
+  expect(session.diagnostics().control.pending).toBe(1);
+  session.tick();
+  expect(session.view().pose?.position).toEqual([1, 2, 3]);
+});
+
+it("retires congested stream and inbound queues on disconnect", () => {
+  const { session, transport, clock } = makeSession();
+  handshake(session, transport);
+  for (let n = 0; n < 70; n++) {
+    session.sendText(JSON.stringify({ type: "interaction_request", action: "update", sequence: n, payload: "x".repeat(1000) }) + "\n");
+  }
+  session.onTransportText(JSON.stringify({ ...STATE, server: { connected_clients: 99 } }) + "\n");
+  session.stop();
+  clock.nowS = 2;
+  const count = transport.texts.length;
+  session.tick();
+  expect(transport.texts).toHaveLength(count);
+  expect(session.diagnostics().control.pending).toBe(0);
+  expect(session.view().state).toBeNull();
+});

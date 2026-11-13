@@ -81,3 +81,14 @@ it("distinguishes existing server XY scale from native range without silently re
   expect(diagnostic.odomScaleCorrectionFactor).toBe(1.25);
   expect(h.vertices[0].slice(0, 3)).toEqual([0, 0, -150]);
 });
+
+import { LIDAR_PRESENTATION_TRACE, LIDAR_TRACE_POINT } from "../../../core/tests/support/LidarPresentationTrace";
+it.each(LIDAR_PRESENTATION_TRACE)("shared cloud contract with scale $scale", trace => {
+  const h = harness();
+  h.renderer.apply({ points: [LIDAR_TRACE_POINT],
+    origin: { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 },
+    mode: "obstacles", robot: [0, 0, 0.33], orientation: [0, 0, 0, 1], bounds: [1, 0.4, 0.5],
+    obstacleRangeM: 0.6, odomScaleCorrectionFactor: trace.scale });
+  expect(h.vertices[0][6]).toBeCloseTo(trace.expectedAlpha, 5);
+  expect(h.vertices[0][2] / 100).toBeCloseTo(-1);
+});
