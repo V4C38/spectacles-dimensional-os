@@ -1,10 +1,10 @@
 import * as THREE from "three";
-import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/clientTrackingOrigin";
-import { odomToClientTrackingPoint } from "@dimos-ar-client/localization/clientTrackingTransforms";
-import type { Quat, Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
-import { lidarHeightColor, lidarBodyClearance } from "@dimos-ar-client/sensors/lidarColors";
-import { LIDAR_PRESETS, type LidarDisplayMode } from "@dimos-ar-client/sensors/lidarSettings";
-import { OBSTACLE_HALO_M } from "./WebXRLidarSettings";
+import { type ClientTrackingOrigin, odomToClientTrackingPoint } from "@dimos-ar-client/localization/ClientTracking";
+
+import type { Quat, Vec3 } from "@dimos-ar-client/ClientContracts";
+import { lidarHeightColor, lidarBodyClearance } from "@dimos-ar-client/sensors/LidarRendering";
+import { LIDAR_PRESETS, type LidarDisplayMode, OBSTACLE_HALO_M } from "@dimos-ar-client/sensors/LidarDisplay";
+
 import { clientTrackingToWebxrPoint } from "../utilities/WebXRCoordinates";
 
 export const MAX_LIDAR_POINTS = 4000;

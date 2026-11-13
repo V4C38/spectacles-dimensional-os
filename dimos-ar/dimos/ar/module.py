@@ -14,11 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 import websockets.asyncio.server as ws_server
 
 from dimos.agents.annotation import skill
-from dimos.ar.localization.coordinator import (
-    AsyncLocalizer,
-    LocalizationCoordinator,
-    LocalizationOutcome,
-)
+from dimos.ar.async_execution import BoundedWorker, NativeRPC
 from dimos.ar.localization.fiducial_marker.localizer import FiducialMarkerLocalizer
 from dimos.ar.localization.map_localization import MapLocalization
 from dimos.ar.localization.odom_map_transform import OdomMapTransform
@@ -26,26 +22,26 @@ from dimos.ar.localization.policy import EpisodeWork, LocalizationPolicy
 from dimos.ar.localization.runner import (
     EPISODE_TIMEOUT_S,
     RESULT_TIMEOUT_S,
+    LocalizationCoordinator,
+    LocalizationOutcome,
     LocalizationRunner,
     prepare_marker_episode,
 )
-from dimos.ar.localization.types import LocalizationProviderType, SnapshotLocalizer
+from dimos.ar.localization.types import AsyncLocalizer, LocalizationProviderType, SnapshotLocalizer
 from dimos.ar.localization.vps.admission import VpsAdmission
 from dimos.ar.localization.vps.localizer import VpsLocalizer
 from dimos.ar.localization.vps.multiset_client import MultisetVpsClient, MultisetVpsClientConfig
 from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
-from dimos.ar.manipulation.admission import admit_manipulation
-from dimos.ar.manipulation.frames import ReferencePose
-from dimos.ar.manipulation.protocol import ManipulationRequest
-from dimos.ar.manipulation.service import ManipulationService
-from dimos.ar.manipulation.spec import ARManipulationSpec
-from dimos.ar.native_rpc import NativeRPC
-from dimos.ar.navigation.control_service import NavigationControlService
-from dimos.ar.navigation.control_spec import ARNavigationControlSpec
-from dimos.ar.navigation.coordinator import NavGoalCoordinator
-from dimos.ar.navigation.preview_planner import PreviewPlanner
-from dimos.ar.navigation.preview_service import NavigationPreviewService
-from dimos.ar.navigation.tele_cmd_vel import TeleCmdVelPublisher
+from dimos.ar.manipulation.model import ReferencePose
+from dimos.ar.manipulation.protocol import ARManipulationSpec, ManipulationRequest
+from dimos.ar.manipulation.service import ManipulationService, admit_manipulation
+from dimos.ar.navigation.control import (
+    ARNavigationControlSpec,
+    NavGoalCoordinator,
+    NavigationControlService,
+    TeleCmdVelPublisher,
+)
+from dimos.ar.navigation.preview import NavigationPreviewService, PreviewPlanner
 from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavJoystickRequest, NavState
 from dimos.ar.replication.interaction import (
     InteractionCoordinator,
@@ -62,6 +58,7 @@ from dimos.ar.robot.capabilities import (
     CapabilityName,
     CapabilitySet,
 )
+from dimos.ar.robot.emergency_stop import EmergencyStopController
 from dimos.ar.robot.odometry import RobotOdometry, RobotSourceChangedError
 from dimos.ar.robot.profiles.profile import (
     FiducialMarkerMount,
@@ -69,10 +66,8 @@ from dimos.ar.robot.profiles.profile import (
     RobotProfile,
     get_profile,
 )
-from dimos.ar.robot.safety import Safety
 from dimos.ar.robot.state_publisher import RobotStatePublisher
 from dimos.ar.sensors.lidar_settings import DEFAULT_LIDAR_SETTINGS, LidarSettings
-from dimos.ar.websocket.ip_relay import DEFAULT_IP_RELAY_URL
 from dimos.ar.websocket.protocol import (
     AgentState,
     ClientPose,
@@ -97,8 +92,7 @@ from dimos.ar.websocket.protocol import (
     observation_from_localization,
 )
 from dimos.ar.websocket.server import WebSocketServer
-from dimos.ar.websocket.server_info import server_info
-from dimos.ar.worker import BoundedWorker
+from dimos.ar.websocket.server_discovery import DEFAULT_IP_RELAY_URL, server_info
 from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
@@ -227,7 +221,7 @@ class ARModule(Module):  # type: ignore[misc]
     _robot_observations: RobotObservationBuffer
     _profile: RobotProfile
     _capabilities: CapabilitySet
-    _safety: Safety
+    _safety: EmergencyStopController
     _tele_cmd_vel_publisher: TeleCmdVelPublisher | None
     _lidar_settings: LidarSettings
     _odometry: RobotOdometry
@@ -366,7 +360,7 @@ class ARModule(Module):  # type: ignore[misc]
                     max_angular_rps=self._profile.max_angular_rps,
                     loop=self._loop,
                 )
-            self._safety = Safety(
+            self._safety = EmergencyStopController(
                 estop_available=self._capabilities.supports(CapabilityName.ESTOP),
                 effects=(self._clear_navigation, self._publish_stop),
             )

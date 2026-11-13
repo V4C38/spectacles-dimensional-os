@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from dimos.ar.localization.pose_buffer import PoseBuffer, PoseSample
 from dimos.ar.localization.types import DistortionModel, Intrinsics, Observation
+from dimos.ar.robot.odometry import PoseBuffer, PoseSample
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image

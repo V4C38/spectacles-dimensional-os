@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { expect, it, vi } from "vitest";
-import { WebXRRouteRenderer } from "../src/navigation/WebXRRouteRenderer";
-import { WORLD_DASH_STYLE, ROBOT_LINE_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
+import { WebXRRouteRenderer } from "../src/navigation/WebXRNavigationRenderer";
+import { WORLD_DASH_STYLE, ROBOT_LINE_STYLE } from "@dimos-ar-client/presentation/WorldPresentation";
 const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
 const dashed = (route: WebXRRouteRenderer) => route.object.getObjectByName("Adaptive dashed line") as THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>;
 const ribbon = (route: WebXRRouteRenderer) => route.object.getObjectByName("Executing route ribbon") as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;

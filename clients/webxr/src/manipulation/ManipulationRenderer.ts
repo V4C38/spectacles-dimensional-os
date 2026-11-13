@@ -1,40 +1,70 @@
-import { endEffectorAngles, endEffectorDisplayPose } from "@dimos-ar-client/manipulation/ManipulationVisuals";
-import { ARM_PANEL_STYLE } from "@dimos-ar-client/presentation/PanelFrameStyle";
-import { ArmPresentationSampler } from "@dimos-ar-client/manipulation/ArmPresentationSampler";
-import { Text } from "troika-three-text";
-import { disposeTextResources } from "../presentation/TextResources";
-import { UI_FONT_REGULAR } from "../presentation/UIFonts";
-import { ROBOT_LABEL_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
-import { webxrToClientTrackingPoint } from "../utilities/WebXRCoordinates";
-import { ARM_VISUAL_STYLE, armPointDisplacement, armLinkWeight, armLinkPresentation, ArmMeshFade } from "@dimos-ar-client/manipulation/ManipulationVisuals";
-import { manipulationActivePlan, manipulationPathOpacity, ManipulationPreviewPlayback } from "@dimos-ar-client/manipulation/ManipulationPresentation";
-import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/clientTrackingOrigin";
-import { odomToClientTrackingPose } from "@dimos-ar-client/localization/clientTrackingTransforms";
-import { type ManipulationSnapshot } from "@dimos-ar-client/manipulation/ManipulationInteraction";
-import type {
-  ManipulationPlan,
-  ManipulationPose,
-  ManipulationState,
-} from "@dimos-ar-client/manipulation/ManipulationTypes";
-import {
-  composePose,
-  linkPoses,
-  manipulationPlanPath,
-} from "@dimos-ar-client/manipulation/ModelKinematics";
-import { WORLD_DASH_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
-import type { Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
 import * as THREE from "three";
+import { indicatorMaterial } from "../presentation/PoseIndicatorMaterial";
+import { registerRayTarget } from "../input/WebXRInteraction";
+import { EndEffectorStatusView } from "../presentation/NotificationPill";
+import { endEffectorAngles, endEffectorDisplayPose, ARM_VISUAL_STYLE, armPointDisplacement, armLinkWeight, armLinkPresentation, ArmMeshFade, manipulationActivePlan, manipulationPathOpacity, ManipulationPreviewPlayback, type ManipulationSnapshot } from "@dimos-ar-client/manipulation/ManipulationPresentation";
+
+import { ARM_PANEL_STYLE } from "@dimos-ar-client/presentation/ControlPanelPresentation";
+import { ArmPresentationSampler, ArmTrajectoryProgress } from "@dimos-ar-client/manipulation/ArmPresentation";
+import { Text } from "troika-three-text";
+import { disposeTextResources, UI_FONT_REGULAR, syncText } from "../presentation/SceneResources";
+
+import { ROBOT_LABEL_STYLE, WORLD_DASH_STYLE } from "@dimos-ar-client/presentation/WorldPresentation";
+import { webxrToClientTrackingPoint, clientTrackingToWebxrPose } from "../utilities/WebXRCoordinates";
+
+
+import { type ClientTrackingOrigin, odomToClientTrackingPose } from "@dimos-ar-client/localization/ClientTracking";
+
+
+import type { ManipulationPlan, ManipulationPose, ManipulationState } from "@dimos-ar-client/manipulation/ManipulationTypes";
+import { composePose, linkPoses, manipulationPlanPath } from "@dimos-ar-client/manipulation/ModelKinematics";
+
+import type { Vec3 } from "@dimos-ar-client/ClientContracts";
 import { AdaptiveDashedLineRenderer } from "../presentation/AdaptiveDashedLineRenderer";
-import { syncText } from "../presentation/UIFonts";
-import {
-  clientTrackingToWebxrPose,
-} from "../utilities/WebXRCoordinates";
-import { ArmTrajectoryProgress } from "@dimos-ar-client/manipulation/ArmTrajectoryProgress";
-import { EndEffectorHandleRenderer } from "./EndEffectorHandleRenderer";
+
+
+
 import { ManipulationControlsView } from "./ManipulationControlsView";
 import { ManipulationModelRenderer } from "./ManipulationModelRenderer";
-import { EndEffectorStatusView } from "./EndEffectorStatusView";
 import { MarkerCorrectionRenderer } from "../presentation/MarkerCorrectionRenderer";
+
+/** Tool interaction stays on top; environment depth never modifies this material. */
+export class EndEffectorHandleRenderer {
+  readonly object = new THREE.Group();
+  readonly collider: THREE.Mesh;
+  readonly visual: THREE.Mesh;
+  constructor() {
+    this.object.name = "EndEffectorHandle";
+    this.collider = new THREE.Mesh(
+      new THREE.SphereGeometry(0.036, 20, 16),
+      indicatorMaterial(),
+    );
+    this.visual = new THREE.Mesh(new THREE.SphereGeometry(0.012, 20, 16), this.collider.material);
+    this.visual.renderOrder = 50;
+    this.visual.raycast = () => {};
+    this.object.add(this.visual);
+    this.collider.material = new THREE.MeshBasicMaterial({ visible: false });
+    this.collider.name = "EndEffectorHandleCollider";
+    this.collider.userData.rayPriority = 10;
+    registerRayTarget(this.collider);
+    this.collider.renderOrder = 50;
+    this.object.add(this.collider);
+
+  }
+  dispose(): void {
+    this.object.traverse((object) => {
+      if (object instanceof THREE.Mesh || object instanceof THREE.Line) {
+        object.geometry.dispose();
+        for (const material of Array.isArray(object.material)
+          ? object.material
+          : [object.material])
+          material.dispose();
+      }
+    });
+    this.object.removeFromParent();
+  }
+}
+
 
 export interface ManipulationRenderInput {
   state: ManipulationState | null | undefined;
@@ -56,6 +86,7 @@ export interface ManipulationRenderInput {
     failedJoints?: string[];
   } | null;
 }
+
 
 export class ManipulationRenderer {
   readonly object = new THREE.Group();

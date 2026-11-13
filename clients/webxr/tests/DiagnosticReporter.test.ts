@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { DiagnosticReporter, validDiagnosticEntry } from "../src/diagnostics/DiagnosticReporter";
+import { DiagnosticReporter, validDiagnosticEntry } from "../src/diagnostics/Diagnostics";
 
 it("silences traces by default, preserves severity, and reports repeated failures after cooldown", () => {
   let now = 0, verbose = false;

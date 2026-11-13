@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from dimos.ar.localization.types import Intrinsics
-from dimos.ar.localization.undistort import undistort_to_pinhole
+from dimos.ar.localization.vps.localizer import undistort_to_pinhole
 
 _GO2_INTRINSICS = Intrinsics(
     fx=797.4756164864929,

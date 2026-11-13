@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from dimos.ar.navigation.preview_planner import PreviewPlanner
+from dimos.ar.navigation.preview import PreviewPlanner
 from dimos.core.global_config import GlobalConfig
 from dimos.msgs.nav_msgs.OccupancyGrid import CostValues, OccupancyGrid
 

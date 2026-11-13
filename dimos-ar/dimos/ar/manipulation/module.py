@@ -7,7 +7,7 @@ from typing import Any
 from pydantic import Field
 
 from dimos.ar.manipulation.adapter import DimOSManipulationAdapter
-from dimos.ar.manipulation.frames import ReferencePose
+from dimos.ar.manipulation.model import ReferencePose
 from dimos.ar.manipulation.runtime import ManipulationRuntime
 from dimos.core.core import rpc
 from dimos.manipulation.manipulation_module import ManipulationModule, ManipulationModuleConfig

@@ -1,7 +1,7 @@
 import * as THREE from "three";
-import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/clientTrackingOrigin";
-import { MarkerCorrectionTrail } from "@dimos-ar-client/presentation/MarkerCorrectionTrail";
-import { ROBOT_LINE_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
+import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/ClientTracking";
+import { MarkerCorrectionTrail, ROBOT_LINE_STYLE } from "@dimos-ar-client/presentation/WorldPresentation";
+
 import { AdaptiveDashedLineRenderer } from "./AdaptiveDashedLineRenderer";
 
 export class MarkerCorrectionRenderer {

@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { PANEL_TOP, RUNTIME_FOOTER_GAP, RUNTIME_LAYOUTS, SETUP_LAYOUTS, panelFooterY } from "../src/presentation/PanelLayout";
+import { PANEL_TOP, RUNTIME_FOOTER_GAP, RUNTIME_LAYOUTS, SETUP_LAYOUTS, panelFooterY } from "../src/presentation/PanelPresentation";
 
 it.each(Object.entries({ ...RUNTIME_LAYOUTS, ...SETUP_LAYOUTS }))("keeps %s rows and footer within the calibrated panel height", (_, profile) => {
   expect(profile.height).toBeLessThanOrEqual(0.76);

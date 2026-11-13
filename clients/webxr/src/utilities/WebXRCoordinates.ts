@@ -1,5 +1,5 @@
-import type { Quat, Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
-import { normalizeQuat, rotateVecByQuat, requireVec3, applyBasis as apply, transposeBasis as transpose, changeBasisQuat, remapPoseQuat, type Mat3 } from "@dimos-ar-client/localization/clientTrackingTransforms";
+import type { Quat, Vec3 } from "@dimos-ar-client/ClientContracts";
+import { normalizeQuat, rotateVecByQuat, requireVec3, applyBasis as apply, transposeBasis as transpose, changeBasisQuat, remapPoseQuat, type Mat3 } from "@dimos-ar-client/localization/ClientTracking";
 
 type PositionOrientation = {
   position: Vec3;

@@ -5,13 +5,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from dimos.ar.async_execution import BoundedWorker
 from dimos.ar.localization.map_localization import MapLocalization
 from dimos.ar.localization.odom_map_transform import OdomMapTransform
-from dimos.ar.localization.pose_buffer import PoseBuffer
 from dimos.ar.localization.types import LocalizedPose
 from dimos.ar.localization.vps.admission import VpsAdmission
+from dimos.ar.robot.odometry import PoseBuffer
 from dimos.ar.websocket.protocol import LocalizationCaptureProgress, LocalizationTracking, TimeSync
-from dimos.ar.worker import BoundedWorker
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from test_support.localization import _observation

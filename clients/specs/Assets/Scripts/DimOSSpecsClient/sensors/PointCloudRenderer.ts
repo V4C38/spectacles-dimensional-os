@@ -1,8 +1,8 @@
-import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingOrigin";
-import { odomToClientTrackingPoint } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingTransforms";
-import { lidarBodyClearance, lidarHeightColor } from "DimOSARClient.lspkg/Scripts/DimOSARClient/sensors/lidarColors";
-import { LIDAR_PRESETS, type LidarDisplayMode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/sensors/lidarSettings";
-import type { Quat, Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes";
+import { type ClientTrackingOrigin, odomToClientTrackingPoint } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+
+import { lidarBodyClearance, lidarHeightColor } from "DimOSARClient.lspkg/Scripts/DimOSARClient/sensors/LidarRendering";
+import { LIDAR_PRESETS, type LidarDisplayMode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/sensors/LidarDisplay";
+import type { Quat, Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 import { clientTrackingToSpecsPoint } from "../utilities/SpecsCoordinates";
 
 const DOT_MATERIAL = requireAsset("../../../Materials/LidarDot.mat") as Material;

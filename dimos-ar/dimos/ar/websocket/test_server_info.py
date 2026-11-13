@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from dimos.ar.websocket import server_info as metadata
+from dimos.ar.websocket import server_discovery as metadata
 
 
 def test_effective_robot_and_package_metadata(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,13 +1,13 @@
-import { odomToClientTrackingPose,rotateVecByQuat } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingTransforms";
-import { getRobotActivityState,robotTitleText,type RobotMarkerApplyInput } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotMarkerState";
-import type { ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/arModuleSession";
-import type { Quat,RobotDescription,Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes";
-import { sessionLinkStatus } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/sessionLinkStatus";
+import { odomToClientTrackingPose, rotateVecByQuat, type ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import { getRobotActivityState, robotTitleText, type RobotMarkerApplyInput } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotPresentation";
+import type { ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/ARModuleSession";
+import type { Quat, RobotDescription, Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
+import { sessionLinkStatus } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
 import { RuntimePoseSmoothing } from "../utilities/RuntimePoseSmoothing";
-import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingOrigin";
-import { clientTrackingToSpecsPoint,clientTrackingToSpecsPose } from "../utilities/SpecsCoordinates";
-import { yawRotationFromPlanarDirection } from "../utilities/SpecsUtilities";
-import type { AppState } from "./AppState";
+
+import { clientTrackingToSpecsPoint, clientTrackingToSpecsPose, yawRotationFromPlanarDirection } from "../utilities/SpecsCoordinates";
+
+import type { UIPresentationState } from "./UIPresentationState";
 import { RobotWorldRenderer } from "./RobotWorldRenderer";
 import { findChildRecursive } from "./UIKit";
 type RobotActivityVoice = { asrRunning: boolean; ttsPlaying: boolean };
@@ -15,7 +15,7 @@ type RobotActivityVoice = { asrRunning: boolean; ttsPlaying: boolean };
 export interface RobotMarkerApplyContext {
   mainUi: SceneObject;
   fallbackUniformScale?: number;
-  appState: AppState;
+  appState: UIPresentationState;
 }
 
 const GO2_BASE_HEIGHT_M = 0.33;
@@ -136,7 +136,7 @@ export class RobotPresenter extends BaseScriptComponent {
   }
 
   refreshLabels(
-    appState: AppState,
+    appState: UIPresentationState,
     view: ARModuleSessionState,
     voice: RobotActivityVoice & { status?: string },
   ): void {
@@ -357,7 +357,7 @@ export class RobotPresenter extends BaseScriptComponent {
     }
   }
 
-  private applyDebugViewVisibility(appState: AppState | null): void {
+  private applyDebugViewVisibility(appState: UIPresentationState | null): void {
     if (!this.debugViewRoot) {
       return;
     }

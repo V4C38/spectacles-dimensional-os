@@ -1,6 +1,6 @@
 import { PairedBulk } from "./PairedBulk";
-import type { ClientClock, WebSocketTransport } from "../../src/websocket/hostPorts";
-import type { Capabilities, Hello, State } from "../../src/websocket/protocolTypes";
+import type { ClientClock, WebSocketTransport, Capabilities, Hello, State } from "../../src/ClientContracts";
+
 
 export class FakeClock implements ClientClock {
   nowS = 0;
@@ -77,8 +77,8 @@ export function stateFrame(): State { return {
 
 
 /** Fixture server publication: navigation domain facts ride one revisioned snapshot. */
-export function navigationSnapshot(current: import("../../src/replication/CollaborationTypes").InteractionState | null,
-  goal: import("../../src/websocket/protocolTypes").NavGoal) {
+export function navigationSnapshot(current: import("../../src/ClientContracts").InteractionState | null,
+  goal: import("../../src/ClientContracts").NavGoal) {
   const state = current ?? { type: "interaction_state" as const, epoch: "fixture-navigation", revision: 0,
     mode: "manual" as const, authority: null, targets: [], motion_busy: false, following_tail: null,
     preview: null, active_goal: null };

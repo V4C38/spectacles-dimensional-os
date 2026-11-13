@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
 
-from dimos.ar.manipulation.frames import ReferencePose
+from dimos.ar.manipulation.model import ReferencePose
 from dimos.ar.manipulation.runtime import ManipulationRuntime
 
 

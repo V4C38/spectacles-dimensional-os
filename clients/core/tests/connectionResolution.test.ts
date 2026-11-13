@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { validPin } from "../src/websocket/connectionPin";
+import { validPin } from "../src/websocket/ConnectionAddress";
 
 it("retains leading zeros and rejects non-six-digit PINs", () => {
     expect(validPin("012345")).toBe(true);

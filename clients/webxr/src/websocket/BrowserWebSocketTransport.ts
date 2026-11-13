@@ -1,10 +1,10 @@
-import { AR_MODULE_CLIENT_CONFIG, type WebSocketTransport } from "@dimos-ar-client/websocket/hostPorts";
+import { AR_MODULE_CLIENT_CONFIG, type WebSocketTransport, type WebSocketTransportHandlers as BrowserWebSocketTransportHandlers } from "@dimos-ar-client/ClientContracts";
+
 
 const WS_CONNECTING = 0;
 const WS_OPEN = 1;
 
-export type { WebSocketTransportHandlers as BrowserWebSocketTransportHandlers } from "@dimos-ar-client/websocket/hostPorts";
-import type { WebSocketTransportHandlers as BrowserWebSocketTransportHandlers } from "@dimos-ar-client/websocket/hostPorts";
+export type { WebSocketTransportHandlers as BrowserWebSocketTransportHandlers } from "@dimos-ar-client/ClientContracts";
 
 export class BrowserWebSocketTransport implements WebSocketTransport {
   private url: string;
@@ -160,4 +160,17 @@ function requirePositive(value: number, name: string): number {
     throw new Error(`${name} must be a finite number greater than 0`);
   }
   return value;
+}
+
+export function arModuleSameOriginUrl(location: { protocol: string; host: string }): string {
+  if (location.protocol !== "https:" && location.protocol !== "http:") {
+    throw new Error("WebXR page origin must be http or https");
+  }
+  if (location.protocol !== "https:") {
+    throw new Error("Open this page over HTTPS. The headset WebSocket uses same-origin wss:///ar.");
+  }
+  if (!location.host) {
+    throw new Error("page host is required");
+  }
+  return `wss://${location.host}/ar`;
 }

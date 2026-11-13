@@ -1,8 +1,9 @@
-import type { CameraCaptureSource, CameraTrackingSource, ClientClock } from "@dimos-ar-client/websocket/hostPorts";
-import type { LocalizationObservation, Quat, Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
-import { rotateVecByQuat } from "@dimos-ar-client/localization/clientTrackingTransforms";
+import type { EncodeResponse } from "./JpegWorker";
+import type { CameraCaptureSource, CameraTrackingSource, ClientClock, LocalizationObservation, Quat, Vec3 } from "@dimos-ar-client/ClientContracts";
+
+import { rotateVecByQuat } from "@dimos-ar-client/localization/ClientTracking";
 import { webxrOpticalToClientTrackingPose } from "../utilities/WebXRCoordinates";
-import { reportDiagnostic } from "../diagnostics/BrowserDiagnostics";
+import { reportDiagnostic } from "../diagnostics/Diagnostics";
 import { frameTimeToClientClock } from "../utilities/BrowserClientClock";
 import {
   jpegDimensionsMatch,
@@ -16,7 +17,7 @@ import {
 const POSE_BUFFER_CAPACITY = 360;
 const STALE_POSE_S = 0.1;
 
-export type WebxrPoseSample = {
+export type WebXRPoseSample = {
   t: number;
   position: Vec3;
   orientation: Quat;
@@ -61,14 +62,14 @@ export function selectFrameTimestamp(metadata: VideoFrameMetadata): number {
 }
 
 export function lookupPoseSample(
-  buffer: readonly WebxrPoseSample[],
+  buffer: readonly WebXRPoseSample[],
   ts: number,
-): WebxrPoseSample | null {
+): WebXRPoseSample | null {
   if (buffer.length === 0) {
     return null;
   }
-  let before: WebxrPoseSample | null = null;
-  let after: WebxrPoseSample | null = null;
+  let before: WebXRPoseSample | null = null;
+  let after: WebXRPoseSample | null = null;
   for (const sample of buffer) {
     if (sample.t <= ts) {
       before = sample;
@@ -93,7 +94,7 @@ export function lookupPoseSample(
   return nearest;
 }
 
-type FrozenFrame = { ts: number; pose: WebxrPoseSample; encoded: ReturnType<JpegEncoder["encode"]> };
+type FrozenFrame = { ts: number; pose: WebXRPoseSample; encoded: ReturnType<JpegEncoder["encode"]> };
 
 export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSource {
   private readonly clock: ClientClock;
@@ -104,7 +105,7 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
   private staleCaptures = 0;
   private readonly performanceNow: () => number;
   private readonly videoFactory: () => HTMLVideoElement;
-  private readonly poseBuffer: WebxrPoseSample[] = [];
+  private readonly poseBuffer: WebXRPoseSample[] = [];
   private stream: MediaStream | null = null;
   private video: HTMLVideoElement | null = null;
   private operation = new AbortController();
@@ -319,7 +320,7 @@ function bounded<T>(pending: Promise<T>, signal: AbortSignal, timeoutMs: number)
   });
 }
 
-export function composeOptical(pose: WebxrPoseSample, profile: HmdCalibrationProfile): { position: Vec3; orientation: Quat } {
+export function composeOptical(pose: WebXRPoseSample, profile: HmdCalibrationProfile): { position: Vec3; orientation: Quat } {
   const extra = profile.T_viewer_optical;
   const offset = rotateVecByQuat(pose.orientation, extra.position);
   return webxrOpticalToClientTrackingPose({
@@ -436,4 +437,91 @@ function cameraFailure(error: unknown): unknown {
     return new Error(`The headset camera could not open (${error.name}). Check Browser's headset camera permission in Quest settings and update Quest Browser, then retry.`);
   }
   return error;
+}
+
+type Encoded = Awaited<ReturnType<JpegEncoder["encode"]>>;
+
+/** Freeze pixels synchronously; JPEG work must not wait for main-thread idle time. */
+export class BrowserJpegEncoder implements JpegEncoder {
+  private worker: Worker | null = null;
+  private pending: { id: number; resolve: (value: Encoded) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> } | null = null;
+  private sequence = 0;
+  private workerFailed = false;
+  private canvas: HTMLCanvasElement | null = null;
+
+  constructor(private readonly quality = 0.85) {}
+
+  encode(video: HTMLVideoElement): Promise<Encoded> {
+    if (this.pending) return Promise.reject(new Error("JPEG encoding already pending"));
+    const worker = this.getWorker();
+    if (!worker) {
+      try { return Promise.resolve(this.encodeFallback(video)); }
+      catch (error) { return Promise.reject(error); }
+    }
+    // This constructor snapshots the exact frame before the video can advance.
+    let frame: VideoFrame;
+    try { frame = new VideoFrame(video); }
+    catch (error) { return Promise.reject(error); }
+    return new Promise((resolve, reject) => {
+      const id = ++this.sequence;
+      const timer = setTimeout(() => this.failWorker(new Error("JPEG encoding timed out")), 1500);
+      this.pending = { id, resolve, reject, timer };
+      try { worker.postMessage({ id, frame, quality: this.quality }, [frame]); }
+      catch (error) { frame.close(); this.failWorker(error instanceof Error ? error : new Error(String(error))); }
+    });
+  }
+
+  cancel(): void {
+    this.rejectPending(new Error("JPEG encoding cancelled"));
+    this.worker?.terminate(); this.worker = null;
+  }
+
+  dispose(): void { this.cancel(); this.canvas = null; }
+
+  private getWorker(): Worker | null {
+    if (this.worker) return this.worker;
+    if (this.workerFailed || typeof Worker === "undefined" || typeof VideoFrame === "undefined" || typeof OffscreenCanvas === "undefined") return null;
+    try {
+      this.worker = new Worker(new URL("./JpegWorker.ts", import.meta.url), { type: "module" });
+      this.worker.onmessage = ({ data }: MessageEvent<EncodeResponse>) => {
+        const pending = this.pending;
+        if (!pending || data.id !== pending.id) return;
+        if (data.error || !data.jpeg || !data.width || !data.height) { this.failWorker(new Error(data.error ?? "Invalid JPEG worker result")); return; }
+        clearTimeout(pending.timer); this.pending = null;
+        pending.resolve({ jpeg: new Uint8Array(data.jpeg), width: data.width, height: data.height });
+      };
+      this.worker.onerror = () => this.failWorker(new Error("JPEG worker failed"));
+      return this.worker;
+    } catch {
+      this.workerFailed = true;
+      return null;
+    }
+  }
+
+  private failWorker(error: Error): void {
+    this.rejectPending(error);
+    this.worker?.terminate(); this.worker = null;
+    reportDiagnostic("jpeg-worker-failed", { message: error.message }, "warn");
+  }
+
+  private rejectPending(error: Error): void {
+    if (!this.pending) return;
+    clearTimeout(this.pending.timer);
+    const pending = this.pending; this.pending = null; pending.reject(error);
+  }
+
+  private encodeFallback(video: HTMLVideoElement): Encoded {
+    const canvas = this.canvas ??= document.createElement("canvas");
+    if (canvas.width !== video.videoWidth) canvas.width = video.videoWidth;
+    if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("2D canvas is required for JPEG encoding");
+    context.drawImage(video, 0, 0);
+    // In browsers without worker support, synchronous encoding avoids toBlob's
+    // Android idle-task timeout. It is used only for requested captures.
+    const data = canvas.toDataURL("image/jpeg", this.quality);
+    if (!data.startsWith("data:image/jpeg;base64,")) throw new Error("Browser cannot encode JPEG images");
+    const bytes = atob(data.slice(data.indexOf(",") + 1));
+    return { jpeg: Uint8Array.from(bytes, value => value.charCodeAt(0)), width: canvas.width, height: canvas.height };
+  }
 }

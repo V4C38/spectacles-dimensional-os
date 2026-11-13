@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
-import { ArmJointFilter } from "../../src/manipulation/ArmJointFilter";
-import { ArmTrajectoryProgress } from "../../src/manipulation/ArmTrajectoryProgress";
+import { ArmJointFilter, ArmTrajectoryProgress } from "../../src/manipulation/ArmPresentation";
+
 import type {
   ManipulationModel,
   ManipulationPlan,

@@ -1,7 +1,7 @@
-import type { ClientClock } from "./hostPorts";
+import type { ClientClock, Hello, Lidar, Outbound } from "../ClientContracts";
 import type { BulkTransfer } from "./BulkTransfer";
 import { decodeOutboundObject } from "./protocol";
-import type { Hello, Lidar, Outbound } from "./protocolTypes";
+
 
 type Value = Record<string, unknown>;
 type Pending = { value: Value; deadline: number; stream: string | null; generation: number; connection: number };

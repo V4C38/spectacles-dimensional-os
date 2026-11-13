@@ -1,6 +1,6 @@
 import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 // Hardware inputs are deterministic fixtures. Production state owners, SIK/SUK controls and renderers run unchanged.
-import { SETUP_LAYOUTS,SETUP_PANEL_SCALE } from "../Scripts/DimOSSpecsClient/presentation/PanelLayout";
+import { SETUP_LAYOUTS,SETUP_PANEL_SCALE } from "../Scripts/DimOSSpecsClient/presentation/SpecsPanelPresentation";
 import { SetupWizardStep } from "../Scripts/DimOSSpecsClient/presentation/SetupWizardView";
 import { getFrameComponent } from "../Scripts/DimOSSpecsClient/presentation/UIKit";
 import { INTEGRATION_CATALOG as CATALOG } from "./IntegrationCatalog";

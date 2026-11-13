@@ -1,5 +1,5 @@
-import type { ARModuleSession } from "../websocket/arModuleSession";
-import type { LocalizationCaptureEpisode } from "../localization/localizationCaptureEpisode";
+import type { ARModuleSession } from "../websocket/ARModuleSession";
+import type { LocalizationCaptureEpisode } from "../localization/LocalizationCaptureEpisode";
 export type SetupStep = "connect" | "localization";
 export type AlignmentReview = Readonly<{ reason: string; pending: boolean }>;
 export type SetupSnapshot = Readonly<{

@@ -62,3 +62,9 @@ class Localizer(Protocol):
 
 class SnapshotLocalizer(Localizer, Protocol):
     def snapshot(self) -> Localizer: ...
+
+
+class AsyncLocalizer(Protocol):
+    async def localize(self, observations: Sequence[Observation]) -> LocalizedPose | None: ...
+
+    async def close(self) -> None: ...

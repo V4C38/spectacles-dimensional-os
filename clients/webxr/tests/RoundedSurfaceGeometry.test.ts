@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { roundedSurfaceGeometry } from "../src/presentation/RoundedSurfaceGeometry";
+import { roundedSurfaceGeometry } from "../src/presentation/SurfaceMaterials";
 
 it("adds exactly one millimeter behind the glass without a competing front cap", () => {
   const geometry = roundedSurfaceGeometry(0.9, 0.76, 0.05, 0.001);

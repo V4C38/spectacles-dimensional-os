@@ -1,12 +1,12 @@
 """Hardware-free verification of the official planning scene and AR worker snapshots."""
 
 from dimos.ar.manipulation.adapter import DimOSManipulationAdapter
-from dimos.ar.manipulation.collision_model import (
+from dimos.ar.manipulation.model import describe_model
+from dimos.ar.manipulation.model_config import (
+    safe_openyam_model,
     with_finger_self_collision_exclusion,
     with_openyam_collision_geometry,
 )
-from dimos.ar.manipulation.limits import safe_openyam_model
-from dimos.ar.manipulation.model import describe_model
 from dimos.ar.manipulation.module import ARManipulationModuleConfig
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.msgs.geometry_msgs.Pose import Pose

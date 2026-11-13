@@ -1,17 +1,9 @@
 import { FakeClock, FakeTransport, helloAt, stateFrame } from "./support/SessionFixture";
 import { describe, expect, it } from "vitest";
-import { ClientTrackingOriginStore } from "../src/localization/clientTrackingOrigin";
-import {
-  LIDAR_PRESETS,
-  lidarModeFromSettings,
-  nextLidarMode,
-  requestLidarSettings,
-} from "../src/sensors/lidarSettings";
-import { ARModuleSession } from "../src/websocket/arModuleSession";
-import type {
-  Capabilities,
-  LidarSettings,
-} from "../src/websocket/protocolTypes";
+import { ClientTrackingOriginStore } from "../src/localization/ClientTracking";
+import { LIDAR_PRESETS, lidarModeFromSettings, nextLidarMode, requestLidarSettings } from "../src/sensors/LidarDisplay";
+import { ARModuleSession } from "../src/websocket/ARModuleSession";
+import type { Capabilities, LidarSettings } from "../src/ClientContracts";
 
 const STATE = stateFrame();
 

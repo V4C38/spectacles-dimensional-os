@@ -1,5 +1,5 @@
-import type { InteractionCredentials, InteractionKind, InteractionPose, InteractionResult, InteractionState, InteractionSettings, InteractionTarget, InteractionSnapshot, InteractionDomain } from "./CollaborationTypes";
-import type { Quat, ReadonlyFacts } from "../websocket/protocolTypes";
+import type { InteractionCredentials, InteractionKind, InteractionPose, InteractionResult, InteractionState, InteractionSettings, InteractionTarget, InteractionSnapshot, InteractionDomain, Quat, ReadonlyFacts } from "../ClientContracts";
+
 
 export const TARGET_SEND_INTERVAL_S = 0.05;
 export const AUTHORITY_RENEW_INTERVAL_S = 0.1;

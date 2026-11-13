@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { ManipulationInputCapture, ManipulationPressEdges } from "../../src/manipulation/ManipulationInputCapture";
+import { ManipulationInputCapture, ManipulationPressEdges } from "../../src/manipulation/ManipulationInput";
 
 it("keeps drag ownership through another hand's gripper press and release", () => {
   const capture = new ManipulationInputCapture();

@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { setMockInteractors } from "../mocks/InteractionManager";
-import { SpecsNavigationInput } from "../../Assets/Scripts/DimOSSpecsClient/navigation/SpecsNavigationInput";
+import { SpecsNavigationInput } from "../../Assets/Scripts/DimOSSpecsClient/navigation/SpecsNavigationController";
 
 const body = {} as SceneObject, marker = {} as SceneObject, cancel = {} as SceneObject;
 function harness(target: SceneObject) {

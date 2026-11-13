@@ -1,6 +1,6 @@
 import { PrimaryNeutralGradients } from "SpectaclesUIKit.lspkg/Scripts/Themes/SnapOS-2.0/Gradients/PrimaryNeutralGradients";
 import { RoundedRectangle } from "SpectaclesUIKit.lspkg/Scripts/Visuals/RoundedRectangle/RoundedRectangle";
-import { CONTROL_PANEL_LAYOUT,CONTROL_PANEL_TYPE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
+import { CONTROL_PANEL_LAYOUT, CONTROL_PANEL_TYPE, type StatusTone } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
 // ================================================================
 /**
  * UIKit — merged constants, primitives, scene-lookup helpers, and
@@ -15,7 +15,7 @@ import { Frame } from "SpectaclesUIKit.lspkg/Scripts/Components/Frame/Frame";
 import { TextInputField } from "SpectaclesUIKit.lspkg/Scripts/Components/TextInputField/TextInputField";
 import { SnapOS2Styles } from "SpectaclesUIKit.lspkg/Scripts/Themes/SnapOS-2.0/SnapOS2";
 import { RoundedRectangleVisual } from "SpectaclesUIKit.lspkg/Scripts/Visuals/RoundedRectangle/RoundedRectangleVisual";
-import type { StatusTone } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/sessionLinkStatus";
+
 
 export { SnapOS2Styles };
 

@@ -1,7 +1,7 @@
-import type { Quat, Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
-import { rotateVecByQuat } from "@dimos-ar-client/localization/clientTrackingTransforms";
-import { requireAcceptedProfile } from "../../src/localization/HmdCalibration";
-import type { HmdCalibrationProfile } from "../../src/localization/HmdCalibration";
+import type { Quat, Vec3 } from "@dimos-ar-client/ClientContracts";
+import { rotateVecByQuat } from "@dimos-ar-client/localization/ClientTracking";
+import { requireAcceptedProfile, type HmdCalibrationProfile } from "../../src/localization/HmdCalibration";
+
 
 export interface CalibrationObservation {
   corners3d: Vec3[];

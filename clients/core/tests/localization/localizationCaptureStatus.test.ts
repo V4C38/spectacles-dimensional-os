@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { localizationCaptureStatus } from "../../src/localization/localizationCaptureStatus";
-import type { ARModuleSessionState } from "../../src/websocket/arModuleSession";
-import type { LocalizationCapturePhase } from "../../src/localization/localizationCaptureEpisode";
+import { localizationCaptureStatus } from "../../src/presentation/ControlPanelPresentation";
+import type { ARModuleSessionState } from "../../src/websocket/ARModuleSession";
+import type { LocalizationCapturePhase } from "../../src/localization/LocalizationCaptureEpisode";
 
 function view(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionState {
   return {

@@ -1,5 +1,12 @@
-import { CAPABILITY_LABELS } from "./CapabilityPresentation";
-import type { ARModuleSessionState } from "../websocket/arModuleSession";
+import type { ARModuleSessionState } from "../websocket/ARModuleSession";
+import type { LocalizationCaptureState } from "../localization/LocalizationCaptureEpisode";
+
+/** One label catalog shared by immersive and landing capability summaries. */
+export const CAPABILITY_LABELS = {
+  manipulation: "Manipulation", navigation: "Navigation", agent: "Agent mode",
+  object_detection: "Object detection", lidar: "LiDAR", localization: "Localization",
+  estop: "Emergency Stop",
+} as const;
 
 /** Copy and proportions shared by host-native control panels. */
 export const CONTROL_PANEL_LAYOUT = { width: 0.9, height: 0.76, margin: 0.05, cornerRadius: 0.05, titleY: 0.306 } as const;
@@ -87,4 +94,191 @@ export function layoutPanelRows(startY: number, rows: readonly LayoutRow[], geom
   const height = Math.ceil((geometry.top - cursor + geometry.bottom) / geometry.quantum - 1e-8) * geometry.quantum;
   if (height > geometry.maximumHeight) throw new Error(`Panel profile exceeds calibrated height: ${height}`);
   return { height, rows: positions };
+}
+
+const compactControlScale = CONTROL_PANEL_SCALE.runtime / .7;
+/** OpenYAM controls only; the robot badge is anchored independently. */
+export const ARM_PANEL_STYLE = {
+  widthM: 0.224, headerM: 0.04, rowM: 0.04, paddingM: 0.028,
+  buttonHeightM: CONTROL_PANEL_CONTROLS.height * compactControlScale,
+  buttonFontM: CONTROL_PANEL_TYPE.buttonDp * CONTROL_PANEL_TYPE.dpToMetres * compactControlScale,
+  cornerM: .025,
+  defaultScale: 0.875, minScale: 0.65625, maxScale: 1.75,
+  pinXM: 0.088, pinYM: -0.024, pinSizeM: CONTROL_PANEL_CONTROLS.iconSize * compactControlScale, iconStrokeM: 0.0015,
+} as const;
+export function clampArmPanelScale(scale: number): number {
+  return Math.max(ARM_PANEL_STYLE.minScale, Math.min(ARM_PANEL_STYLE.maxScale, scale));
+}
+
+/** Shared thumbtack icon, in design metres, as independent line-segment endpoints. */
+export const PANEL_PIN_SEGMENTS: readonly (readonly [number, number])[] = [
+ [-.005,.007],[.005,.007], [-.005,.007],[-.003,.001],
+ [.005,.007],[.003,.001], [-.003,.001],[-.006,-.002],
+ [-.006,-.002],[.006,-.002], [.006,-.002],[.003,.001],
+ [0,-.002],[0,-.009],
+];
+export const PANEL_SCAN_SEGMENTS: readonly (readonly [number, number])[] = [
+ [-.007,.003],[-.007,.007],[-.007,.007],[-.003,.007],
+ [.003,.007],[.007,.007],[.007,.007],[.007,.003],
+ [.007,-.003],[.007,-.007],[.007,-.007],[.003,-.007],
+ [-.003,-.007],[-.007,-.007],[-.007,-.007],[-.007,-.003],
+ [-.003,0],[.003,0],[0,-.003],[0,.003],
+];
+
+export const PANEL_RESIZE_S = 0.28;
+
+/** Interruptible height animation. The host keeps its top reference stationary. */
+export class PanelHeightAnimation {
+  height: number = CONTROL_PANEL_LAYOUT.height;
+  target = this.height;
+  private start = this.height;
+  private elapsed = PANEL_RESIZE_S;
+
+  request(height: number, immediate = false): void {
+    if (immediate) { this.height = this.target = this.start = height; this.elapsed = PANEL_RESIZE_S; return; }
+    if (height === this.target) return;
+    this.start = this.height; this.target = height; this.elapsed = 0;
+  }
+  tick(deltaS: number, paused = false): void {
+    if (paused || this.height === this.target) return;
+    this.elapsed = Math.min(PANEL_RESIZE_S, this.elapsed + Math.max(0, deltaS));
+    const t = this.elapsed / PANEL_RESIZE_S;
+    this.height = this.elapsed === PANEL_RESIZE_S ? this.target : this.start + (this.target - this.start) * t * t * (3 - 2 * t);
+  }
+}
+
+export const NO_ROBOT_CONNECTED_LABEL = "- Disconnected -";
+
+export type SessionLinkPhase = "disconnected" | "connecting" | "robotOffline" | "connected";
+
+export type StatusTone = "error" | "warn" | "success" | "neutral" | "muted";
+
+export interface StatusText {
+  text: string;
+  color: StatusTone;
+}
+
+export interface SessionLinkTransitionLog {
+  hudText: string;
+  hudColor: StatusTone;
+  consoleText: string;
+  consoleColor: StatusTone;
+  hudDurationS?: number;
+}
+
+export function deriveSessionLinkPhase(view: ARModuleSessionState): SessionLinkPhase {
+  if (view.connection === "disconnected" || view.connection === "failed") {
+    return "disconnected";
+  }
+  if (view.connection === "connecting" || view.connection === "awaiting_hello") {
+    return "connecting";
+  }
+  if (!view.pose) {
+    return "robotOffline";
+  }
+  return "connected";
+}
+
+export function sessionLinkStatus(
+  view: ARModuleSessionState,
+  displayName: string = NO_ROBOT_CONNECTED_LABEL,
+): StatusText {
+  switch (deriveSessionLinkPhase(view)) {
+    case "disconnected":
+      return {
+        text: `\n\n\n${NO_ROBOT_CONNECTED_LABEL}`,
+        color: "error",
+      };
+    case "connecting":
+      return {
+        text: "\n\n\nConnecting…",
+        color: "error",
+      };
+    case "robotOffline":
+      return {
+        text: "\n\n\nConnected - Robot not connected",
+        color: "warn",
+      };
+    case "connected":
+      return {
+        text: `\n\n\nConnected - ${displayName}`,
+        color: "success",
+      };
+  }
+}
+
+export function sessionLinkTransitionLog(
+  prev: SessionLinkPhase,
+  next: SessionLinkPhase,
+): SessionLinkTransitionLog | null {
+  if (prev === next) {
+    return null;
+  }
+  if (next === "disconnected") {
+    return {
+      hudText: "Disconnected",
+      hudColor: "error",
+      consoleText: "Disconnected",
+      consoleColor: "error",
+      hudDurationS: 3.0,
+    };
+  }
+  if (prev === "connected" && next === "robotOffline") {
+    return {
+      hudText: "Robot disconnected",
+      hudColor: "error",
+      consoleText: "Robot disconnected",
+      consoleColor: "error",
+      hudDurationS: 3.0,
+    };
+  }
+  if (prev === "robotOffline" && next === "connected") {
+    return {
+      hudText: "Robot connected",
+      hudColor: "success",
+      consoleText: "Robot connected",
+      consoleColor: "success",
+      hudDurationS: 2.0,
+    };
+  }
+  return null;
+}
+
+export interface CaptureStatusText {
+  text: string;
+  color: StatusTone;
+}
+
+export function localizationCaptureStatus(
+  sessionView: ARModuleSessionState,
+  episodeView: LocalizationCaptureState,
+  nowS: number = 0,
+): CaptureStatusText {
+  if (sessionView.connection !== "ready") {
+    return { text: "Inactive — not ready", color: "muted" };
+  }
+  if (!sessionView.capabilities?.localization.available) {
+    const reason = sessionView.capabilities?.localization.reason ?? "Localization unavailable";
+    return { text: reason, color: "warn" };
+  }
+  if (sessionView.hasTrackingOrigin && episodeView.phase === "idle") {
+    return { text: "Localized", color: "success" };
+  }
+
+  switch (episodeView.phase) {
+    case "idle":
+      return { text: "Ready to scan", color: "neutral" };
+    case "waiting_for_geometric_gate":
+      return { text: "Look toward the robot to scan", color: "warn" };
+    case "waiting_for_retry":
+      return { text: "Localized — correction retry pending", color: "muted" };
+    case "capturing":
+    case "awaiting_result":
+      return { text: `Scanning ${".".repeat(1 + Math.floor(nowS / 0.4) % 3)}\n${episodeView.capturePolicy === "any_angle" ? "Look around the mapped room" : "Look at the marker"}`, color: "neutral" };
+    case "failed":
+      return {
+        text: episodeView.lastError ? `Capture failed — ${episodeView.lastError}` : "Capture failed",
+        color: "error",
+      };
+  }
 }

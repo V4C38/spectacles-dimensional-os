@@ -1,17 +1,11 @@
 import { FakeClock, FakeTransport, helloAt, stateFrame, navigationSnapshot } from "./support/SessionFixture";
 import { ARM_FIXTURE } from "./support/IntegrationArmFixture";
 import { describe, expect, it } from "vitest";
-import { ClientTrackingOriginStore } from "../src/localization/clientTrackingOrigin";
+import { ClientTrackingOriginStore } from "../src/localization/ClientTracking";
 import { LIDAR_FOURCC } from "../src/websocket/protocol";
-import {
-  AR_MODULE_CLIENT_CONFIG,
-} from "../src/websocket/hostPorts";
-import { ARModuleSession } from "../src/websocket/arModuleSession";
-import type {
-  Capabilities,
-  Hello,
-  LocalizationObservationsRequest,
-} from "../src/websocket/protocolTypes";
+import { AR_MODULE_CLIENT_CONFIG, type Capabilities, type Hello, type LocalizationObservationsRequest } from "../src/ClientContracts";
+import { ARModuleSession } from "../src/websocket/ARModuleSession";
+
 
 const STATE = stateFrame();
 

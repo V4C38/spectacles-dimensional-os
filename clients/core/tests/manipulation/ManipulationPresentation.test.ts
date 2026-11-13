@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { ManipulationPreviewPlayback } from "../../src/manipulation/ManipulationPresentation";
+import { ManipulationPreviewPlayback, endEffectorAction, manipulationPathOpacity, manipulationPreviewPlan, manipulationActivePlan, manipulationObservedJoints, manipulationProposedJoints } from "../../src/manipulation/ManipulationPresentation";
 const plan = { plan_id: "one", joint_names: ["j"], trajectory: [{ time: 0, positions: [0] }, { time: 1, positions: [1] }], duration: 1 };
 it("plays once from zero and retains the final configuration", () => {
   const p = new ManipulationPreviewPlayback();
@@ -13,7 +13,7 @@ it("plays once from zero and retains the final configuration", () => {
 });
 
 
-import { endEffectorAction, manipulationPathOpacity } from "../../src/manipulation/ManipulationPresentation";
+
 it("shares near-EE gripper and motion path opacity across both clients", () => {
   const intent = { canExecute: true, canManipulate: true, stopped: false, executing: false, finishing: false } as any;
   expect(endEffectorAction(intent, 0, true)).toMatchObject({ action: "gripper", label: "Open", enabled: true, allowDuringGrab: true });
@@ -32,7 +32,7 @@ it("pauses Preview without consuming the feedback-loss interval",()=> {
   expect(p.sample(plan,2.1).time).toBeCloseTo(.35);
 });
 
-import { manipulationPreviewPlan } from "../../src/manipulation/ManipulationPresentation";
+
 it("keeps an old reviewed endpoint out of every subsequent live drag", () => {
   expect(manipulationPreviewPlan(plan, true, false, false)).toBe(plan);
   {
@@ -43,7 +43,7 @@ it("keeps an old reviewed endpoint out of every subsequent live drag", () => {
 });
 
 
-import { manipulationActivePlan, manipulationObservedJoints, manipulationProposedJoints } from "../../src/manipulation/ManipulationPresentation";
+
 it("derives the same articulated joints for live IK, rejected drafts, reviewed plans and playback", () => {
   const model: any = { joints: [], links: [] };
   const state: any = { observations: { arm: { joints: { j: .2 } }, other: { joints: { auxiliary: .7 } } }, plan };

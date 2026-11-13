@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
-import { MarkerCorrectionTrail } from "../src/presentation/MarkerCorrectionTrail";
-import type { ClientTrackingOrigin } from "../src/localization/clientTrackingOrigin";
+import { MarkerCorrectionTrail } from "../src/presentation/WorldPresentation";
+import type { ClientTrackingOrigin } from "../src/localization/ClientTracking";
 
 const origin: ClientTrackingOrigin = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
 const correction: ClientTrackingOrigin = { ...origin, position: [1, 0, 0] };

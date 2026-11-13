@@ -1,4 +1,4 @@
-import type { ClientClock } from "@dimos-ar-client/websocket/hostPorts";
+import type { ClientClock } from "@dimos-ar-client/ClientContracts";
 
 export class BrowserClientClock implements ClientClock {
   now(): number {

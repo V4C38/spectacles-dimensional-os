@@ -1,7 +1,8 @@
 import { beforeEach, expect, it, vi } from "vitest";
+vi.mock("SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider", () => ({ Slider: class {} }));
 import { clearMockCursors, setMockCursor } from "../mocks/CursorControllerProvider";
 import { setMockInteractors } from "../mocks/InteractionManager";
-import { SpecsManipulationInput } from "../../Assets/Scripts/DimOSSpecsClient/manipulation/SpecsManipulationInput";
+import { SpecsManipulationInput } from "../../Assets/Scripts/DimOSSpecsClient/manipulation/SpecsManipulationController";
 beforeEach(() => { clearMockCursors(); (global as any).deviceInfoSystem = { isEditor: () => false }; });
 it("captures a full pose through target departure and releases only the owner", () => {
   const target = {} as SceneObject;

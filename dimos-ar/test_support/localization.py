@@ -3,10 +3,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 from weakref import WeakKeyDictionary
 
-from dimos.ar.localization.coordinator import LocalizationCoordinator
 from dimos.ar.localization.policy import LocalizationPolicy
-from dimos.ar.localization.pose_buffer import PoseBuffer
+from dimos.ar.localization.runner import LocalizationCoordinator
 from dimos.ar.localization.types import Intrinsics, LocalizedPose, Observation
+from dimos.ar.robot.odometry import PoseBuffer
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo

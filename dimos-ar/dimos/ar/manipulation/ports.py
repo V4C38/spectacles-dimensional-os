@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from dimos.ar.manipulation.frames import ReferencePose
+from dimos.ar.manipulation.model import ReferencePose
 from dimos.manipulation.manipulation_spec import (
     CommandResult,
     ExecutionResult,

@@ -1,11 +1,8 @@
 import { expect, it } from "vitest";
 import { ARM_FIXTURE } from "../support/IntegrationArmFixture";
 import type { ManipulationModel } from "../../src/manipulation/ManipulationTypes";
-import { gripperJointValues } from "../../src/manipulation/ArmToolKinematics";
-import {
-  composePose,
-  linkPoses,
-} from "../../src/manipulation/ModelKinematics";
+import { gripperJointValues, composePose, linkPoses } from "../../src/manipulation/ModelKinematics";
+
 
 const fixture = ARM_FIXTURE;
 const model = fixture.model as ManipulationModel;

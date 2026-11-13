@@ -1,40 +1,32 @@
 import { clientTrackingToWebxrPoint } from "./utilities/WebXRCoordinates";
-import { odomToClientTrackingPose } from "@dimos-ar-client/localization/clientTrackingTransforms";
+import { odomToClientTrackingPose, ClientTrackingOriginStore, type ClientTrackingOrigin, rotateVecByQuat } from "@dimos-ar-client/localization/ClientTracking";
 import { WebXRManipulationController } from "./manipulation/WebXRManipulationController";
 import { AlignmentWarning } from "@dimos-ar-client/presentation/NotificationCenter";
-import { ClientPosePublisher } from "@dimos-ar-client/agent/ClientPosePublisher";
+import { ClientPosePublisher } from "@dimos-ar-client/agent/AgentTransport";
 import { ViewerNotificationPresenter } from "./presentation/ViewerNotificationPresenter";
-import { reportDiagnostic } from "./diagnostics/BrowserDiagnostics";
-import { AgentDraftSession } from "@dimos-ar-client/agent/AgentDraftSession";
-import { RobotSelection } from "@dimos-ar-client/robot/RobotSelection";
-import type { RecognitionPort, SynthesisPort } from "@dimos-ar-client/agent/AgentDraftSession";
-import type { ClientClock } from "@dimos-ar-client/websocket/hostPorts";
-import {
-  ClientTrackingOriginStore,
-  type ClientTrackingOrigin,
-} from "@dimos-ar-client/localization/clientTrackingOrigin";
-import { LocalizationCaptureEpisode } from "@dimos-ar-client/localization/localizationCaptureEpisode";
-import {
-  rotateVecByQuat,
-} from "@dimos-ar-client/localization/clientTrackingTransforms";
-import { parsePlaceArMarkerArgs, parseRemoveArMarkerArgs } from "@dimos-ar-client/agent/agentSkills";
-import { ARModuleSession } from "@dimos-ar-client/websocket/arModuleSession";
-import type { Quat, Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
+import { reportDiagnostic } from "./diagnostics/Diagnostics";
+import { AgentDraftSession, type RecognitionPort, type SynthesisPort } from "@dimos-ar-client/agent/AgentDraftSession";
+import { RobotSelection } from "@dimos-ar-client/robot/RobotPresentation";
+
+import type { ClientClock, Quat, Vec3, BindableWebSocketTransport } from "@dimos-ar-client/ClientContracts";
+
+import { LocalizationCaptureEpisode } from "@dimos-ar-client/localization/LocalizationCaptureEpisode";
+
+import { parsePlaceArMarkerArgs, parseRemoveArMarkerArgs } from "@dimos-ar-client/agent/MarkerSkills";
+import { ARModuleSession } from "@dimos-ar-client/websocket/ARModuleSession";
+
 import type { HmdCameraSource } from "./localization/HmdCameraSource";
-import { WebXRJoystickController, type JoystickAxes } from "./navigation/WebXRJoystickController";
+import { JoystickNavigationController as WebXRJoystickController, type JoystickAxes } from "@dimos-ar-client/navigation/NavigationCommands";
 import {
   WebXRNavigationController,
 } from "./navigation/WebXRNavigationController";
-import {
-  navigationSurfaceHits,
-  type FloorPlane,
-} from "./navigation/WebXRGroundPlacement";
+import { navigationSurfaceHits, type FloorPlane } from "./input/WebXRInteraction";
 import { WebXRARMarkerPresenter } from "./presentation/WebXRARMarkerPresenter";
 import { WebXRLidarRenderer } from "./sensors/WebXRLidarRenderer";
 import { WebXRRobotPresenter } from "./presentation/WebXRRobotPresenter";
-import { WebXRRouteRenderer } from "./navigation/WebXRRouteRenderer";
+import { WebXRRouteRenderer } from "./navigation/WebXRNavigationRenderer";
 import { WebXRUIPresenter } from "./presentation/WebXRUIPresenter";
-import type { BindableWebSocketTransport } from "@dimos-ar-client/websocket/hostPorts";
+
 type WebXRCameraPort = Pick<HmdCameraSource, "samplePose" | "cameraOptical" | "start" | "stop" | "capture" | "clearTracking" | "availabilityError" | "previewFrame" | "dispose"> & Partial<Pick<HmdCameraSource, "trackingPosition">>;
 
 export interface DimOSWebXRClientDeps {

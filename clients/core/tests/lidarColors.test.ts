@@ -1,12 +1,12 @@
 import { expect, it } from "vitest";
-import { lidarHeightColor } from "../src/sensors/lidarColors";
+import { lidarHeightColor } from "../src/sensors/LidarRendering";
 it("clamps a stable height spectrum and computes obstacle distance from the robot pose", () => {
   expect(lidarHeightColor(-1)).toEqual(lidarHeightColor(0)); expect(lidarHeightColor(2)).toEqual(lidarHeightColor(1));
   expect(lidarHeightColor(0.5)[1]).toBeGreaterThan(lidarHeightColor(0.5)[2]);
 });
 
 it("preserves native sensor distances after a fixed wire XY heuristic", async () => {
-  const { lidarBodyClearance } = await import("../src/sensors/lidarColors");
+  const { lidarBodyClearance } = await import("../src/sensors/LidarRendering");
   const robot = [5, -2.5, 0.33] as [number, number, number];
   const point = [5.75, -1.5, 0.7] as [number, number, number];
   const native = lidarBodyClearance([4.6, -1.2, 0.7], [4, -2, 0.33], [0, 0, 0, 1], [0.7, 0.5, 0.55]);

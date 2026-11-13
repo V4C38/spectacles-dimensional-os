@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingOrigin";
-import { ROBOT_LINE_STYLE, WORLD_DASH_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldVisualStyle";
+import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import { ROBOT_LINE_STYLE, WORLD_DASH_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldPresentation";
 
 const { renderers } = vi.hoisted(() => ({ renderers: new Map<string, any>() }));
 vi.mock("../../Assets/Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer", () => {
@@ -15,7 +15,7 @@ vi.mock("../../Assets/Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer", 
   }
   return { WorldMeshRenderer: Renderer, AdaptiveStrokeRenderer: Renderer };
 });
-import { NavigationRouteRenderer } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavigationRouteRenderer";
+import { NavigationRouteRenderer } from "../../Assets/Scripts/DimOSSpecsClient/navigation/SpecsNavigationRenderer";
 
 const origin: ClientTrackingOrigin = {
   position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0,

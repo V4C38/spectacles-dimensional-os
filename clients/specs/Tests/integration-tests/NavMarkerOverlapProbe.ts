@@ -9,7 +9,7 @@ import { TargetingMode } from "SpectaclesInteractionKit.lspkg/Core/Interactor/In
 import { IntegrationInput } from "./IntegrationInput";
 import { IntegrationV2Fixture } from "./IntegrationV2Fixture";
 import { INTEGRATION_CATALOG as CATALOG } from "./IntegrationCatalog";
-import { NAVIGATION_CANCEL_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldVisualStyle";
+import { NAVIGATION_CANCEL_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldPresentation";
 
 @component
 export class ReviewScenario extends BaseScriptComponent {

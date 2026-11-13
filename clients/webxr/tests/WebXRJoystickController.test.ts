@@ -1,6 +1,7 @@
 import { immediateAuthority } from "../../core/tests/support/ImmediateAuthority";
 import { describe, expect, it, vi } from "vitest";
-import { filterJoystick, isMenuButtonPressed, WebXRJoystickController } from "../src/navigation/WebXRJoystickController";
+import { filterJoystick, JoystickNavigationController as WebXRJoystickController } from "@dimos-ar-client/navigation/NavigationCommands";
+import { isMenuButtonPressed } from "../src/presentation/PanelInteraction";
 
 describe("WebXRJoystickController", () => {
   it("filters the deadzone and treats the menu button as button 4", () => {

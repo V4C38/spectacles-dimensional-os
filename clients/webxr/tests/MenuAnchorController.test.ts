@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { expect, it } from "vitest";
-import { MenuAnchorController } from "../src/input/MenuAnchorController";
+import { MenuAnchorController } from "../src/presentation/PanelInteraction";
 
 it.each(["left", "right"] as const)("follows the summoning %s source and freezes on detach", handedness => {
   const anchor = new MenuAnchorController(), panel = new THREE.Group();

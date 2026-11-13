@@ -1,4 +1,4 @@
-import { validDiagnosticEntry } from "./src/diagnostics/DiagnosticReporter";
+import { validDiagnosticEntry } from "./src/diagnostics/Diagnostics";
 import { defineConfig, type Plugin } from "vitest/config";
 import { pinGatewayPlugin } from "./server/PinGateway";
 import basicSsl from "@vitejs/plugin-basic-ssl";
@@ -7,7 +7,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { AR_MODULE_CLIENT_CONFIG } from "../core/src/websocket/hostPorts";
+import { AR_MODULE_CLIENT_CONFIG } from "../core/src/ClientContracts";
 
 const clientCore = fileURLToPath(
   new URL("../core/src", import.meta.url),

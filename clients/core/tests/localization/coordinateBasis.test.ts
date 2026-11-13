@@ -1,9 +1,6 @@
 import { expect, it } from "vitest";
-import {
-  applyBasis, transposeBasis, changeBasisQuat, remapPoseQuat, rotateVecByQuat,
-  type Mat3,
-} from "../../src/localization/clientTrackingTransforms";
-import type { Quat, Vec3 } from "../../src/websocket/protocolTypes";
+import { applyBasis, transposeBasis, changeBasisQuat, remapPoseQuat, rotateVecByQuat, type Mat3 } from "../../src/localization/ClientTracking";
+import type { Quat, Vec3 } from "../../src/ClientContracts";
 
 const basis: Mat3 = [[0, 0, -1], [-1, 0, 0], [0, 1, 0]];
 const point: Vec3 = [0.3, -0.7, 1.1];

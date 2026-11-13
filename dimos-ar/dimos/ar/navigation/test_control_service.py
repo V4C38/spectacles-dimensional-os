@@ -6,7 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from dimos.ar.navigation.control_service import NavigationControlService
+from dimos.ar.navigation.control import NavigationControlService
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
 

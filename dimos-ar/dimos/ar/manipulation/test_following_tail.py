@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from dimos.ar.manipulation.following_tail import FollowingTail
+from dimos.ar.manipulation.operation import FollowingTail
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from test_support.manipulation import runtime
 

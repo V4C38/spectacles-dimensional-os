@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { ManipulationRequests, type ManipulationRequest } from "../../src/manipulation/ManipulationRequests";
+import { ManipulationRequests, type ManipulationRequest } from "../../src/manipulation/ManipulationController";
 import type { ManipulationResult } from "../../src/manipulation/ManipulationTypes";
 
 function fixture() {

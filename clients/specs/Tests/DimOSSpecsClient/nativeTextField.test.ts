@@ -3,7 +3,7 @@ vi.mock("SpectaclesUIKit.lspkg/Scripts/Components/ScrollWindow/ScrollWindow", ()
 vi.mock("SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider", () => ({ Slider: { getTypeName: () => "slider" } }));
 const { createText } = vi.hoisted(() => ({ createText: vi.fn() }));
 vi.mock("../mocks/UIKit.ts", () => ({ createText, configurePanelText: vi.fn(), COLOR_WHITE: {}, FONT_CAPTION: 12 }));
-import { NativeTextField } from "../../Assets/Scripts/DimOSSpecsClient/presentation/NativeTextField";
+import { ScrollableTextView } from "../../Assets/Scripts/DimOSSpecsClient/presentation/ScrollableTextView";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -50,7 +50,7 @@ function fixture() {
   const textNode = createNode("text");
   const text = { text: "", getBoundingBox: () => ({ getSize: () => ({ y: measuredHeight }) }), getSceneObject: () => textNode };
   vi.mocked(createText).mockReturnValue(text as any);
-  const field = new NativeTextField({} as any, "Field", 40, 20, 3);
+  const field = new ScrollableTextView({} as any, "Field", 40, 20, 3);
   windowWrites.mockClear(); sliderWrites.mockClear();
   return { field, text, window, slider, windowWrites, sliderWrites, nodes,
     measure: (height: number) => { measuredHeight = height; }, valueChanged, positionUpdated, dimensionsUpdated };

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { CollaborationController } from "../../src/replication/CollaborationController";
-import { ManipulationInteraction } from "../../src/manipulation/ManipulationInteraction";
-import type { InteractionState } from "../../src/replication/CollaborationTypes";
-import type { Outbound } from "../../src/websocket/protocolTypes";
+import { ManipulationInteraction } from "../../src/manipulation/ManipulationController";
+import type { InteractionState, Outbound } from "../../src/ClientContracts";
+
 const pose = (z: number) => ({ position: [0,0,z] as [number,number,number], orientation: [0,0,0,1] as [number,number,number,number] });
 function fixture() {
   const sent: any[] = []; let clock = 100, listener: (m: Outbound) => void = () => {};

@@ -1,25 +1,21 @@
 import { EnvironmentDepthRenderer } from "./presentation/EnvironmentDepthRenderer";
-import { BrowserJpegEncoder } from "./localization/BrowserJpegEncoder";
+import { BrowserJpegEncoder, browserMediaPort, HmdCameraSource, videoFrameCallbackPort } from "./localization/HmdCameraSource";
 import { LandingInfoPresenter } from "./presentation/LandingInfoPresenter";
-import { applyDOMDesign } from "./presentation/DimOSARDesign";
+import { applyDOMDesign, toneCss } from "./presentation/DimOSARDesign";
 import * as xb from "xrblocks";
-import { EMPTY_RAY_LENGTH_M } from "./input/XRBlocksRayInteraction";
-import { reportBrowserError, reportDiagnostic } from "./diagnostics/BrowserDiagnostics";
-import { HMD_OPTIONS, parseHmdId } from "./localization/HmdCalibration";
-import { profileForHmd } from "./localization/HmdProfiles";
-import {
-  browserMediaPort,
-  HmdCameraSource,
-  videoFrameCallbackPort,
-} from "./localization/HmdCameraSource";
+import { EMPTY_RAY_LENGTH_M } from "./input/WebXRInteraction";
+import { reportBrowserError, reportDiagnostic } from "./diagnostics/Diagnostics";
+import { HMD_OPTIONS, parseHmdId, profileForHmd } from "./localization/HmdCalibration";
+
+
 import { browserRecognition, browserSynthesis } from "./agent/BrowserSpeechAdapters";
 import { DimOSWebXRClient } from "./DimOSWebXRClient";
-import { toneCss } from "./presentation/StatusTones";
+
 import { WebXRApp } from "./WebXRApp";
-import { arModuleSameOriginUrl } from "./WebXRRuntimeConfig";
+import { arModuleSameOriginUrl, BrowserWebSocketTransport } from "./websocket/BrowserWebSocketTransport";
 import { BrowserClientClock } from "./utilities/BrowserClientClock";
-import { BrowserWebSocketTransport } from "./websocket/BrowserWebSocketTransport";
-import type { StatusTone } from "@dimos-ar-client/websocket/sessionLinkStatus";
+
+import type { StatusTone } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 
 function setStatus(text: string, tone: StatusTone = "neutral"): void {
   const node = document.getElementById("status");

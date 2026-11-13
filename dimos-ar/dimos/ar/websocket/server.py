@@ -17,10 +17,11 @@ from typing import Any
 import websockets
 import websockets.asyncio.server as ws_server
 
+from dimos.ar.async_execution import BoundedWorker
 from dimos.ar.manipulation.protocol import ManipulationRequest
 from dimos.ar.navigation.types import NavGoalRequest, NavJoystickRequest
 from dimos.ar.replication.interaction import InteractionRequest
-from dimos.ar.timing_diagnostics import TimingSummary
+from dimos.ar.timing_diagnostics import LatencyHistogram, TimingSummary
 from dimos.ar.websocket.bulk import (
     BULK_BYTES_PER_SECOND,
     MAX_BULK_RECORD_BYTES,
@@ -29,8 +30,6 @@ from dimos.ar.websocket.bulk import (
     BulkUpload,
     TokenBucket,
 )
-from dimos.ar.websocket.ip_relay import IpRelayPublisher, lan_ip
-from dimos.ar.websocket.performance import LatencyHistogram
 from dimos.ar.websocket.protocol import (
     LOCALIZATION_OBSERVATIONS_FOURCC,
     ClientError,
@@ -53,7 +52,7 @@ from dimos.ar.websocket.protocol import (
     encode_hello,
 )
 from dimos.ar.websocket.send_queue import ClientSendQueue, peek_frame_type
-from dimos.ar.worker import BoundedWorker
+from dimos.ar.websocket.server_discovery import IpRelayPublisher, lan_ip
 from dimos.core.global_config import global_config
 from dimos.utils.logging_config import setup_logger
 

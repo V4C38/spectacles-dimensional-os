@@ -1,5 +1,5 @@
-import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingOrigin";
-import { MarkerCorrectionTrail } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/MarkerCorrectionTrail";
+import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import { MarkerCorrectionTrail } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldPresentation";
 import { AdaptiveStrokeRenderer, WorldMeshRenderer } from "./WorldMeshRenderer";
 
 /** Reused visual meshes only; no interaction components or localization writes. */

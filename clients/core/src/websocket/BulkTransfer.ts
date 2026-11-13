@@ -1,5 +1,5 @@
-import type { BindableWebSocketTransport, ClientClock } from "./hostPorts";
-import { validateManipulationModel } from "../manipulation/ManipulationModelValidation";
+import type { BindableWebSocketTransport, ClientClock } from "../ClientContracts";
+import { validateManipulationModel } from "../manipulation/ManipulationValidation";
 
 export const BULK_RECORD_BYTES = 16384;
 export const BULK_UPLOAD_BYTES = 4194304;

@@ -1,10 +1,6 @@
-import { rotateVecByQuat, multiplyRotation } from "../localization/clientTrackingTransforms";
-import type { Quat, Vec3 } from "../websocket/protocolTypes";
-import type {
-  ManipulationModel,
-  ManipulationPlan,
-  ManipulationPose,
-} from "./ManipulationTypes";
+import { rotateVecByQuat, multiplyRotation } from "../localization/ClientTracking";
+import type { Quat, Vec3 } from "../ClientContracts";
+import type { ManipulationModel, ManipulationPlan, ManipulationPose, ManipulationGroup } from "./ManipulationTypes";
 
 export function composePose(
   a: ManipulationPose,
@@ -116,4 +112,34 @@ export function toolSubtree(
     for (const joint of model.joints)
       if (links.has(joint.parent)) links.add(joint.child);
   return { root, links };
+}
+
+/** Map normalized opening only to this group's independent finger joints. */
+export function gripperJointValues(
+  model: ManipulationModel,
+  group: ManipulationGroup | undefined,
+  opening: number | null | undefined,
+): Record<string, number> {
+  if (opening == null || !group?.has_gripper || !group.tip_frame) return {};
+  const { links: toolLinks } = toolSubtree(model, group.tip_frame);
+  const values: Record<string, number> = {};
+  const t = Math.max(0, Math.min(1, opening));
+  for (const joint of model.joints) {
+    if (
+      joint.kind !== "prismatic" ||
+      !joint.limits ||
+      joint.mimic ||
+      !toolLinks.has(joint.child) ||
+      group.joint_names.includes(joint.name)
+    )
+      continue;
+    const mapping = model.gripper_joints?.[joint.name];
+    if (mapping) values[joint.name] = mapping.closed + (mapping.open - mapping.closed) * t;
+  }
+  return values;
+}
+
+export function jointDelta(from: number, to: number, continuous: boolean): number {
+  const delta = to - from;
+  return continuous ? Math.atan2(Math.sin(delta), Math.cos(delta)) : delta;
 }

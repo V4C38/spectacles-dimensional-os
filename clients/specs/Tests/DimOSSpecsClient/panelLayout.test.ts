@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { RUNTIME_LAYOUTS, SETUP_LAYOUTS, PANEL_GEOMETRY, panelContentOffset, panelFooterY, easePanel } from "../../Assets/Scripts/DimOSSpecsClient/presentation/PanelLayout";
+import { readFileSync } from "node:fs";
+import { basename } from "node:path";
+import { SetupWizardView } from "../../Assets/Scripts/DimOSSpecsClient/presentation/SetupWizardView";
+import { RUNTIME_LAYOUTS, SETUP_LAYOUTS, PANEL_GEOMETRY, panelContentOffset, panelFooterY, easePanel } from "../../Assets/Scripts/DimOSSpecsClient/presentation/SpecsPanelPresentation";
 
 describe("compact panel geometry", () => {
   it("fits every stable state without changing the calibrated width", () => {
@@ -32,4 +35,23 @@ describe("compact panel geometry", () => {
     expect(easePanel(0.1)).toBeLessThan(0.1);
     expect(easePanel(0.9)).toBeGreaterThan(0.9);
   });
+});
+
+
+it("keeps the native layout import distinct from the packaged panel policy", () => {
+  const source = readFileSync(new URL("../../Assets/Scripts/DimOSSpecsClient/presentation/SetupWizardView.ts", import.meta.url), "utf8");
+  const imports = [...source.matchAll(/from\s+"([^"]+)"/g)].map(match => match[1]);
+  const packagedPolicy = imports.find(path => path.startsWith("DimOSARClient.lspkg/") && path.endsWith("/ControlPanelPresentation"));
+  const nativeLayout = imports.find(path => path === "./SpecsPanelPresentation");
+  expect(packagedPolicy).toBeDefined();
+  expect(nativeLayout).toBeDefined();
+  // The editor's native loader must receive distinguishable module names.
+  expect(basename(nativeLayout!)).not.toBe(basename(packagedPolicy!));
+});
+
+it("initializes actual setup layouts before constructing the native scene", () => {
+  const reachedNativeScene = new Error("native scene construction reached");
+  const panel = { getChildrenCount: () => { throw reachedNativeScene; } } as unknown as SceneObject;
+  // Exercise the real constructor's field initializers; prototype-only tests skip them.
+  expect(() => new SetupWizardView(panel)).toThrow(reachedNativeScene);
 });

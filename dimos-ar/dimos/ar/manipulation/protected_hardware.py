@@ -4,7 +4,7 @@ import math
 import time
 from typing import Any
 
-from dimos.ar.manipulation.limits import COMMAND_TRACKING_LEAD_RAD
+from dimos.ar.manipulation.model_config import COMMAND_TRACKING_LEAD_RAD
 from dimos.ar.manipulation.protection import MotorProtection, ProtectionPolicy
 from dimos.hardware.whole_body.openyam_damiao.adapter import OpenYamDamiaoAdapter
 from dimos.utils.logging_config import setup_logger

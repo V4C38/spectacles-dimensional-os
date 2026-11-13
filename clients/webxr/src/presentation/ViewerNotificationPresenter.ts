@@ -1,6 +1,6 @@
 import { NotificationPill } from "./NotificationPill";
 import * as THREE from "three";
-import { VIEWER_NOTIFICATION_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
+import { VIEWER_NOTIFICATION_STYLE } from "@dimos-ar-client/presentation/WorldPresentation";
 import { NotificationCenter, type ClientNotification } from "@dimos-ar-client/presentation/NotificationCenter";
 export type ViewerNotification = ClientNotification;
 

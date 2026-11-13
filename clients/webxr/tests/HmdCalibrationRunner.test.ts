@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { acceptProfile, evaluateCalibration } from "./fixtures/HmdCalibrationRunner";
-import { HMD_PROFILES } from "../src/localization/HmdProfiles";
+import { HMD_PROFILES } from "../src/localization/HmdCalibration";
 
 describe("evaluateCalibration", () => {
   it("accepts observations inside the recorded thresholds", () => {

@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
-import { armDisplacementCoefficients, ArmOpacityUniforms } from "../../Assets/Scripts/DimOSSpecsClient/manipulation/ArmMaterial";
-import { armPointDisplacement, ArmMeshFade, ArmOpacityCadence } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationVisuals";
+import { armDisplacementCoefficients, ArmOpacityUniforms, ManipulationRenderer } from "../../Assets/Scripts/DimOSSpecsClient/manipulation/ManipulationRenderer";
+import { armPointDisplacement, ArmMeshFade, ArmOpacityCadence, ManipulationPreviewPlayback } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationPresentation";
 import { clientTrackingToSpecsPoint } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
 import type { ManipulationPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationTypes";
 
@@ -70,11 +70,11 @@ it("samples displacement on request, smoothly fades and stops writing settled un
 
 vi.mock("SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider", () => ({ Slider: class {} }));
 vi.mock("../mocks/UIKit.ts", () => ({ setButtonStyle: vi.fn(), SnapOS2Styles: {} }));
-import { ManipulationRenderer } from "../../Assets/Scripts/DimOSSpecsClient/manipulation/ManipulationRenderer";
-import { ArmPresentationSampler } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ArmPresentationSampler";
-import { ManipulationPreviewPlayback } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationPresentation";
-import { ArmTrajectoryProgress } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ArmTrajectoryProgress";
-import { PanelHeightAnimation } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/PanelHeightAnimation";
+
+import { ArmPresentationSampler, ArmTrajectoryProgress } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ArmPresentation";
+
+
+import { PanelHeightAnimation } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
 import { ARM_FIXTURE } from "../../../core/tests/support/IntegrationArmFixture";
 
 it("keeps all initialized link buffers static during reveal, motion, warnings and hiding", () => {

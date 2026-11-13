@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  IpRelayClient,
-  routeConnectionField,
-  toggleConnectionMethod,
-} from "../../Assets/Scripts/DimOSSpecsClient/IpRelayClient";
+import { IpRelayClient, routeConnectionField, toggleConnectionMethod } from "../../Assets/Scripts/DimOSSpecsClient/websocket/IpRelayClient";
 
 describe("PIN and IP routing", () => {
   it("resolves a PIN and switches the field to a typed IP", async () => {

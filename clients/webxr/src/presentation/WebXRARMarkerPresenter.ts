@@ -1,13 +1,13 @@
 import * as THREE from "three";
-import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/clientTrackingOrigin";
-import { composePlaceArMarker, type PlaceArMarkerArgs } from "@dimos-ar-client/agent/agentSkills";
+import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/ClientTracking";
+import { composePlaceArMarker, type PlaceArMarkerArgs } from "@dimos-ar-client/agent/MarkerSkills";
 import { Text } from "troika-three-text";
-import type { Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
-import { disposeTextResources } from "./TextResources";
+import type { Vec3 } from "@dimos-ar-client/ClientContracts";
+import { disposeTextResources, syncText, UI_FONT_REGULAR, UI_FONT_SEMIBOLD } from "./SceneResources";
 import { cornerRadius } from "./DimOSARDesign";
-import { GlassSurface } from "./GlassSurface";
+import { GlassSurface } from "./SurfaceMaterials";
 import { indicatorMaterial } from "./PoseIndicatorMaterial";
-import { syncText, UI_FONT_REGULAR, UI_FONT_SEMIBOLD } from "./UIFonts";
+
 import { clientTrackingToWebxrPoint } from "../utilities/WebXRCoordinates";
 
 type MarkerEntry = {

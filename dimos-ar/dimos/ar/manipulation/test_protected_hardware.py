@@ -87,7 +87,7 @@ def test_stop_refreshes_stale_feedback_before_holding(monkeypatch):
 def test_loaded_arm_can_overcome_five_degree_tracking_offset(monkeypatch):
     import math
 
-    from dimos.ar.manipulation.limits import COMMAND_TRACKING_LEAD_RAD
+    from dimos.ar.manipulation.model_config import COMMAND_TRACKING_LEAD_RAD
 
     device, sent = adapter(monkeypatch)
     now = [0.0]

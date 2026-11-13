@@ -6,12 +6,12 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any, cast
 
-from dimos.ar.manipulation.errors import (
+from dimos.ar.manipulation.planner_worker import PlanningWorker
+from dimos.ar.manipulation.protocol import (
     ExecutionNotStartedError,
     ManipulationError,
     spatial_error_code,
 )
-from dimos.ar.manipulation.planner_worker import PlanningWorker
 from dimos.control.tasks.pose_target_ik import PinkPoseTargetSolver, PoseTargetIKTaskConfig
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.manipulation_spec import (

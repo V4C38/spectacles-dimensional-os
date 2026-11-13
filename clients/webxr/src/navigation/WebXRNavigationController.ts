@@ -1,13 +1,13 @@
 import * as THREE from "three";
-import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/clientTrackingOrigin";
-import type { ARModuleSession, ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSession";
-import type { Quat, Vec3, YawPose } from "@dimos-ar-client/websocket/protocolTypes";
-import { NavigationInteraction } from "@dimos-ar-client/navigation/NavigationInteraction";
-import { NavigationPreviewCoordinator } from "@dimos-ar-client/navigation/NavigationPreviewCoordinator";
-import { requestNavGoal } from "@dimos-ar-client/navigation/navGoalRequest";
+import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/ClientTracking";
+import type { ARModuleSession, ARModuleSessionState } from "@dimos-ar-client/websocket/ARModuleSession";
+import type { Quat, Vec3, YawPose } from "@dimos-ar-client/ClientContracts";
+import { NavigationInteraction, NavigationPreviewCoordinator } from "@dimos-ar-client/navigation/NavigationInteraction";
+
+import { requestNavGoal } from "@dimos-ar-client/navigation/NavigationCommands";
 import { clientTrackingToWebxrPose, clientTrackingToWebxrPoint, webxrHeadingToClientTrackingPose, webxrToClientTrackingPoint } from "../utilities/WebXRCoordinates";
-import { WebXRNavGoalView, type NavFlash } from "./WebXRNavGoalView";
-import { FLOOR_AIM_RANGE_M, RAY_LENGTH_M, solveMeshPlacement, type MeshHit } from "./WebXRGroundPlacement";
+import { WebXRNavGoalView, type NavFlash } from "./WebXRNavigationRenderer";
+import { FLOOR_AIM_RANGE_M, RAY_LENGTH_M, solveMeshPlacement, type MeshHit } from "../input/WebXRInteraction";
 export { FLASH_DURATION_S, robotDeadzoneRadiusM } from "@dimos-ar-client/navigation/NavigationInteraction";
 
 /** WebXR placement and scene binding. All navigation interaction policy lives in ClientCore. */

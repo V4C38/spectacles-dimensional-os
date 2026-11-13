@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from dimos.ar.localization.pose_buffer import PoseBuffer
+from dimos.ar.robot.odometry import PoseBuffer
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
 

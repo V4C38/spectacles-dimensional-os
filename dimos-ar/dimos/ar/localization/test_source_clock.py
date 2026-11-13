@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from dimos.ar.localization.source_clock import RobotSourceClock
+from dimos.ar.robot.odometry import RobotSourceClock
 
 
 def test_live_source_keeps_producer_time_despite_delivery_delay() -> None:

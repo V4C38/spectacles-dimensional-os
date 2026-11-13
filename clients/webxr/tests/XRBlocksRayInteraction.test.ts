@@ -9,7 +9,7 @@ vi.hoisted(() => {
 });
 import * as THREE from "three";
 import * as xb from "xrblocks";
-import { XRBlocksRayInteraction, registerRayTarget, resolveRayHit, preferredPointer } from "../src/input/XRBlocksRayInteraction";
+import { XRBlocksRayInteraction, registerRayTarget, resolveRayHit, preferredPointer } from "../src/input/WebXRInteraction";
 
 function fixture() {
   const scene = new THREE.Scene();

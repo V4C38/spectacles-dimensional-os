@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+vi.mock("SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider", () => ({ Slider: class {} }));
 import { AdaptiveStrokeRenderer, WorldMeshRenderer, circleMesh } from "../../Assets/Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer";
 
 function renderer() {
@@ -47,7 +48,7 @@ it("keeps the native stroke vertex contract while supporting arm color and pixel
 });
 
 it("arm rigid motion updates pose uniforms without uploading geometry", async () => {
-  const { ArmStrokeRenderer } = await import("../../Assets/Scripts/DimOSSpecsClient/manipulation/ArmStrokeRenderer");
+  const { ArmStrokeRenderer } = await import("../../Assets/Scripts/DimOSSpecsClient/manipulation/ManipulationRenderer");
   const position = vi.fn(), rotation = vi.fn(), upload = vi.fn();
   vi.stubGlobal("vec3", class { constructor(public x: number, public y: number, public z: number) {} });
   vi.stubGlobal("quat", class { constructor(public w: number, public x: number, public y: number, public z: number) {} });

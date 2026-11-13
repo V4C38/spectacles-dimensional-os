@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CollaborationController } from "../../src/replication/CollaborationController";
-import type { InteractionState, InteractionPose } from "../../src/replication/CollaborationTypes";
+import type { InteractionState, InteractionPose } from "../../src/ClientContracts";
 import { decodeOutbound } from "../../src/websocket/protocol";
 const pose = (x: number): InteractionPose => ({ position: [x, 0, 0], orientation: [0, 0, 0, 1] });
 function state(revision = 0): InteractionState { return {

@@ -310,7 +310,7 @@ def test_range_filter_stays_in_native_metres_when_display_is_scaled() -> None:
 def test_native_navigation_and_lidar_share_one_corrected_wire_frame() -> None:
     import time
 
-    from dimos.ar.navigation.coordinator import NavGoalCoordinator
+    from dimos.ar.navigation.control import NavGoalCoordinator
     from dimos.ar.navigation.types import NavGoalRequest
     from dimos.msgs.nav_msgs.Path import Path
 
@@ -363,7 +363,7 @@ def test_lidar_subscriptions_are_isolated_and_downsample_once(monkeypatch):
 
 
 def _publish_odom(publisher, pose):
-    from dimos.ar.localization.pose_buffer import PoseSample
+    from dimos.ar.robot.odometry import PoseSample
     from dimos.ar.robot.odometry_correction import correct_odom_pose
     corrected = correct_odom_pose(pose, factor=publisher._odom_scale_correction_factor)
     publisher.publish_odom(PoseSample(

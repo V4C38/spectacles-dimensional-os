@@ -1,8 +1,8 @@
 import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 // Hardware inputs are deterministic fixtures. Production state owners, SIK/SUK controls and renderers run unchanged.
 import { availableCapabilityLabels } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
-import { FLOOR_MARKER_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldVisualStyle";
-import { RUNTIME_LAYOUTS,RUNTIME_PANEL_SCALE,SETUP_LAYOUTS } from "../Scripts/DimOSSpecsClient/presentation/PanelLayout";
+import { FLOOR_MARKER_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldPresentation";
+import { RUNTIME_LAYOUTS,RUNTIME_PANEL_SCALE,SETUP_LAYOUTS } from "../Scripts/DimOSSpecsClient/presentation/SpecsPanelPresentation";
 import { getFrameComponent } from "../Scripts/DimOSSpecsClient/presentation/UIKit";
 import { WristMenuController } from "../Scripts/DimOSSpecsClient/presentation/WristMenuController";
 import { IntegrationArmGolden } from "./IntegrationArmGolden";
@@ -215,7 +215,7 @@ export function runGoldenCase(scenario: ReviewScenario, id: string): void {
       scenario.after(1, () => {
         scenario.input!.active = false;
         scenario.check(id, scenario.count("interaction_request", row => row.action === "confirm") === before + 1 &&
-          root.selection.isSelected() && root.navigationController.activePath()?.length >= 2 && root.navGoalPresenter.ribbon.object.enabled, id);
+          root.selection.isSelected() && root.navigationController.activePath()?.length >= 2 && root.activeRouteRenderer.ribbon.object.enabled, id);
       });
       break;
     }

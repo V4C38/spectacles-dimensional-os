@@ -2,7 +2,7 @@ import { EnvironmentDepthRenderer } from "./presentation/EnvironmentDepthRendere
 import * as THREE from "three";
 import * as xb from "xrblocks";
 import { DimOSWebXRClient } from "./DimOSWebXRClient";
-import { reportDiagnostic } from "./diagnostics/BrowserDiagnostics";
+import { reportDiagnostic } from "./diagnostics/Diagnostics";
 import { WebXRInputController } from "./input/WebXRInputController";
 import { WebXRSessionController } from "./WebXRSessionController";
 

@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
-import { SpecsArmPanelPresenter } from "../../Assets/Scripts/DimOSSpecsClient/manipulation/SpecsArmPanelPresenter";
+vi.mock("SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider", () => ({ Slider: class {} }));
+import { SpecsArmPanelPresenter } from "../../Assets/Scripts/DimOSSpecsClient/manipulation/ManipulationControlsView";
 import { Frame } from "../mocks/Frame";
 
 
@@ -36,7 +37,7 @@ it("initializes Frame on an enabled host before hiding it or using its native bu
   } finally { vi.unstubAllGlobals(); }
 });
 
-import { ARM_PANEL_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/PanelFrameStyle";
+import { ARM_PANEL_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
 class Vector {
   constructor(public x = 0, public y = 0, public z = 0) {}
   add(other: Vector) { return new Vector(this.x + other.x, this.y + other.y, this.z + other.z); }

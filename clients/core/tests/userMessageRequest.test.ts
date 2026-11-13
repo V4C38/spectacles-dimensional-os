@@ -1,9 +1,9 @@
 import { FakeClock, FakeTransport, helloAt, stateFrame } from "./support/SessionFixture";
 import { describe, expect, it } from "vitest";
-import { requestUserMessage } from "../src/agent/userMessageRequest";
-import { ClientTrackingOriginStore } from "../src/localization/clientTrackingOrigin";
-import { ARModuleSession } from "../src/websocket/arModuleSession";
-import type { Capabilities } from "../src/websocket/protocolTypes";
+import { requestUserMessage } from "../src/agent/AgentTransport";
+import { ClientTrackingOriginStore } from "../src/localization/ClientTracking";
+import { ARModuleSession } from "../src/websocket/ARModuleSession";
+import type { Capabilities } from "../src/ClientContracts";
 
 const STATE = stateFrame();
 

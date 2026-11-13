@@ -5,7 +5,7 @@ import json
 import pytest
 import requests
 
-from dimos.ar.websocket.ip_relay import IpRelayPublisher
+from dimos.ar.websocket.server_discovery import IpRelayPublisher
 
 
 @pytest.mark.parametrize("method,payload,key", [

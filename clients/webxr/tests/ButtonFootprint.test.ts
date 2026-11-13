@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import * as THREE from "three";
-import { ButtonFootprint } from "../src/presentation/ButtonFootprint";
+import { ButtonFootprint } from "../src/presentation/SurfaceMaterials";
 
 it("spreads and softens a raised button's shadow down and sideways in physical units", () => {
   const footprint = new ButtonFootprint(0.4, 0.1, 0.05);

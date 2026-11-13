@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dimos.ar.robot.safety import Safety
+from dimos.ar.robot.emergency_stop import EmergencyStopController
 
 
-def _safety(*, estop_available: bool = True) -> tuple[Safety, list[str]]:
+def _safety(*, estop_available: bool = True) -> tuple[EmergencyStopController, list[str]]:
     calls: list[str] = []
 
     def effect_a() -> bool:
@@ -14,7 +14,7 @@ def _safety(*, estop_available: bool = True) -> tuple[Safety, list[str]]:
         calls.append("b")
         return False
 
-    return Safety(estop_available=estop_available, effects=(effect_a, effect_b)), calls
+    return EmergencyStopController(estop_available=estop_available, effects=(effect_a, effect_b)), calls
 
 
 def test_estop_request_runs_all_effects() -> None:
@@ -38,6 +38,6 @@ def test_estop_unavailable_runs_no_effects() -> None:
 
 def test_false_when_no_effect_reports_change() -> None:
     calls: list[str] = []
-    safety = Safety(estop_available=True, effects=(lambda: calls.append("x") or False,))
+    safety = EmergencyStopController(estop_available=True, effects=(lambda: calls.append("x") or False,))
     assert safety.on_estop_request() is False
     assert calls == ["x"]

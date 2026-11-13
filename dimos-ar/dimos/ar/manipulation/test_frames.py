@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
-from dimos.ar.manipulation.frames import ReferencePose
+from dimos.ar.manipulation.model import ReferencePose
 
 
 def test_rotated_translated_reference_preserves_complete_tool_pose():
@@ -34,7 +34,7 @@ def test_pose_error_preserves_quaternion_equivalence_and_rejects_nonfinite_feedb
     import math
     from types import SimpleNamespace
 
-    from dimos.ar.manipulation.frames import pose_error
+    from dimos.ar.manipulation.model import pose_error
     from dimos.msgs.geometry_msgs.Pose import Pose
 
     assert pose_error(Pose(), Pose(0, 0, 0, 0, 0, 0, -1)) == (0, 0)

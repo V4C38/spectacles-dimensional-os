@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { armMaterial } from "../src/manipulation/ArmMaterial";
+import { armMaterial } from "../src/manipulation/ManipulationModelRenderer";
 import { AdaptiveDashedLineRenderer } from "../src/presentation/AdaptiveDashedLineRenderer";
 
 it("keeps translucent arm surfaces from writing depth", () => {

@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { describe, expect, it, vi } from "vitest";
-import { FingertipButtons } from "../src/input/FingertipButtons";
+import { FingertipButtons } from "../src/input/WebXRInteraction";
 
 function fixture() {
   const scene = new THREE.Group();

@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from dimos.ar.navigation.tele_cmd_vel import TeleCmdVelPublisher
+from dimos.ar.navigation.control import TeleCmdVelPublisher
 from dimos.ar.navigation.types import NavJoystickRequest
 from dimos.msgs.geometry_msgs.Twist import Twist
 

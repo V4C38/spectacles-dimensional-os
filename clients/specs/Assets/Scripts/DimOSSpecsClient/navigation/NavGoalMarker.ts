@@ -1,10 +1,10 @@
 import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable";
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
-import { NAVIGATION_CANCEL_STYLE,navigationCancelReveal } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldVisualStyle";
+import { NAVIGATION_CANCEL_STYLE, navigationCancelReveal } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldPresentation";
 import { findChildRecursive } from "../presentation/UIKit";
 import { WorldMeshRenderer,strokeMesh2D } from "../presentation/WorldMeshRenderer";
-import { yawRotationFromWorldRotation } from "../utilities/SpecsUtilities";
-import { NavigationMarkerRenderer,type NavigationMarkerStyle } from "./NavigationMarkerRenderer";
+import { yawRotationFromWorldRotation } from "../utilities/SpecsCoordinates";
+import { NavigationMarkerRenderer, type NavigationMarkerStyle } from "./SpecsNavigationRenderer";
 
 export type NavGoalMarkerEvents = {
   onDragTriggerStart?: (interactor: { startPoint?: vec3; endPoint?: vec3 } | null) => void;
@@ -33,7 +33,7 @@ export class NavGoalMarker extends BaseScriptComponent {
   private hovered = false;
   private worldVisuals: NavigationMarkerRenderer | null = null;
 
-  // NavigationController initializes this after ObjectPrefab.instantiate()
+  // SpecsNavigationController initializes this after ObjectPrefab.instantiate()
   // returns. Hiding the hierarchy in onAwake interrupts construction of its
   // UIKit/Interactable children on device.
   ensureReady(): void {

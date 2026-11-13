@@ -5,10 +5,10 @@ import {
   robotFloorOffsetCm,
 } from "../../Assets/Scripts/DimOSSpecsClient/presentation/RobotPresenter";
 import { clientTrackingToSpecsPoint } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
-import type { RobotDescription, Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes";
+import type { RobotDescription, Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 
-import { AppState } from "../../Assets/Scripts/DimOSSpecsClient/presentation/AppState";
-import type { ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/arModuleSession";
+import { UIPresentationState } from "../../Assets/Scripts/DimOSSpecsClient/presentation/UIPresentationState";
+import type { ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/ARModuleSession";
 
 const GO2: RobotDescription = {
   odom_scale_correction_factor: 1,
@@ -105,7 +105,7 @@ describe("activity survives pose presentation", () => {
       connection: "ready", hello: { robot: GO2 },
       nav: null, state: { agent: { idle } },
     } as unknown as ARModuleSessionState;
-    const appState = new AppState();
+    const appState = new UIPresentationState();
     const ctx = { mainUi: motionRoot as unknown as SceneObject, appState };
     presenter.refreshLabels(appState, view, { asrRunning, ttsPlaying });
     for (let i = 0; i < 3; i++) {

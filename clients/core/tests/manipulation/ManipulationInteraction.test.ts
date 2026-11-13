@@ -1,11 +1,11 @@
 import { immediateAuthority } from "../support/ImmediateAuthority";
 import { describe, expect, it } from "vitest";
-import { ManipulationInteraction } from "../../src/manipulation/ManipulationInteraction";
+import { ManipulationInteraction } from "../../src/manipulation/ManipulationController";
 import {
   decodeManipulation,
   encodeManipulation,
 } from "../../src/manipulation/ManipulationProtocol";
-import type { Outbound } from "../../src/websocket/protocolTypes";
+import type { Outbound } from "../../src/ClientContracts";
 
 function fixture() {
   const sent: any[] = [];

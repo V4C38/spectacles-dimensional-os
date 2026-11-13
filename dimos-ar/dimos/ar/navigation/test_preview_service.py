@@ -5,7 +5,7 @@ import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from dimos.ar.navigation.preview_service import NavigationPreviewService
+from dimos.ar.navigation.preview import NavigationPreviewService
 from dimos.ar.navigation.types import NavGoalRequest
 
 

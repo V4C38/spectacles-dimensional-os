@@ -1,10 +1,10 @@
 import { immediateAuthority } from "../../../core/tests/support/ImmediateAuthority";
 import { setMockTime } from "../setup/lens-globals";
-import { describe, expect, it } from "vitest";
-import { clientTrackingToOdomPose, rotateVecByQuat, odomToClientTrackingYawPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingTransforms";
+import { describe, expect, it, vi } from "vitest";
+import { clientTrackingToOdomPose, rotateVecByQuat, odomToClientTrackingYawPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 import { clientTrackingToSpecsYawPose } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
-import { specsNavigationPoseInTracking } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavigationController";
-import { SpecsNavigationInput } from "../../Assets/Scripts/DimOSSpecsClient/navigation/SpecsNavigationInput";
+import { specsNavigationPoseInTracking, SpecsNavigationInput, SpecsNavigationController } from "../../Assets/Scripts/DimOSSpecsClient/navigation/SpecsNavigationController";
+
 describe("navigation marker terminal heading", () => {
   it.each([0, Math.PI / 2, Math.PI, -Math.PI / 2])(
     "sends the displayed arrow direction at marker yaw %s, with a rotated localization origin",
@@ -34,15 +34,15 @@ describe("navigation marker terminal heading", () => {
   );
 });
 
-import { NavigationController } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavigationController";
-import { vi } from "vitest";
+
+
 
 it("removes invalid floor probes independently and cancels only their draft owner", () => {
   let hits = [{ position: new vec3(0, 0, -100), normal: new vec3(0, 1, 0) }];
   const view: any = { connection: "ready", hasTrackingOrigin: true, nav: null, nav_goal: null,
     capabilities: { navigation: { available: true, nav_goal: { preview: false, available: true } } }, state: null };
   const origin: any = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
-  const controller = new NavigationController({ session: { collaboration: immediateAuthority({ now: () => getTime() }).collaboration, view: () => view, sendText: vi.fn() } as any,
+  const controller = new SpecsNavigationController({ session: { collaboration: immediateAuthority({ now: () => getTime() }).collaboration, view: () => view, sendText: vi.fn() } as any,
     deviceTracking: { worldOptions: {}, raycastWorldMesh: () => hits } as any,
     robotPresenter: { floorPose: () => null, deadzoneRadiusCm: () => null, floorWorldY: () => 0 } as any,
     parent: {} as SceneObject, cameraObject: { getTransform: () => ({ getWorldPosition: () => new vec3(0, 100, 0) }) } as any, navGoalMarkerPrefab: {} as ObjectPrefab });
@@ -83,7 +83,7 @@ it.each([false, true])("streams marker drags across frames with selection %s acr
   const origin: any = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
   const sendText = vi.fn();
   const authority = immediateAuthority({ now: () => getTime() });
-  const controller = new NavigationController({ session: { collaboration: authority.collaboration, view: () => view, sendText } as any,
+  const controller = new SpecsNavigationController({ session: { collaboration: authority.collaboration, view: () => view, sendText } as any,
     deviceTracking: { worldOptions: options, raycastWorldMesh: cast } as any,
     robotPresenter: { floorPose: () => ({ position: new vec3(0, 0, -100), rotation: quat.quatIdentity() }),
       deadzoneRadiusCm: () => null, floorWorldY: () => 0 } as any,
@@ -148,7 +148,7 @@ it("keeps direct dragging continuous across scanned robot surfaces without allow
   const view: any = { connection: "ready", hasTrackingOrigin: true, nav: null, nav_goal: null,
     capabilities: { estop: { available: true }, navigation: { available: true, nav_goal: { preview: false, available: true } } }, state: null };
   const origin: any = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
-  const controller = new NavigationController({ session: { collaboration: immediateAuthority({ now: () => getTime() }).collaboration, view: () => view, sendText: vi.fn() } as any,
+  const controller = new SpecsNavigationController({ session: { collaboration: immediateAuthority({ now: () => getTime() }).collaboration, view: () => view, sendText: vi.fn() } as any,
     deviceTracking: { worldOptions: {}, raycastWorldMesh: () => [hit] } as any,
     robotPresenter: { floorPose: () => ({ position: new vec3(0, 0, -100), rotation: quat.quatIdentity() }),
       worldPosition: () => new vec3(0, 0, -100), deadzoneRadiusCm: () => 50, floorWorldY: () => 0 } as any,
@@ -179,7 +179,7 @@ it("keeps direct dragging continuous across scanned robot surfaces without allow
 });
 
 it("rejects direct drag intersections outside the queried 20 metre ray segment", () => {
-  const controller = new NavigationController({ session: { collaboration: immediateAuthority({ now: () => getTime() }).collaboration, requestEstop() {} } as any,
+  const controller = new SpecsNavigationController({ session: { collaboration: immediateAuthority({ now: () => getTime() }).collaboration, requestEstop() {} } as any,
     deviceTracking: { worldOptions: {}, raycastWorldMesh: () => [] } as any,
     robotPresenter: {} as any, cameraObject: { getTransform: () => ({ getWorldPosition: () => new vec3(0, 100, 0) }) } as any, parent: {} as any, navGoalMarkerPrefab: {} as any });
   (controller as any).currentPose = () => ({ position: vec3.zero(), rotation: quat.quatIdentity() });
@@ -192,7 +192,7 @@ it("rejects direct drag intersections outside the queried 20 metre ray segment",
 it("keeps an edge grab anchored instead of dragging the circle center to the pinch ray", () => {
   const view: any = { connection: "ready", hasTrackingOrigin: true, nav: null, nav_goal: null,
     capabilities: { estop: { available: true }, navigation: { available: true, nav_goal: { preview: false, available: true } } } };
-  const controller = new NavigationController({ session: { collaboration: immediateAuthority({ now: () => getTime() }).collaboration, view: () => view, sendText: vi.fn() } as any,
+  const controller = new SpecsNavigationController({ session: { collaboration: immediateAuthority({ now: () => getTime() }).collaboration, view: () => view, sendText: vi.fn() } as any,
     deviceTracking: { worldOptions: {}, raycastWorldMesh: () => [] } as any,
     robotPresenter: { floorPose: () => ({ position: new vec3(0, 0, -100), rotation: quat.quatIdentity() }) } as any,
     parent: {} as any, cameraObject: { getTransform: () => ({ getWorldPosition: () => new vec3(0, 100, 0) }) } as any, navGoalMarkerPrefab: {} as any });
@@ -210,7 +210,7 @@ it("does not place an attached marker at world zero while the robot floor is sti
   let floor: { position: vec3; rotation: quat } | null = null;
   const view: any = { connection: "ready", hasTrackingOrigin: true, nav: null, nav_goal: null,
     capabilities: { navigation: { available: true, nav_goal: { preview: false, available: true } } } };
-  const controller = new NavigationController({ session: { collaboration: immediateAuthority().collaboration, view: () => view } as any,
+  const controller = new SpecsNavigationController({ session: { collaboration: immediateAuthority().collaboration, view: () => view } as any,
     deviceTracking: { worldOptions: {}, raycastWorldMesh: () => [] } as any,
     robotPresenter: { floorPose: () => floor, floorWorldY: () => floor?.position.y ?? null } as any,
     parent: {} as any, cameraObject: { getTransform: () => ({ getWorldPosition: () => new vec3(0, 100, 0) }) } as any, navGoalMarkerPrefab: {} as any });
@@ -224,7 +224,7 @@ it("does not place an attached marker at world zero while the robot floor is sti
 
 it("reports transport failure from navigation cancellation", () => {
   let view: any;
-  const controller = new NavigationController({
+  const controller = new SpecsNavigationController({
     session: { collaboration: immediateAuthority({ now: () => getTime() }).collaboration, view: () => view, requestEstop() { throw new Error("WebSocket is not open"); } } as any,
     deviceTracking: { worldOptions: {} } as any,
     robotPresenter: {} as any, cameraObject: { getTransform: () => ({ getWorldPosition: () => new vec3(0, 100, 0) }) } as any, parent: {} as any, navGoalMarkerPrefab: {} as any,

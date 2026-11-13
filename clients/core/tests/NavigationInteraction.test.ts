@@ -1,8 +1,8 @@
 import { immediateAuthority } from "./support/ImmediateAuthority";
 import { expect, it, vi } from "vitest";
-import { NavigationInteraction, NAV_FEEDBACK_ANIMATION_S, NAV_FEEDBACK_TIMING } from "../src/navigation/NavigationInteraction";
-import { NavigationPreviewCoordinator } from "../src/navigation/NavigationPreviewCoordinator";
-import type { ARModuleSessionState } from "../src/websocket/arModuleSession";
+import { NavigationInteraction, NAV_FEEDBACK_ANIMATION_S, NAV_FEEDBACK_TIMING, NavigationPreviewCoordinator } from "../src/navigation/NavigationInteraction";
+
+import type { ARModuleSessionState } from "../src/websocket/ARModuleSession";
 
 function fixture() {
   const view = { connection: "ready", hasTrackingOrigin: true, capabilities: { navigation: { available: true, nav_goal: { available: true, preview: false } }, estop: { available: true } }, nav: null, nav_goal: null } as unknown as ARModuleSessionState;
@@ -316,7 +316,7 @@ it.each(["succeeded", "cancelled", "failed"] as const)("holds the completed %s f
 });
 
 it("smooths drag-direction turns without responding to small position jitter", async () => {
-  const { NavigationHeading } = await import("../src/navigation/NavigationPolicy");
+  const { NavigationHeading } = await import("../src/navigation/NavigationInteraction");
   const heading = new NavigationHeading(); heading.reset([0, 0, 0], [0, 0, 0, 1], 0);
   expect(heading.update([0.01, 0.01, 0], 1 / 60)).toEqual([0, 0, 0, 1]);
   const turn = heading.update([0, 0.04, 0], 2 / 60);

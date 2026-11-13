@@ -1,5 +1,5 @@
 import { CollaborationController } from "../../src/replication/CollaborationController";
-import type { InteractionKind, InteractionPose, InteractionSettings, InteractionState, InteractionTarget } from "../../src/replication/CollaborationTypes";
+import type { InteractionKind, InteractionPose, InteractionSettings, InteractionState, InteractionTarget } from "../../src/ClientContracts";
 
 /** In-process server boundary; production CollaborationController still grants, predicts and retires. */
 export function immediateAuthority(options: {

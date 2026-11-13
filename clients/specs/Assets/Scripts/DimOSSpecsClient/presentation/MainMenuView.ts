@@ -2,12 +2,12 @@ import type { CapsuleButton } from "SpectaclesUIKit.lspkg/Scripts/Components/But
 import type { StateName } from "SpectaclesUIKit.lspkg/Scripts/Components/Element";
 import { Slider } from "SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider";
 import { CONTROL_PANEL_LAYOUT,CONTROL_PANEL_SECTION,CONTROL_PANEL_COPY as COPY,controlPanelTab,robotBadgeText,sensorStatusText } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
-import type { LidarDisplayMode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/sensors/lidarSettings";
-import type { OperatingMode } from "./AppState";
-import { NativeTextField } from "./NativeTextField";
-import { PanelHeightController } from "./PanelHeightController";
-import { RUNTIME_LAYOUTS,RUNTIME_PANEL_SCALE,panelFooterY,panelProfile,type PanelProfile } from "./PanelLayout";
-import type { SpecsUISnapshot } from "./SpecsUISnapshot";
+import type { LidarDisplayMode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/sensors/LidarDisplay";
+import type { OperatingMode, SpecsUISnapshot } from "./UIPresentationState";
+import { ScrollableTextView } from "./ScrollableTextView";
+import { PanelHeightController, RUNTIME_LAYOUTS, RUNTIME_PANEL_SCALE, panelFooterY, panelProfile, type PanelProfile } from "./SpecsPanelPresentation";
+
+
 import {
 COLOR_WHITE,SnapOS2Styles,
 configureControlPanelFrame,configurePanelText,
@@ -73,7 +73,7 @@ export class MainMenuView {
   private readonly pages = new Map<Page, SceneObject>();
   private readonly bodies = new Map<Page, SceneObject>();
   private readonly rowNodes: { parent: SceneObject; node: SceneObject; y: number }[] = [];
-  private readonly messageBlocks = new Map<NativeTextField, SceneObject>();
+  private readonly messageBlocks = new Map<ScrollableTextView, SceneObject>();
   private readonly heightController: PanelHeightController;
   private operatingMode: OperatingMode = "manual";
   private layoutKey = "";
@@ -81,9 +81,9 @@ export class MainMenuView {
   private readonly status: Text;
   private readonly manual: SceneObject;
   private readonly chat: SceneObject;
-  private readonly reply: NativeTextField;
-  private readonly draft: NativeTextField;
-  private readonly diagnostics: NativeTextField;
+  private readonly reply: ScrollableTextView;
+  private readonly draft: ScrollableTextView;
+  private readonly diagnostics: ScrollableTextView;
   private readonly send: CapsuleButton;
   private readonly clear: CapsuleButton;
   private readonly modeButtons: CapsuleButton[];
@@ -188,7 +188,7 @@ export class MainMenuView {
     const logs = global.scene.createSceneObject("DiagnosticsBlock"); logs.setParent(diagnostics);
     this.rowNodes.push({ parent: diagnostics, node: logs, y: -3 });
     this.surface(logs, 0, 0, CONTENT, 26);
-    this.diagnostics = new NativeTextField(logs, COPY.diagnostics, CONTENT - 5.6, 22, 0, panelFontSize(18));
+    this.diagnostics = new ScrollableTextView(logs, COPY.diagnostics, CONTENT - 5.6, 22, 0, panelFontSize(18));
     const alignment = this.bodies.get("alignment")!;
     this.text(this.pages.get("alignment")!, COPY.alignmentTitle, 0, HEADER, CONTENT, 6, 30, HorizontalAlignment.Center, COLOR_WHITE);
     this.text(alignment, COPY.alignmentGuidance, 0, 0.055 * UNIT, CONTENT - 6, 7, 22, HorizontalAlignment.Center);
@@ -309,11 +309,11 @@ export class MainMenuView {
     this.tick(0);
   }
 
-  private messageField(parent: SceneObject, caption: string, y: number, bodyScrollable: boolean): NativeTextField {
+  private messageField(parent: SceneObject, caption: string, y: number, bodyScrollable: boolean): ScrollableTextView {
     const block = global.scene.createSceneObject(`${caption}Block`); block.setParent(parent); block.getTransform().setLocalPosition(new vec3(0, y, 0));
     this.surface(block, 0, 0, CONTENT, 0.12 * UNIT);
     this.text(block, caption, 0, 0.033 * UNIT, CONTENT - 5.6, 2, 15, HorizontalAlignment.Center);
-    const field = new NativeTextField(block, caption, CONTENT - 5.6, 0.057 * UNIT, -0.016 * UNIT, panelFontSize(20));
+    const field = new ScrollableTextView(block, caption, CONTENT - 5.6, 0.057 * UNIT, -0.016 * UNIT, panelFontSize(20));
     this.messageBlocks.set(field, block);
     field.window.scrollingPaused = !bodyScrollable;
     return field;

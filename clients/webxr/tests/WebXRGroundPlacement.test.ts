@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  intersectRayPlanes,
-  navigationSurfaceHits,
-  type FloorPlane,
-  isGroundNormal,
-  planeNormalFromPose,
-  solveMeshPlacement,
-} from "../src/navigation/WebXRGroundPlacement";
+import { intersectRayPlanes, navigationSurfaceHits, type FloorPlane, isGroundNormal, planeNormalFromPose, solveMeshPlacement } from "../src/input/WebXRInteraction";
 
 describe("WebXRGroundPlacement", () => {
   it("accepts floor-normal hits, rejects walls and falls back when no floor exists", () => {

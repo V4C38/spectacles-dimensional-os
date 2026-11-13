@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
-import { ArmJointFilter, armMotionContext } from "../../src/manipulation/ArmJointFilter";
-import { ARM_PANEL_STYLE, clampArmPanelScale } from "../../src/presentation/PanelFrameStyle";
+import { ArmJointFilter, armMotionContext } from "../../src/manipulation/ArmPresentation";
+import { ARM_PANEL_STYLE, clampArmPanelScale } from "../../src/presentation/ControlPanelPresentation";
 import type { ManipulationModel } from "../../src/manipulation/ManipulationTypes";
 
 const model = { joints: [{ name: "j", kind: "revolute", limits: { lower: -2, upper: 2 } }] } as ManipulationModel;

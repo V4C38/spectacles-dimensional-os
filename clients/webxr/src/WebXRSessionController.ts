@@ -1,4 +1,4 @@
-import { reportDiagnostic } from "./diagnostics/BrowserDiagnostics";
+import { reportDiagnostic } from "./diagnostics/Diagnostics";
 
 export interface WebXRSessionPorts {
   renderer(): { getReferenceSpace(): XRReferenceSpace | null; setReferenceSpace(reference: XRReferenceSpace): void };

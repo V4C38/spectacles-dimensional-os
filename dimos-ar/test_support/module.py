@@ -9,15 +9,15 @@ from dimos.ar.module import (
     ARModule,
     ARModuleConfig,
 )
-from dimos.ar.navigation.preview_service import NavigationPreviewService
+from dimos.ar.navigation.preview import NavigationPreviewService
 from dimos.ar.navigation.types import NavState
 from dimos.ar.replication.interaction import InteractionCoordinator, InteractionRequest
 from dimos.ar.robot.agent_service import ARAgentService
 from dimos.ar.robot.capabilities import CapabilityName, CapabilitySet
+from dimos.ar.robot.emergency_stop import EmergencyStopController
 from dimos.ar.robot.odometry import RobotOdometry
 from dimos.ar.robot.profiles.profile import RobotProfile
 from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
-from dimos.ar.robot.safety import Safety
 from dimos.ar.sensors.lidar_settings import LidarSettings
 
 
@@ -94,7 +94,7 @@ def _module_with_policy(
         on_estop=lambda: False,
     )
     module.stop_movement = SimpleNamespace(transport=None, publish=lambda _msg: None)
-    module._safety = Safety(
+    module._safety = EmergencyStopController(
         estop_available=module._capabilities.supports(CapabilityName.ESTOP),
         effects=(module._clear_navigation, module._publish_stop),
     )

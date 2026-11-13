@@ -1,10 +1,10 @@
 import { FakeClock, FakeTransport, helloAt, stateFrame } from "./support/SessionFixture";
 import { describe, expect, it } from "vitest";
-import { ClientTrackingOriginStore } from "../src/localization/clientTrackingOrigin";
-import { requestNavGoal } from "../src/navigation/navGoalRequest";
-import { requestNavJoystick } from "../src/navigation/navJoystickRequest";
-import { ARModuleSession } from "../src/websocket/arModuleSession";
-import type { Capabilities } from "../src/websocket/protocolTypes";
+import { ClientTrackingOriginStore } from "../src/localization/ClientTracking";
+import { requestNavGoal, requestNavJoystick } from "../src/navigation/NavigationCommands";
+
+import { ARModuleSession } from "../src/websocket/ARModuleSession";
+import type { Capabilities } from "../src/ClientContracts";
 
 const STATE = stateFrame();
 

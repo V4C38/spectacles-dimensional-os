@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { rotateVecByQuat } from "@dimos-ar-client/localization/clientTrackingTransforms";
-import {
-  webxrOpticalToClientTrackingPose,
-  webxrToClientTrackingPoint,
-  webxrToClientTrackingPose,
-} from "../src/utilities/WebXRCoordinates";
+import { rotateVecByQuat, clientTrackingToOdomPose } from "@dimos-ar-client/localization/ClientTracking";
+import { webxrOpticalToClientTrackingPose, webxrToClientTrackingPoint, webxrToClientTrackingPose, webxrHeadingToClientTrackingPose, clientTrackingToWebxrPose } from "../src/utilities/WebXRCoordinates";
 
 describe("WebXRCoordinates", () => {
   it("maps Three.js / WebXR Y-up onto protocol Z-up", () => {
@@ -36,10 +32,10 @@ describe("WebXRCoordinates", () => {
 });
 
 import { composeOptical } from "../src/localization/HmdCameraSource";
-import { HMD_PROFILES } from "../src/localization/HmdProfiles";
-import { webxrHeadingToClientTrackingPose, clientTrackingToWebxrPose } from "../src/utilities/WebXRCoordinates";
+import { HMD_PROFILES } from "../src/localization/HmdCalibration";
 
-import { clientTrackingToOdomPose } from "@dimos-ar-client/localization/clientTrackingTransforms";
+
+
 
 it("preserves generic identity rotations while keeping optical right/down/forward axes fixed", () => {
   const object = webxrToClientTrackingPose({ position: [0, 0, 0], orientation: [0, 0, 0, 1] });

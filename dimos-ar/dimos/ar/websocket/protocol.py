@@ -23,8 +23,12 @@ from dimos.ar.localization.types import (
 from dimos.ar.manipulation.protocol import ManipulationRequest, decode_request
 from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavJoystickRequest, NavState
 from dimos.ar.numeric import finite_number
-from dimos.ar.replication.interaction import InteractionRequest
-from dimos.ar.replication.protocol import decode_interaction_request, identifier, sequence
+from dimos.ar.replication.interaction import (
+    InteractionRequest,
+    decode_interaction_request,
+    identifier,
+    sequence,
+)
 from dimos.ar.robot.capabilities import (
     NAVIGATION_INPUT_NAMES,
     Capability,

@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { PanelHeightAnimation, PANEL_RESIZE_S } from "../../src/presentation/PanelHeightAnimation";
+import { PanelHeightAnimation, PANEL_RESIZE_S } from "../../src/presentation/ControlPanelPresentation";
 
 it("eases shrinking and growing over 280ms without restarting identical requests", () => {
   const controller = new PanelHeightAnimation();

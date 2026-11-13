@@ -3,7 +3,7 @@ import "./fixtures/xrEnvironment";
 import { describe, expect, it } from "vitest";
 import { DimOSWebXRClient } from "../src/DimOSWebXRClient";
 import { BrowserWebSocketTransport } from "../src/websocket/BrowserWebSocketTransport";
-import { HMD_PROFILES } from "../src/localization/HmdProfiles";
+import { HMD_PROFILES } from "../src/localization/HmdCalibration";
 import { HmdCameraSource } from "../src/localization/HmdCameraSource";
 
 class FakeSocket {

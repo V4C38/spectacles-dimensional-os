@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BrowserJpegEncoder } from "../src/localization/BrowserJpegEncoder";
+import { BrowserJpegEncoder } from "../src/localization/HmdCameraSource";
 
 class FakeWorker {
   static instances: FakeWorker[] = [];

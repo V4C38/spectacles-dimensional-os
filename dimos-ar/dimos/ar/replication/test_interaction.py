@@ -2,8 +2,11 @@ from dataclasses import replace
 
 import pytest
 
-from dimos.ar.replication.interaction import InteractionCoordinator, InteractionRequest
-from dimos.ar.replication.protocol import decode_interaction_request
+from dimos.ar.replication.interaction import (
+    InteractionCoordinator,
+    InteractionRequest,
+    decode_interaction_request,
+)
 
 
 @pytest.fixture

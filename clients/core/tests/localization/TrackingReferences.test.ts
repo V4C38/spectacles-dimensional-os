@@ -1,10 +1,10 @@
-import { ClientPosePublisher } from "../../src/agent/ClientPosePublisher";
+import { ClientPosePublisher } from "../../src/agent/AgentTransport";
 import { expect, it } from "vitest";
-import { ClientTrackingOriginStore } from "../../src/localization/clientTrackingOrigin";
-import { HeadsetTravel } from "../../src/localization/HeadsetTravel";
-import { LocalizationTrackingReporter } from "../../src/localization/LocalizationTrackingReporter";
-import { ARModuleSession } from "../../src/websocket/arModuleSession";
-import type { LocalizationObservation, LocalizationResult, LocalizationMapTransform, Vec3 } from "../../src/websocket/protocolTypes";
+import { ClientTrackingOriginStore } from "../../src/localization/ClientTracking";
+import { HeadsetTravel, LocalizationTrackingReporter } from "../../src/localization/LocalizationTrackingReporter";
+
+import { ARModuleSession } from "../../src/websocket/ARModuleSession";
+import type { LocalizationObservation, LocalizationResult, LocalizationMapTransform, Vec3 } from "../../src/ClientContracts";
 import { FakeClock, FakeTransport, helloAt } from "../support/SessionFixture";
 
 const context = { map_code: "office", odom_reference_id: "fixture-odom" };

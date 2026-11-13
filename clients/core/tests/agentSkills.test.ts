@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  composePlaceArMarker,
-  parsePlaceArMarkerArgs,
-  parseRemoveArMarkerArgs,
-} from "../src/agent/agentSkills";
-import type { ClientTrackingOrigin } from "../src/localization/clientTrackingOrigin";
+import { composePlaceArMarker, parsePlaceArMarkerArgs, parseRemoveArMarkerArgs } from "../src/agent/MarkerSkills";
+import type { ClientTrackingOrigin } from "../src/localization/ClientTracking";
 
 const ORIGIN: ClientTrackingOrigin = {
   position: [1, 0, 0],

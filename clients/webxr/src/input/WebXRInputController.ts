@@ -1,22 +1,22 @@
-import { ManipulationInputCapture, ManipulationPressEdges } from "@dimos-ar-client/manipulation/ManipulationInputCapture";
-import { FingertipButtons } from "./FingertipButtons";
-import { ViewerPanelPlacement } from "../presentation/ViewerPanelPlacement";
+import { ManipulationInputCapture, ManipulationPressEdges } from "@dimos-ar-client/manipulation/ManipulationInput";
+import { FingertipButtons, FLOOR_AIM_RANGE_M, navigationSurfaceHits, planeNormalFromPose, solveMeshPlacement, type FloorPlane, XRBlocksRayInteraction, markRayAmbient, markRayPassive, preferredPointer, registerRayTarget, InteractionCapture } from "./WebXRInteraction";
+import { ViewerPanelPlacement, isMenuButtonPressed, MenuAnchorController, PalmMenuGate, palmUpDot } from "../presentation/PanelInteraction";
 import * as THREE from "three";
 import * as xb from "xrblocks";
 
-import { reportDiagnostic } from "../diagnostics/BrowserDiagnostics";
+import { reportDiagnostic } from "../diagnostics/Diagnostics";
 import type { DimOSWebXRClient } from "../DimOSWebXRClient";
-import { isMenuButtonPressed, type JoystickAxes } from "../navigation/WebXRJoystickController";
-import { FLOOR_AIM_RANGE_M, navigationSurfaceHits, planeNormalFromPose, solveMeshPlacement, type FloorPlane } from "../navigation/WebXRGroundPlacement";
-import { ScrollableTextView } from "../presentation/ScrollableTextView";
+import type { JoystickAxes } from "@dimos-ar-client/navigation/NavigationCommands";
+
+import { ScrollableTextView } from "../presentation/TextViews";
 import { MainMenuView } from "../presentation/MainMenuView";
-import { XRBlocksRayInteraction, markRayAmbient, markRayPassive, preferredPointer, registerRayTarget } from "./XRBlocksRayInteraction";
+
 import { InteractionSoundController } from "../presentation/InteractionSoundController";
-import { InteractionCapture } from "./InteractionCapture";
-import { MenuAnchorController } from "./MenuAnchorController";
-import { PalmMenuGate, palmUpDot } from "./PalmMenuGate";
+
+
+
 import { WebXRHandStyle } from "./WebXRHandStyle";
-import { worldMarkerHover } from "@dimos-ar-client/presentation/WorldVisualStyle";
+import { worldMarkerHover } from "@dimos-ar-client/presentation/WorldPresentation";
 
 type WebXRInputClient = Pick<DimOSWebXRClient,
   "manipulation" | "ui" | "originStore" | "session" | "episode" | "robot" | "navigation" | "joystick" | "speech" |

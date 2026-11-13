@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { EndEffectorStatus, type EndEffectorStatusInput } from "../../src/manipulation/EndEffectorStatus";
+import { EndEffectorStatus, type EndEffectorStatusInput } from "../../src/manipulation/ManipulationPresentation";
 
 const ready: EndEffectorStatusInput = { blocked: false, fresh: true, stopped: false,
   moving: false, rejection: null };

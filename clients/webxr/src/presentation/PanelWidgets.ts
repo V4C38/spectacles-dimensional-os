@@ -2,11 +2,11 @@ import * as THREE from "three";
 import * as xb from "xrblocks";
 import { CONTROL_PANEL_SECTION, controlPanelTab } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 import { DIMOS_AR_DESIGN, cornerRadius } from "./DimOSARDesign";
-import { SurfaceText } from "./SurfaceText";
+import { SurfaceText, ScrollableTextView } from "./TextViews";
 import { SurfaceButton, type ButtonVariant } from "./SurfaceButton";
-import { ScrollableTextView } from "./ScrollableTextView";
-import { GlassSurface } from "./GlassSurface";
-import { UI_FONT_REGULAR, UI_FONT_SEMIBOLD } from "./UIFonts";
+
+import { GlassSurface } from "./SurfaceMaterials";
+import { UI_FONT_REGULAR, UI_FONT_SEMIBOLD } from "./SceneResources";
 const C = DIMOS_AR_DESIGN.colors;
 const HEIGHT = DIMOS_AR_DESIGN.panel.height;
 const CONTENT = DIMOS_AR_DESIGN.panel.width - DIMOS_AR_DESIGN.panel.margin * 2;

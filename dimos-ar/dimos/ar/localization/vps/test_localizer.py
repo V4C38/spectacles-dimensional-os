@@ -7,9 +7,9 @@ import numpy as np
 import pytest
 
 from dimos.ar.localization.types import Intrinsics, Observation
-from dimos.ar.localization.undistort import UndistortedFrame
 import dimos.ar.localization.vps.localizer as vps_module
 from dimos.ar.localization.vps.localizer import (
+    UndistortedFrame,
     VpsLocalizer,
     VpsLocalizerConfig,
     VpsQueryResult,

@@ -1,36 +1,30 @@
-import { odomToClientTrackingPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingTransforms";
+import { odomToClientTrackingPose, ClientTrackingOriginStore, type ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 import TargetProvider,{ type InteractableHitInfo } from "SpectaclesInteractionKit.lspkg/Providers/TargetProvider/TargetProvider";
 import { LensConfig } from "SpectaclesInteractionKit.lspkg/Utils/LensConfig";
 import type { DispatchedDelayedEvent,DispatchedUpdateEvent } from "SpectaclesInteractionKit.lspkg/Utils/UpdateDispatcher";
-import {
-parsePlaceArMarkerArgs,
-parseRemoveArMarkerArgs,
-} from "DimOSARClient.lspkg/Scripts/DimOSARClient/agent/agentSkills";
-import { ClientPosePublisher } from "DimOSARClient.lspkg/Scripts/DimOSARClient/agent/ClientPosePublisher";
-import {
-ClientTrackingOriginStore,
-type ClientTrackingOrigin,
-} from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingOrigin";
-import { LocalizationCaptureEpisode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/localizationCaptureEpisode";
-import { RobotSelection } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotSelection";
-import { ARModuleSession } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/arModuleSession";
-import { buildModuleWebSocketUrl,normalizeHost } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/hostNormalization";
-import { AR_MODULE_CLIENT_CONFIG } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/hostPorts";
+import { parsePlaceArMarkerArgs, parseRemoveArMarkerArgs } from "DimOSARClient.lspkg/Scripts/DimOSARClient/agent/MarkerSkills";
+import { ClientPosePublisher } from "DimOSARClient.lspkg/Scripts/DimOSARClient/agent/AgentTransport";
+
+import { LocalizationCaptureEpisode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/LocalizationCaptureEpisode";
+import { RobotSelection } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotPresentation";
+import { ARModuleSession } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/ARModuleSession";
+import { buildModuleWebSocketUrl, normalizeHost } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/ConnectionAddress";
+import { AR_MODULE_CLIENT_CONFIG } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 import { AlignmentWarning } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/NotificationCenter";
-import { AgentSpeechController } from "./agent/AgentSpeechController";
-import { IpRelayClient } from "./IpRelayClient";
+import { SpecsAgentController } from "./agent/SpecsAgentController";
+import { IpRelayClient } from "./websocket/IpRelayClient";
 import { SpecsCameraSource } from "./localization/SpecsCameraSource";
 import { SpecsCameraStream } from "./localization/SpecsCameraStream";
 import { SpecsManipulationController } from "./manipulation/SpecsManipulationController";
-import { NavigationController } from "./navigation/NavigationController";
-import { NavigationRouteRenderer } from "./navigation/NavigationRouteRenderer";
-import { SpecsNavigationInput } from "./navigation/SpecsNavigationInput";
+import { SpecsNavigationController, SpecsNavigationInput } from "./navigation/SpecsNavigationController";
+import { NavigationRouteRenderer } from "./navigation/SpecsNavigationRenderer";
+
 import { ARMarkerPresenter } from "./presentation/ARMarkerPresenter";
 import { RobotPresenter } from "./presentation/RobotPresenter";
-import { readSikLaserPointers } from "./presentation/SpecsLaserInput";
-import { SpecsLaserPresenter } from "./presentation/SpecsLaserPresenter";
+import { readSikLaserPointers, CursorLaserPresenter } from "./presentation/CursorLaserPresenter";
+
 import { SpecsTargetPriority } from "./presentation/SpecsTargetPriority";
-import { SpecsTextToSpeech } from "./presentation/SpecsTextToSpeech";
+import { SpecsTextToSpeech } from "./agent/SpecsSpeechAdapters";
 import { UIPresenter } from "./presentation/UIPresenter";
 import { ViewerNotificationPresenter } from "./presentation/ViewerNotificationPresenter";
 import { PointCloudRenderer } from "./sensors/PointCloudRenderer";
@@ -75,7 +69,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
   private targetPriority: SpecsTargetPriority<InteractableHitInfo> | null = null;
   private previewRoute: NavigationRouteRenderer | null = null;
   private notifications: ViewerNotificationPresenter | null = null;
-  private lasers: SpecsLaserPresenter | null = null;
+  private lasers: CursorLaserPresenter | null = null;
   private laserUpdate: DispatchedUpdateEvent | null = null;
   private laserStart: DispatchedDelayedEvent | null = null;
   private suspended = false;
@@ -84,14 +78,14 @@ export class DimOSSpecsClient extends BaseScriptComponent {
   private clientTrackingOriginStore: ClientTrackingOriginStore | null = null;
   private session: ARModuleSession | null = null;
   private episode: LocalizationCaptureEpisode | null = null;
-  private navGoalPresenter: NavigationRouteRenderer | null = null;
-  private navigationController: NavigationController | null = null;
+  private activeRouteRenderer: NavigationRouteRenderer | null = null;
+  private navigationController: SpecsNavigationController | null = null;
   private unsubscribeSelection: (() => void) | null = null;
   private destroyed = false;
   private unsubscribeView: (() => void) | null = null;
   private updateEvent: SceneEvent | null = null;
   private lastSessionView: ReturnType<ARModuleSession["view"]> | null = null;
-  private speechController: AgentSpeechController | null = null;
+  private speechController: SpecsAgentController | null = null;
   private tts: SpecsTextToSpeech | null = null;
   private annotations: ARMarkerPresenter | null = null;
   private unsubscribeOutbound: (() => void) | null = null;
@@ -178,9 +172,9 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     const parent = this.getSceneObject();
     this.manipulation = new SpecsManipulationController(session, () => clientTrackingOriginStore.T_odom_client,
       parent, this.cameraObject, () => this.selection.toggle(), () => this.emergencyStop(), () => this.uiPresenter?.realign());
-    this.lasers = new SpecsLaserPresenter(parent, readSikLaserPointers);
-    const navGoalPresenter = new NavigationRouteRenderer(parent);
-    const navigationController = new NavigationController({
+    this.lasers = new CursorLaserPresenter(parent, readSikLaserPointers);
+    const activeRouteRenderer = new NavigationRouteRenderer(parent);
+    const navigationController = new SpecsNavigationController({
       session,
       deviceTracking,
       robotPresenter: this.robotPresenter,
@@ -188,7 +182,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       parent,
       navGoalMarkerPrefab: this.navGoalMarkerPrefab,
     });
-    this.navGoalPresenter = navGoalPresenter;
+    this.activeRouteRenderer = activeRouteRenderer;
     this.previewRoute = new NavigationRouteRenderer(parent);
     this.navigationInput = new SpecsNavigationInput(navigationController, this.robotPresenter);
     this.targetPriority = new SpecsTargetPriority(TargetProvider);
@@ -246,7 +240,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       this.navigationController?.dispose();
       this.robotPresenter!.dispose();
       this.lidarPresenter.hide();
-      this.navGoalPresenter?.destroy();
+      this.activeRouteRenderer?.destroy();
       this.previewRoute?.destroy(); this.notifications?.dispose();
       this.episode?.dispose();
       if (this.updateEvent) this.updateEvent.enabled = false;
@@ -269,7 +263,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     const episode = this.episode!;
     const cameraSource = this.cameraSource!;
     const clientTrackingOriginStore = this.clientTrackingOriginStore!;
-    const navGoalPresenter = this.navGoalPresenter!;
+    const activeRouteRenderer = this.activeRouteRenderer!;
     const navigationController = this.navigationController!;
     const robotPresenter = this.robotPresenter;
 
@@ -283,7 +277,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     });
 
     this.lidarPresenter.hide();
-    navGoalPresenter.hide();
+    activeRouteRenderer.hide();
     navigationController.hide();
 
 
@@ -315,7 +309,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     let asrModule: AsrModule | null = null;
     try { asrModule = require("LensStudio:AsrModule") as AsrModule; }
     catch { print("Speech recognition is unavailable in this runtime"); }
-    const speechController = new AgentSpeechController({
+    const speechController = new SpecsAgentController({
       asrModule,
       session,
       tts,
@@ -418,7 +412,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
           pointLimit: prefs.pointLimit, obstacleRangeM: prefs.obstacleRangeM,
           odomScaleCorrectionFactor: view.hello?.robot.odom_scale_correction_factor ?? 1, viewportHeight });
         const circles = { startCircle: robotPresenter.floorCircleBounds(), viewportHeight };
-        navGoalPresenter.apply({ path: navigationController.activePath(), origin,
+        activeRouteRenderer.apply({ path: navigationController.activePath(), origin,
           pathVisible: navigationController.isArmed() && !nav.flash,
           floorY: robotPresenter.floorWorldY(), goalY: navigationController.currentPose()?.position.y,
           executing: nav.followingPath, endCircle: navigationController.circleBounds(), ...circles });
@@ -426,7 +420,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
           pathVisible: navigationController.isAiming(), preview: true,
           floorY: robotPresenter.floorWorldY(), goalY: navigationController.currentPose()?.position.y,
           endCircle: navigationController.draftCircleBounds(), ...circles });
-      } else { this.lidarPresenter.hide(); navGoalPresenter.hide(); this.previewRoute?.hide(); }
+      } else { this.lidarPresenter.hide(); activeRouteRenderer.hide(); this.previewRoute?.hide(); }
       this.annotations?.update(this.cameraObject.getTransform().getWorldPosition(), dt);
 
       let alignmentDistance: number | null = null;

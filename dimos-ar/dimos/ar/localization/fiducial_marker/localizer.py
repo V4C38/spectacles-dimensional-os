@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
-from dimos.ar.localization.pose_buffer import PoseBuffer, PoseSample
 from dimos.ar.localization.transforms import fuse_pose_estimates, normalize_pose_estimate
 from dimos.ar.localization.types import Intrinsics, LocalizedPose, Observation, SnapshotLocalizer
+from dimos.ar.robot.odometry import PoseBuffer, PoseSample
 from dimos.ar.robot.profiles.profile import FiducialMarkerMount
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.perception.fiducial.marker_pose import (

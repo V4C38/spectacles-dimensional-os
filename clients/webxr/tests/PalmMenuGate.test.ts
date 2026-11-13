@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { expect, it } from "vitest";
-import { PalmMenuGate, palmUpDot } from "../src/input/PalmMenuGate";
+import { PalmMenuGate, palmUpDot } from "../src/presentation/PanelInteraction";
 
 it("requires a deliberate palm-up pose and debounces opening and closing", () => {
   const gate = new PalmMenuGate();

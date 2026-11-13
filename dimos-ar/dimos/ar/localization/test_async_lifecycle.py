@@ -8,14 +8,13 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from dimos.ar.localization.coordinator import LocalizationOutcome
+from dimos.ar.async_execution import BoundedWorker
 from dimos.ar.localization.policy import LocalizationPolicy
-from dimos.ar.localization.pose_buffer import PoseBuffer
-from dimos.ar.localization.runner import LocalizationRunner
+from dimos.ar.localization.runner import LocalizationOutcome, LocalizationRunner
 from dimos.ar.localization.vps.robot_observation_buffer import (
     RobotObservationBuffer,
 )
-from dimos.ar.worker import BoundedWorker
+from dimos.ar.robot.odometry import PoseBuffer
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from test_support.localization import _advance, _camera_info, _image, _observation
 

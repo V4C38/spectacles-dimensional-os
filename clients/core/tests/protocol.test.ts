@@ -19,10 +19,10 @@ import {
   encodeNavJoystickRequest,
   encodeText,
 } from "../src/websocket/protocol";
-import type { LocalizationObservation } from "../src/websocket/protocolTypes";
+import type { LocalizationObservation } from "../src/ClientContracts";
 
 function decodeNavigation(value: Record<string, unknown>) {
-  const snapshot = navigationSnapshot(null, value as unknown as import("../src/websocket/protocolTypes").NavGoal);
+  const snapshot = navigationSnapshot(null, value as unknown as import("../src/ClientContracts").NavGoal);
   const decoded = decodeOutbound(JSON.stringify(snapshot));
   if (decoded.type !== "interaction_state") throw new Error("Missing navigation snapshot");
   return (value.preview ? decoded.preview : decoded.active_goal)!;
@@ -652,9 +652,9 @@ it("decodes optional localization result deadlines and rejects invalid values", 
 });
 
 it("accepts the required robot XY heuristic", () => {
-  expect((decodeOutbound(JSON.stringify(HELLO_FIXTURE)) as import("../src/websocket/protocolTypes").Hello).robot).toEqual(HELLO_FIXTURE.robot);
+  expect((decodeOutbound(JSON.stringify(HELLO_FIXTURE)) as import("../src/ClientContracts").Hello).robot).toEqual(HELLO_FIXTURE.robot);
   const hello = { ...HELLO_FIXTURE, robot: { ...HELLO_FIXTURE.robot, odom_scale_correction_factor: 1.25 } };
-  expect((decodeOutbound(JSON.stringify(hello)) as import("../src/websocket/protocolTypes").Hello).robot).toEqual(hello.robot);
+  expect((decodeOutbound(JSON.stringify(hello)) as import("../src/ClientContracts").Hello).robot).toEqual(hello.robot);
   for (const scale of [0, -1, null, true, "1.25"]) {
     expect(() => decodeOutbound(JSON.stringify({ ...hello, robot: { ...hello.robot, odom_scale_correction_factor: scale } }))).toThrow();
   }

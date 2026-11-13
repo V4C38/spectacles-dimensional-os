@@ -1,11 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { scaleIn, scaleOut, nextAnimationVersion, DEFAULT_SCALE_ANIMATION_VERSION_KEY } from "../../Assets/Scripts/DimOSSpecsClient/utilities/AnimationUtilities";
+import { scaleIn, scaleOut, nextAnimationVersion, DEFAULT_SCALE_ANIMATION_VERSION_KEY, lerpVec3 } from "../../Assets/Scripts/DimOSSpecsClient/utilities/AnimationUtilities";
 import { advanceAnimations, flushAnimations } from "../mocks/animate";
-import {
-  exponentialSmoothAlpha,
-  interpolatePose,
-  lerpVec3,
-} from "../../Assets/Scripts/DimOSSpecsClient/utilities/AnimationUtilities";
+import { exponentialSmoothAlpha, interpolatePose } from "../../Assets/Scripts/DimOSSpecsClient/utilities/RuntimePoseSmoothing";
 
 describe("lerpVec3", () => {
   it("interpolates at midpoint", () => {

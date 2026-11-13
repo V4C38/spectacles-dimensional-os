@@ -1,6 +1,6 @@
 import * as THREE from "three";
-import type { Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
-import { WORLD_DASH_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
+import type { Vec3 } from "@dimos-ar-client/ClientContracts";
+import { WORLD_DASH_STYLE } from "@dimos-ar-client/presentation/WorldPresentation";
 
 /** Camera-facing strokes with a pixel floor and an antialiased dash-to-solid distance transition. */
 export class AdaptiveDashedLineRenderer {

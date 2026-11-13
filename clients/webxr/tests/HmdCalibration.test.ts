@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { jpegDimensionsMatch, matchStream, parseHmdId } from "../src/localization/HmdCalibration";
-import { HMD_PROFILES } from "../src/localization/HmdProfiles";
+import { jpegDimensionsMatch, matchStream, parseHmdId, HMD_PROFILES, matchesProfileCamera, profileForStream, requireUsableProfile } from "../src/localization/HmdCalibration";
+
 
 describe("HmdCalibration", () => {
   it("rejects unknown HMD ids", () => {
@@ -27,8 +27,8 @@ describe("HmdCalibration", () => {
   });
 });
 
-import { matchesProfileCamera, profileForStream, requireUsableProfile } from "../src/localization/HmdCalibration";
-import { rotateVecByQuat } from "@dimos-ar-client/localization/clientTrackingTransforms";
+
+import { rotateVecByQuat } from "@dimos-ar-client/localization/ClientTracking";
 
 for (const id of ["quest3", "quest3s"] as const) {
   it(`uses the ${id} device profile`, () => {

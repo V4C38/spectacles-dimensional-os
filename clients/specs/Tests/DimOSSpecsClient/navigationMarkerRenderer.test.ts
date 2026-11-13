@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { NavigationMarkerRenderer } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavigationMarkerRenderer";
+import { NavigationMarkerRenderer } from "../../Assets/Scripts/DimOSSpecsClient/navigation/SpecsNavigationRenderer";
 
 const meshes = vi.hoisted(() => new Map<string, any>());
 vi.mock("../../Assets/Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer", async importOriginal => {

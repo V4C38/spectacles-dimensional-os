@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildModuleWebSocketUrl,
-  isValidHost,
-  normalizeHost,
-} from "../../src/websocket/hostNormalization";
+import { buildModuleWebSocketUrl, isValidHost, normalizeHost } from "../../src/websocket/ConnectionAddress";
 
 describe("normalizeHost", () => {
   it("strips scheme, path, and port", () => {

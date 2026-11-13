@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyAgentResponseText } from "../../src/agent/AgentResponseClassification";
+import { classifyAgentResponseText } from "../../src/agent/AgentDraftSession";
 
 describe("classifyAgentResponseText", () => {
   it("returns ok for success-style replies", () => {

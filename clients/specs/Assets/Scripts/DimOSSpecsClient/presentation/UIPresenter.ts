@@ -1,33 +1,26 @@
-import type { ClientTrackingOriginStore } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingOrigin";
-import type { LocalizationCaptureEpisode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/localizationCaptureEpisode";
-import { localizationCaptureStatus } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/localizationCaptureStatus";
+import type { ClientTrackingOriginStore } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import type { LocalizationCaptureEpisode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/LocalizationCaptureEpisode";
+import { localizationCaptureStatus, deriveSessionLinkPhase, sessionLinkTransitionLog, type SessionLinkPhase } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
 import { SetupFlow } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/SetupFlow";
-import { deriveRobotMarkerApplyInput,getRobotActivityState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotMarkerState";
-import type { RobotSelection } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotSelection";
-import { LidarDisplayController } from "DimOSARClient.lspkg/Scripts/DimOSARClient/sensors/LidarDisplayController";
-import {
-LIDAR_PRESETS,
-requestLidarSettings,
-} from "DimOSARClient.lspkg/Scripts/DimOSARClient/sensors/lidarSettings";
-import type { ARModuleSession,ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/arModuleSession";
-import {
-deriveSessionLinkPhase,
-sessionLinkTransitionLog,
-type SessionLinkPhase,
-} from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/sessionLinkStatus";
-import { AgentSpeechController } from "../agent/AgentSpeechController";
-import type { IpRelayClient } from "../IpRelayClient";
+import { deriveRobotMarkerApplyInput, getRobotActivityState, type RobotSelection } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotPresentation";
+
+import { LidarDisplayController, LIDAR_PRESETS, requestLidarSettings } from "DimOSARClient.lspkg/Scripts/DimOSARClient/sensors/LidarDisplay";
+
+import type { ARModuleSession, ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/ARModuleSession";
+
+import { SpecsAgentController } from "../agent/SpecsAgentController";
+import type { IpRelayClient } from "../websocket/IpRelayClient";
 import { DEFAULT_SCALE_ANIMATION_VERSION_KEY,nextAnimationVersion,scaleIn,scaleOut } from "../utilities/AnimationUtilities";
 import type { SpecsWebSocketTransport } from "../websocket/SpecsWebSocketTransport";
-import { AppState,type OperatingMode } from "./AppState";
+import { UIPresentationState, type OperatingMode, type SpecsUISnapshot } from "./UIPresentationState";
 import { MainMenuView } from "./MainMenuView";
-import { RUNTIME_PANEL_SCALE } from "./PanelLayout";
+import { RUNTIME_PANEL_SCALE } from "./SpecsPanelPresentation";
 import type { RobotPresenter } from "./RobotPresenter";
 import { SetupWizardController } from "./SetupWizardController";
-import type { SpecsTextToSpeech } from "./SpecsTextToSpeech";
-import type { SpecsUISnapshot } from "./SpecsUISnapshot";
+import type { SpecsTextToSpeech } from "../agent/SpecsSpeechAdapters";
+
 import { getFrameComponent,isFrameInitialized,placePanelInFront,statusToneColor } from "./UIKit";
-import { UILogger } from "./UILogger";
+import { HudMessageController } from "./HudMessageController";
 import { WristMenuController } from "./WristMenuController";
 
 const EDITOR_MENU_SCALE = RUNTIME_PANEL_SCALE;
@@ -60,7 +53,7 @@ export interface UIPresenterDeps {
   setManipulationSpeed?: (value: number) => void;
   manipulationEnabled?: () => boolean;
   manipulationDiagnostics?: () => string;
-  speechController?: AgentSpeechController | null;
+  speechController?: SpecsAgentController | null;
   tts?: SpecsTextToSpeech | null;
 }
 
@@ -80,10 +73,10 @@ export class UIPresenter extends BaseScriptComponent {
   private menuMotionEvent: SceneEvent | null = null;
   private deps: UIPresenterDeps | null = null;
   private lidarDisplay: LidarDisplayController | null = null;
-  private readonly appState = new AppState();
+  private readonly appState = new UIPresentationState();
   private setupWizardController: SetupWizardController | null = null;
   private mainMenuView: MainMenuView | null = null;
-  private uiLogger = new UILogger();
+  private uiLogger = new HudMessageController();
   private wristMenuController: WristMenuController | null = null;
   private uiState = -1;
   private isEditorMode = false;
@@ -106,7 +99,7 @@ export class UIPresenter extends BaseScriptComponent {
     return this.appState.debugModeEnabled;
   }
 
-  public attachVoice(speechController: AgentSpeechController, tts: SpecsTextToSpeech): void {
+  public attachVoice(speechController: SpecsAgentController, tts: SpecsTextToSpeech): void {
     const deps = this.requireDeps();
     deps.speechController = speechController;
     deps.tts = tts;

@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from dimos.ar.manipulation.frames import ReferencePose
+from dimos.ar.manipulation.model import ReferencePose
 from dimos.ar.manipulation.runtime import ManipulationRuntime
 from test_support.manipulation import command, runtime
 
@@ -161,7 +161,7 @@ def test_follow_speed_scales_the_solver_envelope_without_mutating_limits(monkeyp
 
 
 def test_shutdown_parking_caps_speed_and_times_out_without_claiming_success(monkeypatch):
-    import dimos.ar.manipulation.zero as implementation
+    import dimos.ar.manipulation.operation as implementation
 
     module = runtime()
     module.session.owner, module.session.group_id = "old-client", "arm"
@@ -319,7 +319,7 @@ def test_snapshot_places_the_model_base_in_wire_coordinates_once():
 
 
 def zero_fixture(monkeypatch, *, position=0.015, duration=0.2, refresh=True):
-    import dimos.ar.manipulation.zero as implementation
+    import dimos.ar.manipulation.operation as implementation
 
     module = runtime()
     observed = module.adapter.get_state().groups["arm"]
@@ -745,7 +745,7 @@ def test_snapshot_does_not_actuate_a_completed_deferred_gripper():
 
 
 def test_recoverable_ik_exception_retains_lease_and_clears_only_motion_target(monkeypatch):
-    from dimos.ar.manipulation.errors import ManipulationError
+    from dimos.ar.manipulation.protocol import ManipulationError
 
     module = runtime()
     module.adapter.ready = True
@@ -1043,7 +1043,7 @@ def test_stop_does_not_wait_for_blocked_operation_observation():
 @pytest.mark.parametrize("path", ["tail", "reconnect"])
 @pytest.mark.parametrize("blocked_effect", ["observation", "target"])
 def test_stop_is_independent_of_tail_and_reconnect_effects(path, blocked_effect):
-    from dimos.ar.manipulation.following_tail import FollowingTail
+    from dimos.ar.manipulation.operation import FollowingTail
 
     module = runtime()
     body = {"position": [0.2, 0, 0], "orientation": [0, 0, 0, 1], "speed_scale": 0.5}

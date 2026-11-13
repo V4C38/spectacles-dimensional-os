@@ -1,33 +1,192 @@
+import type { ManipulationPose, ManipulationState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationTypes";
+import { ARM_VISUAL_STYLE, armTransformDifference, EndEffectorStatus, END_EFFECTOR_STATUS_STYLE, type EndEffectorStatusInput, endEffectorAction, manipulationActivePlan, manipulationButtonEnabled, manipulationMenuRows, manipulationPathOpacity, ArmMeshFade, ArmOpacityCadence, ARM_VISUAL_STYLE as STYLE, armLinkPresentation, armLinkWeight, armShapeEdges, endEffectorAngles, endEffectorDisplayPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationPresentation";
+import { clientTrackingToSpecsPose, clientTrackingToSpecsPoint } from "../utilities/SpecsCoordinates";
+import { AdaptiveStrokeRenderer, WorldMeshRenderer, sphereMesh } from "../presentation/WorldMeshRenderer";
+
+import { ViewerNotificationPresenter } from "../presentation/ViewerNotificationPresenter";
 import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable";
-import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingOrigin";
-import { odomToClientTrackingPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingTransforms";
-import { ArmPresentationSampler } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ArmPresentationSampler";
-import { ArmTrajectoryProgress } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ArmTrajectoryProgress";
+import { type ClientTrackingOrigin, odomToClientTrackingPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+
+import { ArmPresentationSampler, ArmTrajectoryProgress } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ArmPresentation";
+
 import type { ManipulationController } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationController";
-import type { ManipulationInputCapture } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationInputCapture";
-import { endEffectorAction,manipulationActivePlan,manipulationButtonEnabled,manipulationMenuRows,manipulationPathOpacity } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationPresentation";
-import type { ManipulationPose,ManipulationState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationTypes";
-import { ArmMeshFade,ArmOpacityCadence,ARM_VISUAL_STYLE as STYLE,armLinkPresentation,armLinkWeight,armShapeEdges,endEffectorAngles,endEffectorDisplayPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationVisuals";
-import { composePose,linkPoses,manipulationPlanPath } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ModelKinematics";
-import { ARM_PANEL_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/PanelFrameStyle";
-import { PanelHeightAnimation } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/PanelHeightAnimation";
-import { ROBOT_LABEL_STYLE,WORLD_DASH_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldVisualStyle";
-import type { Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes";
-import { COLOR_WHITE,SnapOS2Styles,createRobotLabelText,setButtonStyle,uiMaterialLayer } from "../presentation/UIKit";
-import { AdaptiveStrokeRenderer,WorldMeshRenderer,sphereMesh } from "../presentation/WorldMeshRenderer";
+import type { ManipulationInputCapture } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationInput";
+
+
+
+import { composePose, linkPoses, manipulationPlanPath } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ModelKinematics";
+import { ARM_PANEL_STYLE, PanelHeightAnimation } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
+
+import { ROBOT_LABEL_STYLE, WORLD_DASH_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldPresentation";
+import type { Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
+import { COLOR_WHITE, SnapOS2Styles, createRobotLabelText, setButtonStyle, uiMaterialLayer } from "../presentation/UIKit";
+
 import { MarkerCorrectionRenderer } from "../presentation/MarkerCorrectionRenderer";
-import { clientTrackingToSpecsPoint,clientTrackingToSpecsPose } from "../utilities/SpecsCoordinates";
-import { ArmControlsView } from "./ArmControlsView";
-import { ARM_MATERIAL,ARM_SURFACE_MATERIAL,ArmOpacityUniforms,configureArmMaterial,configureArmSurface } from "./ArmMaterial";
-import { ArmStrokeRenderer } from "./ArmStrokeRenderer";
-import { EndEffectorStatusPill } from "./EndEffectorStatusPill";
+
+import { ManipulationControlsView } from "./ManipulationControlsView";
 import { OPENYAM_MESH } from "./OpenYAMMesh";
+
+export const ARM_MATERIAL = requireAsset("../../../Materials/ArmFresnel.mat") as Material;
+
+
+export function configureArmMaterial(material: Material, opacity = 1): void {
+  const pass = material.mainPass as Pass & { fill: number; edgeOpacity: number; power: number; twoSided: boolean };
+  pass.fill = pass.edgeOpacity = ARM_VISUAL_STYLE.fill * opacity;
+  // Negative power selects the flat surface branch; the measured sphere retains Fresnel.
+  pass.power = -1;
+  pass.twoSided = false;
+}
+
+
+export const ARM_SURFACE_MATERIAL = requireAsset("../../../Materials/ArmSurface.mat") as Material;
+
+const surfaceValues = new WeakMap<Material, string>();
+
+export function configureArmSurface(material: Material, opacity: number, color: number): void {
+  const key = `${opacity}:${color}`;
+  if (surfaceValues.get(material) === key) return;
+  const pass = material.mainPass as any;
+  pass.opacityScale = ARM_VISUAL_STYLE.fill * opacity;
+  pass.colorR = ((color >> 16) & 255) / 255;
+  pass.colorG = ((color >> 8) & 255) / 255;
+  pass.colorB = (color & 255) / 255;
+  surfaceValues.set(material, key);
+}
+
+
+const POINT_UNIFORMS = [
+  "pointDelta00", "pointDelta01", "pointDelta02", "pointDelta10", "pointDelta11",
+  "pointDelta12", "pointDelta20", "pointDelta21", "pointDelta22",
+  "pointDeltaX", "pointDeltaY", "pointDeltaZ", "pointFloor", "pointBoost", "pointVisibility",
+] as const;
+
+
+/** Difference of rigid transforms, in the same centimetre basis as the static arm meshes. */
+export function armDisplacementCoefficients(measured: ManipulationPose, proposed: ManipulationPose): number[] {
+  return armTransformDifference(clientTrackingToSpecsPose(measured), clientTrackingToSpecsPose(proposed));
+}
+
+
+/** A constant-size fade replaces thousands of vertex-alpha edits and MeshBuilder rebuilds. */
+export class ArmOpacityUniforms {
+  private values = new Array<number>(POINT_UNIFORMS.length).fill(0);
+  private target = new Array<number>(POINT_UNIFORMS.length).fill(0);
+  private initialized = false;
+  private readonly uploaded = new WeakMap<Material, number[]>();
+
+  sample(measured: ManipulationPose, proposed: ManipulationPose,
+    style: { pointVisible: boolean; floor: number; displacementBoost: number },
+    refresh: boolean, elapsed: number): void {
+    if (refresh || !this.initialized) {
+      this.target.splice(0, 12, ...armDisplacementCoefficients(measured, proposed));
+      // Begin at the current displacement; visibility itself fades in smoothly.
+      if (!this.initialized) this.values.splice(0, 12, ...this.target.slice(0, 12));
+      this.initialized = true;
+    }
+    this.target[12] = style.floor;
+    this.target[13] = style.displacementBoost;
+    this.target[14] = style.pointVisible ? 1 : 0;
+    const gain = 1 - Math.exp(-Math.max(0, Math.min(0.1, elapsed)) / 0.12);
+    for (let i = 0; i < this.values.length; i++) {
+      const next = this.values[i] + (this.target[i] - this.values[i]) * gain;
+      this.values[i] = Math.abs(next - this.target[i]) < 0.000001 ? this.target[i] : next;
+    }
+  }
+
+  apply(material: Material): void {
+    let previous = this.uploaded.get(material);
+    if (!previous) { previous = []; this.uploaded.set(material, previous); }
+    const pass = material.mainPass as unknown as Record<string, number>;
+    POINT_UNIFORMS.forEach((name, i) => {
+      if (previous[i] === this.values[i]) return;
+      pass[name] = previous[i] = this.values[i];
+    });
+  }
+}
+
+const MATERIAL = requireAsset("../../../Materials/ArmStroke.mat") as Material;
+
+
+/** Static link-local endpoints; only pose uniforms change during rigid motion. */
+export class ArmStrokeRenderer extends AdaptiveStrokeRenderer {
+  geometryUploads = 0;
+  private boundsSet = false;
+  private poseKey = "";
+  private styleKey = "";
+  constructor(parent: SceneObject, name: string) { super(parent, name, MATERIAL); }
+  segments(...args: Parameters<AdaptiveStrokeRenderer["segments"]>): void {
+    this.styleKey = "";
+    super.segments(...args);
+  }
+  upload(vertices: number[], indices: readonly number[]): void {
+    this.geometryUploads++;
+    for (let i = 0; i < vertices.length; i += 22) {
+      vertices[i + 15] = vertices[i + 11] * Math.hypot(vertices[i + 12] - vertices[i], vertices[i + 13] - vertices[i + 1], vertices[i + 14] - vertices[i + 2]);
+    }
+    if (!this.boundsSet && vertices.length) {
+      const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+      for (let i = 0; i < vertices.length; i += 22) for (const offset of [0, 12]) for (let axis = 0; axis < 3; axis++) {
+        min[axis] = Math.min(min[axis], vertices[i + offset + axis]);
+        max[axis] = Math.max(max[axis], vertices[i + offset + axis]);
+      }
+      const pass = this.material.mainPass as any;
+      pass.frustumCullMode = FrustumCullMode.UserDefinedAABB;
+      pass.frustumCullMin = new vec3(min[0] - 3, min[1] - 3, min[2] - 3);
+      pass.frustumCullMax = new vec3(max[0] + 3, max[1] + 3, max[2] + 3);
+      this.boundsSet = true;
+    }
+    super.upload(vertices, indices);
+  }
+  style(width: number, opacity: number, color: readonly [number, number, number] = [1, 1, 1], start = 0): void {
+    const key = `${width}:${opacity}:${color}:${start}`;
+    if (this.styleKey === key) return;
+    super.style(width, opacity, color, start); this.styleKey = key;
+  }
+  pose(pose: ManipulationPose): void {
+    const key = JSON.stringify(pose);
+    if (key === this.poseKey) return;
+    this.poseKey = key;
+    const pass = this.material.mainPass as any;
+    [pass.positionX, pass.positionY, pass.positionZ] = pose.position;
+    [pass.rotationX, pass.rotationY, pass.rotationZ, pass.rotationW] = pose.orientation;
+    const t = this.object.getTransform();
+    t.setWorldPosition(new vec3(...pose.position));
+    t.setWorldRotation(new quat(pose.orientation[3], pose.orientation[0], pose.orientation[1], pose.orientation[2]));
+  }
+}
+
+
+export class EndEffectorStatusView {
+  private readonly status = new EndEffectorStatus();
+  private readonly presenter: ViewerNotificationPresenter;
+
+  constructor(parent: SceneObject) {
+    this.presenter = new ViewerNotificationPresenter(parent, {
+      ...END_EFFECTOR_STATUS_STYLE, fontSize: 1.36 * 32 / 0.69492703,
+    }, parent);
+  }
+
+  apply(input: EndEffectorStatusInput, anchor: SceneObject, camera: SceneObject, now: number): void {
+    const sample = this.status.sample(input, now);
+    this.presenter.draw(sample.notification, sample.elapsedS, sample.opacity, {
+      plateAlpha: 0.94, warningColor: [1, 0.65, 0], neutralColor: [1, 1, 1],
+    });
+    if (!sample.notification) return;
+    const rotation = camera.getTransform().getWorldRotation();
+    const transform = this.presenter.root.getTransform();
+    transform.setWorldPosition(anchor.getTransform().getWorldPosition().add(rotation.multiplyVec3(
+      new vec3(END_EFFECTOR_STATUS_STYLE.rightM * 100, END_EFFECTOR_STATUS_STYLE.upM * 100, 0))));
+    transform.setWorldRotation(rotation);
+    transform.setLocalScale(vec3.one().uniformScale(sample.scale));
+  }
+}
+
 
 export class ManipulationRenderer {
   private readonly placements = new Map<SceneObject, ManipulationPose>();
   private readonly pointOpacity = new Map<string, ArmOpacityUniforms>();
   readonly object: SceneObject;
-  readonly controls: ArmControlsView;
+  readonly controls: ManipulationControlsView;
   readonly handle: SceneObject;
   private readonly base: SceneObject;
   private readonly label: Text;
@@ -36,7 +195,7 @@ export class ManipulationRenderer {
   private readonly sphere: WorldMeshRenderer;
   private readonly correction: MarkerCorrectionRenderer;
   localizationAvailable = false;
-  private readonly warning: EndEffectorStatusPill;
+  private readonly warning: EndEffectorStatusView;
   private readonly picks = new Map<string, SceneObject>();
   private readonly meshes = new Map<string, WorldMeshRenderer>();
   private readonly edges = new Map<string, { stroke: ArmStrokeRenderer }>();
@@ -104,10 +263,10 @@ export class ManipulationRenderer {
     this.nameLabel = createRobotLabelText(labels, "ArmTitle", style.title.emM, style.title.xM, style.title.yM, style.title.widthM, true, COLOR_WHITE, 21);
     this.activityLabel = createRobotLabelText(labels, "ArmActivity", style.activity.emM, 0, style.activity.yM, style.activity.widthM, false, COLOR_WHITE, 22);
     this.label = createRobotLabelText(labels, "ArmMovementSpeed", style.detail.emM, 0, style.detail.yM, style.detail.widthM, false, new vec4(1, 1, 1, 0.5), 22);
-    this.controls = new ArmControlsView(this.object, core, () => this.controlsEnabled,
+    this.controls = new ManipulationControlsView(this.object, core, () => this.controlsEnabled,
       (key, active) => { if (active) this.actionHover.add(key); else this.actionHover.delete(key); }, recalibrate);
     this.menuHeight.request(4 * ARM_PANEL_STYLE.rowM + ARM_PANEL_STYLE.paddingM + ARM_PANEL_STYLE.headerM, true);
-    this.warning = new EndEffectorStatusPill(this.object);
+    this.warning = new EndEffectorStatusView(this.object);
   }
 
 

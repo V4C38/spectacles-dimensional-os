@@ -1,7 +1,8 @@
 import { expect, it, vi } from "vitest";
-import { EndEffectorStatusPill } from "../../Assets/Scripts/DimOSSpecsClient/manipulation/EndEffectorStatusPill";
+vi.mock("SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider", () => ({ Slider: class {} }));
+import { EndEffectorStatusView } from "../../Assets/Scripts/DimOSSpecsClient/manipulation/ManipulationRenderer";
 import { ViewerNotificationPresenter } from "../../Assets/Scripts/DimOSSpecsClient/presentation/ViewerNotificationPresenter";
-import { EndEffectorStatus } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/EndEffectorStatus";
+import { EndEffectorStatus } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationPresentation";
 
 it("anchors the Specs status beside the EE and fades its plate, text, and animated glyph together", () => {
   const transform = { setWorldPosition: vi.fn(), setWorldRotation: vi.fn(), setLocalScale: vi.fn() };
@@ -10,9 +11,9 @@ it("anchors the Specs status beside the EE and fades its plate, text, and animat
   const presenter = Object.assign(Object.create(ViewerNotificationPresenter.prototype), {
     root, text, plate, icon: { triangles },
   });
-  const pill = Object.assign(Object.create(EndEffectorStatusPill.prototype), {
+  const pill = Object.assign(Object.create(EndEffectorStatusView.prototype), {
     presenter, status: new EndEffectorStatus(),
-  }) as EndEffectorStatusPill;
+  }) as EndEffectorStatusView;
   const anchor = { getTransform: () => ({ getWorldPosition: () => new vec3(1, 2, 3) }) } as SceneObject;
   const camera = { getTransform: () => ({ getWorldRotation: () => quat.quatIdentity() }) } as SceneObject;
   const failed = { blocked: false, fresh: true, stopped: false, moving: false, rejection: { message: "IK failed" } };

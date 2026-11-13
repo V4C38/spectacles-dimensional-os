@@ -1,26 +1,16 @@
-import { getRobotActivityState, type RobotActivityState } from "@dimos-ar-client/robot/RobotMarkerState";
-import type { RobotSelection } from "@dimos-ar-client/robot/RobotSelection";
-import { availableFeatures, localizationGuidance, localizationProviderLabel, localizationKind } from "@dimos-ar-client/presentation/ControlPanelPresentation";
+import { getRobotActivityState, type RobotActivityState, type RobotSelection } from "@dimos-ar-client/robot/RobotPresentation";
+
+import { availableFeatures, localizationGuidance, localizationProviderLabel, localizationKind, localizationCaptureStatus, deriveSessionLinkPhase, sessionLinkStatus, sessionLinkTransitionLog, type SessionLinkPhase, type StatusTone } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 export { availableFeatures } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 import { SetupFlow, type SetupStep } from "@dimos-ar-client/presentation/SetupFlow";
-import { LidarDisplayController } from "@dimos-ar-client/sensors/LidarDisplayController";
-import { readLidarPreferences, saveLidarPreferences, type LidarDisplayPreferences } from "../sensors/WebXRLidarSettings";
-import { localizationCaptureStatus } from "@dimos-ar-client/localization/localizationCaptureStatus";
-import type { LocalizationCaptureEpisode } from "@dimos-ar-client/localization/localizationCaptureEpisode";
-import {
-  LIDAR_PRESETS,
-  requestLidarSettings,
-  type LidarDisplayMode,
-} from "@dimos-ar-client/sensors/lidarSettings";
-import type { ARModuleSession, ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSession";
-import {
-  deriveSessionLinkPhase,
-  sessionLinkStatus,
-  sessionLinkTransitionLog,
-  type SessionLinkPhase,
-  type StatusTone,
-} from "@dimos-ar-client/websocket/sessionLinkStatus";
-import { requestUserMessage } from "@dimos-ar-client/agent/userMessageRequest";
+import { LidarDisplayController, type LidarDisplayPreferences, LIDAR_PRESETS, requestLidarSettings, type LidarDisplayMode } from "@dimos-ar-client/sensors/LidarDisplay";
+import { readLidarPreferences, saveLidarPreferences } from "../sensors/BrowserLidarPreferences";
+
+import type { LocalizationCaptureEpisode } from "@dimos-ar-client/localization/LocalizationCaptureEpisode";
+
+import type { ARModuleSession, ARModuleSessionState } from "@dimos-ar-client/websocket/ARModuleSession";
+
+import { requestUserMessage } from "@dimos-ar-client/agent/AgentTransport";
 
 export type OperatingMode = "manual" | "agent";
 

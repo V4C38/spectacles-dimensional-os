@@ -1,12 +1,12 @@
 import { helloAt } from "../../core/tests/support/SessionFixture";
-import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/clientTrackingOrigin";
+import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/ClientTracking";
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
-import { deriveRobotMarkerApplyInput } from "@dimos-ar-client/robot/RobotMarkerState";
-import type { ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSession";
-import type { Capabilities, Capability } from "@dimos-ar-client/websocket/protocolTypes";
+import { deriveRobotMarkerApplyInput } from "@dimos-ar-client/robot/RobotPresentation";
+import type { ARModuleSessionState } from "@dimos-ar-client/websocket/ARModuleSession";
+import type { Capabilities, Capability } from "@dimos-ar-client/ClientContracts";
 import { WebXRRobotPresenter } from "../src/presentation/WebXRRobotPresenter";
-import { ROBOT_LINE_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
+import { ROBOT_LINE_STYLE } from "@dimos-ar-client/presentation/WorldPresentation";
 
 const capabilities: Capabilities = {
   manipulation: { available: false, reason: "No arm" },

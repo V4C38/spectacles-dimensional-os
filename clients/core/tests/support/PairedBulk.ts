@@ -1,4 +1,4 @@
-import type { BindableWebSocketTransport, WebSocketTransportHandlers } from "../../src/websocket/hostPorts";
+import type { BindableWebSocketTransport, WebSocketTransportHandlers } from "../../src/ClientContracts";
 
 /** An explicit paired v2 peer for tests that focus on session/camera behavior. */
 export class PairedBulk implements BindableWebSocketTransport {

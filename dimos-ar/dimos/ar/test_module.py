@@ -15,9 +15,8 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 import numpy as np
 import pytest
 
-from dimos.ar.localization.coordinator import LocalizationOutcome
 from dimos.ar.localization.policy import EpisodeWork
-from dimos.ar.localization.pose_buffer import PoseBuffer
+from dimos.ar.localization.runner import LocalizationOutcome
 from dimos.ar.localization.types import Intrinsics
 from dimos.ar.manipulation.protocol import ManipulationRequest
 from dimos.ar.module import (
@@ -27,12 +26,12 @@ from dimos.ar.module import (
     LocalizationProviderConfig,
     profile_for_config,
 )
-from dimos.ar.navigation.tele_cmd_vel import TeleCmdVelPublisher
+from dimos.ar.navigation.control import TeleCmdVelPublisher
 from dimos.ar.navigation.types import NavGoalRequest, NavJoystickRequest, NavState
 from dimos.ar.replication.interaction import InteractionRequest
 from dimos.ar.robot.agent_service import _textual_ai_message
 from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, CapabilityName
-from dimos.ar.robot.odometry import RobotOdometry
+from dimos.ar.robot.odometry import PoseBuffer, RobotOdometry
 from dimos.ar.robot.profiles.profile import FiducialMarkerMount, RobotName, RobotProfile
 from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 from dimos.ar.websocket.protocol import (
@@ -943,7 +942,7 @@ def test_new_goal_broadcasts_cleared_state_before_planner_can_complete() -> None
 
 
 async def test_changed_robot_frame_retires_origins_and_requires_mapping_restart() -> None:
-    from dimos.ar.localization.pose_buffer import PoseBuffer
+    from dimos.ar.robot.odometry import PoseBuffer
 
     module = _module_with_policy(["vps"])
     module._odometry.history = PoseBuffer()
@@ -982,10 +981,10 @@ async def test_changed_robot_frame_retires_origins_and_requires_mapping_restart(
 async def test_robot_image_pairing_preserves_producer_time_and_encodes_off_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dimos.ar.localization.pose_buffer import PoseBuffer
+    from dimos.ar.async_execution import BoundedWorker
     from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
     import dimos.ar.module as ar_module
-    from dimos.ar.worker import BoundedWorker
+    from dimos.ar.robot.odometry import PoseBuffer
     from test_support.localization import _camera_info
 
     module = _module_with_policy(["vps"])
@@ -1193,7 +1192,7 @@ def test_start_after_failed_build_preserves_the_build_error(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_new_clients_keep_hardware_capability_and_observe_fault_recovery():
-    from dimos.ar.navigation.control_service import NavigationControlService
+    from dimos.ar.navigation.control import NavigationControlService
 
     module = _module_with_policy([])
     native = Mock()

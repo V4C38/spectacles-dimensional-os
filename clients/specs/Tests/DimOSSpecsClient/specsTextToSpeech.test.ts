@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { SpecsTextToSpeech } from "../../Assets/Scripts/DimOSSpecsClient/presentation/SpecsTextToSpeech";
+import { SpecsTextToSpeech } from "../../Assets/Scripts/DimOSSpecsClient/agent/SpecsSpeechAdapters";
 afterEach(() => vi.unstubAllGlobals());
 it.each(["enabled", "isEnabledInHierarchy"] as const)("can cancel pending speech with %s disabled", (property) => {
   vi.stubGlobal("TextToSpeech", { Options: { create: () => ({}) } });

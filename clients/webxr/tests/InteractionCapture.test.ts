@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { InteractionCapture } from "../src/input/InteractionCapture";
+import { InteractionCapture } from "../src/input/WebXRInteraction";
 
 it("authorizes actual button release callbacks once and rejects competing and cancelled presses", () => {
   const capture = new InteractionCapture(), a = { userData: { id: 1 } }, b = { userData: { id: 2 } };

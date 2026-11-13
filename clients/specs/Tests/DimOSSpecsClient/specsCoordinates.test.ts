@@ -9,11 +9,8 @@ import {
   specsToClientTrackingQuat,
   specsToClientTrackingYawPose,
 } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
-import {
-  normalizeQuat,
-  rotateVecByQuat,
-} from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingTransforms";
-import type { Quat, Vec3, YawPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes";
+import { normalizeQuat, rotateVecByQuat } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import type { Quat, Vec3, YawPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 
 const IDENTITY_Q: Quat = [0, 0, 0, 1];
 

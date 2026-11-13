@@ -1,30 +1,25 @@
-import { RobotBoundsAnimation } from "@dimos-ar-client/presentation/RobotBoundsAnimation";
+import { RobotBoundsAnimation, ROBOT_LABEL_STYLE } from "@dimos-ar-client/presentation/WorldPresentation";
 import { RobotMarkerLabel } from "./RobotMarkerLabel";
-import { ROBOT_LABEL_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
+
 import * as THREE from "three";
 import { AdaptiveDashedLineRenderer } from "./AdaptiveDashedLineRenderer";
-import { FLOOR_MARKER_STYLE, ROBOT_LINE_STYLE } from "./DimOSARDesign";
+import { FLOOR_MARKER_STYLE, ROBOT_LINE_STYLE, toneHex } from "./DimOSARDesign";
 import { Text } from "troika-three-text";
-import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/clientTrackingOrigin";
-import { odomToClientTrackingPose } from "@dimos-ar-client/localization/clientTrackingTransforms";
-import type { ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSession";
-import type { Quat, Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
-import type { StatusTone } from "@dimos-ar-client/websocket/sessionLinkStatus";
+import { type ClientTrackingOrigin, odomToClientTrackingPose } from "@dimos-ar-client/localization/ClientTracking";
+
+import type { ARModuleSessionState } from "@dimos-ar-client/websocket/ARModuleSession";
+import type { Quat, Vec3 } from "@dimos-ar-client/ClientContracts";
+import type { StatusTone } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 import {
   clientTrackingToWebxrPoint,
   clientTrackingToWebxrPose,
 } from "../utilities/WebXRCoordinates";
-import { registerRayTarget } from "../input/XRBlocksRayInteraction";
-import { disposeTextResources } from "./TextResources";
+import { registerRayTarget } from "../input/WebXRInteraction";
+import { disposeTextResources } from "./SceneResources";
 import { indicatorMaterial } from "./PoseIndicatorMaterial";
 import { MarkerCorrectionRenderer } from "./MarkerCorrectionRenderer";
-import { toneHex } from "./StatusTones";
-import {
-  deriveRobotMarkerApplyInput,
-  getRobotActivityState,
-  robotTitleText,
-  type RobotMarkerApplyInput,
-} from "@dimos-ar-client/robot/RobotMarkerState";
+
+import { deriveRobotMarkerApplyInput, getRobotActivityState, robotTitleText, type RobotMarkerApplyInput } from "@dimos-ar-client/robot/RobotPresentation";
 
 export type RobotFeedback = {
   tone: StatusTone;

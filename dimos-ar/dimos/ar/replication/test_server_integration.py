@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 import websockets
 
-from dimos.ar.navigation.coordinator import NavGoalCoordinator
+from dimos.ar.navigation.control import NavGoalCoordinator
 from dimos.ar.websocket.server import WebSocketServer
 from test_support.module import _module_with_policy
 from test_support.websocket import ServerHarness, _sample_hello

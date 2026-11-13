@@ -1,7 +1,7 @@
 import math
 import xml.etree.ElementTree as ET
 
-from dimos.ar.manipulation.limits import safe_openyam_model, soft_joint_limits
+from dimos.ar.manipulation.model_config import safe_openyam_model, soft_joint_limits
 from dimos.robot.manipulators.openyam.config import make_openyam_model_config
 
 
@@ -61,7 +61,7 @@ def test_recovery_path_only_enters_the_margin_inward():
 
     import pytest
 
-    from dimos.ar.manipulation.limits import validate_soft_trajectory
+    from dimos.ar.manipulation.model_config import validate_soft_trajectory
 
     config = safe_openyam_model(make_openyam_model_config())
 
@@ -80,7 +80,7 @@ def test_recovery_path_only_enters_the_margin_inward():
 def test_finger_collision_policy_keeps_visuals_and_arm_collisions():
     import pickle
 
-    from dimos.ar.manipulation.collision_model import with_finger_self_collision_exclusion
+    from dimos.ar.manipulation.model_config import with_finger_self_collision_exclusion
 
     original = safe_openyam_model(make_openyam_model_config())
     config = with_finger_self_collision_exclusion(original)
@@ -96,7 +96,7 @@ def test_finger_collision_policy_keeps_visuals_and_arm_collisions():
 
 
 def test_collision_model_survives_blueprint_config_serialization():
-    from dimos.ar.manipulation.collision_model import with_finger_self_collision_exclusion
+    from dimos.ar.manipulation.model_config import with_finger_self_collision_exclusion
     from dimos.manipulation.planning.spec.config import RobotModelConfig
 
     config = with_finger_self_collision_exclusion(safe_openyam_model(make_openyam_model_config()))
@@ -106,7 +106,7 @@ def test_collision_model_survives_blueprint_config_serialization():
 
 
 def test_openyam_collision_compatibility_preserves_exact_visual_geometry():
-    from dimos.ar.manipulation.collision_model import with_openyam_collision_geometry
+    from dimos.ar.manipulation.model_config import with_openyam_collision_geometry
 
     original = safe_openyam_model(make_openyam_model_config())
     config = with_openyam_collision_geometry(original)

@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  deriveSessionLinkPhase,
-  sessionLinkStatus,
-  sessionLinkTransitionLog,
-} from "../../src/websocket/sessionLinkStatus";
-import type { ARModuleSessionState } from "../../src/websocket/arModuleSession";
+import { deriveSessionLinkPhase, sessionLinkStatus, sessionLinkTransitionLog } from "../../src/presentation/ControlPanelPresentation";
+import type { ARModuleSessionState } from "../../src/websocket/ARModuleSession";
 
 function baseView(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionState {
   return {

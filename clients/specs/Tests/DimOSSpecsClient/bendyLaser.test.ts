@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { cursorLaserFrame, type LaserPointer } from "../../Assets/Scripts/DimOSSpecsClient/presentation/CursorLaserGeometry";
-import { laserTubeGeometry } from "../../Assets/Scripts/DimOSSpecsClient/presentation/BendyLaserRenderer";
-import { SpecsLaserPresenter } from "../../Assets/Scripts/DimOSSpecsClient/presentation/SpecsLaserPresenter";
+import { cursorLaserFrame, laserTubeGeometry, type LaserPointer } from "../../Assets/Scripts/DimOSSpecsClient/presentation/CursorLaserFrame";
+import { CursorLaserPresenter } from "../../Assets/Scripts/DimOSSpecsClient/presentation/CursorLaserPresenter";
+
 
 function pointer(overrides: Partial<LaserPointer> = {}): LaserPointer {
   return { id: 1, active: true, origin: [0, 0, 0],
@@ -58,7 +58,7 @@ it("builds a reusable open tube with valid topology and complete curve/ring UVs"
 it("keeps hands independent, hides direct/lost input, and cleans up once", () => {
   const visuals = new Map<number, { apply: ReturnType<typeof vi.fn>; hide: ReturnType<typeof vi.fn>; destroy: ReturnType<typeof vi.fn> }>();
   let pointers = [pointer(), pointer({ id: 2, cursor: [10, 0, -100] })];
-  const presenter = new SpecsLaserPresenter({} as SceneObject, () => pointers, (_parent, id) => {
+  const presenter = new CursorLaserPresenter({} as SceneObject, () => pointers, (_parent, id) => {
     const visual = { apply: vi.fn(), hide: vi.fn(), destroy: vi.fn() }; visuals.set(id, visual); return visual;
   });
   presenter.tick(); presenter.tick();

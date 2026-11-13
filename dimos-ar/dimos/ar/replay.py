@@ -11,10 +11,10 @@ from pathlib import Path
 import time
 from typing import Any, ClassVar
 
-from dimos.ar.localization.source_clock import RobotSourceClock
-from dimos.ar.manipulation.frames import ReferencePose
+from dimos.ar.manipulation.model import ReferencePose
 from dimos.ar.module import ARModule
 from dimos.ar.robot.capabilities import Capability, CapabilityName
+from dimos.ar.robot.odometry import RobotSourceClock
 from dimos.ar.robot.profiles.profile import RobotName
 from dimos.ar.websocket.protocol import encode_text
 from dimos.core.core import rpc

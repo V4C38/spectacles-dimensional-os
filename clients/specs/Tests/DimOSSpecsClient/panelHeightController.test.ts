@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { RUNTIME_PANEL_SCALE } from "../../Assets/Scripts/DimOSSpecsClient/presentation/PanelLayout";
-import { PanelHeightController } from "../../Assets/Scripts/DimOSSpecsClient/presentation/PanelHeightController";
+import { RUNTIME_PANEL_SCALE, PanelHeightController } from "../../Assets/Scripts/DimOSSpecsClient/presentation/SpecsPanelPresentation";
+
 class Vector {
   constructor(public x = 0, public y = 0, public z = 0) {}
   static up() { return new Vector(0, 1, 0); }

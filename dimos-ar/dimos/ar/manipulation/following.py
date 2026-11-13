@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 import attrs
 import numpy as np
 
-from dimos.ar.manipulation.frames import pose_error
+from dimos.ar.manipulation.model import pose_error
 from dimos.control.tasks.cartesian_ik_task.cartesian_ik_task import (
     CartesianIKTask,
     CartesianIKTaskConfig,
@@ -174,7 +174,7 @@ class SpeedScaledCartesianIKTask(CartesianIKTask):  # type: ignore[misc]
         failure = self._solver.failure
         if failure is None:
             return None
-        from dimos.ar.manipulation.errors import spatial_error_code
+        from dimos.ar.manipulation.protocol import spatial_error_code
 
         return {
             "message": str(failure),
@@ -213,7 +213,7 @@ def create_task(cfg: Any, hardware: Any) -> SpeedScaledCartesianIKTask:
                 limits[name] = velocity
     if set(limits) != set(cfg.joint_names):
         raise ValueError("Following requires model velocity limits for every arm joint")
-    from dimos.ar.manipulation.limits import COMMAND_TRACKING_LEAD_RAD
+    from dimos.ar.manipulation.model_config import COMMAND_TRACKING_LEAD_RAD
 
     values["max_command_tracking_error_deg"] = math.degrees(COMMAND_TRACKING_LEAD_RAD)
     values["joint_command_filter_cutoff_hz"] = None

@@ -1,4 +1,4 @@
-import type { BindableWebSocketTransport, WebSocketTransportHandlers } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/hostPorts";
+import type { BindableWebSocketTransport, WebSocketTransportHandlers } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 
 type Value = Record<string, any>;
 

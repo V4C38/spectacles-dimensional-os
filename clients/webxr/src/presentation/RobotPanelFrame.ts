@@ -1,7 +1,7 @@
-import {ARM_PANEL_STYLE, PANEL_PIN_SEGMENTS, PANEL_SCAN_SEGMENTS} from "@dimos-ar-client/presentation/PanelFrameStyle";
+import { ARM_PANEL_STYLE, PANEL_PIN_SEGMENTS, PANEL_SCAN_SEGMENTS } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 import * as THREE from "three";
-import {registerRayTarget, UI_CONTROL_RAY_PRIORITY} from "../input/XRBlocksRayInteraction";
-import {disposeObjectTrees} from "../manipulation/ObjectResources";
+import { registerRayTarget, UI_CONTROL_RAY_PRIORITY } from "../input/WebXRInteraction";
+import { disposeObjectTrees } from "./SceneResources";
 
 /** The same bottom move bar and corner scaling affordances as the runtime window. */
 export class RobotPanelFrame {

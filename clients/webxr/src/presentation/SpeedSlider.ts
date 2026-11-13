@@ -1,10 +1,7 @@
 import * as THREE from "three";
 import { DIMOS_AR_DESIGN } from "./DimOSARDesign";
-import { glassMaterial, GlassSurface } from "./GlassSurface";
-import {
-  registerRayTarget,
-  UI_CONTROL_RAY_PRIORITY,
-} from "../input/XRBlocksRayInteraction";
+import { glassMaterial, GlassSurface } from "./SurfaceMaterials";
+import { registerRayTarget, UI_CONTROL_RAY_PRIORITY } from "../input/WebXRInteraction";
 /** Physical iOS-style track, progress and thumb, with an independent capture area. */
 export class SpeedSlider extends THREE.Group {
   readonly hit: THREE.Mesh;

@@ -1,13 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, afterEach, vi } from "vitest";
 import { quat, vec3 } from "../shims/lens-runtime";
-import {
-  lookupPoseSample,
-  scaleCameraIntrinsics,
-  specsWorldPoseToTracking,
-  specsCameraOpticalPoseToTracking,
-  type PoseSample,
-} from "../../Assets/Scripts/DimOSSpecsClient/localization/SpecsCameraSource";
-import { rotateVecByQuat } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingTransforms";
+import { lookupPoseSample, scaleCameraIntrinsics, specsWorldPoseToTracking, specsCameraOpticalPoseToTracking, type PoseSample, SpecsCameraSource } from "../../Assets/Scripts/DimOSSpecsClient/localization/SpecsCameraSource";
+import { rotateVecByQuat } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 
 describe("camera optical pose", () => {
   it("maps optical right/down/forward to tracking right/down/forward for a level Lens camera", () => {
@@ -90,8 +84,8 @@ describe("scaleCameraIntrinsics", () => {
   });
 });
 
-import { afterEach, vi } from "vitest";
-import { SpecsCameraSource } from "../../Assets/Scripts/DimOSSpecsClient/localization/SpecsCameraSource";
+
+
 import { setMockTime } from "../setup/lens-globals";
 afterEach(() => vi.unstubAllGlobals());
 it("settles capture on stop during JPEG encoding and ignores the retired native callback", async () => {

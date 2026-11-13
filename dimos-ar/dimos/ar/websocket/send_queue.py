@@ -11,9 +11,8 @@ import time
 import websockets
 import websockets.asyncio.server as ws_server
 
-from dimos.ar.timing_diagnostics import TimingSummary
+from dimos.ar.timing_diagnostics import LatencyHistogram, TimingSummary
 from dimos.ar.websocket.bulk import TokenBucket
-from dimos.ar.websocket.performance import LatencyHistogram
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()

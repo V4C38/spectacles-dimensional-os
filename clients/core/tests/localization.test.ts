@@ -1,33 +1,13 @@
 import { FakeClock, FakeTransport, helloAt, stateFrame } from "./support/SessionFixture";
 import { describe, expect, it } from "vitest";
-import { ClientTrackingOriginStore } from "../src/localization/clientTrackingOrigin";
-import {
-  odomToClientTrackingPoint,
-  odomToClientTrackingPose,
-  odomToClientTrackingYawPose,
-  clientTrackingToOdomPoint,
-  clientTrackingToOdomPose,
-} from "../src/localization/clientTrackingTransforms";
-import {
-  LocalizationCaptureEpisode,
-  type LocalizationCaptureConfig,
-} from "../src/localization/localizationCaptureEpisode";
-import { passesGeometricGate } from "../src/localization/geometricGate";
-import {
-  type CameraCaptureSource,
-  type CameraTrackingSource,
-  type CaptureGeometry,
-} from "../src/websocket/hostPorts";
+import { ClientTrackingOriginStore, odomToClientTrackingPoint, odomToClientTrackingPose, odomToClientTrackingYawPose, clientTrackingToOdomPoint, clientTrackingToOdomPose, passesGeometricGate } from "../src/localization/ClientTracking";
+
+import { LocalizationCaptureEpisode, type LocalizationCaptureConfig } from "../src/localization/LocalizationCaptureEpisode";
+
+import type { CameraCaptureSource, CameraTrackingSource, CaptureGeometry, Intrinsics, LocalizationObservation, LocalizationObservationsRequest, Quat, Vec3, YawPose } from "../src/ClientContracts";
 import { decodeLocalizationObservations } from "../src/websocket/protocol";
-import { ARModuleSession } from "../src/websocket/arModuleSession";
-import type {
-  Intrinsics,
-  LocalizationObservation,
-  LocalizationObservationsRequest,
-  Quat,
-  Vec3,
-  YawPose,
-} from "../src/websocket/protocolTypes";
+import { ARModuleSession } from "../src/websocket/ARModuleSession";
+
 
 const IDENTITY_Q: Quat = [0, 0, 0, 1];
 

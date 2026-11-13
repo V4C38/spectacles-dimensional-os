@@ -1,31 +1,17 @@
-import { availableCapabilityLabels,localizationGuidance,localizationKind,localizationProviderLabel } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
+import { availableCapabilityLabels, localizationGuidance, localizationKind, localizationProviderLabel, localizationCaptureStatus, deriveSessionLinkPhase, NO_ROBOT_CONNECTED_LABEL, sessionLinkStatus, type SessionLinkPhase, type StatusText } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
 import { SetupFlow } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/SetupFlow";
-import { getRobotActivityState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotMarkerState";
-import { SETUP_PANEL_SCALE } from "./PanelLayout";
+import { getRobotActivityState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotPresentation";
+import { SETUP_PANEL_SCALE } from "./SpecsPanelPresentation";
 import { SpecsConnectionController } from "./SpecsConnectionController";
 require("LensStudio:TextInputModule");
 
-import type { ClientTrackingOrigin,ClientTrackingOriginStore } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingOrigin";
-import type { LocalizationCaptureEpisode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/localizationCaptureEpisode";
-import { localizationCaptureStatus } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/localizationCaptureStatus";
-import type { ARModuleSession,ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/arModuleSession";
-import {
-isValidHost,
-loadStoredModuleHost,
-type ModuleHostStore,
-} from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/hostNormalization";
-import {
-deriveSessionLinkPhase,
-NO_ROBOT_CONNECTED_LABEL,
-sessionLinkStatus,
-type SessionLinkPhase,
-type StatusText,
-} from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/sessionLinkStatus";
-import {
-toggleConnectionMethod,
-type ConnectionMethod,
-type IpRelayClient,
-} from "../IpRelayClient";
+import type { ClientTrackingOrigin, ClientTrackingOriginStore } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import type { LocalizationCaptureEpisode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/LocalizationCaptureEpisode";
+
+import type { ARModuleSession, ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/ARModuleSession";
+import { isValidHost, loadStoredModuleHost, type ModuleHostStore } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/ConnectionAddress";
+
+import { toggleConnectionMethod, type ConnectionMethod, type IpRelayClient } from "../websocket/IpRelayClient";
 import { DEFAULT_SCALE_ANIMATION_VERSION_KEY,nextAnimationVersion,scaleIn } from "../utilities/AnimationUtilities";
 import type { SpecsWebSocketTransport } from "../websocket/SpecsWebSocketTransport";
 import { SetupWizardStep,SetupWizardView } from "./SetupWizardView";

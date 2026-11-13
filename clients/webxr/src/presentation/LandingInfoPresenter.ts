@@ -1,5 +1,5 @@
-import { CAPABILITY_LABELS } from "@dimos-ar-client/presentation/CapabilityPresentation";
-import type { ARModuleSession, ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSession";
+import { CAPABILITY_LABELS } from "@dimos-ar-client/presentation/ControlPanelPresentation";
+import type { ARModuleSession, ARModuleSessionState } from "@dimos-ar-client/websocket/ARModuleSession";
 
 declare const __DIMOS_BUILD__: string;
 

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { NavGoalMarker } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavGoalMarker";
-import { NAVIGATION_CANCEL_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldVisualStyle";
+import { NAVIGATION_CANCEL_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldPresentation";
 
 vi.mock("../../Assets/Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer", async importOriginal => {
   const actual = await importOriginal<typeof import("../../Assets/Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer")>();

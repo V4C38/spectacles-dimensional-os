@@ -6,7 +6,7 @@ import "./fixtures/xrEnvironment";
 
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { ManipulationRenderer } from "../src/manipulation/ManipulationRenderer";
+import { ManipulationRenderer, type ManipulationRenderInput } from "../src/manipulation/ManipulationRenderer";
 import type { ManipulationState } from "@dimos-ar-client/manipulation/ManipulationTypes";
 const pose = {
   position: [0, 0, 0] as [number, number, number],
@@ -377,12 +377,8 @@ it("shows movement-weighted 3D links without arm boxes", () => {
   }
 });
 
-import {
-  deriveManipulationSnapshot,
-  targetIsOffset,
-  type ManipulationSnapshot,
-} from "@dimos-ar-client/manipulation/ManipulationInteraction";
-import type { ManipulationRenderInput } from "../src/manipulation/ManipulationRenderer";
+import { deriveManipulationSnapshot, targetIsOffset, type ManipulationSnapshot } from "@dimos-ar-client/manipulation/ManipulationPresentation";
+
 let speedScale = 0.2;
 let rejection: ManipulationRenderInput["rejection"] = null;
 type RendererFixture = Partial<Pick<ManipulationRenderInput,

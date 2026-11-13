@@ -1,7 +1,7 @@
 import { immediateAuthority } from "./support/ImmediateAuthority";
 import { expect, it, vi } from "vitest";
-import { NavigationPreviewCoordinator } from "../src/navigation/NavigationPreviewCoordinator";
-import type { ARModuleSessionState } from "../src/websocket/arModuleSession";
+import { NavigationPreviewCoordinator } from "../src/navigation/NavigationInteraction";
+import type { ARModuleSessionState } from "../src/websocket/ARModuleSession";
 
 function fixture() {
   let now = 0;

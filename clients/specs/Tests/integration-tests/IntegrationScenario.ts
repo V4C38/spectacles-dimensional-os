@@ -2,7 +2,7 @@ import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 import { runGoldenCase } from "./IntegrationGoldenCases";
 import { runRegressionCase } from "./IntegrationRegressionCases";
 // Hardware inputs are deterministic fixtures. Production state owners, SIK/SUK controls and renderers run unchanged.
-import { WORLD_DASH_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldVisualStyle";
+import { WORLD_DASH_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldPresentation";
 import { decodeLocalizationObservations,LIDAR_FOURCC } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocol";
 import { emitReviewEvent, findProductionRoot } from "./IntegrationHost";
 import { WorldMeshRenderer } from "../Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer";

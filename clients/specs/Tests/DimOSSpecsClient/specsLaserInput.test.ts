@@ -1,5 +1,5 @@
 import { beforeEach, expect, it } from "vitest";
-import { readSikLaserPointers } from "../../Assets/Scripts/DimOSSpecsClient/presentation/SpecsLaserInput";
+import { readSikLaserPointers } from "../../Assets/Scripts/DimOSSpecsClient/presentation/CursorLaserPresenter";
 import { setMockInteractors } from "../mocks/InteractionManager";
 import { setMockCursor, clearMockCursors } from "../mocks/CursorControllerProvider";
 import { setMockHands } from "../mocks/HandInputData";

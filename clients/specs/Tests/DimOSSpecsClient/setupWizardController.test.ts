@@ -34,7 +34,7 @@ function harness(storage = new Map<string, string>(), options: {
   const finished = vi.fn();
   const dismissed = vi.fn();
   const episode = { reset: vi.fn(), pause: vi.fn(), requestStart: vi.fn(), view: () => ({ phase: "capturing" }) };
-  const resolve = vi.fn(options.resolve ?? (() => new Promise<import("../../Assets/Scripts/DimOSSpecsClient/IpRelayClient").ResolvedPin | null>(() => {})));
+  const resolve = vi.fn(options.resolve ?? (() => new Promise<import("../../Assets/Scripts/DimOSSpecsClient/websocket/IpRelayClient").ResolvedPin | null>(() => {})));
   const session = { view: () => view, start: vi.fn(), stop: vi.fn(), subscribeView: () => vi.fn() };
   const transport = { setUrl: vi.fn() };
   const events: { bind: ReturnType<typeof vi.fn>; reset: ReturnType<typeof vi.fn>; cancel: ReturnType<typeof vi.fn>; fire: () => void }[] = [];

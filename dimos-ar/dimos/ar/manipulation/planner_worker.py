@@ -97,7 +97,7 @@ class PlanningWorker:
 
 
 def main(fd: int) -> None:
-    from dimos.ar.manipulation.limits import validate_soft_endpoint, validate_soft_trajectory
+    from dimos.ar.manipulation.model_config import validate_soft_endpoint, validate_soft_trajectory
     from dimos.manipulation.manipulation_module import (
         ManipulationModule,
         ManipulationModuleConfig,

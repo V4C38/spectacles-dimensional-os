@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { DragPlacementPlane, SpecsFloorReference, SpecsDragPosition } from "../../Assets/Scripts/DimOSSpecsClient/navigation/GroundPlacement";
+import { DragPlacementPlane, SpecsFloorReference, SpecsDragPosition } from "../../Assets/Scripts/DimOSSpecsClient/navigation/SpecsNavigationController";
 
 const from = new vec3(0, 100, 0), ray = new vec3(0, -1, -1);
 const floor = (height: number, normal = new vec3(0, 1, 0)) =>

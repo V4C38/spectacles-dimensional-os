@@ -9,11 +9,11 @@ from unittest.mock import AsyncMock
 import numpy as np
 import pytest
 
+from dimos.ar.async_execution import BoundedWorker
 from dimos.ar.localization.map_localization import MapLocalization
 from dimos.ar.localization.odom_map_transform import OdomMapTransform
 from dimos.ar.localization.types import LocalizedPose
 from dimos.ar.localization.vps.admission import VpsAdmission
-from dimos.ar.worker import BoundedWorker
 from dimos.msgs.geometry_msgs.Pose import Pose
 from test_support.localization import _observation
 

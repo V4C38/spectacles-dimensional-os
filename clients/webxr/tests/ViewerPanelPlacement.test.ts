@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import * as THREE from "three";
-import { ViewerPanelPlacement } from "../src/presentation/ViewerPanelPlacement";
+import { ViewerPanelPlacement } from "../src/presentation/PanelInteraction";
 it("opens below eye level, follows translation and rotation, pins on grab, and recenters on reopening", () => {
   const placement = new ViewerPanelPlacement(), panel = new THREE.Group();
   const eye = new THREE.Vector3(0, 1.6, 0), rotation = new THREE.Quaternion();

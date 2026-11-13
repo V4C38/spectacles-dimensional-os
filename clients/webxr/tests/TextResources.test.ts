@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { expect, it, vi } from "vitest";
-import { disposeTextResources } from "../src/presentation/TextResources";
+import { disposeTextResources, disposeObjectTrees } from "../src/presentation/SceneResources";
 
 it("disposes a fallback text canvas and its allocations", () => {
   const texture = new THREE.Texture(), material = new THREE.MeshBasicMaterial({ map: texture });
@@ -20,7 +20,7 @@ it("releases Troika's instance-owned base without disposing externally shared ma
 });
 
 import { Text } from "troika-three-text";
-import { disposeObjectTrees } from "../src/manipulation/ObjectResources";
+
 it("uses the same instance-material cleanup for text inside an object tree", () => {
   const root = new THREE.Group(), text = new Text(); root.add(text);
   // Force Troika to allocate its per-instance default material, as rendering does.

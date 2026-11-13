@@ -1,8 +1,8 @@
-import type { Vec3 } from "../../src/websocket/protocolTypes";
+import type { Vec3 } from "../../src/ClientContracts";
 import type { ManipulationPose } from "../../src/manipulation/ManipulationTypes";
 import { composePose } from "../../src/manipulation/ModelKinematics";
 import { expect, it } from "vitest";
-import { endEffectorDisplayPose, ARM_VISUAL_STYLE, armShapeEdges, armLinkWeight, armLinkPresentation, ArmMeshFade } from "../../src/manipulation/ManipulationVisuals";
+import { endEffectorDisplayPose, ARM_VISUAL_STYLE, armShapeEdges, armLinkWeight, armLinkPresentation, ArmMeshFade } from "../../src/manipulation/ManipulationPresentation";
 
 it("keeps the perimeter of a triangulated plane without its diagonal or duplicate seams", () => {
   const points = [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0];
@@ -63,7 +63,7 @@ it("fades a rotating link by local surface displacement", () => {
 
 
 it("prepared point displacement agrees with rigid-pose evaluation", async () => {
-  const {armPointDisplacement} = await import("../../src/manipulation/ManipulationVisuals");
+  const {armPointDisplacement} = await import("../../src/manipulation/ManipulationPresentation");
   for (const angle of [0, .1, .6, -1]) {
     const a = {position:[.01,.02,.03],orientation:[0,Math.sin(.05),0,Math.cos(.05)]} as any;
     const b = {position:[.04,.01,.02],orientation:[0,0,Math.sin(angle/2),Math.cos(angle/2)]} as any;
@@ -97,7 +97,7 @@ it("shows a shared planning target without local selection and retains the measu
 });
 
 it("samples opacity at 10 Hz without queuing missed samples", async () => {
-  const { ArmOpacityCadence } = await import("../../src/manipulation/ManipulationVisuals");
+  const { ArmOpacityCadence } = await import("../../src/manipulation/ManipulationPresentation");
   const cadence = new ArmOpacityCadence(); let count = 0;
   for (let frame = 0; frame <= 60; frame++) if (cadence.sample(frame / 60) !== null) count++;
   expect(count).toBe(11);

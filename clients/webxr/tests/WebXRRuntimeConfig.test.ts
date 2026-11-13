@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arModuleSameOriginUrl } from "../src/WebXRRuntimeConfig";
+import { arModuleSameOriginUrl } from "../src/websocket/BrowserWebSocketTransport";
 
 describe("arModuleSameOriginUrl", () => {
   it("derives same-origin wss:///ar from an HTTPS page", () => {

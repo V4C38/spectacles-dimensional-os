@@ -1,4 +1,6 @@
-import { CONTROL_PANEL_LAYOUT, CONTROL_PANEL_CONTROLS, CONTROL_PANEL_MESSAGE } from "@dimos-ar-client/presentation/ControlPanelPresentation";
+import { CONTROL_PANEL_LAYOUT, CONTROL_PANEL_CONTROLS, CONTROL_PANEL_MESSAGE, type StatusTone } from "@dimos-ar-client/presentation/ControlPanelPresentation";
+
+
 /** Shared dimOS AR tokens: pill controls, softly rounded fields, and the existing panel edge. */
 export const DIMOS_AR_DESIGN = {
   colors: {
@@ -26,4 +28,21 @@ export function applyDOMDesign(element: HTMLElement): void {
 }
 
 /** Physical floor-marker styling, independent of each marker's radius. */
-export { FLOOR_MARKER_STYLE, ROBOT_LINE_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
+export { FLOOR_MARKER_STYLE, ROBOT_LINE_STYLE } from "@dimos-ar-client/presentation/WorldPresentation";
+
+export const TONE_HEX: Record<StatusTone, number> = {
+  // Apple dark-appearance system colors.
+  error: 0xff453a,
+  warn: 0xff9f0a,
+  success: 0x30d158,
+  neutral: 0xffffff,
+  muted: 0x8e8e93,
+};
+
+export function toneHex(tone: StatusTone): number {
+  return TONE_HEX[tone];
+}
+
+export function toneCss(tone: StatusTone): string {
+  return `#${toneHex(tone).toString(16).padStart(6, "0")}`;
+}

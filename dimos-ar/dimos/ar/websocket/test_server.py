@@ -149,9 +149,8 @@ async def test_estop_is_processed_on_same_socket_while_localization_waits(
 ) -> None:
     from types import SimpleNamespace
 
-    from dimos.ar.localization.coordinator import LocalizationOutcome
     from dimos.ar.localization.policy import LocalizationPolicy
-    from dimos.ar.localization.runner import LocalizationRunner
+    from dimos.ar.localization.runner import LocalizationOutcome, LocalizationRunner
     from dimos.ar.module import ARModule
     from dimos.ar.robot.odometry import RobotOdometry
     import dimos.ar.websocket.server as server_module

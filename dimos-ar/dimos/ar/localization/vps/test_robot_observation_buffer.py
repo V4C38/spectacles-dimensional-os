@@ -5,12 +5,12 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from dimos.ar.localization.pose_buffer import PoseBuffer
 from dimos.ar.localization.vps.robot_observation_buffer import (
     RobotObservationBuffer,
     intrinsics_from_camera_info,
     observation_from_robot_frame,
 )
+from dimos.ar.robot.odometry import PoseBuffer
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from test_support.localization import _camera_info, _image

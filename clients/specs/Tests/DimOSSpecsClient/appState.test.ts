@@ -1,14 +1,10 @@
 import { helloAt } from "../../../core/tests/support/SessionFixture";
 import { describe, expect, it } from "vitest";
-import {
-  deriveRobotMarkerApplyInput,
-  getRobotActivityState,
-  robotTitleText,
-} from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotMarkerState";
-import { NO_ROBOT_CONNECTED_LABEL } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/sessionLinkStatus";
-import type { ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/arModuleSession";
-import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingOrigin";
-import type { Hello, Pose, RobotDescription } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes";
+import { deriveRobotMarkerApplyInput, getRobotActivityState, robotTitleText } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotPresentation";
+import { NO_ROBOT_CONNECTED_LABEL } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
+import type { ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/ARModuleSession";
+import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import type { Hello, Pose, RobotDescription } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 
 const GO2: RobotDescription = {
   odom_scale_correction_factor: 1,

@@ -1,10 +1,10 @@
 import { helloAt } from "../../core/tests/support/SessionFixture";
 import { describe, expect, it, vi } from "vitest";
-import { LIDAR_PRESETS } from "@dimos-ar-client/sensors/lidarSettings";
+import { LIDAR_PRESETS } from "@dimos-ar-client/sensors/LidarDisplay";
 import { WebXRUIPresenter } from "../src/presentation/WebXRUIPresenter";
-import type { ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSession";
-import type { Capabilities } from "@dimos-ar-client/websocket/protocolTypes";
-import { RobotSelection } from "@dimos-ar-client/robot/RobotSelection";
+import type { ARModuleSessionState } from "@dimos-ar-client/websocket/ARModuleSession";
+import type { Capabilities } from "@dimos-ar-client/ClientContracts";
+import { RobotSelection } from "@dimos-ar-client/robot/RobotPresentation";
 
 const capabilities: Capabilities = {
   manipulation: { available: false, reason: "No arm" },

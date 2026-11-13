@@ -1,23 +1,23 @@
-import { ARM_PANEL_STYLE } from "@dimos-ar-client/presentation/PanelFrameStyle";
+import { ARM_PANEL_STYLE, PanelHeightAnimation } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 import { RobotPanelFrame } from "../presentation/RobotPanelFrame";
-import { manipulationMenuRows, manipulationButtonEnabled, endEffectorAction } from "@dimos-ar-client/manipulation/ManipulationPresentation";
-import type { ManipulationSnapshot } from "@dimos-ar-client/manipulation/ManipulationInteraction";
+import { manipulationMenuRows, manipulationButtonEnabled, endEffectorAction, type ManipulationSnapshot } from "@dimos-ar-client/manipulation/ManipulationPresentation";
+
 import type {
   ManipulationGroup,
   ManipulationObservation,
 } from "@dimos-ar-client/manipulation/ManipulationTypes";
 import * as THREE from "three";
 import { Text } from "troika-three-text";
-import { registerRayTarget } from "../input/XRBlocksRayInteraction";
+import { registerRayTarget } from "../input/WebXRInteraction";
 import { DIMOS_AR_DESIGN } from "../presentation/DimOSARDesign";
-import { GlassSurface } from "../presentation/GlassSurface";
-import { PanelHeightAnimation } from "@dimos-ar-client/presentation/PanelHeightAnimation";
+import { GlassSurface } from "../presentation/SurfaceMaterials";
+
 import { indicatorMaterial } from "../presentation/PoseIndicatorMaterial";
 import { RobotMarkerLabel } from "../presentation/RobotMarkerLabel";
 import { SpeedSlider } from "../presentation/SpeedSlider";
 import { SurfaceButton } from "../presentation/SurfaceButton";
-import { syncText, UI_FONT_REGULAR, UI_FONT_SEMIBOLD } from "../presentation/UIFonts";
-import { disposeObjectTrees } from "./ObjectResources";
+import { syncText, UI_FONT_REGULAR, UI_FONT_SEMIBOLD, disposeObjectTrees } from "../presentation/SceneResources";
+
 
 export class ManipulationControlsView {
   readonly controls = new THREE.Group();

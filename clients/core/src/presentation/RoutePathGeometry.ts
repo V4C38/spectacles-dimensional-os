@@ -1,5 +1,5 @@
 // Pure presentation geometry in metres with world Y up; both hosts adapt their coordinates at the boundary.
-import type { Vec3 } from "../websocket/protocolTypes";
+import type { Vec3 } from "../ClientContracts";
 
 export const CORNER_FILLET_MAX_M = 0.1;
 export const CORNER_FILLET_ANGLE_DEG = 40;

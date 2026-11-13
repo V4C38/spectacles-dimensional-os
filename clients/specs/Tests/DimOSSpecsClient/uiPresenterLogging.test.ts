@@ -6,7 +6,7 @@ vi.mock("../../Assets/Scripts/DimOSSpecsClient/presentation/SetupWizardControlle
 
 vi.mock("../../Assets/Scripts/DimOSSpecsClient/presentation/MainMenuView", () => ({ MainMenuView: class {} }));
 
-import { AppState } from "../../Assets/Scripts/DimOSSpecsClient/presentation/AppState";
+import { UIPresentationState } from "../../Assets/Scripts/DimOSSpecsClient/presentation/UIPresentationState";
 import { UIPresenter } from "../../Assets/Scripts/DimOSSpecsClient/presentation/UIPresenter";
 import { scaleIn, scaleOut } from "../../Assets/Scripts/DimOSSpecsClient/utilities/AnimationUtilities";
 import { flushAnimations } from "../mocks/animate";
@@ -14,7 +14,7 @@ import { flushAnimations } from "../mocks/animate";
 describe("HUD logging", () => {
   it("keeps debug pose updates out of the console", () => {
     const presenter = new UIPresenter();
-    const appState = new AppState();
+    const appState = new UIPresentationState();
     appState.debugModeEnabled = true;
     const view = {
       connection: "ready", hasTrackingOrigin: true,
@@ -162,7 +162,7 @@ it.each([false, true])("scales the whole Specs menu uniformly to 75% for editor 
 });
 
 import { SpecsCameraStream } from "../../Assets/Scripts/DimOSSpecsClient/localization/SpecsCameraStream";
-import { RobotSelection } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotSelection";
+import { RobotSelection } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotPresentation";
 import { setMockTime } from "../setup/lens-globals";
 
 it("reads selection eligibility and listening/responding activity from portable owners", () => {

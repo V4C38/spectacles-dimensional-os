@@ -8,7 +8,7 @@ import math
 import time
 from typing import TYPE_CHECKING, Protocol
 
-from dimos.ar.localization.pose_buffer import PoseSample
+from dimos.ar.robot.odometry import PoseSample
 from dimos.ar.robot.odometry_correction import correct_odom_points
 from dimos.ar.sensors.lidar_filter import (
     DEFAULT_TARGET_POINTS,

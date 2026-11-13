@@ -8,8 +8,8 @@ import { DimOSWebXRClient } from "../src/DimOSWebXRClient";
 import { BrowserWebSocketTransport } from "../src/websocket/BrowserWebSocketTransport";
 import { cameraFixture } from "./fixtures/camera";
 import { LIDAR_FOURCC, decodeLocalizationObservations } from "@dimos-ar-client/websocket/protocol";
-import type { Hello, State } from "@dimos-ar-client/websocket/protocolTypes";
-import type { InteractionState } from "@dimos-ar-client/replication/CollaborationTypes";
+import type { Hello, State, InteractionState } from "@dimos-ar-client/ClientContracts";
+
 
 class Socket {
   afterReceive: () => void = () => {};

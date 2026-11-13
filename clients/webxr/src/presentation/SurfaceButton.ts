@@ -1,10 +1,10 @@
 import * as THREE from "three";
 import * as xb from "xrblocks";
-import { ButtonFootprint } from "./ButtonFootprint";
-import { glassMaterial } from "./GlassSurface";
-import { buttonSurfaceBacking, tintButtonBacking } from "./RoundedSurfaceGeometry";
+import { ButtonFootprint, glassMaterial, buttonSurfaceBacking, tintButtonBacking } from "./SurfaceMaterials";
+
+
 import { DIMOS_AR_DESIGN } from "./DimOSARDesign";
-import { registerRayTarget, UI_CONTROL_RAY_PRIORITY } from "../input/XRBlocksRayInteraction";
+import { registerRayTarget, UI_CONTROL_RAY_PRIORITY } from "../input/WebXRInteraction";
 const C = DIMOS_AR_DESIGN.colors;
 const HEIGHT = DIMOS_AR_DESIGN.panel.height;
 export type ButtonVariant = "default" | "primary" | "danger" | "resume" | "field" | "tab";

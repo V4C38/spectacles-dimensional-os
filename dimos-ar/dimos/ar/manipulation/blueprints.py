@@ -2,13 +2,14 @@
 
 from dataclasses import replace
 
-from dimos.ar.manipulation.collision_model import (
+from dimos.ar.manipulation.following import ARManipulationCoordinator
+from dimos.ar.manipulation.model import ReferencePose
+from dimos.ar.manipulation.model_config import (
+    safe_openyam_model,
+    soft_joint_limits,
     with_finger_self_collision_exclusion,
     with_openyam_collision_geometry,
 )
-from dimos.ar.manipulation.following import ARManipulationCoordinator
-from dimos.ar.manipulation.frames import ReferencePose
-from dimos.ar.manipulation.limits import safe_openyam_model, soft_joint_limits
 from dimos.ar.manipulation.module import ARManipulationModule
 from dimos.ar.module import ARModule
 from dimos.ar.robot.profiles.profile import RobotName

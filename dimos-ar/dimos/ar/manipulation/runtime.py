@@ -6,19 +6,21 @@ import time
 from typing import Any
 from uuid import uuid4
 
-from dimos.ar.manipulation.errors import (
+from dimos.ar.manipulation.model import describe_model
+from dimos.ar.manipulation.operation import (
+    FollowingTail,
+    JointZeroOperation,
+    ManipulationOperation,
+    ManipulationSession,
+)
+from dimos.ar.manipulation.ports import ManipulationBackend
+from dimos.ar.manipulation.protocol import (
     ExecutionNotStartedError,
     ManipulationError,
+    decode_request,
     rejection_result,
     spatial_error_code,
 )
-from dimos.ar.manipulation.following_tail import FollowingTail
-from dimos.ar.manipulation.model import describe_model
-from dimos.ar.manipulation.operation import ManipulationOperation
-from dimos.ar.manipulation.ports import ManipulationBackend
-from dimos.ar.manipulation.protocol import decode_request
-from dimos.ar.manipulation.session import ManipulationSession
-from dimos.ar.manipulation.zero import JointZeroOperation
 from dimos.ar.replication.manipulation_authority import (
     ManipulationAdmission,
     ManipulationAuthorityFence,

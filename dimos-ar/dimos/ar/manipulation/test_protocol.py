@@ -54,7 +54,7 @@ def test_websocket_rejects_duplicate_native_following_stream():
 
 
 def test_rejection_policy_handles_invalid_native_action_without_losing_error():
-    from dimos.ar.manipulation.errors import rejection_result
+    from dimos.ar.manipulation.protocol import rejection_result
 
     assert rejection_result([], ValueError("unknown manipulation action")) == {
         "status": "rejected", "code": "rejected", "message": "unknown manipulation action",

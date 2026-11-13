@@ -60,9 +60,8 @@ async def test_playback_preserves_producer_timing_despite_delayed_camera_deliver
     from types import SimpleNamespace
     from unittest.mock import Mock
 
-    from dimos.ar.localization.source_clock import RobotSourceClock
     from dimos.ar.replay import RecordedARModule
-    from dimos.ar.robot.odometry import RobotOdometry
+    from dimos.ar.robot.odometry import RobotOdometry, RobotSourceClock
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
     now = [110.15]

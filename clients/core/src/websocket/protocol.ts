@@ -3,40 +3,8 @@
 // non-busy admission. These semantics require no extra wire fields (PROTOCOL.md).
 import { utf8Bytes, validatedBulkArray } from "./BulkTransfer";
 import { decodeManipulation, decodeFollowingTail } from "../manipulation/ManipulationProtocol";
-import type { InteractionState, InteractionResult, InteractionAuthority, InteractionTarget, InteractionCredentials } from "../replication/CollaborationTypes";
-import {
-  CAPABILITY_NAMES,
-  type Capabilities,
-  type Capability,
-  type CapturePolicy,
-  type DistortionModel,
-  type Intrinsics,
-  type Lidar,
-  type LidarSettings,
-  type LocalizationObservation,
-  type LocalizationObservations,
-  type LocalizationObservationsRequest,
-  type LocalizationResult,
-  type MapAlignment,
-  type MapContext,
-  type LocalizationMapTransform,
-  type LocalizationStatus,
-  type NavGoal,
-  type NavState,
-  type Outbound,
-  type Pose,
-  type Quat,
-  type RobotDescription,
-  type State,
-  type TimeSync,
-  type Vec3,
-  type YawPose,
-  type Hello,
-  type HelloRequest,
-  type AgentMessage,
-  type AgentSkill,
-  type NavigationCapability,
-} from "./protocolTypes";
+import { type InteractionState, type InteractionResult, type InteractionAuthority, type InteractionTarget, type InteractionCredentials, CAPABILITY_NAMES, type Capabilities, type Capability, type CapturePolicy, type DistortionModel, type Intrinsics, type Lidar, type LidarSettings, type LocalizationObservation, type LocalizationObservations, type LocalizationObservationsRequest, type LocalizationResult, type MapAlignment, type MapContext, type LocalizationMapTransform, type LocalizationStatus, type NavGoal, type NavState, type Outbound, type Pose, type Quat, type RobotDescription, type State, type TimeSync, type Vec3, type YawPose, type Hello, type HelloRequest, type AgentMessage, type AgentSkill, type NavigationCapability } from "../ClientContracts";
+
 
 export const LOCALIZATION_OBSERVATIONS_FOURCC = 0x4c4f4341;
 export const LIDAR_FOURCC = 0x4c444152;
@@ -211,7 +179,7 @@ export interface DecodeContext { message_type: string; message_ts?: number; requ
 export class ProtocolDecodeError extends Error {
   constructor(readonly context: DecodeContext, detail: string, readonly excerpt?: string) { super(detail); this.name = "ProtocolDecodeError"; }
 }
-export function encodeClientError(report: import("./protocolTypes").ClientError): string {
+export function encodeClientError(report: import("../ClientContracts").ClientError): string {
   return encodeText(report);
 }
 

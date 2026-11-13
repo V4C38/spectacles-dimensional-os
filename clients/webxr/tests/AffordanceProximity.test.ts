@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { expect, it } from "vitest";
-import { proximityToAffordance } from "../src/input/AffordanceProximity";
+import { proximityToAffordance } from "../src/input/WebXRInteraction";
 
 it("uses angular and physical edge distances with hysteresis, including rotated controls", () => {
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.02)); mesh.position.set(0, 0, -1); mesh.updateMatrixWorld(true);

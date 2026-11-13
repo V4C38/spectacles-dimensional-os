@@ -64,7 +64,7 @@ export class AlignmentWarning {
   private failed = false;
   private pending = false;
   private shown = false;
-  observe(message: import("../websocket/protocolTypes").Outbound): void {
+  observe(message: import("../ClientContracts").Outbound): void {
     if (message.type === "localization_context") { this.failed = this.pending = false; }
     if (message.type === "localization_observations_request") { this.pending = true; this.failed = false; }
     if (message.type === "localization_result" || message.type === "localization_map_transform") { this.failed = this.pending = false; }

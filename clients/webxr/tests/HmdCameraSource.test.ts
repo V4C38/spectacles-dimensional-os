@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { lookupPoseSample, selectFrameTimestamp } from "../src/localization/HmdCameraSource";
-import { HMD_PROFILES } from "../src/localization/HmdProfiles";
+import { HMD_PROFILES } from "../src/localization/HmdCalibration";
 import { cameraFixture } from "./fixtures/camera";
 
 async function readyCapture(f: ReturnType<typeof cameraFixture>) {

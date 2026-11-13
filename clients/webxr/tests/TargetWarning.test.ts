@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
 import * as THREE from "three";
-import { NotificationPill } from "../src/presentation/NotificationPill";
-import { EndEffectorStatusView } from "../src/manipulation/EndEffectorStatusView";
+import { NotificationPill, EndEffectorStatusView } from "../src/presentation/NotificationPill";
 it("keeps a non-interactive pill beside the EE and fades it out on recovery", () => {
   const warning = new EndEffectorStatusView(), marker = new THREE.Vector3(1, 1, 1);
   const failed = { blocked: false, fresh: true, stopped: false, moving: false,

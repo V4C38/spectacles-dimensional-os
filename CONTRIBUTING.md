@@ -14,6 +14,8 @@ Use Python 3.12 and Node 22 (`nvm use`). Install Git LFS and ffmpeg/ffprobe. Fol
 
 Give each runtime concern one mutable owner. Expose facts through that owner and derive presentation; avoid mirrored lifecycle flags. Keep platform mechanisms in hosts. Use descriptive role names such as Controller, Presenter, View, and Renderer.
 
+Group related helpers and classes in cohesive feature modules; a separate owner does not require a separate file. Name a class-owned file after its main class, or use the feature name for a multi-export module. Preserve independent instances, initialization order, and lifecycle boundaries when consolidating. Keep SDK-free geometry and resource helpers below platform views. Give Specs host modules distinct names from Core modules, and verify actual native startup after moves: TypeScript compilation and mocked host tests alone do not prove runtime import resolution.
+
 Open Lens Studio from `clients/specs/spectacles-dimensional-os.esproj`. Manipulate scenes through Lens MCP, never hand edit them. Preserve asset metadata identities. The production Integration Test Harness must retain Auto Run false; native scenarios belong only in disposable editor projects.
 
 The [protocol](dimos-ar/PROTOCOL.md) is canonical: update it, Python protocol, and Core protocol together when changing messages. DimOS owns hardware, planning, execution, and measured feedback; AR owns sessions, authority, coordinate conversion, and presentation. Keep native stop/feedback safeguards until tested upstream equivalents exist.

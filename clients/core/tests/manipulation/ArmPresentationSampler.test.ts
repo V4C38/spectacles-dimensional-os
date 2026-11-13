@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { ArmPresentationSampler } from "../../src/manipulation/ArmPresentationSampler";
+import { ArmPresentationSampler } from "../../src/manipulation/ArmPresentation";
 import type { ManipulationModel, ManipulationState } from "../../src/manipulation/ManipulationTypes";
 const origin = { position: [0,0,0] as [number,number,number], orientation: [0,0,0,1] as [number,number,number,number], confidence: 1, ts: 0 };
 const model: ManipulationModel = { revision: "one", root: "base", links: [{ name: "base", bounds: null }, { name: "tool", bounds: null }], asset_url: null,

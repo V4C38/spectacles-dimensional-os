@@ -1,23 +1,44 @@
-import { ARM_VISUAL_STYLE, armShapeEdges } from "@dimos-ar-client/manipulation/ManipulationVisuals";
-import type {
-  ManipulationModel,
-} from "@dimos-ar-client/manipulation/ManipulationTypes";
+import { ARM_VISUAL_STYLE as STYLE, ARM_VISUAL_STYLE, armShapeEdges } from "@dimos-ar-client/manipulation/ManipulationPresentation";
 import * as THREE from "three";
+import type { ManipulationModel } from "@dimos-ar-client/manipulation/ManipulationTypes";
+
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { registerRayTarget } from "../input/XRBlocksRayInteraction";
+import { registerRayTarget } from "../input/WebXRInteraction";
 import { AdaptiveDashedLineRenderer } from "../presentation/AdaptiveDashedLineRenderer";
-import {
-  clientTrackingToWebxrPoint,
-} from "../utilities/WebXRCoordinates";
-import { armMaterial } from "./ArmMaterial";
-import { disposeObjectTrees } from "./ObjectResources";
-import { visualProfile } from "./profiles/ManipulationVisualProfile";
+import { clientTrackingToWebxrPoint } from "../utilities/WebXRCoordinates";
+import { disposeObjectTrees } from "../presentation/SceneResources";
+
+export function armMaterial(): THREE.ShaderMaterial {
+  const material = new THREE.ShaderMaterial({
+    uniforms: { uOpacity: { value: 1 }, uColor: { value: new THREE.Color(STYLE.color) } },
+    vertexShader: "attribute float armAlpha; varying float vArmAlpha; void main() { vArmAlpha = armAlpha; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+    fragmentShader: `
+      varying float vArmAlpha;
+      uniform float uOpacity;
+      uniform vec3 uColor;
+      void main() {
+        gl_FragColor = vec4(uColor, clamp(${STYLE.fill} * uOpacity * vArmAlpha, 0.0, 1.0));
+        #include <colorspace_fragment>
+      }`,
+    transparent: true, depthWrite: false, toneMapped: false,
+  });
+  return material;
+}
+
+
+export function visualProfile(model: ManipulationModel): { rootMeshRotationY: number } {
+  if (model.visual_profile !== undefined && model.visual_profile !== "openyam")
+    throw new Error(`Unsupported manipulation visual profile: ${model.visual_profile}`);
+  return { rootMeshRotationY: Math.PI / 2 };
+}
+
 
 const BASIS = new THREE.Matrix4().makeBasis(
   new THREE.Vector3(...clientTrackingToWebxrPoint([1, 0, 0])),
   new THREE.Vector3(...clientTrackingToWebxrPoint([0, 1, 0])),
   new THREE.Vector3(...clientTrackingToWebxrPoint([0, 0, 1])),
 );
+
 
 export class ManipulationModelRenderer {
   readonly object = new THREE.Group();

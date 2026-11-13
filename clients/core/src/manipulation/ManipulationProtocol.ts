@@ -1,12 +1,6 @@
-import { object, text, finite, vector, pose } from "./ManipulationValidation";
+import { object, text, finite, vector, pose, validateManipulationModel } from "./ManipulationValidation";
 import { isValidatedBulkAsset, validatedBulkArray } from "../websocket/BulkTransfer";
-import { validateManipulationModel } from "./ManipulationModelValidation";
-import type {
-  FollowingTail,
-  ManipulationAction,
-  ManipulationOutbound,
-  ManipulationPose,
-} from "./ManipulationTypes";
+import type { FollowingTail, ManipulationAction, ManipulationOutbound, ManipulationPose } from "./ManipulationTypes";
 
 const ACTIONS: readonly string[] = [
   "evaluate",

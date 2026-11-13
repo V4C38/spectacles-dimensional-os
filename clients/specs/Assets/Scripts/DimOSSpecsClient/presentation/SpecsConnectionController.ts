@@ -1,7 +1,7 @@
-import type { ARModuleSession } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/arModuleSession";
-import { buildModuleWebSocketUrl,isValidHost,saveModuleHost,type ModuleHostStore } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/hostNormalization";
-import { AR_MODULE_CLIENT_CONFIG } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/hostPorts";
-import { routeConnectionField,type ConnectionMethod,type ResolvedPin } from "../IpRelayClient";
+import type { ARModuleSession } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/ARModuleSession";
+import { buildModuleWebSocketUrl, isValidHost, saveModuleHost, type ModuleHostStore } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/ConnectionAddress";
+import { AR_MODULE_CLIENT_CONFIG } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
+import { routeConnectionField, type ConnectionMethod, type ResolvedPin } from "../websocket/IpRelayClient";
 
 const PIN_STORAGE_KEY = "dimos_ar_module_pin";
 

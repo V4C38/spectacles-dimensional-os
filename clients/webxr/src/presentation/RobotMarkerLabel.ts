@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { Text } from "troika-three-text";
-import { ROBOT_LABEL_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
-import { UI_FONT_REGULAR, UI_FONT_SEMIBOLD, syncText } from "./UIFonts";
+import { ROBOT_LABEL_STYLE } from "@dimos-ar-client/presentation/WorldPresentation";
+import { UI_FONT_REGULAR, UI_FONT_SEMIBOLD, syncText } from "./SceneResources";
 const TAG_WIDTH = ROBOT_LABEL_STYLE.widthM,
   TAG_PADDING = ROBOT_LABEL_STYLE.paddingM;
 export class RobotMarkerLabel extends THREE.Group {

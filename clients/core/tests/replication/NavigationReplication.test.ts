@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { CollaborationController } from "../../src/replication/CollaborationController";
-import { NavigationInteraction } from "../../src/navigation/NavigationInteraction";
-import { NavigationPreviewCoordinator } from "../../src/navigation/NavigationPreviewCoordinator";
-import { JoystickNavigationController } from "../../src/navigation/JoystickNavigationController";
-import type { ARModuleSessionState } from "../../src/websocket/arModuleSession";
-import type { InteractionState } from "../../src/replication/CollaborationTypes";
+import { NavigationInteraction, NavigationPreviewCoordinator } from "../../src/navigation/NavigationInteraction";
+
+import { JoystickNavigationController } from "../../src/navigation/NavigationCommands";
+import type { ARModuleSessionState } from "../../src/websocket/ARModuleSession";
+import type { InteractionState } from "../../src/ClientContracts";
 const origin = { position: [1, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
 function fixture() {
   const sent: any[] = [], commands: any[] = [];

@@ -1,26 +1,26 @@
 import { label, button, place, rect, surface, setText, clip, cameraIcon, gearIcon, layoutText, iconClose, scrollLabel, messageField, tabs, sectionHeading } from "./PanelWidgets";
 import { panelChrome } from "./RobotPanelFrame";
-import { updatePanelGesture, type PanelGesture } from "./PanelGesture";
-import { PanelPageTransitions } from "./PanelPageTransitions";
+import { updatePanelGesture, type PanelGesture } from "./PanelInteraction";
+import { PanelPageTransitions, PANEL_TOP, RUNTIME_LAYOUTS, SETUP_LAYOUTS, panelFooterY, panelProfile, type PanelProfile } from "./PanelPresentation";
 import { SpeedSlider } from "./SpeedSlider";
-import { SETUP_SUCCESS_STYLE, strokeJoints2D, STROKE_JOIN_SEGMENTS } from "@dimos-ar-client/presentation/WorldVisualStyle";
-import { CONTROL_PANEL_COPY as COPY, CONTROL_PANEL_LAYOUT, CONTROL_PANEL_SCALE, robotBadgeText, sensorStatusText } from "@dimos-ar-client/presentation/ControlPanelPresentation";
+import { SETUP_SUCCESS_STYLE, strokeJoints2D, STROKE_JOIN_SEGMENTS } from "@dimos-ar-client/presentation/WorldPresentation";
+import { CONTROL_PANEL_COPY as COPY, CONTROL_PANEL_LAYOUT, CONTROL_PANEL_SCALE, robotBadgeText, sensorStatusText, PanelHeightAnimation } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 import * as THREE from "three";
-import type { LidarDisplayMode } from "@dimos-ar-client/sensors/lidarSettings";
+import type { LidarDisplayMode } from "@dimos-ar-client/sensors/LidarDisplay";
 import * as xb from "xrblocks";
-import type { Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
-import { markRayPassive, registerRayTarget } from "../input/XRBlocksRayInteraction";
-import { SurfaceText } from "./SurfaceText";
+import type { Vec3 } from "@dimos-ar-client/ClientContracts";
+import { markRayPassive, registerRayTarget } from "../input/WebXRInteraction";
+import { SurfaceText, ScrollableTextView } from "./TextViews";
 import { SurfaceButton } from "./SurfaceButton";
-import { DIMOS_AR_DESIGN } from "./DimOSARDesign";
-import { GlassSurface } from "./GlassSurface";
-import { PANEL_TOP, RUNTIME_LAYOUTS, SETUP_LAYOUTS, panelFooterY, panelProfile, type PanelProfile } from "./PanelLayout";
-import { PanelHeightAnimation } from "@dimos-ar-client/presentation/PanelHeightAnimation";
+import { DIMOS_AR_DESIGN, toneCss } from "./DimOSARDesign";
+import { GlassSurface } from "./SurfaceMaterials";
+
+
 import type { AgentDraftSnapshot } from "@dimos-ar-client/agent/AgentDraftSession";
-import { disposeTextResources } from "./TextResources";
-import { ScrollableTextView } from "./ScrollableTextView";
+import { disposeTextResources } from "./SceneResources";
+
 import { SetupCameraPreviewView, type CameraPreviewFrame } from "./SetupCameraPreviewView";
-import { toneCss } from "./StatusTones";
+
 import type { WebXRUISnapshot } from "./WebXRUIPresenter";
 
 export type MainMenuCallbacks = {

@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { ManipulationGesture } from "../../src/manipulation/ManipulationGesture";
+import { ManipulationGesture } from "../../src/manipulation/ManipulationInput";
 import type { ManipulationPose } from "../../src/manipulation/ManipulationTypes";
 const pose = (x: number): ManipulationPose => ({ position: [x, 0, 0], orientation: [0, 0, 0, 1] });
 it("preserves grab offset, updates immediately, and retires capture", () => {

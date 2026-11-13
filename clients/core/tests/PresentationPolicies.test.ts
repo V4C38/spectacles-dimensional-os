@@ -1,8 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { NotificationCenter } from "../src/presentation/NotificationCenter";
 import { SetupFlow } from "../src/presentation/SetupFlow";
-import { LidarDisplayController } from "../src/sensors/LidarDisplayController";
-import { worldMarkerHover, circleStrokeSegments } from "../src/presentation/WorldVisualStyle";
+import { LidarDisplayController } from "../src/sensors/LidarDisplay";
+import { worldMarkerHover, circleStrokeSegments } from "../src/presentation/WorldPresentation";
 
 it("links marker and robot hover only while attached, without changing either actual target", () => {
   expect(worldMarkerHover(true, true, false)).toEqual({ robot: true, marker: true });

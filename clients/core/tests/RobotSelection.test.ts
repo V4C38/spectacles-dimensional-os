@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { RobotSelection } from "../src/robot/RobotSelection";
+import { RobotSelection } from "../src/robot/RobotPresentation";
 
 it("owns eligible selection and notifies only on transitions", () => {
   const selection = new RobotSelection(), changed = vi.fn();

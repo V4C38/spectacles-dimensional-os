@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { expect, it } from "vitest";
-import { WebXRDirectInteraction } from "../src/input/WebXRDirectInteraction";
-import { registerRayTarget } from "../src/input/XRBlocksRayInteraction";
+import { WebXRDirectInteraction, registerRayTarget } from "../src/input/WebXRInteraction";
+
 import type * as xb from "xrblocks";
 
 it("resolves physical proximity on transformed shapes, retains a target and never switches capture modes", () => {

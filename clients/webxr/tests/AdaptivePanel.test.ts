@@ -5,10 +5,10 @@ import "./fixtures/xrEnvironment";
 import * as THREE from "three";
 import * as xb from "xrblocks";
 import { MainMenuView } from "../src/presentation/MainMenuView";
-import { PanelHeightAnimation } from "@dimos-ar-client/presentation/PanelHeightAnimation";
-import { RUNTIME_FOOTER_GAP, RUNTIME_LAYOUTS, SETUP_LAYOUTS } from "../src/presentation/PanelLayout";
+import { PanelHeightAnimation } from "@dimos-ar-client/presentation/ControlPanelPresentation";
+import { RUNTIME_FOOTER_GAP, RUNTIME_LAYOUTS, SETUP_LAYOUTS } from "../src/presentation/PanelPresentation";
 import type { WebXRUISnapshot } from "../src/presentation/WebXRUIPresenter";
-import type { GlassSurface } from "../src/presentation/GlassSurface";
+import type { GlassSurface } from "../src/presentation/SurfaceMaterials";
 
 const views: MainMenuView[] = [];
 afterEach(() => { for (const view of views) view.dispose(); views.length = 0; });

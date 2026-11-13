@@ -17,9 +17,14 @@ from uuid import uuid4
 
 import numpy as np
 
-from dimos.ar.localization.coordinator import AsyncLocalizer
+from dimos.ar.async_execution import BoundedWorker
 from dimos.ar.localization.odom_map_transform import OdomMapTransform
-from dimos.ar.localization.types import LocalizedPose, Observation, SnapshotLocalizer
+from dimos.ar.localization.types import (
+    AsyncLocalizer,
+    LocalizedPose,
+    Observation,
+    SnapshotLocalizer,
+)
 from dimos.ar.localization.vps.admission import QueryDeferredError, VpsAdmission
 from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
 from dimos.ar.robot.odometry import RobotOdometry
@@ -29,7 +34,6 @@ from dimos.ar.websocket.protocol import (
     TimeSync,
     encode_text,
 )
-from dimos.ar.worker import BoundedWorker
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.transform_utils import matrix_to_pose, pose_to_matrix

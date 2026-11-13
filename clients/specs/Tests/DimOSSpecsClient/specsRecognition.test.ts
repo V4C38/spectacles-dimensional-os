@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { setMockTime } from "../setup/lens-globals";
-import { SpecsRecognition } from "../../Assets/Scripts/DimOSSpecsClient/agent/AgentSpeechController";
+import { SpecsRecognition } from "../../Assets/Scripts/DimOSSpecsClient/agent/SpecsSpeechAdapters";
 
 let options: any;
 beforeEach(() => {

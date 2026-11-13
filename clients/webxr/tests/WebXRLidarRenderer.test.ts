@@ -13,10 +13,10 @@ it("renders LiDAR before UI without writing depth that can occlude panels", () =
 
 
 
-const origin = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 } as import("@dimos-ar-client/localization/clientTrackingOrigin").ClientTrackingOrigin;
+const origin = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 } as import("@dimos-ar-client/localization/ClientTracking").ClientTrackingOrigin;
 it("uses reusable capped buffers, round sprites, stable height colors and red-transparent obstacle distance", () => {
   const lidar = new WebXRLidarRenderer();
-  const points: import("@dimos-ar-client/websocket/protocolTypes").Vec3[] = [[0, 0, 0.1], [0.5, 0, 0.33], [0, 0, 2]];
+  const points: import("@dimos-ar-client/ClientContracts").Vec3[] = [[0, 0, 0.1], [0.5, 0, 0.33], [0, 0, 2]];
   lidar.apply(points, origin, "full", [0, 0, 0.33], 0.33);
   const positions = lidar.object.geometry.getAttribute("position") as THREE.BufferAttribute;
   const colors = lidar.object.geometry.getAttribute("color") as THREE.BufferAttribute;
@@ -43,7 +43,7 @@ it("uses reusable capped buffers, round sprites, stable height colors and red-tr
 
 it("fades to zero at 60 cm from rotated body bounds and restores opaque Full colours", () => {
   const lidar = new WebXRLidarRenderer();
-  const points: import("@dimos-ar-client/websocket/protocolTypes").Vec3[] = [[0, 0.5, 0.4], [0, 0.8, 0.4], [0, 1.1, 0.4], [0, 1.2, 0.4]];
+  const points: import("@dimos-ar-client/ClientContracts").Vec3[] = [[0, 0.5, 0.4], [0, 0.8, 0.4], [0, 1.1, 0.4], [0, 1.2, 0.4]];
   lidar.apply(points, origin, "obstacles", [0, 0, 0.33], 0.33, [0, 0, Math.SQRT1_2, Math.SQRT1_2], [1, 0.4, 0.5]);
   const colors = lidar.object.geometry.getAttribute("color");
   expect(colors.itemSize).toBe(4); expect(colors.getW(0)).toBeCloseTo(1);

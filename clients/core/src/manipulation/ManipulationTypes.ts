@@ -1,4 +1,4 @@
-import type { Quat, Vec3 } from "../websocket/protocolTypes";
+import type { Quat, Vec3 } from "../ClientContracts";
 
 export interface ManipulationPose {
   position: Vec3;

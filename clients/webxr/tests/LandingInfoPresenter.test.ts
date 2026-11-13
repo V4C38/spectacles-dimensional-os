@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { expect, it } from "vitest";
-import type { ARModuleSession, ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSession";
+import type { ARModuleSession, ARModuleSessionState } from "@dimos-ar-client/websocket/ARModuleSession";
 import { LandingInfoPresenter } from "../src/presentation/LandingInfoPresenter";
 
 it("uses the shared hello and clears stale server details on disconnect without guessing addresses", () => {

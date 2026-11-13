@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import * as THREE from "three";
-import { WebXRNavGoalView } from "../src/navigation/WebXRNavGoalView";
-import { NAVIGATION_CANCEL_STYLE, ROBOT_LINE_STYLE, WORLD_DASH_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
+import { WebXRNavGoalView } from "../src/navigation/WebXRNavigationRenderer";
+import { NAVIGATION_CANCEL_STYLE, ROBOT_LINE_STYLE, WORLD_DASH_STYLE } from "@dimos-ar-client/presentation/WorldPresentation";
 
 it("renders a full-size confirmed draft using the robot-box dash pattern in physical metres", () => {
   const normal = new WebXRNavGoalView(), draft = new WebXRNavGoalView();

@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { reportDiagnostic } from "../diagnostics/BrowserDiagnostics";
+import { reportDiagnostic } from "../diagnostics/Diagnostics";
 
 type ProjectedDepth = XRWebGLDepthInformation & {
   isValid?: boolean;

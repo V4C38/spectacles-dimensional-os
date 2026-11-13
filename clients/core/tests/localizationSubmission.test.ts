@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LocalizationSubmission } from "../src/localization/localizationSubmission";
+import { LocalizationSubmission } from "../src/websocket/ARModuleSession";
 
 describe("localization submission correlation", () => {
   it("accepts only the newest batch in the converted server clock", () => {

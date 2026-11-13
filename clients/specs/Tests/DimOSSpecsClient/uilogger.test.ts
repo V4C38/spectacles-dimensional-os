@@ -1,10 +1,10 @@
 import { expect, it } from "vitest";
-import { UILogger } from "../../Assets/Scripts/DimOSSpecsClient/presentation/UILogger";
+import { HudMessageController } from "../../Assets/Scripts/DimOSSpecsClient/presentation/HudMessageController";
 import { setMockTime } from "../setup/lens-globals";
 
 it("expires transient feedback while retaining indefinite feedback", () => {
   setMockTime(10);
-  const logger = new UILogger();
+  const logger = new HudMessageController();
   logger.show("Connected", new vec4(0, 1, 0, 1), 0.5);
   logger.tick(10.49); expect(logger.snapshot?.text).toBe("Connected");
   logger.tick(10.5); expect(logger.snapshot).toBeNull();

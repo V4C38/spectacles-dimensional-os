@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { ManipulationPressEdges } from "@dimos-ar-client/manipulation/ManipulationInputCapture";
-import { MenuAnchorController } from "../src/input/MenuAnchorController";
+import { ManipulationPressEdges } from "@dimos-ar-client/manipulation/ManipulationInput";
+import { MenuAnchorController } from "../src/presentation/PanelInteraction";
 import { expect, it, vi } from "vitest";
 import "./fixtures/xrEnvironment";
 
@@ -68,7 +68,7 @@ import { WebXRApp } from "../src/WebXRApp";
 import { WebXRInputController } from "../src/input/WebXRInputController";
 import { DimOSWebXRClient } from "../src/DimOSWebXRClient";
 import { BrowserWebSocketTransport } from "../src/websocket/BrowserWebSocketTransport";
-import { registerRayTarget } from "../src/input/XRBlocksRayInteraction";
+import { registerRayTarget } from "../src/input/WebXRInteraction";
 import { cameraFixture } from "./fixtures/camera";
 
 it("consumes UI selection, cancels drags on input loss, invalidates resets, and supports XR reentry", () => {
