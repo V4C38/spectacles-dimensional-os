@@ -1,6 +1,6 @@
 import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable";
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
-import { NAVIGATION_CANCEL_STYLE,navigationCancelReveal } from "../../DimOSARClient/presentation/WorldVisualStyle";
+import { NAVIGATION_CANCEL_STYLE,navigationCancelReveal } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldVisualStyle";
 import { findChildRecursive } from "../presentation/UIKit";
 import { WorldMeshRenderer,strokeMesh2D } from "../presentation/WorldMeshRenderer";
 import { yawRotationFromWorldRotation } from "../utilities/SpecsUtilities";
@@ -146,11 +146,6 @@ export class NavGoalMarker extends BaseScriptComponent {
   get worldPosition(): vec3 {
     this.ensureReady();
     return this.root!.getTransform().getWorldPosition();
-  }
-
-  getRotation(): quat {
-    this.ensureReady();
-    return this.rotation;
   }
 
   setPose(position: vec3, rotation: quat): void {

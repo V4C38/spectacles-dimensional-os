@@ -1,26 +1,26 @@
-import { availableCapabilityLabels,localizationGuidance,localizationKind,localizationProviderLabel } from "../../DimOSARClient/presentation/ControlPanelPresentation";
-import { SetupFlow } from "../../DimOSARClient/presentation/SetupFlow";
-import { getRobotActivityState } from "../../DimOSARClient/robot/RobotMarkerState";
+import { availableCapabilityLabels,localizationGuidance,localizationKind,localizationProviderLabel } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
+import { SetupFlow } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/SetupFlow";
+import { getRobotActivityState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotMarkerState";
 import { SETUP_PANEL_SCALE } from "./PanelLayout";
 import { SpecsConnectionController } from "./SpecsConnectionController";
 require("LensStudio:TextInputModule");
 
-import type { ClientTrackingOrigin,ClientTrackingOriginStore } from "../../DimOSARClient/localization/clientTrackingOrigin";
-import type { LocalizationCaptureEpisode } from "../../DimOSARClient/localization/localizationCaptureEpisode";
-import { localizationCaptureStatus } from "../../DimOSARClient/localization/localizationCaptureStatus";
-import type { ARModuleSession,ARModuleSessionState } from "../../DimOSARClient/websocket/arModuleSession";
+import type { ClientTrackingOrigin,ClientTrackingOriginStore } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingOrigin";
+import type { LocalizationCaptureEpisode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/localizationCaptureEpisode";
+import { localizationCaptureStatus } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/localizationCaptureStatus";
+import type { ARModuleSession,ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/arModuleSession";
 import {
 isValidHost,
 loadStoredModuleHost,
 type ModuleHostStore,
-} from "../../DimOSARClient/websocket/hostNormalization";
+} from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/hostNormalization";
 import {
 deriveSessionLinkPhase,
 NO_ROBOT_CONNECTED_LABEL,
 sessionLinkStatus,
 type SessionLinkPhase,
 type StatusText,
-} from "../../DimOSARClient/websocket/sessionLinkStatus";
+} from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/sessionLinkStatus";
 import {
 toggleConnectionMethod,
 type ConnectionMethod,

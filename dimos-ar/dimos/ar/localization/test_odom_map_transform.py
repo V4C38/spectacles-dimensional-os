@@ -40,16 +40,6 @@ def test_update_from_vps_rejects_low_confidence() -> None:
     assert odom_map_transform.vps_sample() is None
 
 
-
-
-
-
-
-
-
-
-
-
 @pytest.mark.parametrize(
     ("field", "value"),
     [

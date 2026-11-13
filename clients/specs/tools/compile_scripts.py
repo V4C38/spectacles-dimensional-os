@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+from pathlib import Path
 
-from native_project import prepare_harness
+from core_package import extract_sources
 from ls_awake import KeepAwake
+from native_project import prepare_harness
 
 
 def main() -> int:
@@ -38,6 +39,9 @@ def main() -> int:
     shutil.rmtree(output / "Src/Assets/Scripts")
     shutil.copytree(args.source / "Assets/Scripts", output / "Src/Assets/Scripts")
     shutil.rmtree(output / "Src/Assets/Review", ignore_errors=True)
+    shutil.rmtree(output / "Src/Packages/DimOSARClient.lspkg", ignore_errors=True)
+    extract_sources(args.source / "Packages/DimOSARClient.lspkg",
+                    output / "Src/Packages/DimOSARClient.lspkg/Scripts/DimOSARClient")
     if args.include:
         prepare_harness(output / "Src", args.include)
     command = [str(compiler), "--parseDir", str(output / "Src"), "--componentsCompileDir", str(output / "Out/Components"),

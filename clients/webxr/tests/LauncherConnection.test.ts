@@ -35,7 +35,6 @@ it("shows WebXR URL or Specs PIN and keeps IP in expanded details", () => {
   expect(element("pinRow").classList.contains("hidden")).toBe(true);
   for (const client of ["specs", "webxr"]) {
     update({ ...status, client });
-    expect(element("hostIpSummary").classList.contains("hidden")).toBe(true);
     expect(element("hostIpRow").classList.contains("hidden")).toBe(false);
     expect(element("hostIp").textContent).toBe(status.host_ip);
     if (client === "specs") {

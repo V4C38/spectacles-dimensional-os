@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 class FiducialMarkerLocalizerConfig:
     max_reprojection_error_px: float = 3.0
     # Small printed markers have noisy planar PnP tilt even at low reprojection
-    # error. Match the previous tracker's 20-degree gravity-consistency gate.
+    # error. Reject tilt inconsistent with gravity.
     max_tilt_rad: float = math.radians(20.0)
     max_position_residual_m: float = 0.35
     max_yaw_residual_rad: float = math.radians(12.0)

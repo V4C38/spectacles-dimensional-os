@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { ViewerNotificationPresenter } from "../../Assets/Scripts/DimOSSpecsClient/presentation/ViewerNotificationPresenter";
-import { notificationGlyph } from "../../Assets/Scripts/DimOSARClient/presentation/NotificationCenter";
+import { notificationGlyph } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/NotificationCenter";
 afterEach(() => vi.unstubAllGlobals());
 it.each(["stop", "warning"] as const)("renders the shared %s glyph consistently across repeated frames", (glyph) => {
   const originalQuat = quat;

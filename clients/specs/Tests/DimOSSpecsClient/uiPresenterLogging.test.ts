@@ -162,7 +162,7 @@ it.each([false, true])("scales the whole Specs menu uniformly to 75% for editor 
 });
 
 import { SpecsCameraStream } from "../../Assets/Scripts/DimOSSpecsClient/localization/SpecsCameraStream";
-import { RobotSelection } from "../../Assets/Scripts/DimOSARClient/robot/RobotSelection";
+import { RobotSelection } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotSelection";
 import { setMockTime } from "../setup/lens-globals";
 
 it("reads selection eligibility and listening/responding activity from portable owners", () => {

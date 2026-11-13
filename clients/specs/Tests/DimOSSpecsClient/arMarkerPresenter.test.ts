@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { parsePlaceArMarkerArgs } from "../../Assets/Scripts/DimOSARClient/agent/agentSkills";
-import type { ClientTrackingOrigin } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingOrigin";
+import { parsePlaceArMarkerArgs } from "DimOSARClient.lspkg/Scripts/DimOSARClient/agent/agentSkills";
+import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingOrigin";
 import { ARMarkerPresenter } from "../../Assets/Scripts/DimOSSpecsClient/presentation/ARMarkerPresenter";
 import { clientTrackingToSpecsPoint } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
 

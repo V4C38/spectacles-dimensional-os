@@ -105,3 +105,75 @@ async def test_takeover_never_signals_replacement_listener(tmp_path: Path, monke
     assert [call.args for call in kill.call_args_list] == [
         (4242, signal.SIGINT), (4242, signal.SIGKILL),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_code", [0, 1])
+@pytest.mark.parametrize("reader", ["backend", "webxr", "setup"])
+async def test_exited_leader_with_inherited_stdout_retires_owned_worker(
+    tmp_path: Path, exit_code: int, reader: str,
+) -> None:
+    import asyncio
+    import os
+    import sys
+    from contextlib import AsyncExitStack
+
+    script = (
+        "import subprocess,sys; "
+        "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(120)']); "
+        f"print(p.pid,flush=True); sys.exit({exit_code})"
+    )
+    mgr = ProcessManager(root=tmp_path)
+    unrelated = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", "import time; time.sleep(120)", start_new_session=True,
+    )
+    proc = None
+    try:
+        async with AsyncExitStack() as stack:
+            if reader == "setup":
+                proc = await stack.enter_async_context(mgr._logged_command(
+                    [sys.executable, "-c", script], cwd=tmp_path, label="Setup",
+                ))
+            else:
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable, "-c", script, stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL, start_new_session=True,
+                )
+            assert proc.stdout is not None
+            worker = int(await asyncio.wait_for(proc.stdout.readline(), 3))
+            # The worker keeps the pipe open after its leader exits.
+            if reader == "setup":
+                assert await asyncio.wait_for(mgr._drain_output(proc), 3) == exit_code
+            elif reader == "webxr":
+                mgr._webxr_proc = proc
+                await asyncio.wait_for(mgr._read_webxr_stream(proc), 5)
+                assert mgr._webxr_proc is None
+                assert mgr.status.webxr_phase == "error"
+            else:
+                mgr._proc = proc
+                await asyncio.wait_for(mgr._read_stream(proc), 3)
+                async with asyncio.timeout(5):
+                    while mgr._proc is not None:
+                        await asyncio.sleep(0.02)
+                    # Finalization clears the handle before awaiting group cleanup.
+                    async with mgr._lock:
+                        assert mgr.status.phase == (Phase.ERROR if exit_code else Phase.IDLE)
+        assert proc.returncode == exit_code
+        assert unrelated.returncode is None
+        # A group probe is more portable than Linux-only /proc inspection.
+        if Path("/proc").is_dir():
+            stat = Path(f"/proc/{worker}/stat")
+            assert not stat.exists() or stat.read_text().rsplit(")", 1)[1].split()[0] == "Z"
+        else:
+            with pytest.raises(ProcessLookupError):
+                os.killpg(proc.pid, 0)
+    finally:
+        if proc is not None:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await asyncio.wait_for(proc.wait(), 3)
+        if unrelated.returncode is None:
+            unrelated.kill()
+        await unrelated.wait()

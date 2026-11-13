@@ -8,8 +8,7 @@ Thumbs.db
 !.cursor/rules/
 !.cursor/rules/**
 
-# README / demo media at repo root (not Lens Studio Assets/)
-# Add GIFs/PNGs here when ready; optional LFS via .gitattributes
+# Local scratch notes
 Logs.md
 
 # Accidental Lens Studio open at repo root (always use clients/specs/spectacles-dimensional-os.esproj)
@@ -78,6 +77,7 @@ clients/specs/Tests/coverage/
 
 # Generated test/review evidence, reports, recordings and disposable projects.
 /Review Data/
+/output/
 
 # Legacy output paths: exclude accidental output from older tooling.
 clients/webxr/tests/integration-tests/test-results/

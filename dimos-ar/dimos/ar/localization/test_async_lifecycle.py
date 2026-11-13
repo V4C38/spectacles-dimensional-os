@@ -161,14 +161,6 @@ async def test_runner_bounds_episode_and_discards_retired_results(failure: str) 
         await runner.close()
 
 
-
-
-
-
-
-
-
-
 def test_success_uses_capture_travel_not_http_completion_travel() -> None:
     policy = LocalizationPolicy(["fiducial_marker"])
     policy.on_hello("client")
@@ -184,10 +176,6 @@ def test_exact_pose_remains_usable_beside_a_history_gap() -> None:
     history.push(_pose(15, x=5))
     assert history.at_server_ts(10).position[0] == 0
     assert history.at_server_ts(10.01).position[0] == pytest.approx(0.01)
-
-
-
-
 
 
 @pytest.mark.asyncio

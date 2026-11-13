@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClientTrackingOrigin } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingOrigin";
-import { ROBOT_LINE_STYLE, WORLD_DASH_STYLE } from "../../Assets/Scripts/DimOSARClient/presentation/WorldVisualStyle";
+import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingOrigin";
+import { ROBOT_LINE_STYLE, WORLD_DASH_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldVisualStyle";
 
 const { renderers } = vi.hoisted(() => ({ renderers: new Map<string, any>() }));
 vi.mock("../../Assets/Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer", () => {

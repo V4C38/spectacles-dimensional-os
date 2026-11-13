@@ -1,8 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { NavigationMarkerRenderer } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavigationMarkerRenderer";
 import { circleMesh, strokeMesh2D } from "../../Assets/Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer";
-import { NAV_FEEDBACK_ANIMATION_S, NAV_FEEDBACK_TIMING } from "../../Assets/Scripts/DimOSARClient/navigation/NavigationGoalLifecycle";
-import { NAVIGATION_COLORS, ROBOT_LINE_STYLE, WORLD_DASH_STYLE } from "../../Assets/Scripts/DimOSARClient/presentation/WorldVisualStyle";
+import { NAV_FEEDBACK_ANIMATION_S, NAV_FEEDBACK_TIMING } from "DimOSARClient.lspkg/Scripts/DimOSARClient/navigation/NavigationGoalLifecycle";
+import { NAVIGATION_COLORS, ROBOT_LINE_STYLE, WORLD_DASH_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldVisualStyle";
 
 function sink() { return { triangles: vi.fn(), hide: vi.fn(), object: { getTransform: () => ({ setLocalPosition: vi.fn() }) } }; }
 function renderer(scale = 1) {

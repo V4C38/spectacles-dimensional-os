@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import "./fixtures/xrEnvironment";
 import { expect, it, vi } from "vitest";
-import { FakeClock, FakeTransport, helloAt, stateFrame } from "../../specs/Tests/fixtures/SessionFixture";
+import { FakeClock, FakeTransport, helloAt, stateFrame } from "../../core/tests/support/SessionFixture";
 import { DimOSWebXRClient } from "../src/DimOSWebXRClient";
 import { WebXRApp } from "../src/WebXRApp";
 import { cameraFixture } from "./fixtures/camera";

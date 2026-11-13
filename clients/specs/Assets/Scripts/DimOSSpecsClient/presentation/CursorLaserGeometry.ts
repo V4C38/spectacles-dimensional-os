@@ -1,4 +1,4 @@
-import type { Vec3 } from "../../DimOSARClient/websocket/protocolTypes";
+import type { Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes";
 
 export const CURSOR_LASER_STYLE = {
   startOffsetCm: 10,

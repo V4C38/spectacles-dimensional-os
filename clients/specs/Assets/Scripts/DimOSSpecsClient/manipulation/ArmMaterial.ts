@@ -1,5 +1,5 @@
-import type { ManipulationPose } from "../../DimOSARClient/manipulation/ManipulationTypes";
-import { ARM_VISUAL_STYLE } from "../../DimOSARClient/manipulation/ManipulationVisuals";
+import type { ManipulationPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationTypes";
+import { ARM_VISUAL_STYLE, armTransformDifference } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationVisuals";
 import { clientTrackingToSpecsPose } from "../utilities/SpecsCoordinates";
 export const ARM_MATERIAL = requireAsset("../../../Materials/ArmFresnel.mat") as Material;
 
@@ -32,14 +32,7 @@ const POINT_UNIFORMS = [
 
 /** Difference of rigid transforms, in the same centimetre basis as the static arm meshes. */
 export function armDisplacementCoefficients(measured: ManipulationPose, proposed: ManipulationPose): number[] {
-  const rotation = ([x, y, z, w]: readonly number[]) => [
-    1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w),
-    2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w),
-    2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y),
-  ];
-  const a = clientTrackingToSpecsPose(measured), b = clientTrackingToSpecsPose(proposed);
-  const ra = rotation(a.orientation), rb = rotation(b.orientation);
-  return [...ra.map((value, i) => value - rb[i]), ...a.position.map((value, i) => value - b.position[i])];
+  return armTransformDifference(clientTrackingToSpecsPose(measured), clientTrackingToSpecsPose(proposed));
 }
 
 /** A constant-size fade replaces thousands of vertex-alpha edits and MeshBuilder rebuilds. */

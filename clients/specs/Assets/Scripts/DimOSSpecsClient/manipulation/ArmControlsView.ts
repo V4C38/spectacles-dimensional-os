@@ -1,6 +1,6 @@
 import { Slider } from "SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider";
-import type { ManipulationController } from "../../DimOSARClient/manipulation/ManipulationController";
-import { ARM_PANEL_STYLE,PANEL_PIN_SEGMENTS,PANEL_SCAN_SEGMENTS } from "../../DimOSARClient/presentation/PanelFrameStyle";
+import type { ManipulationController } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationController";
+import { ARM_PANEL_STYLE,PANEL_PIN_SEGMENTS,PANEL_SCAN_SEGMENTS } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/PanelFrameStyle";
 import { COLOR_WHITE,createIconButton,createText,panelButtonLayer,SnapOS2Styles,uiMaterialLayer,type IconButtonResult } from "../presentation/UIKit";
 import { WorldMeshRenderer } from "../presentation/WorldMeshRenderer";
 import { SpecsArmPanelPresenter } from "./SpecsArmPanelPresenter";

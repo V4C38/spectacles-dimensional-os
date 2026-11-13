@@ -742,7 +742,7 @@ async def verify_source_handoff(args: argparse.Namespace, output: Path, result: 
 
 
 def make_video(output: Path) -> None:
-    module = (REPO_ROOT / "tools" / "visual-review.mjs").as_uri()
+    module = (REPO_ROOT / "tools/integration-tests/visual-review.mjs").as_uri()
     code = (
         f"import {{ makeVisualReviews }} from {json.dumps(module)};"
         "for (const path of await makeVisualReviews(process.argv[1])) console.log(path);"

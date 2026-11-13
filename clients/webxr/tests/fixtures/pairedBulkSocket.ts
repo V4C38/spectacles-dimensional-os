@@ -1,4 +1,4 @@
-import { PairedBulk } from "../../../specs/Tests/fixtures/PairedBulk";
+import { PairedBulk } from "../../../core/tests/support/PairedBulk";
 
 /** Browser socket adapter for the explicit paired v2 test peer. */
 export function pairedBulkSocket(uploaded: (bytes: Uint8Array) => void = () => {}): WebSocket & { lidar(data: Uint8Array): void } {

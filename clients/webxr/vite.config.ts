@@ -7,10 +7,10 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { AR_MODULE_CLIENT_CONFIG } from "../specs/Assets/Scripts/DimOSARClient/websocket/hostPorts";
+import { AR_MODULE_CLIENT_CONFIG } from "../core/src/websocket/hostPorts";
 
 const clientCore = fileURLToPath(
-  new URL("../specs/Assets/Scripts/DimOSARClient", import.meta.url),
+  new URL("../core/src", import.meta.url),
 );
 
 const OPTIONAL_XR_BLOCKS = [

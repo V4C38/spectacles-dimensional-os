@@ -1,4 +1,4 @@
-import { helloAt } from "../../specs/Tests/fixtures/SessionFixture";
+import { helloAt } from "../../core/tests/support/SessionFixture";
 import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/clientTrackingOrigin";
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";

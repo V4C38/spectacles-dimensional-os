@@ -8,16 +8,31 @@ import hashlib
 import time
 from pathlib import Path
 
-from review import DEFAULT_CLAD, SPECS_ROOT, LensMcp, capture, runtime_error_lines, write_json
+from core_package import compiler_sources
 from ls_awake import KeepAwake
+from review import (
+    DEFAULT_CLAD,
+    SPECS_ROOT,
+    LensMcp,
+    capture,
+    runtime_error_lines,
+    write_json,
+)
 
 FIXTURES = ("ReviewScenario", "ReviewCompileTrigger", "ColorProbe", "InterFontProbe", "CameraFixture",
             "IntegrationScenario", "IntegrationInput", "IntegrationCatalog", "HeaderProbe")
 
 
+def production_sources(source: Path) -> dict[str, bytes]:
+    scripts = {path.relative_to(source).as_posix(): path.read_bytes()
+               for path in (source / "Assets/Scripts").rglob("*.ts")}
+    scripts.update(compiler_sources(source))
+    return scripts
+
+
 async def wait_for_compiler(source: Path, output: Path, timeout: float = 600) -> str:
     """Wait for actual Source output, without creating any review assets there."""
-    paths = list((source / "Assets/Scripts").rglob("*.ts"))
+    paths = production_sources(source)
     logs = Path.home() / "Library/Preferences/Snap/Lens Studio/logs"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -30,9 +45,9 @@ async def wait_for_compiler(source: Path, output: Path, timeout: float = 600) ->
                       text.rfind("Starting watched compilation cycle"),
                       text.rfind("Starting incremental components compilation"))
         failure = text.rfind("TypeScript compilation failed!")
-        matches = paths and all((source / "Cache/TypeScript/Src" / path.relative_to(source)).is_file() and
-                                (source / "Cache/TypeScript/Src" / path.relative_to(source)).read_bytes() == path.read_bytes()
-                                for path in paths)
+        matches = paths and all((source / "Cache/TypeScript/Src" / path).is_file() and
+                                (source / "Cache/TypeScript/Src" / path).read_bytes() == data
+                                for path, data in paths.items())
         if success > max(pending, failure) and matches:
             return next(line for line in reversed(text.splitlines()) if "TypeScript compilation succeeded!" in line)
         await asyncio.sleep(0.5)
@@ -80,11 +95,10 @@ async def audit(args: argparse.Namespace) -> bool:
         screenshot = await capture(mcp, args.output, "source-preview")
     runtime_errors = fresh_runtime_errors(logs, offsets)
     scripts = []
-    for path in sorted((args.source / "Assets/Scripts").rglob("*.ts")):
-        relative = path.relative_to(args.source)
+    for relative, data in sorted(production_sources(args.source).items()):
         cached = args.source / "Cache/TypeScript/Src" / relative
-        scripts.append({"path": str(relative), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                        "compilerMatches": cached.is_file() and cached.read_bytes() == path.read_bytes()})
+        scripts.append({"path": str(relative), "sha256": hashlib.sha256(data).hexdigest(),
+                        "compilerMatches": cached.is_file() and cached.read_bytes() == data})
     fixture_hosts = [name for name in FIXTURES if name + "Host" in state["sceneNames"]]
     logs = Path.home() / "Library/Preferences/Snap/Lens Studio/logs"
     latest = max(logs.glob("LensStudioLog-*.txt"), key=lambda path: path.stat().st_mtime)

@@ -247,7 +247,7 @@ SPECS and WebXR implement the protocol and provide the UI.
 
 ### ClientCore
 
-[ClientCore](clients/specs/Assets/Scripts/DimOSARClient/) is the shared TypeScript layer: protocol, sessions, localization, navigation and manipulation. Each client adds only its own input and rendering.
+[ClientCore](clients/core/src/) is the shared TypeScript layer: protocol, sessions, localization, navigation and manipulation. WebXR imports its source directly; SPECS uses the exported `DimOSARClient.lspkg`. Each client adds only its own input and rendering.
 
 > ⓘ **Colocated Multiplayer.** Several clients can be connected at the same time, including a mix of SPECS and WebXR. They share goals, routes and arm targets in the robot frame.
 

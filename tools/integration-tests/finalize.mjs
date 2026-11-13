@@ -1,7 +1,7 @@
 import { resolve, join, basename } from "node:path";
 import { writeFile, mkdir, readFile, rm } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
-import { makeVisualReviews } from "../visual-review.mjs";
+import { makeVisualReviews } from "./visual-review.mjs";
 import { goldenChapters } from "./catalog.mjs";
 import { documents, finishRun, sourceIdentity, publishGoldenVideo } from "./artifacts.mjs";
 

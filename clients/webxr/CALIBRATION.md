@@ -92,51 +92,13 @@ requires a matching physical camera label, device ID and stream resolution/rate 
 capture. Keep the observations and physical acceptance results with the calibration record.
 Device IDs are origin-scoped; they are selected after permission and verified for each stream.
 
-## Physical acceptance record
+## Device validation
 
-No devices were connected during this implementation (`adb devices` returned an empty list).
-The following remain pending for **both** models; do not claim device parity until recorded.
+Retain calibration observations and device-specific records with accepted profiles.
+Use the procedures above when recalibrating.
 
-| Model | OS / browser | Profile and held-out errors | Physical flow |
-| --- | --- | --- | --- |
-| Quest 3 | Pending | Device profile enabled | Pending |
-| Quest 3S | Pending | Device profile enabled | Pending |
-
-For each model, test with the mounted Go2 marker: connection and alignment, Skip, measured alignment
-across viewpoints, drag navigation and arrival heading, server relocalization after 0.75 m,
-manual realignment, palm and controller menus, emergency stop, joystick release, agent voice
-or typed keyboard fallback, permission denial, XR suspension, reference reset, exit and reentry.
-Record measured maximum errors, OS/browser versions, and any camera/speech restrictions.
-The 0.75 m trigger and geometric gate remain owned by ARModule/ClientCore.
-
-## Automated validation (2026-10-19)
-
-`./launcher/scripts/run-ci.sh` passed: ARModule lint and mypy, 299 Python tests
-(2 hardware blueprint tests skipped), 64 launcher tests, 268 Specs/ClientCore tests,
-62 WebXR tests, 3 offline calibration regression tests, 2 browser flows with controller/hand
-input through published-profile capture and automatic setup completion, and the production build.
-The calibration recovery data is synthetic and does not qualify either device for release.
-The local toolchain was Node v22.22.1 and Python 3.12.13. Device/browser versions remain
-pending in the physical acceptance table. The detailed local run log is `/tmp/webxr-resumed-ci.log`.
-
-
-## VPS timing and registration acceptance
-
-The async backend and capture/result lifecycle checks do not establish physical
-accuracy. For each Quest model, retain JPEG dimensions, camera label, profile,
-browser/OS version, exposure/presentation timestamp provenance, and surveyed origin
-errors with the acceptance record. Measure decode/transport delay and camera/odometry skew against the
-[protocol timestamp-pairing rules](../../dimos-ar/PROTOCOL.md#localization-qualification-and-coordinate-correction).
-Moving robot-camera captures require surrounding odometry samples at most 200 ms
-apart; no stillness or speed gate substitutes for timestamp correspondence.
-Test robot translation and rotation, camera stalls, delayed responses, reference resets,
-and emergency stop during a deliberately delayed VPS query.
-
-Repeat stationary obstacle observations across robot movement before changing the
-odometry correction. `dimos-ar/tools/check_go2_registration.py` rejects the proposed
-robot-relative per-packet translation on the existing Go2 voxel-map recording.
-The integrated 1.25 heuristic is a fixed XY mapping shared by robot pose, paths
-and LiDAR, with native range calculations preserved separately. A physically
-qualified correction still needs scan provenance or validated vendor-map registration;
-the heuristic and published headset profiles are not that proof.
-No runtime calibration approval screen is introduced by these backend checks.
+For future recalibration, record the headset OS/browser, camera label, JPEG dimensions,
+profile, timestamp provenance, and measured origin/heading errors. Exercise alignment
+across viewpoints, relocalization, permission denial, XR suspension, reference reset,
+and exit/reentry. VPS capture pairing follows the
+[protocol timestamp rules](../../dimos-ar/PROTOCOL.md#localization-qualification-and-coordinate-correction).

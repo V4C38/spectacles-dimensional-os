@@ -280,6 +280,7 @@ test("latest client golden videos replace atomically after complete verification
     const selectedRoot = join(repositoryRoot, "clients/specs"), workspaceRoot = join(parent, "tested workspace");
     await mkdir(workspaceRoot);
     await cp(join(selectedRoot, "Assets"), join(workspaceRoot, "Assets"), { recursive: true });
+    await cp(join(selectedRoot, "Packages"), join(workspaceRoot, "Packages"), { recursive: true });
     for (const file of (await readdir(selectedRoot)).filter(name => name.endsWith(".esproj")))
       await cp(join(selectedRoot, file), join(workspaceRoot, file));
     const selectedFiles = nativeProjectFiles(selectedRoot);
@@ -292,6 +293,11 @@ test("latest client golden videos replace atomically after complete verification
     assert.equal(await readFile(join(output, "specs_golden-path.mp4"), "utf8"), "verified complete native golden");
     assert.equal(await readFile(join(output, "webxr_golden-path.mp4"), "utf8"), "verified new webxr");
     // A handoff/encoding-time change invalidates an earlier passing source check.
+    const changedPackage = join(workspaceRoot, "Packages", "unreviewed.lspkg");
+    await writeFile(changedPackage, "package changed after verification");
+    assert.equal(await publishGoldenVideo(run, "specs", output), null);
+    assert.equal(await readFile(join(output, "specs_golden-path.mp4"), "utf8"), "verified complete native golden");
+    await rm(changedPackage);
     await writeFile(join(run, "results.json"), JSON.stringify({ ...native, source: { ...native.source, fingerprint: "source-before-handoff" } }));
     await writeFile(join(run, "golden-path.mp4"), "stale source video");
     await assert.rejects(publishGoldenVideo(run, "specs", output), /Source changed before golden publication/);

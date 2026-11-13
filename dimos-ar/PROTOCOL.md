@@ -1378,10 +1378,9 @@ A robot clock/frame reset retires pending work and connections; AR navigation
 requires restarting DimOS mapping with a fresh map.
 
 The fixed XY mapping and coordinate-model restart rules are defined under
-[odometry scale correction](#odometry-scale-correction). The
-[compatibility notes](../docs/dimos-compatibility.md#recorded-go2-registration-check)
-retain the measured registration check and limitations. Physical Quest calibration
-and acceptance remain in [CALIBRATION.md](../clients/webxr/CALIBRATION.md).
+[odometry scale correction](#odometry-scale-correction). The read-only
+`tools/check_go2_registration.py` utility checks recorded geometry. Headset camera
+calibration procedures are in [CALIBRATION.md](../clients/webxr/CALIBRATION.md).
 
 ### Odometry reference continuity
 

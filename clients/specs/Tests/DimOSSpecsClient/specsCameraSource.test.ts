@@ -7,7 +7,7 @@ import {
   specsCameraOpticalPoseToTracking,
   type PoseSample,
 } from "../../Assets/Scripts/DimOSSpecsClient/localization/SpecsCameraSource";
-import { rotateVecByQuat } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingTransforms";
+import { rotateVecByQuat } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingTransforms";
 
 describe("camera optical pose", () => {
   it("maps optical right/down/forward to tracking right/down/forward for a level Lens camera", () => {

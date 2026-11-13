@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { rotateVecByQuat } from "@dimos-ar-client/localization/clientTrackingTransforms";
 import {
-  webxrCameraToOpticalPose,
+  webxrOpticalToClientTrackingPose,
   webxrToClientTrackingPoint,
   webxrToClientTrackingPose,
 } from "../src/utilities/WebXRCoordinates";
@@ -13,10 +13,10 @@ describe("WebXRCoordinates", () => {
     expect(webxrToClientTrackingPoint([0, 1, 0])).toEqual([0, 0, 1]);
   });
 
-  it("sends Three.js camera forward into optical +Z / protocol +X", () => {
-    const identity = webxrCameraToOpticalPose({
+  it("maps an explicit optical camera forward into protocol +X", () => {
+    const identity = webxrOpticalToClientTrackingPose({
       position: [0, 0, 0],
-      orientation: [0, 0, 0, 1],
+      orientation: [1, 0, 0, 0],
     });
     const opticalForward = rotateVecByQuat(identity.orientation, [0, 0, 1]);
     expect(opticalForward[0]).toBeCloseTo(1);
@@ -45,7 +45,7 @@ it("preserves generic identity rotations while keeping optical right/down/forwar
   const object = webxrToClientTrackingPose({ position: [0, 0, 0], orientation: [0, 0, 0, 1] });
   expect(object.orientation).toEqual([0, 0, 0, 1]);
   expect(clientTrackingToWebxrPose(object).orientation).toEqual([0, 0, 0, 1]);
-  const optical = webxrCameraToOpticalPose({ position: [0, 0, 0], orientation: [0, 0, 0, 1] });
+  const optical = webxrOpticalToClientTrackingPose({ position: [0, 0, 0], orientation: [1, 0, 0, 0] });
   const axes = [[1, 0, 0], [0, 1, 0], [0, 0, 1]] as [number, number, number][];
   const expected = [[0, -1, 0], [0, 0, -1], [1, 0, 0]];
   axes.forEach((axis, i) => rotateVecByQuat(optical.orientation, axis).forEach((value, j) => expect(value).toBeCloseTo(expected[i][j])));

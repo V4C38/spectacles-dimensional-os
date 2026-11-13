@@ -843,8 +843,6 @@ def test_delayed_follow_evaluation_cannot_clear_reacquired_gesture():
         worker.join(3)
 
 
-
-
 def test_successful_recheck_unpauses_the_same_previously_rejected_target():
     module = runtime()
     module.adapter.ready = True

@@ -1,5 +1,5 @@
 import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
-import { odomToClientTrackingPose } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingTransforms";
+import { odomToClientTrackingPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingTransforms";
 import { emitReviewEvent, findProductionRoot } from "./IntegrationHost";
 import { clientTrackingToSpecsPose } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
 import { ARM_FIXTURE } from "./IntegrationArmFixture";
@@ -8,7 +8,7 @@ import { IntegrationV2Fixture } from "./IntegrationV2Fixture";
 import { InteractorInputType } from "SpectaclesInteractionKit.lspkg/Core/Interactor/Interactor";
 import { INTEGRATION_CATALOG as CATALOG } from "./IntegrationCatalog";
 import { WorldMeshRenderer } from "../../Assets/Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer";
-import { ARM_VISUAL_STYLE } from "../../Assets/Scripts/DimOSARClient/manipulation/ManipulationVisuals";
+import { ARM_VISUAL_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationVisuals";
 
 @component
 export class ReviewScenario extends BaseScriptComponent {

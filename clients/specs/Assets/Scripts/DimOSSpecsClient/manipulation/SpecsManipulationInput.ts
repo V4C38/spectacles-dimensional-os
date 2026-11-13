@@ -1,8 +1,8 @@
 import { CursorControllerProvider } from "SpectaclesInteractionKit.lspkg/Providers/CursorControllerProvider/CursorControllerProvider";
 import { InteractionManager } from "SpectaclesInteractionKit.lspkg/Core/InteractionManager/InteractionManager";
 import { InteractorInputType } from "SpectaclesInteractionKit.lspkg/Core/Interactor/Interactor";
-import { ManipulationInputCapture, ManipulationPressEdges } from "../../DimOSARClient/manipulation/ManipulationInputCapture";
-import type { ManipulationPose } from "../../DimOSARClient/manipulation/ManipulationTypes";
+import { ManipulationInputCapture, ManipulationPressEdges } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationInputCapture";
+import type { ManipulationPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationTypes";
 import { specsToClientTrackingPose } from "../utilities/SpecsCoordinates";
 
 export interface ManipulationInputPort {

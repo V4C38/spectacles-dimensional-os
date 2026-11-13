@@ -1,6 +1,6 @@
-import { layoutPanelRows, type PanelProfile, type LayoutRow } from "../../DimOSARClient/presentation/ControlPanelPresentation";
-export type { PanelProfile, LayoutRow } from "../../DimOSARClient/presentation/ControlPanelPresentation";
-import { CONTROL_PANEL_SCALE } from "../../DimOSARClient/presentation/ControlPanelPresentation";
+import { layoutPanelRows, type PanelProfile, type LayoutRow } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
+export type { PanelProfile, LayoutRow } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
+import { CONTROL_PANEL_SCALE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
 
 /** Scale each native frame and its descendants together. */
 export const SETUP_PANEL_SCALE = CONTROL_PANEL_SCALE.setup * 0.75;

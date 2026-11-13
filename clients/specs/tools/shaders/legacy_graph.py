@@ -96,10 +96,6 @@ def dumps(tree: dict[str, Any]) -> bytes:
     return u32(MAGIC) + u32(len(tree)) + entries(tree)
 
 
-def save(path: Path, tree: dict[str, Any]) -> None:
-    path.write_bytes(dumps(tree))
-
-
 def string(value: str) -> Leaf:
     return Leaf(5, value.encode("utf-8") + b"\0")
 

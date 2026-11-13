@@ -2,9 +2,9 @@ import type { RoundedRectangle } from "SpectaclesUIKit.lspkg/Scripts/Visuals/Rou
 import {
 composePlaceArMarker,
 type PlaceArMarkerArgs,
-} from "../../DimOSARClient/agent/agentSkills";
-import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
-import type { Vec3 } from "../../DimOSARClient/websocket/protocolTypes";
+} from "DimOSARClient.lspkg/Scripts/DimOSARClient/agent/agentSkills";
+import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingOrigin";
+import type { Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes";
 import { clientTrackingToSpecsPoint } from "../utilities/SpecsCoordinates";
 import { COLOR_WHITE,createRoundedSurface,createText } from "./UIKit";
 import { WorldMeshRenderer,sphereMesh } from "./WorldMeshRenderer";

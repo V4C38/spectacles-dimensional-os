@@ -1,5 +1,5 @@
-import { strokeJoints2D, STROKE_JOIN_SEGMENTS, WORLD_DASH_STYLE } from "../../DimOSARClient/presentation/WorldVisualStyle";
-import type { Vec3 } from "../../DimOSARClient/websocket/protocolTypes";
+import { strokeJoints2D, STROKE_JOIN_SEGMENTS, WORLD_DASH_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldVisualStyle";
+import type { Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes";
 
 export const WORLD_COLOR_MATERIAL = requireAsset("../../../Materials/WorldVertexColor.mat") as Material;
 export const WORLD_STROKE_MATERIAL = requireAsset("../../../Materials/AdaptiveStroke.mat") as Material;

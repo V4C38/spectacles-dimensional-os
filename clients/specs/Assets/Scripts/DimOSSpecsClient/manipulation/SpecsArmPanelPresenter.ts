@@ -1,5 +1,5 @@
 import { Frame } from "SpectaclesUIKit.lspkg/Scripts/Components/Frame/Frame";
-import { ARM_PANEL_STYLE, clampArmPanelScale } from "../../DimOSARClient/presentation/PanelFrameStyle";
+import { ARM_PANEL_STYLE, clampArmPanelScale } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/PanelFrameStyle";
 import { configureControlPanelFrame, isFrameInitialized } from "../presentation/UIKit";
 
 /** Native Frame owns manipulation; this presenter owns attached versus pinned placement. */

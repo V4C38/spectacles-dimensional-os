@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { EndEffectorStatusPill } from "../../Assets/Scripts/DimOSSpecsClient/manipulation/EndEffectorStatusPill";
 import { ViewerNotificationPresenter } from "../../Assets/Scripts/DimOSSpecsClient/presentation/ViewerNotificationPresenter";
-import { EndEffectorStatus } from "../../Assets/Scripts/DimOSARClient/manipulation/EndEffectorStatus";
+import { EndEffectorStatus } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/EndEffectorStatus";
 
 it("anchors the Specs status beside the EE and fades its plate, text, and animated glyph together", () => {
   const transform = { setWorldPosition: vi.fn(), setWorldRotation: vi.fn(), setLocalScale: vi.fn() };

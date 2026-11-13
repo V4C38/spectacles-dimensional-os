@@ -1,5 +1,17 @@
 import { defineConfig } from "vitest/config";
 import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+
+const tools = fileURLToPath(new URL("../tools/", import.meta.url));
+execFileSync("python3", [join(tools, "core_package.py"), "check"], { stdio: "inherit" });
+const archive = fileURLToPath(new URL("../Packages/DimOSARClient.lspkg", import.meta.url));
+const digest = createHash("sha256").update(readFileSync(archive)).digest("hex");
+const packagedCore = fileURLToPath(new URL("../../../Review Data/unit/specs/package-source/" + digest, import.meta.url));
+execFileSync("python3", [join(tools, "core_package.py"), "extract", "--destination", packagedCore], { stdio: "inherit" });
+const rawCore = fileURLToPath(new URL("../../core/src/", import.meta.url));
 
 const uikitMock = fileURLToPath(new URL("./mocks/UIKit.ts", import.meta.url));
 const animateMock = fileURLToPath(new URL("./mocks/animate.ts", import.meta.url));
@@ -33,6 +45,27 @@ function isRoundButtonImport(source: string): boolean {
 
 export default defineConfig({
   plugins: [
+    {
+      name: "packaged-core",
+      enforce: "pre",
+      resolveId(source, importer) {
+        if (source.startsWith("DimOSARClient.lspkg/Scripts/DimOSARClient/")) {
+          const target = join(packagedCore, source.slice("DimOSARClient.lspkg/Scripts/DimOSARClient/".length));
+          return target.endsWith(".ts") ? target : target + ".ts";
+        }
+        // Shared fixtures use source-relative imports in Core's own test job.
+        // Specs must exercise the installed package even through those fixtures.
+        if (importer && source.startsWith(".")) {
+          const target = resolve(dirname(importer), source);
+          const path = relative(rawCore, target);
+          if (path !== ".." && !path.startsWith(".." + sep) && !path.startsWith(sep)) {
+            const packaged = join(packagedCore, path);
+            return packaged.endsWith(".ts") ? packaged : packaged + ".ts";
+          }
+        }
+        return null;
+      },
+    },
     {
       name: "lens-text-input-module",
       transform(code, id) {
@@ -91,14 +124,14 @@ export default defineConfig({
     globals: true,
     reporters: ["default", "json"],
     outputFile: { json: fileURLToPath(new URL("../../../Review Data/unit/specs/results.json", import.meta.url)) },
-    include: ["DimOSARClient/**/*.test.ts", "DimOSSpecsClient/**/*.test.ts", "naming.test.ts"],
+    include: ["DimOSSpecsClient/**/*.test.ts"],
     setupFiles: ["./setup/lens-globals.ts"],
     coverage: {
       provider: "v8",
       reportsDirectory: fileURLToPath(new URL("../../../Review Data/coverage/specs", import.meta.url)),
       allowExternal: true,
       include: [
-        "../Assets/Scripts/DimOSARClient/**/*.ts",
+        packagedCore + "/**/*.ts",
         "../Assets/Scripts/DimOSSpecsClient/**/*.ts",
       ],
     },

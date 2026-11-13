@@ -1,10 +1,10 @@
-import { odomToClientTrackingPose,rotateVecByQuat } from "../../DimOSARClient/localization/clientTrackingTransforms";
-import { getRobotActivityState,robotTitleText,type RobotMarkerApplyInput } from "../../DimOSARClient/robot/RobotMarkerState";
-import type { ARModuleSessionState } from "../../DimOSARClient/websocket/arModuleSession";
-import type { Quat,RobotDescription,Vec3 } from "../../DimOSARClient/websocket/protocolTypes";
-import { sessionLinkStatus } from "../../DimOSARClient/websocket/sessionLinkStatus";
+import { odomToClientTrackingPose,rotateVecByQuat } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingTransforms";
+import { getRobotActivityState,robotTitleText,type RobotMarkerApplyInput } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotMarkerState";
+import type { ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/arModuleSession";
+import type { Quat,RobotDescription,Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes";
+import { sessionLinkStatus } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/sessionLinkStatus";
 import { RuntimePoseSmoothing } from "../utilities/RuntimePoseSmoothing";
-import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
+import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingOrigin";
 import { clientTrackingToSpecsPoint,clientTrackingToSpecsPose } from "../utilities/SpecsCoordinates";
 import { yawRotationFromPlanarDirection } from "../utilities/SpecsUtilities";
 import type { AppState } from "./AppState";

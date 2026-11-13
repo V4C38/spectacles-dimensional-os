@@ -107,6 +107,28 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+  client-core-tests:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: clients/core
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - name: Upload Core test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-test-reports
+          path: Review Data/unit/core/
+          retention-days: 14
+          if-no-files-found: warn
+
   client-specs-tests:
     runs-on: ubuntu-24.04
     defaults:
@@ -114,9 +136,9 @@ jobs:
         working-directory: clients/specs/Tests
     steps:
       - uses: actions/checkout@v6
-      - name: Fetch native shader graphs for codec tests
+      - name: Fetch Core package and native shader graphs
         working-directory: .
-        run: git lfs pull --include="clients/specs/Assets/Materials/Shaders/*.ss_graph" --exclude=""
+        run: git lfs pull --include="clients/specs/Assets/Materials/Shaders/*.ss_graph,clients/specs/Packages/DimOSARClient.lspkg" --exclude=""
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -161,7 +183,7 @@ jobs:
           mkdir -p "../../Review Data/unit/integration-tooling"
           node --test --test-reporter=spec --test-reporter-destination=stdout \
             --test-reporter=junit --test-reporter-destination="../../Review Data/unit/integration-tooling/junit.xml" \
-            ../../tools/integration-tests/integration.test.mjs ../../tools/visual-review.test.mjs
+            ../../tools/integration-tests/integration.test.mjs ../../tools/integration-tests/visual-review.test.mjs
       - run: npm run test:integration
       - name: Upload browser visual reviews
         if: always()

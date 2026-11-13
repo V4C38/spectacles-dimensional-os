@@ -98,8 +98,6 @@ def normalize_ui_mount(raw: dict[str, Any] | None) -> dict[str, Any]:
 
 def normalize_ui_mounts(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     mounts = [normalize_ui_mount(item) for item in (raw or [DEFAULT_MOUNT])]
-    if not mounts:
-        mounts = [normalize_ui_mount(DEFAULT_MOUNT)]
     ids = [mount["marker_id"] for mount in mounts]
     if len(ids) != len(set(ids)):
         raise ValueError("fiducial marker IDs must be unique")

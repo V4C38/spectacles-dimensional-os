@@ -17,7 +17,7 @@ async def test_marker_success_preserves_metric_alignment() -> None:
             confidence=0.8,
         )
     )
-    coordinator = _coordinator(providers=["fiducial_marker"], marker=marker)
+    coordinator = _coordinator(marker=marker)
     coordinator._clock = lambda: 100.0
     outcome = await coordinator.run([_observation(ts_server=100.0)])
 
@@ -26,16 +26,8 @@ async def test_marker_success_preserves_metric_alignment() -> None:
     assert outcome.result.ts_server == 100.0
 
 
-
-
-
-
-
-
-
-
 def test_result_in_odom_rejects_non_odom_frame() -> None:
-    coordinator = _coordinator(providers=["fiducial_marker"])
+    coordinator = _coordinator()
     with pytest.raises(ValueError, match="odom"):
         coordinator._result_in_odom(
             LocalizedPose(pose=Pose(0.0, 0.0, 0.0), frame_id="map", confidence=1.0),
@@ -61,7 +53,7 @@ async def test_marker_snapshot_is_created_on_owner_loop_before_worker_dispatch()
         def localize(self, observations):
             raise AssertionError("the live provider must not run on the worker")
 
-    coordinator = _coordinator(providers=["fiducial_marker"])
+    coordinator = _coordinator()
     coordinator._marker = Marker()
     coordinator._clock = lambda: 10.0
     try:

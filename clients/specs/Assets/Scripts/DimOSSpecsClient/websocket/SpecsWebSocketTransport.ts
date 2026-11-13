@@ -1,11 +1,11 @@
-import type { WebSocketTransportHandlers as SpecsWebSocketTransportHandlers } from "../../DimOSARClient/websocket/hostPorts";
-import { AR_MODULE_CLIENT_CONFIG,type WebSocketTransport } from "../../DimOSARClient/websocket/hostPorts";
+import type { WebSocketTransportHandlers as SpecsWebSocketTransportHandlers } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/hostPorts";
+import { AR_MODULE_CLIENT_CONFIG,type WebSocketTransport } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/hostPorts";
 
 const WS_CONNECTING = 0;
 const WS_OPEN = 1;
 const WATCHDOG_INTERVAL_S = 0.2;
 
-export type { WebSocketTransportHandlers as SpecsWebSocketTransportHandlers } from "../../DimOSARClient/websocket/hostPorts";
+export type { WebSocketTransportHandlers as SpecsWebSocketTransportHandlers } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/hostPorts";
 
 const RECEIVE_RECORD_LIMIT = 256;
 const RECEIVE_BYTE_LIMIT = 4 * 1024 * 1024;

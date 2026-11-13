@@ -1,7 +1,7 @@
 import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
 // Hardware inputs are deterministic fixtures. Production state owners, SIK/SUK controls and renderers run unchanged.
-import { availableCapabilityLabels } from "../Scripts/DimOSARClient/presentation/ControlPanelPresentation";
-import { FLOOR_MARKER_STYLE } from "../Scripts/DimOSARClient/presentation/WorldVisualStyle";
+import { availableCapabilityLabels } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
+import { FLOOR_MARKER_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldVisualStyle";
 import { RUNTIME_LAYOUTS,RUNTIME_PANEL_SCALE,SETUP_LAYOUTS } from "../Scripts/DimOSSpecsClient/presentation/PanelLayout";
 import { getFrameComponent } from "../Scripts/DimOSSpecsClient/presentation/UIKit";
 import { WristMenuController } from "../Scripts/DimOSSpecsClient/presentation/WristMenuController";

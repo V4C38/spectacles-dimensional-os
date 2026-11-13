@@ -1,8 +1,8 @@
-import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
-import { odomToClientTrackingYawPose } from "../../DimOSARClient/localization/clientTrackingTransforms";
-import { anchorPathStart,clipPathToCircles,routeRibbon,filletPathCorners as sharedFilletPathCorners,rangePathY as sharedRangePathY } from "../../DimOSARClient/presentation/RoutePathGeometry";
-import { ROUTE_STYLE } from "../../DimOSARClient/presentation/WorldVisualStyle";
-import type { NavGoal } from "../../DimOSARClient/websocket/protocolTypes";
+import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingOrigin";
+import { odomToClientTrackingYawPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingTransforms";
+import { anchorPathStart,clipPathToCircles,routeRibbon,filletPathCorners as sharedFilletPathCorners,rangePathY as sharedRangePathY } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/RoutePathGeometry";
+import { ROUTE_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldVisualStyle";
+import type { NavGoal } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes";
 import { AdaptiveStrokeRenderer,WorldMeshRenderer } from "../presentation/WorldMeshRenderer";
 import { clientTrackingToSpecsYawPose } from "../utilities/SpecsCoordinates";
 
@@ -11,7 +11,7 @@ export type RouteCircle = { center: [number, number, number]; radius: number };
 export class NavigationRouteRenderer {
   private readonly dots: AdaptiveStrokeRenderer;
   private readonly ribbon: WorldMeshRenderer;
-  private lastPath: import("../../DimOSARClient/websocket/protocolTypes").YawPose[] | null = null;
+  private lastPath: import("DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes").YawPose[] | null = null;
   private lastOrigin: ClientTrackingOrigin | null = null;
   private lastParameters: number[] = [];
   private lastSolid = false;
@@ -28,7 +28,7 @@ export class NavigationRouteRenderer {
 
   apply(input: {
     nav_goal?: NavGoal | null;
-    path?: import("../../DimOSARClient/websocket/protocolTypes").YawPose[] | null;
+    path?: import("DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes").YawPose[] | null;
     origin: ClientTrackingOrigin | null;
     pathVisible?: boolean;
     floorY?: number | null;

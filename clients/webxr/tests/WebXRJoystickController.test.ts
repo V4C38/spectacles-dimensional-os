@@ -1,4 +1,4 @@
-import { immediateAuthority } from "../../specs/Tests/fixtures/ImmediateAuthority";
+import { immediateAuthority } from "../../core/tests/support/ImmediateAuthority";
 import { describe, expect, it, vi } from "vitest";
 import { filterJoystick, isMenuButtonPressed, WebXRJoystickController } from "../src/navigation/WebXRJoystickController";
 

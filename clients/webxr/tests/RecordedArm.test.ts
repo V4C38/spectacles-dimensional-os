@@ -4,7 +4,7 @@ import * as THREE from "three";
 import { expect, it, vi } from "vitest";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { WebXRManipulationController } from "../src/manipulation/WebXRManipulationController";
-import { immediateAuthority } from "../../specs/Tests/fixtures/ImmediateAuthority";
+import { immediateAuthority } from "../../core/tests/support/ImmediateAuthority";
 import type { ManipulationState } from "@dimos-ar-client/manipulation/ManipulationTypes";
 
 it("keeps the recorded model at measured EOF poses while stale feedback disables commands", () => {

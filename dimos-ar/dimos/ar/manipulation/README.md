@@ -11,8 +11,8 @@ agentic manipulation and mobile manipulation are outside this interface.
 Use a selected DimOS environment with execute-by-plan-ID and nonmoving IK APIs.
 Install its planning extra together with `dimos-ar[manipulation,dev]`; the launcher
 checks planner construction without contacting hardware. A successful import alone
-does not establish readiness. The [compatibility notes](../../../../docs/dimos-compatibility.md)
-own the pinned source/dependency requirements and collision-model limitations.
+does not establish readiness. CI pins installed source through `.dimos-revision`;
+run the official mock contract before changing the supported baseline.
 Import installed DimOS; do not patch upstream source.
 
 Select an OpenYAM profile and WebXR or Specs in the launcher. Use Simulated for
@@ -187,8 +187,9 @@ control/completion. Keep numeric style values in these owners rather than prose 
 The arm panel is independently movable/scalable from its badge. Pin restores the
 anchored pose/default scale. Specs `SpecsArmPanelPresenter` owns its native Frame,
 attached/pinned state and arm-base anchoring; missing base pose hides it. Controls
-remain under Frame.content. See the architecture's
-[Frame construction invariant](../../../../docs/architecture.md#lens-architecture-and-scene-wiring).
+remain under Frame.content. Initialize the Frame on an enabled host before hiding it;
+register presenter callbacks only after content and configuration exist, because
+initialization can emit scaling/translation synchronously.
 
 ## Protection and continuity
 
@@ -198,7 +199,8 @@ poses in the buffer can recover inward. Recovery trajectories enter monotonicall
 and cannot leave the buffer later. Safe-zero resolves against these command limits.
 Collision geometry derived from missing native collision assets preserves exact visual
 origins/scales; only opposing finger self-contact is excepted. Environment collisions
-remain checked. See [compatibility](../../../../docs/dimos-compatibility.md#openyam-collision-geometry).
+remain checked. The pinned OpenYAM model lacks collision elements, so the adapter
+derives them from canonical visuals while preserving existing geometry.
 
 Physical writes remain bounded. A stationary tracking error above five degrees derates
 after 200 ms; tracking error alone does not latch Stop. Thermal defaults derate at
@@ -237,10 +239,3 @@ control lease failure. Parallel probes also require a private discovery bus:
 ```sh
 dimos --simulation=mock --zenoh-scout-addr=224.0.0.225:17446 run dimos-ar.openyam-ar-planner --armodule.port=8799 --armodule.ip-relay-url=null
 ```
-
-The maintained mock timing benchmark currently fails its 10% arrival-parity assertion;
-see [measurements](../../../../docs/dimos-compatibility.md#mock-arm-arrival-timing).
-No tuning or deadlines are loosened by documentation cleanup. Physical registration,
-CAN, stopping distance/latency, hand input, stereo, depth and sustained performance
-remain [hardware acceptance](../../../../docs/hardware-validation.md) work. Software
-fixtures and mock passes do not establish those outcomes.

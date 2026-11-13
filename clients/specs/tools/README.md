@@ -4,8 +4,8 @@ The runner uses the shared [integration catalog](../../../tools/integration-test
 and runs the production Lens in a disposable Lens Studio 5.15 project. Native
 SIK/SUK controls, ClientCore state and production renderers remain active;
 transport, camera capture, recognition and tracked input poses are deterministic
-fixtures. Physical hand tracking, recognition quality, hardware audio playback
-and on-device performance still need Spectacles checks.
+fixtures. These suites verify editor behavior; physical tracking, recognition,
+audio playback and device performance belong to hardware validation.
 
 Install the official Python MCP SDK into your chosen tools environment and activate it. Set `DIMOS_CLAD_ROOT` to your CLAD installation root (default `~/.local/share/ls515-clad`), containing the app and `ls515-clad/state/mcp.json`, or pass `--app` and `--mcp-config` explicitly. Start the 5.15 CLAD app and its MCP server, then reserve the MCP session:
 

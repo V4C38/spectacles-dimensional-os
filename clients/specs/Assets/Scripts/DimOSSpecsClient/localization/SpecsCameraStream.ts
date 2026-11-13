@@ -81,10 +81,6 @@ export class SpecsCameraStream {
 
   previewTexture(): Texture | null { return this.latestFrame?.texture ?? null; }
 
-  isRunning(): boolean {
-    return this.running;
-  }
-
   requestNextFrame(): Promise<SpecsCameraStreamFrame> {
     if (!this.running) return Promise.reject(new Error("SpecsCameraStream is not running"));
     return new Promise<SpecsCameraStreamFrame>((resolve, reject) => {

@@ -1,5 +1,5 @@
-import { clientTrackingToOdomPoint } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingTransforms";
-import { beforeEach, expect, it, vi } from "vitest";
+import { clientTrackingToOdomPoint } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingTransforms";
+import { expect, it, vi } from "vitest";
 import { PointCloudRenderer, composeLidarPoint } from "../../Assets/Scripts/DimOSSpecsClient/sensors/PointCloudRenderer";
 
 function harness() {

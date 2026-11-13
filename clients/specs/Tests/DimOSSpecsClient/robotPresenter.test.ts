@@ -5,10 +5,10 @@ import {
   robotFloorOffsetCm,
 } from "../../Assets/Scripts/DimOSSpecsClient/presentation/RobotPresenter";
 import { clientTrackingToSpecsPoint } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
-import type { RobotDescription, Vec3 } from "../../Assets/Scripts/DimOSARClient/websocket/protocolTypes";
+import type { RobotDescription, Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes";
 
 import { AppState } from "../../Assets/Scripts/DimOSSpecsClient/presentation/AppState";
-import type { ARModuleSessionState } from "../../Assets/Scripts/DimOSARClient/websocket/arModuleSession";
+import type { ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/arModuleSession";
 
 const GO2: RobotDescription = {
   odom_scale_correction_factor: 1,

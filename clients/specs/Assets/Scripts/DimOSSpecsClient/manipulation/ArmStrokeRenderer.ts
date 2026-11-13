@@ -1,5 +1,5 @@
 import { AdaptiveStrokeRenderer } from "../presentation/WorldMeshRenderer";
-import type { ManipulationPose } from "../../DimOSARClient/manipulation/ManipulationTypes";
+import type { ManipulationPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationTypes";
 const MATERIAL = requireAsset("../../../Materials/ArmStroke.mat") as Material;
 
 /** Static link-local endpoints; only pose uniforms change during rigid motion. */

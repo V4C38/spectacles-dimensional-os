@@ -1,11 +1,6 @@
 {
   "schemaVersion": 1,
   "video": {
-    "width": 1280,
-    "height": 900,
-    "fps": 30,
-    "minDurationS": 75,
-    "maxDurationS": 105,
     "controllerMinDurationS": 20,
     "controllerMaxDurationS": 30
   },

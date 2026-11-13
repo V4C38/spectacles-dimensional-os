@@ -7,7 +7,8 @@ from pathlib import Path
 
 
 def project_files(root: Path) -> dict[str, str]:
-    paths = list((root / "Assets").rglob("*")) + list(root.glob("*.esproj"))
+    paths = (list((root / "Assets").rglob("*")) + list((root / "Packages").rglob("*"))
+             + list(root.glob("*.esproj")))
     return {
         path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(paths)

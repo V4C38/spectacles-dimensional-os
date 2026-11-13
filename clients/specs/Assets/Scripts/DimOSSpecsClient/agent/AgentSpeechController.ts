@@ -1,6 +1,6 @@
-import { AgentDraftSession, type AgentDraftSnapshot, type RecognitionPort, type SynthesisPort } from "../../DimOSARClient/agent/AgentDraftSession";
-import { requestUserMessage } from "../../DimOSARClient/agent/userMessageRequest";
-import type { ARModuleSession } from "../../DimOSARClient/websocket/arModuleSession";
+import { AgentDraftSession, type AgentDraftSnapshot, type RecognitionPort, type SynthesisPort } from "DimOSARClient.lspkg/Scripts/DimOSARClient/agent/AgentDraftSession";
+import { requestUserMessage } from "DimOSARClient.lspkg/Scripts/DimOSARClient/agent/userMessageRequest";
+import type { ARModuleSession } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/arModuleSession";
 import type { OperatingMode } from "../presentation/AppState";
 
 export interface AgentSpeechControllerDeps {

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 from types import SimpleNamespace
 from weakref import WeakKeyDictionary
 
@@ -36,14 +35,9 @@ class _FixedLocalizer:
         self.result = result
         self.calls: list[list[Observation]] = []
 
-    async def localize(self, observations: Sequence[Observation]) -> LocalizedPose | None:
-        self.calls.append(list(observations))
-        return self.result
-
 
 def _coordinator(
     *,
-    providers: list[str],
     marker: _FixedLocalizer | None = None,
 ) -> LocalizationCoordinator:
     class Marker:

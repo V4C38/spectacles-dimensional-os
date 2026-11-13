@@ -1,8 +1,8 @@
 import type { CapsuleButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/CapsuleButton";
 import type { StateName } from "SpectaclesUIKit.lspkg/Scripts/Components/Element";
 import { Slider } from "SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider";
-import { CONTROL_PANEL_LAYOUT,CONTROL_PANEL_SECTION,CONTROL_PANEL_COPY as COPY,controlPanelTab,robotBadgeText,sensorStatusText } from "../../DimOSARClient/presentation/ControlPanelPresentation";
-import type { LidarDisplayMode } from "../../DimOSARClient/sensors/lidarSettings";
+import { CONTROL_PANEL_LAYOUT,CONTROL_PANEL_SECTION,CONTROL_PANEL_COPY as COPY,controlPanelTab,robotBadgeText,sensorStatusText } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
+import type { LidarDisplayMode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/sensors/lidarSettings";
 import type { OperatingMode } from "./AppState";
 import { NativeTextField } from "./NativeTextField";
 import { PanelHeightController } from "./PanelHeightController";
@@ -278,10 +278,6 @@ export class MainMenuView {
   setStatus(text: string, color: vec4): void { this.status.text = text; this.status.textFill.color = color; }
   setOperatingMode(mode: OperatingMode): void { this.operatingMode = mode; this.updateLayout(); this.modeButtons.forEach((b, i) => setButtonSelected(b, i === (mode === "manual" ? 0 : 1))); }
   setDebugModeToggle(enabled: boolean): void { this.debugEnabled = enabled; setButtonSelected(this.debug.button, enabled); this.debug.labelText.text = `Debug · ${enabled ? "On" : "Off"}`; }
-  setLidarModeDisplay(mode: LidarDisplayMode): void { this.lidarButtons.forEach((b, i) => setButtonSelected(b, i === ["off", "obstacles", "full"].indexOf(mode))); }
-  setLidarModeAvailability(available: boolean, mode: LidarDisplayMode): void { this.setLidarModeDisplay(mode); this.lidarButtons.forEach(b => { b.inactive = !available; }); }
-  setEmergencyStopAvailability(available: boolean, _reason?: string | null): void { this.stop.inactive = !available; }
-  setAgentModeAvailability(available: boolean): void { this.modeButtons[1].inactive = !available; }
   setFrameFollowEnabled(enabled: boolean): void { setPanelFollowing(this.panel, enabled, RUNTIME_PANEL_SCALE); }
   setFrameAllowTranslation(enabled: boolean): void { const frame = getFrameComponent(this.panel); if (frame) frame.allowTranslation = enabled; }
   applySpectaclesFrameMotion(): void { this.setFrameAllowTranslation(true); this.setFrameFollowEnabled(false); }

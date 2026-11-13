@@ -36,8 +36,6 @@
           <details class="card config-card ip-card" id="ipCard">
             <summary class="config-summary ip-summary">
               <span class="ip-summary-collapsed">
-                <span class="label" id="hostIpSummaryLabel">Host IP</span>
-                <span class="value mono" id="hostIpSummary">—</span>
                 <span class="label" id="connectionSummaryLabel">PIN</span>
                 <span class="value mono" id="pinSummary">—</span>
                 <span class="label">URL</span>
@@ -146,7 +144,7 @@
               <div class="config-body"><p class="hint">Find Go2 robots on your local network, then select one under Connected robot.</p><button type="button" class="btn" id="discoverWebrtc">Discover</button></div>
             </details>
               <p class="hint" id="discoveryStatus" role="status"></p>
-              <div id="connectionEditor" class="profile-editor hidden"><label class="field">Robot IP address<input id="robotIp" autocomplete="off" placeholder="192.168.1.10" /></label><div class="actions"><button type="button" class="btn" id="saveRobotIp">Save address</button><button type="button" class="btn" id="cancelRobotIp">Cancel</button></div><span id="robotValue" class="hidden"></span></div>
+              <div id="connectionEditor" class="profile-editor hidden"><label class="field">Robot IP address<input id="robotIp" autocomplete="off" placeholder="192.168.1.10" /></label><div class="actions"><button type="button" class="btn" id="saveRobotIp">Save address</button><button type="button" class="btn" id="cancelRobotIp">Cancel</button></div></div>
               <div id="replayRow" class="hidden">
                 <label class="selector-label" for="playbackSource">Simulation source</label>
                 <div class="connection-selector"><select id="playbackSource"><option value="simulator">Simulator</option><option value="recording">Recording</option></select><button type="button" class="btn ghost" id="editReplay" aria-label="Choose replay">✎</button></div>

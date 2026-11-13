@@ -3,7 +3,8 @@
 ## Project Structure & Module Organization
 
 - `dimos-ar/dimos/ar/`: Python ARModule, organized into WebSocket, localization, navigation, robot, and sensor modules; Python tests sit beside source files.
-- `clients/specs/`: Lens Studio project. `Assets/Scripts/DimOSARClient/` contains portable ClientCore; `Assets/Scripts/DimOSSpecsClient/` contains Spectacles logic. Tests live separately in `Tests/`.
+- `clients/core/`: portable ClientCore source in `src/`, independent tests in `tests/`, shared fixtures in `tests/support/`.
+- `clients/specs/`: runnable Lens project. `Packages/DimOSARClient.lspkg` supplies Core; `Assets/Scripts/DimOSSpecsClient/` contains Spectacles logic. Host tests live in `Tests/`.
 - `clients/webxr/`: Vite/Three.js WebXR client, with production code in `src/` and tests in `tests/`.
 - `launcher/app/` and `launcher/scripts/`: local launcher, tests, setup, and CI scripts.
 - `assets/`: documentation media and printable AprilTags in `markers/`.
@@ -12,9 +13,10 @@ Read `CONTRIBUTING.md` for architecture and scene-wiring rules.
 
 ## Build, Test, and Development Commands
 
-- `./launcher/scripts/run-ci.sh`: run the complete validation gate with Python 3.12 and Node 22, including Python lint/type/unit checks, launcher tests, both Vitest suites, WebXR build, and browser integration. Use a normal terminal outside the agent sandbox: DimOS logging writes under `~/.local/state/dimos/logs/`.
+- `./launcher/scripts/run-ci.sh`: run the complete validation gate with Python 3.12 and Node 22, including Python lint/type/unit checks, launcher tests, Core and both client Vitest suites, WebXR build, and browser integration. Use a normal terminal outside the agent sandbox: DimOS logging writes under `~/.local/state/dimos/logs/`.
 - In `clients/webxr/`, run `npm ci`, then `npm run dev` for HTTPS development or `npm run build` for type checking and production output. Run ARModule on the same machine for the `/ar` proxy.
-- In `clients/specs/Tests/`, run `npm ci` and `npm test`.
+- In `clients/core/`, run `npm ci`, `npm run typecheck`, and `npm test` for portable source validation.
+- In `clients/specs/Tests/`, run `npm ci` and `npm test` for archive parity and host tests.
 - In `dimos-ar/`, use the installed DimOS environment: `/path/to/dimos/.venv/bin/python3 -m pytest`.
 - `./launcher/scripts/start-launcher.sh`: start the local launcher.
 
@@ -24,7 +26,7 @@ Use four-space Python indentation, type annotations, Ruff's 100-character config
 
 ## Testing Guidelines
 
-Use pytest/pytest-asyncio for Python (`test_*.py`) and Vitest for TypeScript (`*.test.ts`). Run `npm test` in either client test package. Keep Lens tests outside `Assets/`. Add regression coverage for changed behavior; no numeric coverage threshold is configured.
+Use pytest/pytest-asyncio for Python (`test_*.py`) and Vitest for TypeScript (`*.test.ts`). Run `npm test` in Core or the relevant client test package. Keep Lens tests outside `Assets/`. Add regression coverage for changed behavior; no numeric coverage threshold is configured.
 
 ## Commit & Pull Request Guidelines
 
@@ -38,7 +40,23 @@ Report the checks actually completed and any deferred verification. If the user 
 
 ## Architecture & Protocol Rules
 
-Import installed DimOS; do not edit upstream source. Reuse ClientCore without copying it or adding platform APIs. Change `dimos-ar/PROTOCOL.md`, Python `websocket/protocol.py`, and ClientCore `websocket/protocol.ts` together. Manipulate Lens `.scene` files through Lens Studio MCP tools rather than hand editing.
+Import installed DimOS; do not edit upstream source. Reuse ClientCore without copying it or adding platform APIs. Change `dimos-ar/PROTOCOL.md`, Python `websocket/protocol.py`, and Core `clients/core/src/websocket/protocol.ts` together. Manipulate Lens `.scene` files through Lens Studio MCP tools rather than hand editing.
+
+### Specs Core package updates
+
+`clients/core/src/` is the only authored Core source. WebXR imports it directly;
+Specs uses `clients/specs/Packages/DimOSARClient.lspkg`. After Core changes, agents
+must run `python3 clients/specs/tools/core_package.py sync` before Specs validation.
+The command uses Lens Studio 5.15 MCP and an external disposable authoring project
+under `~/Library/Caches/dimos-clientcore-package/`. Never commit that project or edit
+the installed archive as a second source tree. Preserve package and asset identities.
+`python3 clients/specs/tools/core_package.py check` is read-only and needs no editor.
+Only Specs tests check package freshness; Core/WebXR test raw source independently.
+Tests must not silently rebuild packages. Exclude tests, fixtures, SDK dependencies,
+and host code from the archive. Wait for native import/compile readiness and publish
+atomically after checking actual archive contents. Retain the previous archive and
+diagnostics after failure. Follow queued-work guards, focus limits and production
+handoff rules below. Synchronization does not authorize a commit or push.
 
 The complete functional gate has no numeric test cutoff. Both client integration
 runners produce the canonical golden-path video by default and retain failure

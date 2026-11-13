@@ -8,13 +8,11 @@ import { launcherPresentation } from "./presentation.mjs";
   const stateValue = $("stateValue");
   const stateDetail = $("stateDetail");
   const hostIp = $("hostIp");
-  const hostIpSummary = $("hostIpSummary");
   const pinValue = $("pin");
   const pinSummary = $("pinSummary");
   const webxrNetwork = $("webxrNetwork");
   const webxrNetworkRow = $("webxrNetworkRow");
   const webxrHint = $("webxrHint");
-  const robotValue = $("robotValue");
   const warningText = $("warningText");
   const errorText = $("errorText");
   const controlsCard = $("controlsCard");
@@ -399,10 +397,8 @@ import { launcherPresentation } from "./presentation.mjs";
     });
     blueprintSelect.disabled = locked;
     for (const id of ["robotProfileSelect", "robotProfileName", "newRobotProfile", "deleteRobotProfile", "robotSource", "refreshRobots", "playbackSource", "editConnection", "saveRobotIp", "cancelRobotIp", "robotIp", "editReplay", "replayPath", "browseReplay", "defaultReplay", "profileEdit", "profileDone", "saveProfileName", "cancelProfileName", "confirmDeleteProfile"]) { const control = $(id); if (control) control.disabled = locked; }
-    document.querySelectorAll("[data-client=specs]").forEach(button => { button.disabled = locked; });
     apiKey.disabled = locked;
     revealKey.disabled = locked;
-    robotIp.disabled = locked;
     fiducialEnabled.disabled = locked;
     vpsEnabled.disabled = locked;
     vpsVendor.disabled = locked;
@@ -770,28 +766,15 @@ import { launcherPresentation } from "./presentation.mjs";
     el.replaceChildren(a);
   }
 
-  function displayRobotIp(value) {
-    if (!value || !String(value).trim()) return "";
-    const raw = String(value).trim();
-    if (raw === "simulated") {
-      return "simulated";
-    }
-    return raw;
-  }
-
   function applyConnectionStatus(status) {
     setText(hostIp, status.host_ip);
-    setText(hostIpSummary, status.host_ip);
     const isWebxr = client === "webxr";
-    $("hostIpSummaryLabel").classList.add("hidden");
-    hostIpSummary.classList.add("hidden");
     $("hostIpRow").classList.remove("hidden");
     $("pinRow").classList.toggle("hidden", isWebxr);
     setText(pinValue, isWebxr ? null : status.pin);
     $("connectionSummaryLabel").textContent = "PIN";
     setText(pinSummary, status.pin);
     setHref($("urlSummary"), status.webxr_url, "Address available after Start");
-    setText(robotValue, displayRobotIp(status.robot_ip));
     webxrNetworkRow.classList.toggle("hidden", !isWebxr);
     webxrHint.classList.toggle("hidden", !isWebxr);
     setHref(webxrNetwork, status.webxr_url);

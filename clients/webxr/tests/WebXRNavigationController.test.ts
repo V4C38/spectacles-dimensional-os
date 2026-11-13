@@ -1,4 +1,4 @@
-import { immediateAuthority } from "../../specs/Tests/fixtures/ImmediateAuthority";
+import { immediateAuthority } from "../../core/tests/support/ImmediateAuthority";
 import { describe, expect, it, vi } from "vitest";
 import { NAV_FEEDBACK_ANIMATION_S, NAV_FEEDBACK_TIMING } from "@dimos-ar-client/navigation/NavigationGoalLifecycle";
 import type { ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSession";

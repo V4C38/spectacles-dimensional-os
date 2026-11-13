@@ -12,6 +12,27 @@ import review
 
 
 class NativeProvenanceTests(unittest.TestCase):
+    def test_packaged_core_changes_invalidate_native_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "production"
+            (source / "Assets").mkdir(parents=True)
+            (source / "Packages").mkdir()
+            package = source / "Packages/DimOSARClient.lspkg"
+            package.write_bytes(b"package v1")
+            (source / "project.esproj").write_text("project")
+            harness = root / "Scenario.ts"
+            harness.write_text("fixture")
+            workspace = root / "workspace"
+            review.copy_project(source, workspace, harness)
+            value = provenance.begin(source, workspace, source)
+            self.assertTrue(provenance.matches(value))
+            package.write_bytes(b"package v2")
+            self.assertFalse(provenance.matches(value))
+            package.write_bytes(b"package v1")
+            (workspace / "Packages/DimOSARClient.lspkg").write_bytes(b"stale tested package")
+            self.assertFalse(provenance.matches(value))
+
     def test_prepared_copy_cannot_validate_newer_or_alternate_production(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

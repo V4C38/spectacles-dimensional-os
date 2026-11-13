@@ -1,6 +1,6 @@
 import type { RoundedRectangle } from "SpectaclesUIKit.lspkg/Scripts/Visuals/RoundedRectangle/RoundedRectangle";
-import { NotificationCenter, notificationGlyph, type ClientNotification } from "../../DimOSARClient/presentation/NotificationCenter";
-import { VIEWER_NOTIFICATION_STYLE } from "../../DimOSARClient/presentation/WorldVisualStyle";
+import { NotificationCenter, notificationGlyph, type ClientNotification } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/NotificationCenter";
+import { VIEWER_NOTIFICATION_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldVisualStyle";
 import { WorldMeshRenderer } from "./WorldMeshRenderer";
 import { createRoundedSurface, createText, uiMaterialLayer, COLOR_WHITE } from "./UIKit";
 

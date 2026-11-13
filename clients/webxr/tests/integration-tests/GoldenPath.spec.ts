@@ -186,8 +186,14 @@ test("comparable hand golden path", async ({ page }, info) => {
     }, async () => armCommands("plan").length > 0 && await armValue("renderer.path.visible"));
     let reviewedPlan = "";
     await flow.step("manipulation_execute", async () => {
+      await aimArm(page, "execute");
+      // Aiming waits for the hover menu; review the plan at the activation boundary.
+      await expect.poll(() => armValue("interaction.plan !== null")).toBe(true);
+      await expect.poll(() => armValue("interaction.snapshot().planning")).toBe(false);
+      expect(await armValue("renderer.path.visible")).toBe(true);
       reviewedPlan = await armValue("interaction.plan.plan_id");
-      await clickArm(page, "execute");
+      await setSelection(page, 1);
+      await setSelection(page, 0);
       await expect.poll(() => armCommands("execute").at(-1)?.plan_id).toBe(reviewedPlan);
     }, async () => await appValue(page, "app.client.session.view().manipulation?.execution === 'completed'") &&
       await armValue("interaction.snapshot().executing === false"));

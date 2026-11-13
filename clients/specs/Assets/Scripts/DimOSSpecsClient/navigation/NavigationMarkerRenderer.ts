@@ -1,6 +1,6 @@
-import { ARM_VISUAL_STYLE } from "../../DimOSARClient/manipulation/ManipulationVisuals";
-import { NAV_FEEDBACK_ANIMATION_S,NAV_FEEDBACK_TIMING,type NavFlash } from "../../DimOSARClient/navigation/NavigationGoalLifecycle";
-import { FLOOR_MARKER_STYLE,NAVIGATION_COLORS,NAVIGATION_OUTCOME_STYLE,NAVIGATION_PREVIEW_ARROW_STYLE,WORLD_DASH_STYLE,circleStrokeSegments,navigationCancelReveal } from "../../DimOSARClient/presentation/WorldVisualStyle";
+import { ARM_VISUAL_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationVisuals";
+import { NAV_FEEDBACK_ANIMATION_S,NAV_FEEDBACK_TIMING,type NavFlash } from "DimOSARClient.lspkg/Scripts/DimOSARClient/navigation/NavigationGoalLifecycle";
+import { FLOOR_MARKER_STYLE,NAVIGATION_COLORS,NAVIGATION_OUTCOME_STYLE,NAVIGATION_PREVIEW_ARROW_STYLE,WORLD_DASH_STYLE,circleStrokeSegments,navigationCancelReveal } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldVisualStyle";
 import { AdaptiveStrokeRenderer,WorldMeshRenderer,circleMesh,strokeMesh2D,type WorldColor } from "../presentation/WorldMeshRenderer";
 
 export interface NavigationMarkerStyle {

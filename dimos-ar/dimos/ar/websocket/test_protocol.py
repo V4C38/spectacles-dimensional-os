@@ -385,8 +385,6 @@ def test_decode_client_pose_rejects_non_finite_and_zero_quat() -> None:
         decode_inbound(json.dumps({**base, "orientation": [0.0, 0.0, 0.0, 0.0]}))
 
 
-
-
 def test_encode_client_pose() -> None:
     payload = _parse_json_line(
         encode_client_pose(

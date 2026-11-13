@@ -56,8 +56,6 @@ def test_marker_only_capture_spec() -> None:
     assert policy.capture_spec.wait_timeout_s is None
 
 
-
-
 def test_hello_prompts_when_provider_configured() -> None:
     policy = LocalizationPolicy(["fiducial_marker"])
     assert policy.on_hello("c1") == "c1"
@@ -112,12 +110,6 @@ def test_failed_goal_reached_does_not_prompt() -> None:
     _advance(policy, 0.0, 0.0)
     _advance(policy, 2.0, 0.0)
     assert policy.on_goal_reached(succeeded=False) == []
-
-
-
-
-
-
 
 
 def test_disconnect_drops_pending_episode() -> None:

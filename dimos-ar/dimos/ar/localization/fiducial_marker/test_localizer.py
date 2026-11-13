@@ -277,8 +277,6 @@ def test_localize_without_current_robot_pose_rejects_unregistered_origin(
     assert result is None
 
 
-
-
 def test_unknown_marker_id_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
     buffer = PoseBuffer()
     _seed_pose_buffer(buffer, ts_server=100.0)

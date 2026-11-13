@@ -977,8 +977,13 @@ class ProcessManager:
         proc: asyncio.subprocess.Process | None,
         label: str,
     ) -> bool:
-        if proc is None or proc.returncode is not None:
+        if proc is None:
             return False
+        if proc.returncode is not None:
+            try:
+                os.killpg(proc.pid, 0)
+            except ProcessLookupError:
+                return False
         self._stopping_pids.add(proc.pid)
         self._append_log(f"Stopping {label} (SIGINT)…")
         try:
@@ -993,7 +998,30 @@ class ProcessManager:
             )
             if label == "ARModule" and self.status.blueprint == "openyam_ar_planner":
                 grace += 65  # Allow the supervisor to park before stopping DimOS.
-            await asyncio.wait_for(proc.wait(), timeout=grace)
+            async def wait_for_group() -> None:
+                while True:
+                    try:
+                        os.killpg(proc.pid, 0)
+                    except ProcessLookupError:
+                        return
+                    if Path("/proc").is_dir():
+                        live = False
+                        for entry in Path("/proc").iterdir():
+                            if not entry.name.isdigit():
+                                continue
+                            try:
+                                fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+                                live |= int(fields[2]) == proc.pid and fields[0] != "Z"
+                            except (OSError, ValueError, IndexError):
+                                continue
+                        if not live:
+                            return
+                    await asyncio.sleep(0.02)
+
+            await asyncio.wait_for(
+                wait_for_group() if proc.returncode is not None else proc.wait(),
+                timeout=grace,
+            )
         except TimeoutError:
             self._append_log(f"{label} did not stop in time — sending SIGKILL")
             try:
@@ -1125,15 +1153,23 @@ class ProcessManager:
         try:
             yield proc
         finally:
-            if proc.returncode is None:
-                await self._stop_one(proc, label)
+            await self._stop_one(proc, label)
 
     async def _drain_output(
         self, proc: asyncio.subprocess.Process,
         on_line: Callable[[str], Awaitable[None]] | None = None,
     ) -> int:
         assert proc.stdout is not None
-        while raw := await proc.stdout.readline():
+        while True:
+            try:
+                raw = await asyncio.wait_for(proc.stdout.readline(), timeout=0.1)
+            except TimeoutError:
+                # A surviving child may retain the pipe after its leader exits.
+                if proc.returncode is not None:
+                    return proc.returncode
+                continue
+            if not raw:
+                break
             line = raw.decode("utf-8", errors="replace").rstrip("\n")
             self._append_log(line)
             if on_line is not None:
@@ -1190,6 +1226,7 @@ class ProcessManager:
             return
         async with self._lock:
             if self._webxr_proc is proc:
+                await self._stop_one(proc, "WebXR")
                 self._webxr_proc = None
                 self._webxr_reader_task = None
                 self._append_log("WebXR exited; ARModule remains available")

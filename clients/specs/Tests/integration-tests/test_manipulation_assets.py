@@ -27,7 +27,7 @@ class ManipulationAssetsTests(unittest.TestCase):
                 self.assertAlmostEqual(math.hypot(*link["normals"][index * 3:index * 3 + 3]), 1, places=6)
 
     def test_native_arm_fixture_matches_webxr(self):
-        source = (ROOT / "clients/specs/Tests/integration-tests/IntegrationArmFixture.ts").read_text()
+        source = (ROOT / "clients/core/tests/support/IntegrationArmFixture.ts").read_text()
         actual = json.loads(source.removeprefix("export const ARM_FIXTURE = ").removesuffix(";\n"))
         expected = json.loads((ROOT / "clients/webxr/tests/integration-tests/fixtures/OpenYAM.json").read_text())
         self.assertEqual(actual, expected)

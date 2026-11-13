@@ -1,6 +1,6 @@
 import { InteractionManager } from "SpectaclesInteractionKit.lspkg/Core/InteractionManager/InteractionManager";
 import { InteractorInputType, type Interactor } from "SpectaclesInteractionKit.lspkg/Core/Interactor/Interactor";
-import { worldMarkerHover } from "../../DimOSARClient/presentation/WorldVisualStyle";
+import { worldMarkerHover } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldVisualStyle";
 
 /** Hand targeting only needs navigation commands, not the controller's render/session internals. */
 export interface NavigationInputPort {

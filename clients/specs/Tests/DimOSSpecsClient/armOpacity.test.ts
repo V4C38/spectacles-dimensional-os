@@ -1,8 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { armDisplacementCoefficients, ArmOpacityUniforms } from "../../Assets/Scripts/DimOSSpecsClient/manipulation/ArmMaterial";
-import { armPointDisplacement, ArmMeshFade, ArmOpacityCadence } from "../../Assets/Scripts/DimOSARClient/manipulation/ManipulationVisuals";
+import { armPointDisplacement, ArmMeshFade, ArmOpacityCadence } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationVisuals";
 import { clientTrackingToSpecsPoint } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
-import type { ManipulationPose } from "../../Assets/Scripts/DimOSARClient/manipulation/ManipulationTypes";
+import type { ManipulationPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationTypes";
 
 const identity: ManipulationPose = { position: [0, 0, 0], orientation: [0, 0, 0, 1] };
 
@@ -71,11 +71,11 @@ it("samples displacement on request, smoothly fades and stops writing settled un
 vi.mock("SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider", () => ({ Slider: class {} }));
 vi.mock("../mocks/UIKit.ts", () => ({ setButtonStyle: vi.fn(), SnapOS2Styles: {} }));
 import { ManipulationRenderer } from "../../Assets/Scripts/DimOSSpecsClient/manipulation/ManipulationRenderer";
-import { ArmPresentationSampler } from "../../Assets/Scripts/DimOSARClient/manipulation/ArmPresentationSampler";
-import { ManipulationPreviewPlayback } from "../../Assets/Scripts/DimOSARClient/manipulation/ManipulationPresentation";
-import { ArmTrajectoryProgress } from "../../Assets/Scripts/DimOSARClient/manipulation/ArmTrajectoryProgress";
-import { PanelHeightAnimation } from "../../Assets/Scripts/DimOSARClient/presentation/PanelHeightAnimation";
-import { ARM_FIXTURE } from "../integration-tests/IntegrationArmFixture";
+import { ArmPresentationSampler } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ArmPresentationSampler";
+import { ManipulationPreviewPlayback } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationPresentation";
+import { ArmTrajectoryProgress } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ArmTrajectoryProgress";
+import { PanelHeightAnimation } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/PanelHeightAnimation";
+import { ARM_FIXTURE } from "../../../core/tests/support/IntegrationArmFixture";
 
 it("keeps all initialized link buffers static during reveal, motion, warnings and hiding", () => {
   const node = (): any => ({ enabled: true, getComponent: () => ({}), getTransform: () => ({

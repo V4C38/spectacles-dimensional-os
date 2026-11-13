@@ -1,9 +1,9 @@
 import type { TextInputField } from "SpectaclesUIKit.lspkg/Scripts/Components/TextInputField/TextInputField";
 import type { RoundedRectangle } from "SpectaclesUIKit.lspkg/Scripts/Visuals/RoundedRectangle/RoundedRectangle";
 import type { RoundedRectangleVisual } from "SpectaclesUIKit.lspkg/Scripts/Visuals/RoundedRectangle/RoundedRectangleVisual";
-import { CONTROL_PANEL_LAYOUT,CONTROL_PANEL_TYPE,CONTROL_PANEL_COPY as COPY,controlPanelTab,robotBadgeText } from "../../DimOSARClient/presentation/ControlPanelPresentation";
-import type { SetupStep } from "../../DimOSARClient/presentation/SetupFlow";
-import { NAVIGATION_COLORS,SETUP_SUCCESS_STYLE } from "../../DimOSARClient/presentation/WorldVisualStyle";
+import { CONTROL_PANEL_LAYOUT,CONTROL_PANEL_TYPE,CONTROL_PANEL_COPY as COPY,controlPanelTab,robotBadgeText } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
+import type { SetupStep } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/SetupFlow";
+import { NAVIGATION_COLORS,SETUP_SUCCESS_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldVisualStyle";
 import { PanelHeightController } from "./PanelHeightController";
 import { SETUP_LAYOUTS,SETUP_PANEL_SCALE,panelFooterY,type PanelProfile } from "./PanelLayout";
 import {

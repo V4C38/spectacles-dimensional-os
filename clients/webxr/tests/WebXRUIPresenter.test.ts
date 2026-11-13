@@ -1,4 +1,4 @@
-import { helloAt } from "../../specs/Tests/fixtures/SessionFixture";
+import { helloAt } from "../../core/tests/support/SessionFixture";
 import { describe, expect, it, vi } from "vitest";
 import { LIDAR_PRESETS } from "@dimos-ar-client/sensors/lidarSettings";
 import { WebXRUIPresenter } from "../src/presentation/WebXRUIPresenter";

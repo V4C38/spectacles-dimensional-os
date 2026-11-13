@@ -33,6 +33,7 @@ export function nativeProjectFiles(root) {
     }
   };
   visit(join(root, "Assets"));
+  if (existsSync(join(root, "Packages"))) visit(join(root, "Packages"));
   for (const name of readdirSync(root).filter(name => name.endsWith(".esproj")))
     files[name] = createHash("sha256").update(readFileSync(join(root, name))).digest("hex");
   return files;

@@ -40,7 +40,7 @@ function makeTransport() {
 
   const sockets: MockSocket[] = [];
   const internetModule = {
-    createWebSocket: vi.fn((url: string) => {
+    createWebSocket: vi.fn(() => {
       const socket: MockSocket = {
         readyState: WS_CONNECTING,
         binaryType: "",

@@ -1,7 +1,7 @@
-import { immediateAuthority } from "../fixtures/ImmediateAuthority";
+import { immediateAuthority } from "../../../core/tests/support/ImmediateAuthority";
 import { setMockTime } from "../setup/lens-globals";
 import { describe, expect, it } from "vitest";
-import { clientTrackingToOdomPose, rotateVecByQuat, odomToClientTrackingYawPose } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingTransforms";
+import { clientTrackingToOdomPose, rotateVecByQuat, odomToClientTrackingYawPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingTransforms";
 import { clientTrackingToSpecsYawPose } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
 import { specsNavigationPoseInTracking } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavigationController";
 import { SpecsNavigationInput } from "../../Assets/Scripts/DimOSSpecsClient/navigation/SpecsNavigationInput";

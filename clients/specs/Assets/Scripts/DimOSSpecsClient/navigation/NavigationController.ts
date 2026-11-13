@@ -1,10 +1,10 @@
-import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
-import { requestNavGoal } from "../../DimOSARClient/navigation/navGoalRequest";
-import type { NavFlash } from "../../DimOSARClient/navigation/NavigationGoalLifecycle";
-import { NavigationInteraction,type Placement } from "../../DimOSARClient/navigation/NavigationInteraction";
-import { NavigationPreviewCoordinator } from "../../DimOSARClient/navigation/NavigationPreviewCoordinator";
-import type { ARModuleSession,ARModuleSessionState } from "../../DimOSARClient/websocket/arModuleSession";
-import type { Vec3,YawPose } from "../../DimOSARClient/websocket/protocolTypes";
+import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingOrigin";
+import { requestNavGoal } from "DimOSARClient.lspkg/Scripts/DimOSARClient/navigation/navGoalRequest";
+import type { NavFlash } from "DimOSARClient.lspkg/Scripts/DimOSARClient/navigation/NavigationGoalLifecycle";
+import { NavigationInteraction,type Placement } from "DimOSARClient.lspkg/Scripts/DimOSARClient/navigation/NavigationInteraction";
+import { NavigationPreviewCoordinator } from "DimOSARClient.lspkg/Scripts/DimOSARClient/navigation/NavigationPreviewCoordinator";
+import type { ARModuleSession,ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/arModuleSession";
+import type { Vec3,YawPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes";
 import type { RobotPresenter } from "../presentation/RobotPresenter";
 import { clientTrackingToSpecsPoint,clientTrackingToSpecsYawPose,specsToClientTrackingPoint,specsToClientTrackingYawPose } from "../utilities/SpecsCoordinates";
 import { DragPlacementPlane,SpecsDragPosition,SpecsFloorReference } from "./GroundPlacement";
@@ -249,7 +249,7 @@ export class NavigationController {
     }
   }
 }
-function trackingToSpecs(pose: { position: Vec3; orientation: import("../../DimOSARClient/websocket/protocolTypes").Quat }) {
+function trackingToSpecs(pose: { position: Vec3; orientation: import("DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes").Quat }) {
   const yaw = 2 * Math.atan2(pose.orientation[2], pose.orientation[3]);
   return specsYawPoseToWorld(clientTrackingToSpecsYawPose([...pose.position, yaw]));
 }
@@ -257,7 +257,7 @@ function trackingToSpecs(pose: { position: Vec3; orientation: import("../../DimO
 export function specsNavigationPoseInTracking(position: vec3, rotation: quat) {
   const forward = rotation.multiplyVec3(new vec3(1, 0, 0));
   const p = specsToClientTrackingYawPose([position.x, position.y, position.z, Math.atan2(-forward.z, forward.x)]);
-  return { position: [p[0], p[1], p[2]] as Vec3, orientation: [0, 0, Math.sin(p[3] / 2), Math.cos(p[3] / 2)] as import("../../DimOSARClient/websocket/protocolTypes").Quat };
+  return { position: [p[0], p[1], p[2]] as Vec3, orientation: [0, 0, Math.sin(p[3] / 2), Math.cos(p[3] / 2)] as import("DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes").Quat };
 }
 function specsYawPoseToWorld(pose: YawPose): { position: vec3; rotation: quat } {
   return { position: new vec3(pose[0], pose[1], pose[2]), rotation: new quat(Math.cos(pose[3] / 2), 0, Math.sin(pose[3] / 2), 0) };

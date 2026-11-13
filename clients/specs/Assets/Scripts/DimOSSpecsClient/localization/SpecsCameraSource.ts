@@ -1,5 +1,5 @@
-import type { CameraCaptureSource,CameraTrackingSource } from "../../DimOSARClient/websocket/hostPorts";
-import type { Intrinsics,LocalizationObservation,Quat,Vec3 } from "../../DimOSARClient/websocket/protocolTypes";
+import type { CameraCaptureSource,CameraTrackingSource } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/hostPorts";
+import type { Intrinsics,LocalizationObservation,Quat,Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes";
 import { specsToClientTrackingPose } from "../utilities/SpecsCoordinates";
 import { quatFromMat4Rotation } from "../utilities/SpecsUtilities";
 import type { SpecsCameraStream } from "./SpecsCameraStream";

@@ -1,6 +1,6 @@
-import type { AgentDraftSnapshot } from "../../DimOSARClient/agent/AgentDraftSession";
-import type { LidarDisplayPreferences } from "../../DimOSARClient/sensors/lidarDisplayPreferences";
-import type { LidarDisplayMode } from "../../DimOSARClient/sensors/lidarSettings";
+import type { AgentDraftSnapshot } from "DimOSARClient.lspkg/Scripts/DimOSARClient/agent/AgentDraftSession";
+import type { LidarDisplayPreferences } from "DimOSARClient.lspkg/Scripts/DimOSARClient/sensors/lidarDisplayPreferences";
+import type { LidarDisplayMode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/sensors/lidarSettings";
 import type { OperatingMode } from "./AppState";
 
 /** Facts for native views; page selection and frame placement stay in the host. */

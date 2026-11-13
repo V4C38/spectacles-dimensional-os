@@ -35,10 +35,6 @@ class PreviewPlanner:
             self._gradient_costmap = None
             self._gradient_costmap_ts = None
 
-    def has_costmap(self) -> bool:
-        with self._lock:
-            return self._binary_costmap is not None
-
     def plan(
         self,
         start_xy: tuple[float, float],

@@ -1,11 +1,5 @@
-import type { Quat, Vec3, YawPose } from "../../DimOSARClient/websocket/protocolTypes";
-import { normalizeQuat, rotateVecByQuat } from "../../DimOSARClient/localization/clientTrackingTransforms";
-
-type Mat3 = readonly [
-  readonly [number, number, number],
-  readonly [number, number, number],
-  readonly [number, number, number],
-];
+import type { Quat, Vec3, YawPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes";
+import { normalizeQuat, requireVec3, requireFinite, applyBasis as apply, transposeBasis as transpose, changeBasisQuat, type Mat3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingTransforms";
 
 // Lens is right-handed Y-up, with the camera looking along -Z.
 // Tracking +X forward, +Y left, +Z up → Lens -Z, -X, +Y (metres → centimetres).
@@ -35,11 +29,11 @@ export function specsToClientTrackingPoint(point: Vec3): Vec3 {
 }
 
 export function clientTrackingToSpecsQuat(orientation: Quat): Quat {
-  return conjugate(normalizeQuat(orientation), SPECS_BASIS.P, transpose(SPECS_BASIS.P));
+  return changeBasisQuat(normalizeQuat(orientation), SPECS_BASIS.P);
 }
 
 export function specsToClientTrackingQuat(orientation: Quat): Quat {
-  return conjugate(normalizeQuat(orientation), transpose(SPECS_BASIS.P), SPECS_BASIS.P);
+  return changeBasisQuat(normalizeQuat(orientation), transpose(SPECS_BASIS.P));
 }
 
 export function clientTrackingToSpecsPose(pose: PositionOrientation): PositionOrientation {
@@ -76,85 +70,8 @@ export function specsToClientTrackingYawPose(pose: YawPose): YawPose {
   ];
 }
 
-function conjugate(orientation: Quat, forward: Mat3, inverse: Mat3): Quat {
-  const x = apply(forward, rotateVecByQuat(orientation, apply(inverse, [1, 0, 0])));
-  const y = apply(forward, rotateVecByQuat(orientation, apply(inverse, [0, 1, 0])));
-  const z = apply(forward, rotateVecByQuat(orientation, apply(inverse, [0, 0, 1])));
-  return quatFromBasis(x, y, z);
-}
-
-function quatFromBasis(x: Vec3, y: Vec3, z: Vec3): Quat {
-  const c0 = normalizeVec3(x);
-  const c1 = normalizeVec3(y);
-  const c2 = normalizeVec3(z);
-  const r00 = c0[0];
-  const r01 = c1[0];
-  const r02 = c2[0];
-  const r10 = c0[1];
-  const r11 = c1[1];
-  const r12 = c2[1];
-  const r20 = c0[2];
-  const r21 = c1[2];
-  const r22 = c2[2];
-  const trace = r00 + r11 + r22;
-  let qx: number;
-  let qy: number;
-  let qz: number;
-  let qw: number;
-  if (trace > 0) {
-    const s = Math.sqrt(trace + 1) * 2;
-    qw = 0.25 * s;
-    qx = (r21 - r12) / s;
-    qy = (r02 - r20) / s;
-    qz = (r10 - r01) / s;
-  } else if (r00 > r11 && r00 > r22) {
-    const s = Math.sqrt(1 + r00 - r11 - r22) * 2;
-    qw = (r21 - r12) / s;
-    qx = 0.25 * s;
-    qy = (r01 + r10) / s;
-    qz = (r02 + r20) / s;
-  } else if (r11 > r22) {
-    const s = Math.sqrt(1 + r11 - r00 - r22) * 2;
-    qw = (r02 - r20) / s;
-    qx = (r01 + r10) / s;
-    qy = 0.25 * s;
-    qz = (r12 + r21) / s;
-  } else {
-    const s = Math.sqrt(1 + r22 - r00 - r11) * 2;
-    qw = (r10 - r01) / s;
-    qx = (r02 + r20) / s;
-    qy = (r12 + r21) / s;
-    qz = 0.25 * s;
-  }
-  return normalizeQuat([qx, qy, qz, qw]);
-}
-
-function apply(matrix: Mat3, point: Vec3): Vec3 {
-  return [
-    matrix[0][0] * point[0] + matrix[0][1] * point[1] + matrix[0][2] * point[2],
-    matrix[1][0] * point[0] + matrix[1][1] * point[1] + matrix[1][2] * point[2],
-    matrix[2][0] * point[0] + matrix[2][1] * point[1] + matrix[2][2] * point[2],
-  ];
-}
-
-function transpose(matrix: Mat3): Mat3 {
-  return [
-    [matrix[0][0], matrix[1][0], matrix[2][0]],
-    [matrix[0][1], matrix[1][1], matrix[2][1]],
-    [matrix[0][2], matrix[1][2], matrix[2][2]],
-  ];
-}
-
 function scale(point: Vec3, factor: number): Vec3 {
   return [point[0] * factor, point[1] * factor, point[2] * factor];
-}
-
-function normalizeVec3(value: Vec3): Vec3 {
-  const length = Math.hypot(value[0], value[1], value[2]);
-  if (length < 1e-6) {
-    throw new Error("orientation must be a non-zero quaternion");
-  }
-  return [value[0] / length, value[1] / length, value[2] / length];
 }
 
 function requireYawPose(value: YawPose): YawPose {
@@ -167,22 +84,4 @@ function requireYawPose(value: YawPose): YawPose {
     requireFinite(value[2], "position[2]"),
     requireFinite(value[3], "yaw"),
   ];
-}
-
-function requireVec3(value: Vec3, key: string): Vec3 {
-  if (!Array.isArray(value) || value.length !== 3) {
-    throw new Error(`${key} must be a 3-element array`);
-  }
-  return [
-    requireFinite(value[0], `${key}[0]`),
-    requireFinite(value[1], `${key}[1]`),
-    requireFinite(value[2], `${key}[2]`),
-  ];
-}
-
-function requireFinite(value: unknown, key: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`${key} must be finite`);
-  }
-  return value;
 }

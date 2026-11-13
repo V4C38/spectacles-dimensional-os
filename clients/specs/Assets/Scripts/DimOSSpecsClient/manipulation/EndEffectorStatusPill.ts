@@ -1,4 +1,4 @@
-import { EndEffectorStatus, END_EFFECTOR_STATUS_STYLE, type EndEffectorStatusInput } from "../../DimOSARClient/manipulation/EndEffectorStatus";
+import { EndEffectorStatus, END_EFFECTOR_STATUS_STYLE, type EndEffectorStatusInput } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/EndEffectorStatus";
 import { ViewerNotificationPresenter } from "../presentation/ViewerNotificationPresenter";
 
 export class EndEffectorStatusPill {

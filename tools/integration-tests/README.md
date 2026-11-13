@@ -67,13 +67,13 @@ crops keep UI readable, with wider views for world interactions.
 
 Fixtures simulate transport, camera, recognition and input facts, not production
 state owners. WebXR drives emulated XR joints/controllers; Specs uses native SIK
-events with a test interactor. Actual hardware hand tracking, ASR quality, robot
-motion and device performance still need on-device verification.
+events with a test interactor. On-device tests cover physical hand tracking, ASR quality, robot motion, and
+device performance.
 
 Validate the contract and encoder without a headset:
 
 ```sh
-node --test tools/integration-tests/integration.test.mjs tools/visual-review.test.mjs
+node --test tools/integration-tests/integration.test.mjs tools/integration-tests/visual-review.test.mjs
 ```
 
 `finalize.mjs --client webxr|specs --run <directory> --scope all|golden|regression`
@@ -110,6 +110,5 @@ manipulation) and controller input. WebXR-specific chapter order and holds live 
 `golden.webxrChapters`; `golden.chapters` has the same compact order with native
 holds long enough for complete SIK gestures. Repeated panel/settings tours are
 covered by unit tests and native regressions where declared, not counted as golden coverage.
-Repeated startup, layout, rendering, manipulation soak and failure-matrix browser
-tests have been removed. The catalog explicitly limits WebXR applicability to
-these walkthroughs; native Specs regression requirements remain unchanged.
+The catalog limits WebXR applicability to these walkthroughs; Specs also runs the
+declared native regressions.

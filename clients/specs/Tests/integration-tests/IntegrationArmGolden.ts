@@ -1,4 +1,4 @@
-import { linkPoses } from "../../Assets/Scripts/DimOSARClient/manipulation/ModelKinematics";
+import { linkPoses } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ModelKinematics";
 import { ARM_FIXTURE } from "./IntegrationArmFixture";
 import { IntegrationInput } from "./IntegrationInput";
 import { IntegrationV2Fixture } from "./IntegrationV2Fixture";

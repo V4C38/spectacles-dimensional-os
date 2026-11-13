@@ -12,8 +12,8 @@ import {
 import {
   normalizeQuat,
   rotateVecByQuat,
-} from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingTransforms";
-import type { Quat, Vec3, YawPose } from "../../Assets/Scripts/DimOSARClient/websocket/protocolTypes";
+} from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingTransforms";
+import type { Quat, Vec3, YawPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes";
 
 const IDENTITY_Q: Quat = [0, 0, 0, 1];
 

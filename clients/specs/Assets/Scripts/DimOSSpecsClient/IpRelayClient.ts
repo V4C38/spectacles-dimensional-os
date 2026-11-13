@@ -1,5 +1,5 @@
-import { validPin } from "../DimOSARClient/websocket/connectionPin";
-import { isValidHost } from "../DimOSARClient/websocket/hostNormalization";
+import { validPin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/connectionPin";
+import { isValidHost } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/hostNormalization";
 // Looks up a six-digit PIN on the IP relay and returns the LAN address.
 
 export const IP_RELAY_URL = "https://spectacles-ip-relay.johannestscharn.workers.dev";

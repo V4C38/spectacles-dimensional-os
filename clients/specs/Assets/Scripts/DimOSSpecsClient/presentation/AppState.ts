@@ -1,4 +1,4 @@
-export type OperatingMode = import("../../DimOSARClient/replication/CollaborationTypes").InteractionSnapshot["mode"];
+export type OperatingMode = import("DimOSARClient.lspkg/Scripts/DimOSARClient/replication/CollaborationTypes").InteractionSnapshot["mode"];
 
 export class AppState {
   debugModeEnabled = false;

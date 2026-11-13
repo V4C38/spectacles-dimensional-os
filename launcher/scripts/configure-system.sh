@@ -53,8 +53,7 @@ if [[ -z "${MODE}" ]]; then
 fi
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
-  # Non-macOS: nothing for this helper to do (ARModule is macOS-oriented).
-  [[ "${MODE}" == "check" ]] && exit 0
+  # Socket and multicast settings below apply only to macOS.
   exit 0
 fi
 
@@ -165,10 +164,6 @@ else
 fi
 
 # 2) Socket buffers (optional): raise toward target, halving on rejection.
-ACHIEVED_MAXSOCKBUF=""
-ACHIEVED_RECVSPACE=""
-ACHIEVED_MAXDGRAM=""
-
 apply_buffer() {
   local key="$1" target current val
   target="$(effective_target "${key}")"

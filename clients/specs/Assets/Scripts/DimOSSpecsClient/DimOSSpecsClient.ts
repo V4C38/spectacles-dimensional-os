@@ -1,22 +1,22 @@
-import { odomToClientTrackingPose } from "../DimOSARClient/localization/clientTrackingTransforms";
+import { odomToClientTrackingPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingTransforms";
 import TargetProvider,{ type InteractableHitInfo } from "SpectaclesInteractionKit.lspkg/Providers/TargetProvider/TargetProvider";
 import { LensConfig } from "SpectaclesInteractionKit.lspkg/Utils/LensConfig";
 import type { DispatchedDelayedEvent,DispatchedUpdateEvent } from "SpectaclesInteractionKit.lspkg/Utils/UpdateDispatcher";
 import {
 parsePlaceArMarkerArgs,
 parseRemoveArMarkerArgs,
-} from "../DimOSARClient/agent/agentSkills";
-import { ClientPosePublisher } from "../DimOSARClient/agent/ClientPosePublisher";
+} from "DimOSARClient.lspkg/Scripts/DimOSARClient/agent/agentSkills";
+import { ClientPosePublisher } from "DimOSARClient.lspkg/Scripts/DimOSARClient/agent/ClientPosePublisher";
 import {
 ClientTrackingOriginStore,
 type ClientTrackingOrigin,
-} from "../DimOSARClient/localization/clientTrackingOrigin";
-import { LocalizationCaptureEpisode } from "../DimOSARClient/localization/localizationCaptureEpisode";
-import { RobotSelection } from "../DimOSARClient/robot/RobotSelection";
-import { ARModuleSession } from "../DimOSARClient/websocket/arModuleSession";
-import { buildModuleWebSocketUrl,normalizeHost } from "../DimOSARClient/websocket/hostNormalization";
-import { AR_MODULE_CLIENT_CONFIG } from "../DimOSARClient/websocket/hostPorts";
-import { AlignmentWarning } from "./../DimOSARClient/presentation/NotificationCenter";
+} from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingOrigin";
+import { LocalizationCaptureEpisode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/localizationCaptureEpisode";
+import { RobotSelection } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotSelection";
+import { ARModuleSession } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/arModuleSession";
+import { buildModuleWebSocketUrl,normalizeHost } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/hostNormalization";
+import { AR_MODULE_CLIENT_CONFIG } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/hostPorts";
+import { AlignmentWarning } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/NotificationCenter";
 import { AgentSpeechController } from "./agent/AgentSpeechController";
 import { IpRelayClient } from "./IpRelayClient";
 import { SpecsCameraSource } from "./localization/SpecsCameraSource";

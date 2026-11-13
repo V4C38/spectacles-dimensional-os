@@ -15,13 +15,6 @@ direction with arm +X and its printed top with arm +Y. The resulting tag pose
 relative to the arm is position `[0, -0.060, 0]` meters and quaternion
 `[0, 0, 0, 1]` in XYZW order. The stationary arm base defines the odometry origin.
 
-The robot axis is 60 mm left of the tag center when viewed from above facing forward.
-The reference measured tag yaw is about -0.4944 degrees;
-the reusable default uses zero yaw for a square-aligned tag. If reusing that exact
-measured placement without realigning the printed tag, set the profile's yaw to
--0.4944 degrees. Measure and adjust a saved profile when your placement differs.
-
-
 Calibration is read only from named profiles in `~/.config/dimos/ar-profiles.json`.
 The launcher does not import the native global `armodule` section, rename existing
 profiles, or copy credentials from a repository-root `.env`. Credentials belong in

@@ -1,20 +1,20 @@
-import type { ClientTrackingOriginStore } from "../../DimOSARClient/localization/clientTrackingOrigin";
-import type { LocalizationCaptureEpisode } from "../../DimOSARClient/localization/localizationCaptureEpisode";
-import { localizationCaptureStatus } from "../../DimOSARClient/localization/localizationCaptureStatus";
-import { SetupFlow } from "../../DimOSARClient/presentation/SetupFlow";
-import { deriveRobotMarkerApplyInput,getRobotActivityState } from "../../DimOSARClient/robot/RobotMarkerState";
-import type { RobotSelection } from "../../DimOSARClient/robot/RobotSelection";
-import { LidarDisplayController } from "../../DimOSARClient/sensors/LidarDisplayController";
+import type { ClientTrackingOriginStore } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingOrigin";
+import type { LocalizationCaptureEpisode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/localizationCaptureEpisode";
+import { localizationCaptureStatus } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/localizationCaptureStatus";
+import { SetupFlow } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/SetupFlow";
+import { deriveRobotMarkerApplyInput,getRobotActivityState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotMarkerState";
+import type { RobotSelection } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotSelection";
+import { LidarDisplayController } from "DimOSARClient.lspkg/Scripts/DimOSARClient/sensors/LidarDisplayController";
 import {
 LIDAR_PRESETS,
 requestLidarSettings,
-} from "../../DimOSARClient/sensors/lidarSettings";
-import type { ARModuleSession,ARModuleSessionState } from "../../DimOSARClient/websocket/arModuleSession";
+} from "DimOSARClient.lspkg/Scripts/DimOSARClient/sensors/lidarSettings";
+import type { ARModuleSession,ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/arModuleSession";
 import {
 deriveSessionLinkPhase,
 sessionLinkTransitionLog,
 type SessionLinkPhase,
-} from "../../DimOSARClient/websocket/sessionLinkStatus";
+} from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/sessionLinkStatus";
 import { AgentSpeechController } from "../agent/AgentSpeechController";
 import type { IpRelayClient } from "../IpRelayClient";
 import { DEFAULT_SCALE_ANIMATION_VERSION_KEY,nextAnimationVersion,scaleIn,scaleOut } from "../utilities/AnimationUtilities";

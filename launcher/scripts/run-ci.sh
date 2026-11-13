@@ -23,6 +23,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && /bin/pwd -P)"
 DIMOS_AR="${ROOT}/dimos-ar"
 LAUNCHER_APP="${ROOT}/launcher/app"
+CORE_CLIENT="${ROOT}/clients/core"
 LENS_TESTS="${ROOT}/clients/specs/Tests"
 WEBXR_CLIENT="${ROOT}/clients/webxr"
 REVIEW_DATA="${ROOT}/Review Data"
@@ -155,9 +156,17 @@ run_launcher_job() {
   node --test "${LAUNCHER_APP}/tests/static.test.mjs"
 }
 
+run_client_core_job() {
+  echo "==> client-core-tests job (matches .github/workflows/ci.yml)"
+  cd "${CORE_CLIENT}"
+  npm ci
+  npm run typecheck
+  npm test
+}
+
 run_client_specs_job() {
   echo "==> client-specs-tests job (matches .github/workflows/ci.yml)"
-  hydrate_existing_lfs "clients/specs/Assets/Materials/Shaders/*.ss_graph"
+  hydrate_existing_lfs "clients/specs/Assets/Materials/Shaders/*.ss_graph,clients/specs/Packages/DimOSARClient.lspkg"
   cd "${LENS_TESTS}"
   npm ci
   npm test
@@ -180,7 +189,7 @@ run_client_webxr_job() {
   mkdir -p "${REVIEW_DATA}/unit/integration-tooling"
   node --test --test-reporter=spec --test-reporter-destination=stdout \
     --test-reporter=junit --test-reporter-destination="${REVIEW_DATA}/unit/integration-tooling/junit.xml" \
-    "${ROOT}/tools/integration-tests/integration.test.mjs" "${ROOT}/tools/visual-review.test.mjs"
+    "${ROOT}/tools/integration-tests/integration.test.mjs" "${ROOT}/tools/integration-tests/visual-review.test.mjs"
   npm run test:integration
 }
 
@@ -197,6 +206,7 @@ check_runtime_tools
 run_timed run_dimos_ar_job
 run_timed run_manipulation_contract_job
 run_timed run_launcher_job
+run_timed run_client_core_job
 run_timed run_client_specs_job
 run_timed run_client_webxr_job
 

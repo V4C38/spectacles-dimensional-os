@@ -1,7 +1,7 @@
 """Prepare the same disposable native harness for compilation and Preview."""
-from pathlib import Path
 import re
 import shutil
+from pathlib import Path
 
 from integration_catalog import write_lens_catalog
 
@@ -31,6 +31,8 @@ def prepare_harness(destination: Path, harness: Path) -> None:
             if name in {harness.stem, "IntegrationCatalog"} or name in helpers:
                 continue
             helper = harness.with_name(name + ".ts")
+            if name == "IntegrationArmFixture" and not helper.is_file():
+                helper = Path(__file__).resolve().parents[2] / "core/tests/support/IntegrationArmFixture.ts"
             helpers[name] = helper
             pending.append(helper)
     for stale in review_dir.glob("Integration*.ts"):

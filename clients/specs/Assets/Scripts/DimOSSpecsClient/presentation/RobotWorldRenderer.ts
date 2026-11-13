@@ -1,10 +1,10 @@
 import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable";
-import { robotOutlineFrame, FLOOR_MARKER_STYLE, ROBOT_LINE_STYLE, ROBOT_LABEL_STYLE } from "../../DimOSARClient/presentation/WorldVisualStyle";
-import type { StatusTone } from "../../DimOSARClient/websocket/sessionLinkStatus";
-import type { RobotDescription } from "../../DimOSARClient/websocket/protocolTypes";
+import { robotOutlineFrame, FLOOR_MARKER_STYLE, ROBOT_LINE_STYLE, ROBOT_LABEL_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldVisualStyle";
+import type { StatusTone } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/sessionLinkStatus";
+import type { RobotDescription } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/protocolTypes";
 import { AdaptiveStrokeRenderer, WorldMeshRenderer, circleMesh, sphereMesh } from "./WorldMeshRenderer";
 import { createRobotLabelText, COLOR_WHITE } from "./UIKit";
-import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
+import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/clientTrackingOrigin";
 import { MarkerCorrectionRenderer } from "./MarkerCorrectionRenderer";
 
 const POSE_MATERIAL = requireAsset("../../../Materials/PoseIndicator.mat") as Material;

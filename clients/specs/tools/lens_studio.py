@@ -14,7 +14,9 @@ def dismiss_welcome(pid: int) -> None:
     code = f'''
 tell application "System Events"
   tell (first process whose unix id is {pid})
-    repeat with targetWindow in every window
+    -- Closing a window changes the accessibility indices of later windows.
+    repeat with windowIndex from (count of windows) to 1 by -1
+      set targetWindow to window windowIndex
       set windowName to name of targetWindow
       if windowName is "Home" or windowName is "Welcome" or windowName is "Welcome to Lens Studio" then
         try

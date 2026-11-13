@@ -1,6 +1,6 @@
 import type { InteractionPeer } from "./InteractionPeer";
-import { composePose, linkPoses } from "../../../../specs/Assets/Scripts/DimOSARClient/manipulation/ModelKinematics";
-import type { ManipulationModel, ManipulationPose } from "../../../../specs/Assets/Scripts/DimOSARClient/manipulation/ManipulationTypes";
+import { composePose, linkPoses } from "../../../../core/src/manipulation/ModelKinematics";
+import type { ManipulationModel, ManipulationPose } from "../../../../core/src/manipulation/ManipulationTypes";
 
 type Pose = { position: number[]; orientation: number[] };
 type Packet = Record<string, any>;
