@@ -65,9 +65,10 @@ it("derives LiDAR mode across delayed state, capability loss and reconnect witho
   const sensors = new LidarDisplayController({ view: () => view, sendText } as never, { read: () => null, write });
   sensors.observe(view as never); sensors.setMode("full");
   sensors.observe({ ...view, state: { lidar: { ...off } } } as never);
-  expect(sensors.mode).toBe("off"); expect(write).not.toHaveBeenCalled();
+  expect(sensors.mode).toBe("off"); expect(sensors.selectedMode).toBe("full"); expect(write).toHaveBeenCalledOnce();
   view.state = { lidar: { enabled: true, min_height_m: 0.1, max_height_m: 2, max_range_m: 4 } };
   sensors.observe(view as never); expect(sensors.mode).toBe("full"); expect(write).toHaveBeenCalledOnce();
+  expect(sensors.preferences.fullRangeM).toBe(5); // An obsolete snapshot cannot overwrite the saved intent.
   sensors.observe({ ...view, state: { ...view.state } } as never); expect(write).toHaveBeenCalledOnce();
   view.connection = "failed"; expect(sensors.mode).toBe("off");
   view.connection = "ready"; view.state = { lidar: off }; expect(sensors.mode).toBe("off");
@@ -83,4 +84,33 @@ it("exposes setup facts through detached readonly snapshots and explicit transit
   const copy = flow.snapshot(); (copy.alignmentReview as { pending: boolean }).pending = false;
   expect(flow.alignmentReview?.pending).toBe(true);
   flow.clearAlignmentReview(); expect(flow.alignmentReview).toBeNull();
+});
+
+
+it.each(["off", "full"] as const)("restores explicit %s selection through setup and reconnect without per-frame commands", mode => {
+  const off = { enabled: false, min_height_m: 0, max_height_m: 0, max_range_m: 0 };
+  const view = { connection: "ready", capabilities: { lidar: { available: true } }, state: { lidar: off } };
+  const sendText = vi.fn(), write = vi.fn();
+  const saved = { pointLimit: 1500, obstacleRangeM: .6, fullRangeM: 5, mode };
+  const sensors = new LidarDisplayController({ view: () => view, sendText } as never, { read: () => saved, write });
+  sensors.syncSetup(false); sensors.syncSetup(true); sensors.resetPostSetup();
+  for (let frame = 0; frame < 100; frame++) { sensors.observe(view as never); sensors.syncSetup(true); }
+  expect(sendText).toHaveBeenCalledOnce();
+  expect(JSON.parse(sendText.mock.calls[0][0]).enabled).toBe(mode !== "off");
+  expect(sensors.selectedMode).toBe(mode); expect(write).not.toHaveBeenCalled();
+  view.connection = "disconnected"; sensors.observe(view as never);
+  view.connection = "ready"; sensors.observe(view as never); sensors.syncSetup(false);
+  expect(sendText).toHaveBeenCalledTimes(2);
+  expect(sendText.mock.calls[1][0]).toBe(sendText.mock.calls[0][0]);
+});
+
+it("persists accepted mode choices before acknowledgement and preserves the 0.6m clearance default", () => {
+  const view = { connection: "ready", capabilities: { lidar: { available: true } }, state: { lidar: null } };
+  const sendText = vi.fn(), write = vi.fn();
+  const sensors = new LidarDisplayController({ view: () => view, sendText } as never, { read: () => null, write });
+  sensors.syncSetup(false);
+  expect(JSON.parse(sendText.mock.calls[0][0]).max_range_m).toBeCloseTo(Math.hypot(.7,.5)/2 + .6);
+  sensors.setMode("full"); sensors.setMode("off"); sensors.syncSetup(true);
+  expect(write).toHaveBeenLastCalledWith(expect.objectContaining({ mode: "off", obstacleRangeM: .6 }));
+  expect(sendText).toHaveBeenCalledTimes(3);
 });

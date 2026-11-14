@@ -217,7 +217,8 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
     reportDiagnostic("localization-capture-age", { captureAgeS });
     if (!Number.isFinite(captureAgeS) || captureAgeS < -0.25 || captureAgeS > 1.5) {
       this.staleCaptures++;
-      throw Object.assign(new Error("Camera images are arriving too slowly. Keep the headset connected and try again."), { retryable: this.staleCaptures < 3 });
+      if (this.staleCaptures >= 3) { this.staleCaptures = 0; this.stop(); }
+      throw Object.assign(new Error("Camera images are arriving too slowly. Retrying capture."), { retryable: true });
     }
     this.staleCaptures = 0;
     jpegDimensionsMatch(profile, encoded.width, encoded.height);

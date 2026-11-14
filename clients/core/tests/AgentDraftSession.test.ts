@@ -60,8 +60,10 @@ describe("hold-to-record agent drafts", () => {
 
   it("keeps typed fallback and a draft after permission failure or send failure", () => {
     const f = fixture(); f.speech.setDraft("go home"); f.speech.beginRecording(); f.fail("not-allowed");
-    f.speech.tick(2, true, null, true); expect(f.speech.snapshot().status).toBe("Type a message");
+    f.speech.tick(2, true, null, true); expect(f.speech.snapshot().status).toBe("Ready");
     expect(f.speech.snapshot().error).toContain("not-allowed");
+    expect(f.speech.beginRecording()).toBe(true);
+    f.speech.endRecording(true);
     f.send.mockImplementationOnce(() => { throw new Error("connection lost"); });
     expect(f.speech.submitTyped("go home")).toBe(false); expect(f.speech.snapshot().prompt).toBe("go home");
     expect(f.speech.submitTyped("go home")).toBe(true);

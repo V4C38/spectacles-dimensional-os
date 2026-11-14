@@ -32,6 +32,8 @@ Use pytest/pytest-asyncio for Python (`test_*.py`) and Vitest for TypeScript (`*
 
 History uses short descriptive subjects, such as “Joystick navigation support”; follow that style. PRs should explain behavior changes, reference relevant issues, report validation, and include screenshots for visual changes.
 
+Before committing, amending, or pushing code, the complete local `./launcher/scripts/run-ci.sh` gate must pass for the completed change set. Never commit or push after a failed, interrupted, or unavailable gate unless the user explicitly authorizes skipping validation. GitHub Actions must invoke this same script (with job selectors); keep dependency installation, tool versions, and checks shared rather than duplicating commands in the workflow. macOS uses host libraries; GitHub runs Ubuntu 24.04, so report platform limits and never promise that local success guarantees remote success.
+
 Use focused tests for the behavior being changed during development. Batch related changes and fixes, then run the full `./launcher/scripts/run-ci.sh` gate once at the end of the completed change set. Do not alternate individual edits with repeated full-suite runs.
 
 After a small follow-up fix, rerun the relevant tests rather than restarting the complete gate. Documentation, formatting, whitespace, and Git metadata changes do not justify another full run. Repeat the full gate only when new changes introduce substantial cross-system risk, a failure requires broader verification, or the user explicitly requests it. A single final validation checkpoint covers committing and pushing the same change set; do not rerun tests separately for each Git command.

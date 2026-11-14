@@ -22,6 +22,9 @@ async def test_native_goal_backlog_is_bounded_and_cancel_retires_pending():
             assert release.wait(2)
             return True
 
+        def ar_navigation_recover(self, epoch, revision, deadline):
+            return True
+
         def ar_navigation_heartbeat(self, epoch, revision, deadline):
             beats.append(revision)
             return True
@@ -59,11 +62,11 @@ async def test_explicit_stop_recovers_only_after_native_stop_is_confirmed():
         assert service.faulted
         assert not service.submit(PoseStamped(ts=2), "epoch", 2)
         service.cancel()
-        await service._recovery
+        await asyncio.sleep(0.02)
         assert service.faulted
+        assert service.stop_pending
         runtime.ar_navigation_recover.return_value = True
-        service.cancel()
-        await service._recovery
+        await asyncio.wait_for(service._recovery, 1)
         assert not service.faulted
     finally:
         await service.close()
@@ -101,6 +104,35 @@ async def test_recovery_cannot_overtake_an_actual_timed_out_native_goal():
         release.set()
         await service._recovery
         assert not service.faulted
+    finally:
+        release.set()
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_normal_stop_waits_for_ack_without_publishing_a_navigation_fault():
+    entered, release = threading.Event(), threading.Event()
+    runtime = Mock()
+
+    def stop(*args):
+        entered.set()
+        assert release.wait(2)
+        return True
+
+    runtime.ar_navigation_recover.side_effect = stop
+    recovered = Mock()
+    service = NavigationControlService(runtime, lambda: ("epoch", 1), Mock(), recovered)
+    try:
+        service.cancel()
+        assert service.stop_pending
+        assert not service.faulted
+        assert not service.submit(PoseStamped(ts=1), "epoch", 1)
+        assert await asyncio.to_thread(entered.wait, 1)
+        release.set()
+        await asyncio.wait_for(service._recovery, 1)
+        assert not service.stop_pending
+        assert not service.faulted
+        recovered.assert_called_once()
     finally:
         release.set()
         await service.close()

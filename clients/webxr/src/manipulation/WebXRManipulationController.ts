@@ -26,6 +26,7 @@ export class WebXRManipulationController {
   private lastPanelUpdate = 0;
   private panelGesture: PanelGesture | null = null;
   beginPanel(position: Vec3, orientation: Quat, zone: "bar" | "left" | "right" | "body" = "bar", ray?: {origin: Vec3; direction: Vec3}): void {
+    if (zone === "left" || zone === "right") return;
     this.lastPanelUpdate = this.now();
     this.renderer.detachPanel();
     const panel = this.renderer.panel;
@@ -36,8 +37,8 @@ export class WebXRManipulationController {
     const direction = ray ? new THREE.Vector3(...ray.direction) : new THREE.Vector3(0,0,-1).applyQuaternion(new THREE.Quaternion(...orientation));
     const start = new THREE.Ray(origin,direction).intersectPlane(plane,new THREE.Vector3());
     if (!start) return;
-    const resize = zone === "left" || zone === "right";
-    const anchor = panel.localToWorld(new THREE.Vector3(resize ? (zone === "left" ? .112 : -.112) : 0,0,0));
+    const resize = false;
+    const anchor = panel.localToWorld(new THREE.Vector3(0,0,0));
     this.panelGesture={plane,start,position:panel.position.clone(),anchor,span:start.clone().sub(anchor),scale:panel.scale.x,distance:start.distanceTo(origin),resize,rotation:panel.quaternion.clone(),controllerInverse:new THREE.Quaternion(...orientation).invert(),zone};
   }
   constructor(
@@ -75,7 +76,7 @@ export class WebXRManipulationController {
   hold(position: Vec3, orientation: Quat, ray?: {origin: Vec3; direction: Vec3}): void {
     if (this.panelGesture) {
       const direction = ray?.direction ?? new THREE.Vector3(0,0,-1).applyQuaternion(new THREE.Quaternion(...orientation)).toArray() as Vec3;
-      updatePanelGesture(this.renderer.panel,this.panelGesture,ray?.origin ?? position,direction,new THREE.Quaternion(...orientation),Math.max(0, this.now() - this.lastPanelUpdate),ARM_PANEL_STYLE.minScale,ARM_PANEL_STYLE.maxScale,this.renderer.viewerPosition);
+      updatePanelGesture(this.renderer.panel,this.panelGesture,ray?.origin ?? position,direction,new THREE.Quaternion(...orientation),Math.max(0, this.now() - this.lastPanelUpdate),ARM_PANEL_STYLE.defaultScale,ARM_PANEL_STYLE.defaultScale,this.renderer.viewerPosition);
       this.lastPanelUpdate = this.now();
       return;
     }

@@ -8,6 +8,7 @@ import {
   decodeLocalizationObservations,
   decodeOutbound,
   encodeEstopRequest,
+  encodeResumeOperationRequest,
   encodeNavGoalRequest,
   encodeClientPose,
   encodeHelloRequest,
@@ -30,7 +31,24 @@ function decodeNavigation(value: Record<string, unknown>) {
 
 const HELLO_FIXTURE = { ...helloAt(1234.567), time_sync: { ts_client: 1234.567, ts_server: 5678.901 } };
 
+it("preserves actionable local-dictation availability and bounds its setup reason", () => {
+  const unavailable = { ...HELLO_FIXTURE, speech_transcription: false,
+    speech_transcription_reason: "Install the speech extra in the selected DimOS environment." };
+  expect(decodeOutbound(JSON.stringify(unavailable))).toMatchObject({
+    speech_transcription: false, speech_transcription_reason: unavailable.speech_transcription_reason,
+  });
+  expect(() => decodeOutbound(JSON.stringify({ ...unavailable, speech_transcription_reason: "x".repeat(513) })))
+    .toThrow(/speech_transcription_reason/);
+});
+
 const STATE_FIXTURE = stateFrame();
+
+it("validates canonical stop facts and encodes their matching Resume request", () => {
+  expect(JSON.parse(encodeResumeOperationRequest("epoch", "stop"))).toEqual({ type: "resume_operation_request", epoch: "epoch", stop_id: "stop" });
+  expect(decodeOutbound(JSON.stringify({ ...STATE_FIXTURE, safety: { stopped: true, can_resume: true, stop_id: "stop" } }))).toMatchObject({ safety: { stopped: true, can_resume: true, stop_id: "stop" } });
+  expect(() => decodeOutbound(JSON.stringify({ ...STATE_FIXTURE, safety: { stopped: true, can_resume: true } }))).toThrow(/stop_id/);
+  expect(() => decodeOutbound(JSON.stringify({ ...STATE_FIXTURE, safety: { stopped: false, can_resume: true } }))).toThrow(/stopped/);
+});
 
 it("decodes optional selected localization providers without inventing absent metadata", () => {
   expect(decodeOutbound(JSON.stringify(HELLO_FIXTURE))).toHaveProperty("localization");

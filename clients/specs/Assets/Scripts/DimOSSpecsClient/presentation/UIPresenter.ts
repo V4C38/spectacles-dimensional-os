@@ -34,7 +34,7 @@ type SetUIStateOptions = {
 };
 
 export interface UIPresenterDeps {
-  session: Pick<ARModuleSession, "view" | "start" | "stop" | "sendText" | "requestState" | "collaboration" | "subscribeView">;
+  session: Pick<ARModuleSession, "view" | "start" | "stop" | "sendText" | "requestState" | "requestResumeOperation" | "collaboration" | "subscribeView">;
   episode: LocalizationCaptureEpisode;
   transport: Pick<SpecsWebSocketTransport, "setUrl">;
   clientTrackingOriginStore: ClientTrackingOriginStore;
@@ -75,6 +75,7 @@ export class UIPresenter extends BaseScriptComponent {
   private lidarDisplay: LidarDisplayController | null = null;
   private debugEnabled = false;
   private setupWizardController: SetupWizardController | null = null;
+  presencePanel() { return this.isSetupCompleted() ? this.mainMenuView?.presencePanel() ?? null : null; }
   private mainMenuView: MainMenuView | null = null;
   private uiLogger = new HudMessageController();
   private wristMenuController: WristMenuController | null = null;
@@ -164,7 +165,7 @@ export class UIPresenter extends BaseScriptComponent {
     this.uiLogger.tick();
     this.deps?.speechController?.tick();
     if (!this.setupCompleted) {
-      this.ensureWizardLidarOff();
+      this.syncLidarSelection();
       return;
     }
     this.wristMenuController?.tick(dt);
@@ -256,13 +257,20 @@ export class UIPresenter extends BaseScriptComponent {
       lidarPreferences: { ...this.getLidarPreferences() }, lidarReceived: view.lidar?.points.length ?? 0,
       debugEnabled: this.getDebugMode(),
       debugText: diagnosticsVisible ? `Arm capture: ${deps.manipulationDiagnostics?.() ?? "—"}\nPlayback: ${JSON.stringify(view.state?.playback ?? null)}\nLocalization timings: ${JSON.stringify(deps.episode.timing())}\nConnection: ${view.connection}\nLocalized: ${view.hasTrackingOrigin ? "Yes" : "No"}\nCapture: ${capture?.text}\n${deps.episode.view().lastError ?? ""}` : "",
-      estopAvailable: view.capabilities?.estop.available === true,
+      resumeOperation: view.state?.safety?.stopped === true,
+      estopAvailable: view.state?.safety?.stopped ? view.state.safety.can_resume : view.capabilities?.estop.available === true,
       estopPressed: getTime() < this.stopPressedUntil,
       alignmentReview: this.setupFlow?.alignmentReview?.pending === true,
     };
   }
   requestEmergencyStop(): void {
-    this.requireDeps().emergencyStop();
+    const deps = this.requireDeps();
+    const safety = deps.session.view().state?.safety;
+    if (safety?.stopped) {
+      if (safety.can_resume) deps.session.requestResumeOperation();
+      return;
+    }
+    deps.emergencyStop();
     this.stopPressedUntil = getTime() + 0.35;
   }
   closeMenu(): void { this.deps?.speechController?.endRecording(true); this.wristMenuController?.closeImmediate(); this.setUIState(0); }
@@ -332,7 +340,7 @@ export class UIPresenter extends BaseScriptComponent {
       this.prepareMainUiPlacementAnchor();
       this.setUIState(1);
     }
-    this.sendPostWizardLidarDefault();
+    this.syncLidarSelection();
     this.requestStateIfReady();
     this.refreshHud();
   }
@@ -409,14 +417,13 @@ export class UIPresenter extends BaseScriptComponent {
     controller.start(true);
   }
 
-  private ensureWizardLidarOff(): void { this.lidarDisplay?.syncSetup(false); }
+  private syncLidarSelection(): void { this.lidarDisplay?.syncSetup(false); }
 
-  private sendPostWizardLidarDefault(): void { this.lidarDisplay?.syncSetup(true); }
 
   private refreshHud(): void {
     this.requireDeps();
     this.deps?.speechController?.syncEnabled();
-    this.sendPostWizardLidarDefault();
+    this.syncLidarSelection();
   }
 
   private refreshRobotLabels(): void {

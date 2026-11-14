@@ -456,11 +456,11 @@ export class SetupWizardController {
     const sessionView = this.deps.session.view();
     const episodeView = this.deps.episode.view();
     const kind = localizationKind(sessionView);
-    this.view.setCaptureLayout?.(kind !== "unavailable" && !episodeView.lastError);
+    this.view.setCaptureLayout?.(kind !== "unavailable" && (!episodeView.lastError || episodeView.retryInS != null));
     this.view.setLocalizationProvider?.(localizationProviderLabel(kind));
     this.view.setMarkerGuide?.(kind === "marker" || kind === "mixed");
     this.view.setLocalizationGuidance?.(localizationGuidance(kind));
-    this.view.setRetryVisible?.(episodeView.lastError !== null);
+    this.view.setRetryVisible?.(false);
     const capture = localizationCaptureStatus(sessionView, episodeView, getTime());
     this.view.setStatus(capture.text, statusToneColor(capture.color));
   }

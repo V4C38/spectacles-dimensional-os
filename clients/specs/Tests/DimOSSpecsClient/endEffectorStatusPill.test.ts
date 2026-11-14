@@ -1,5 +1,9 @@
 import { expect, it, vi } from "vitest";
 vi.mock("SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider", () => ({ Slider: class {} }));
+vi.mock("../mocks/UIKit.ts", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../mocks/UIKit")>(),
+  uprightFacingRotation: () => quat.quatIdentity(),
+}));
 import { EndEffectorStatusView } from "../../Assets/Scripts/DimOSSpecsClient/manipulation/ManipulationRenderer";
 import { ViewerNotificationPresenter } from "../../Assets/Scripts/DimOSSpecsClient/presentation/ViewerNotificationPresenter";
 import { EndEffectorStatus } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationPresentation";
@@ -15,7 +19,7 @@ it("anchors the Specs status beside the EE and fades its plate, text, and animat
     presenter, status: new EndEffectorStatus(),
   }) as EndEffectorStatusView;
   const anchor = { getTransform: () => ({ getWorldPosition: () => new vec3(1, 2, 3) }) } as SceneObject;
-  const camera = { getTransform: () => ({ getWorldRotation: () => quat.quatIdentity() }) } as SceneObject;
+  const camera = { getTransform: () => ({ getWorldRotation: () => quat.quatIdentity(), getWorldPosition: () => vec3.zero() }) } as SceneObject;
   const failed = { blocked: false, fresh: true, stopped: false, moving: false, rejection: { message: "IK failed" } };
   pill.apply(failed, anchor, camera, 1);
   pill.apply({ ...failed }, anchor, camera, 3);

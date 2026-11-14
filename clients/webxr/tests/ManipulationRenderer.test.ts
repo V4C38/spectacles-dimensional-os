@@ -6,7 +6,7 @@ import "./fixtures/xrEnvironment";
 
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { ManipulationRenderer, type ManipulationRenderInput } from "../src/manipulation/ManipulationRenderer";
+import { ManipulationRenderer, EndEffectorHandleRenderer, type ManipulationRenderInput } from "../src/manipulation/ManipulationRenderer";
 import type { ManipulationState } from "@dimos-ar-client/manipulation/ManipulationTypes";
 const pose = {
   position: [0, 0, 0] as [number, number, number],
@@ -86,7 +86,7 @@ it("keeps the gripper menu across hover transitions and shows the target guide",
   apply(1);
   expect(r.gripperMenu.visible).toBe(true);
   expect(r.gripperMenu.position.y).toBeCloseTo(
-    r.handle.object.position.y - 0.05,
+    r.handle.object.position.y - 0.07,
   );
   r.eeHovered = false;
   apply(1.1);
@@ -655,23 +655,24 @@ it("uses full opacity for an executing path and planning opacity for its draft",
   } finally { r.dispose(); }
 });
 
-it("keeps the EE grab radius three times the visual radius", () => {
+it("keeps the EE visual and grab radius equal", () => {
   const renderer = new ManipulationRenderer();
   try {
     const radius = (mesh: THREE.Mesh) => (mesh.geometry as THREE.SphereGeometry).parameters.radius * mesh.scale.x;
-    expect(radius(renderer.handle.visual)).toBeCloseTo(radius(renderer.handle.collider) / 3);
-    expect(radius(renderer.measuredHandle.visual)).toBeCloseTo(radius(renderer.handle.visual) * 0.5);
+    expect(radius(renderer.handle.visual)).toBeCloseTo(radius(renderer.handle.collider));
+    expect(radius(renderer.measuredHandle.visual)).toBeCloseTo(radius(renderer.handle.visual) / 3);
     expect(renderer.measuredHandle.collider.userData.interactionEnabled).toBe(false);
   } finally { renderer.dispose(); }
 });
 
-it("moves and scales the arm controls independently and Pin restores the anchor", () => {
+it("moves the arm controls independently and Pin restores the anchor", () => {
   const r = new ManipulationRenderer();
   try {
     applyRenderer(r, { now: 1 });
     const frame = r.controlsView.frame.object;
     const handles = frame.children.filter(child => child.userData.panelHandle);
-    expect(handles.map(child => child.userData.panelHandle)).toEqual(["bar", "left", "right"]);
+    expect(handles.filter(child => child.visible).map(child => child.userData.panelHandle)).toEqual(["bar"]);
+    expect(handles.filter(child => !child.visible).every(child => child.userData.rayDisabled)).toBe(true);
     expect(handles.every(child => child.userData.manipulationPanel)).toBe(true);
     const rootPose = r.baseMarker.position.clone();
     r.object.updateMatrixWorld(true);
@@ -781,4 +782,30 @@ it("owns the visible handle's rejection, stale and blocked center colors", () =>
   applyRenderer(renderer, { selected: false, target: pose, now: 4 });
   expect(color()).toBe(0xb3b3b3);
   renderer.dispose();
+});
+
+
+it("matches the selectable EE collider to its visual and keeps the measured marker small", () => {
+  const renderer = new ManipulationRenderer();
+  try {
+    expect((renderer.handle.visual.geometry as THREE.SphereGeometry).parameters.radius).toBe(.018);
+    expect((renderer.handle.collider.geometry as THREE.SphereGeometry).parameters.radius).toBe(.018);
+    expect((renderer.measuredHandle.visual.geometry as THREE.SphereGeometry).parameters.radius).toBe(.012);
+    expect(renderer.handle.collider.userData.rayPriority).toBe(10);
+  } finally { renderer.dispose(); }
+});
+
+
+it("keeps the EE grab collider on the visible sphere instead of intercepting nearby controls", () => {
+  const handle = new EndEffectorHandleRenderer();
+  try {
+    const collider = handle.collider.geometry as THREE.SphereGeometry;
+    const visible = handle.visual.geometry as THREE.SphereGeometry;
+    expect(collider.parameters.radius).toBe(visible.parameters.radius);
+    handle.object.updateMatrixWorld(true);
+    const ray = new THREE.Raycaster(new THREE.Vector3(.025,0,.2), new THREE.Vector3(0,0,-1));
+    expect(ray.intersectObject(handle.collider)).toHaveLength(0);
+    ray.ray.origin.x = 0;
+    expect(ray.intersectObject(handle.collider).length).toBeGreaterThan(0);
+  } finally { handle.dispose(); }
 });

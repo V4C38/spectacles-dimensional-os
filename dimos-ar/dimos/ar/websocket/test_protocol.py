@@ -23,6 +23,7 @@ from dimos.ar.websocket.protocol import (
     LocalizationObservation,
     LocalizationObservationsRequest,
     LocalizationStartRequest,
+    ResumeOperationRequest,
     StateRequest,
     StateSnapshot,
     TimeSync,
@@ -44,6 +45,13 @@ from dimos.ar.websocket.protocol import (
     observation_from_localization,
 )
 from test_support.websocket import TYPESCRIPT_LOCA_ONE, _encode_localization_observations_frame
+
+
+def test_resume_request_requires_current_stop_and_source_identifiers():
+    assert decode_inbound('{"type":"resume_operation_request","epoch":"source","stop_id":"stop"}') == ResumeOperationRequest("source", "stop")
+    for missing in (None, "", " ", 1):
+        with pytest.raises((TypeError, ValueError)):
+            decode_inbound(json.dumps({"type": "resume_operation_request", "epoch": "source", "stop_id": missing}))
 
 
 def _available() -> Capability:

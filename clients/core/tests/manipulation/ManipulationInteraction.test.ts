@@ -47,6 +47,7 @@ function fixture() {
       view: () => view,
       collaboration: authority.collaboration,
       assetTransferDeadline: (id: string) => assets.get(id) ?? null,
+      requestResumeOperation: () => sent.push({ type: "resume_operation_request" }),
       sendText: (text) => { const request = JSON.parse(text); if (request.action === "release") followingToken = null; sent.push(request); },
       subscribeOutbound: (callback) => {
         listener = callback;
@@ -432,6 +433,7 @@ it("does not retry timed-out execution and blocks plans with stale feedback", ()
   f.reply(f.sent.at(-1), { status: "aborted" });
   f.interaction.begin();
   f.interaction.aim(pose);
+  f.advance(.51, false);
   f.advance(2.01, false);
   expect(f.interaction.dragging).toBe(false);
   expect(f.interaction.plan).toBeNull();
@@ -763,6 +765,7 @@ it("regrabs a released follow goal with a fresh lease and interrupts on feedback
   expect(f.authority.state.authority!.lease_id).not.toBe(firstLease);
   expect(f.sent.filter(c => c.action === "acquire")).toHaveLength(2);
   f.reply(f.sent.at(-1), { status: "acquired", token: "second" });
+  f.advance(.51, false);
   f.advance(2.01, false);
   expect(f.interaction.dragging).toBe(false);
   expect(f.authority.state.authority).toBeNull();
@@ -830,20 +833,20 @@ it("validates a new released follow goal rather than restoring an older rejected
   const count = f.sent.length; f.advance(0.1); expect(f.sent).toHaveLength(count);
 });
 
-it("retains a grab during unavailable feedback, reacquires safely, and expires after one second", () => {
+it.each(["released", "retired"])("retains a grab through 1.5s feedback loss and reacquires after %s native retirement", releaseOutcome => {
   const f=fixture(); f.interaction.begin();
   f.reply(f.sent.at(-1),{status:"acquired",token:"old"}); f.interaction.aim(pose); f.advance(.04);
   f.view.manipulation.available=false;
   const count=f.sent.length; f.advance(.1,false);
-  f.interaction.aim({...pose,position:[.1,0,.3]}); f.advance(.9,false);
+  f.interaction.aim({...pose,position:[.1,0,.3]}); f.advance(1.5,false);
   expect(f.interaction.dragging).toBe(true); expect(f.sent).toHaveLength(count + 1);
   expect(f.sent.at(-1).action).toBe("release");
-  f.reply(f.sent.at(-1), { status: "released" });
+  f.reply(f.sent.at(-1), releaseOutcome === "released" ? { status: "released" } : { status: "rejected", code: "retired" });
   f.view.manipulation.available=true; f.advance(.01);
   expect(f.sent.at(-1).action).toBe("acquire");
   f.reply(f.sent.at(-1),{status:"acquired",token:"new"}); f.advance(.04);
   expect(f.sent.at(-1)).toMatchObject({action:"update",token:"new",position:[.1,0,.3]});
-  f.view.manipulation.available=false; f.advance(.01,false); f.advance(1.001,false);
+  f.view.manipulation.available=false; f.advance(.01,false); f.advance(2.001,false);
   expect(f.interaction.dragging).toBe(false);
   expect(f.sent.some(c=>c.action==="cancel")).toBe(true);
 });
@@ -902,6 +905,7 @@ it("records why a held capture ended without treating spatial failure as an endi
   const sample = f.sent.at(-1);
   f.reply(sample, {status: "infeasible", code: "ik_failed", sequence: sample.sequence});
   expect(f.interaction.captureEvents).toEqual([]);
+  f.advance(.51, false);
   f.advance(2.01, false);
   expect(f.interaction.captureEvents.at(-1)?.reason).toBe("feedback stale");
 });
@@ -959,7 +963,7 @@ it("retains a failed execution target and replans rather than reusing its cancel
   expect(f.sent.slice(before).some(c=>c.action === "plan")).toBe(true);
 });
 
-it.each(["planning", "following"])("preserves %s capture and last valid model for exactly one second of socket loss", mode => {
+it.each(["planning", "following"])("preserves %s capture and last valid model for two seconds of socket loss", mode => {
   const f=fixture(); f.interaction.setSelected(mode === "planning"); f.interaction.begin();
   if(mode === "following") f.reply(f.sent.at(-1),{status:"acquired",token:"old"});
   f.interaction.aim(pose); f.advance(.05); const old=f.sent.at(-1);
@@ -967,7 +971,7 @@ it.each(["planning", "following"])("preserves %s capture and last valid model fo
   const valid=f.interaction.previewJoints;
   f.view.connection="disconnected"; f.advance(0,false);
   const count=f.sent.length;
-  f.interaction.aim({...pose,position:[.2,0,.3]}); f.advance(.999,false);
+  f.interaction.aim({...pose,position:[.2,0,.3]}); f.advance(1.999,false);
   expect(f.interaction.dragging).toBe(true);
   expect(f.interaction.previewJoints).toEqual(valid);
   expect(f.interaction.target?.position).toEqual([.2,0,.3]);
@@ -977,17 +981,35 @@ it.each(["planning", "following"])("preserves %s capture and last valid model fo
   expect(f.interaction.target).toBeNull(); expect(f.interaction.previewJoints).toBeNull();
 });
 
-it("keeps capture after reconnect while requiring explicit motor Resume",()=> {
+it("retires capture when reconnect reveals a confirmed motor stop",()=> {
   const f=fixture(); f.interaction.begin();
   f.reply(f.sent.at(-1),{status:"acquired",token:"old"}); f.interaction.aim(pose); f.advance(.04);
   f.view.connection="disconnected"; f.advance(.1,false);
   f.view.connection="ready"; f.view.manipulation.stopped=true; f.view.manipulation.stop_confirmed=true;
+  f.view.state = { safety: { stopped: true, can_resume: true, stop_id: "stop" } };
   const count=f.sent.length; f.advance(.5);
-  expect(f.interaction.dragging).toBe(true); expect(f.sent).toHaveLength(count);
+  expect(f.interaction.dragging).toBe(false); expect(f.sent).toHaveLength(count);
   expect(f.interaction.snapshot().canResume).toBe(true);
-  f.interaction.resume(); expect(f.sent.at(-1).action).toBe("resume");
-  f.reply(f.sent.at(-1),{status:"resumed"}); f.view.manipulation.stopped=false; f.advance(.01);
+  f.interaction.resume(); expect(f.sent.at(-1).type).toBe("resume_operation_request");
+  f.view.manipulation.stopped=false; f.view.state.safety = { stopped: false, can_resume: false }; f.advance(.01);
+  expect(f.interaction.dragging).toBe(false);
+  expect(f.interaction.begin()).toBe(true);
   expect(f.sent.at(-1).action).toBe("acquire");
+});
+
+it("keeps the visual grab across reconnect and acquires a fresh native following token", () => {
+  const f = fixture(); f.interaction.begin();
+  f.reply(f.sent.at(-1), { status: "acquired", token: "old-native" });
+  f.interaction.aim(pose); f.advance(.04);
+  f.view.connection = "disconnected"; f.advance(0, false); f.advance(.6, false);
+  expect(f.interaction.dragging).toBe(true);
+  const count = f.sent.length;
+  f.view.connection = "ready"; f.view.manipulation.following = false; f.advance(.01);
+  const acquire = f.sent.slice(count).find(command => command.action === "acquire");
+  expect(acquire).toBeDefined();
+  expect(f.interaction.dragging).toBe(true);
+  f.reply(acquire, { status: "acquired", token: "fresh-native" }); f.advance(.04);
+  expect(f.sent.at(-1)).toMatchObject({ action: "update", token: "fresh-native" });
 });
 
 it("rejects old advisory replies during loss and preserves immediate Stop",()=> {

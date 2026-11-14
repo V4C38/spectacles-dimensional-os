@@ -40,7 +40,7 @@ export class WebXRLidarRenderer {
   readonly object: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   private readonly geometry = new THREE.BufferGeometry();
   private readonly texture = dotTexture();
-  private readonly material = new THREE.PointsMaterial({ size: 0.016, map: this.texture, alphaTest: 0.001, transparent: false, blending: THREE.CustomBlending, blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneMinusSrcAlphaFactor, blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor, vertexColors: true, depthWrite: false, toneMapped: false });
+  private readonly material = new THREE.PointsMaterial({ size: 0.024, map: this.texture, alphaTest: 0.001, transparent: false, blending: THREE.CustomBlending, blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneMinusSrcAlphaFactor, blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor, vertexColors: true, depthWrite: false, toneMapped: false });
   private readonly positions = new THREE.BufferAttribute(new Float32Array(MAX_LIDAR_POINTS * 3), 3).setUsage(THREE.DynamicDrawUsage);
   private readonly colors = new THREE.BufferAttribute(new Float32Array(MAX_LIDAR_POINTS * 4), 4).setUsage(THREE.DynamicDrawUsage);
   private readonly sampler = new LidarFrameSampler<ReadonlyFacts<ClientTrackingOrigin>>(
@@ -52,7 +52,7 @@ export class WebXRLidarRenderer {
     // Custom alpha blending keeps the cloud in the early opaque queue, ahead of all UI.
     // Keep distant dots legible, with a bounded close-up footprint and no sphere geometry.
     this.material.onBeforeCompile = shader => {
-      shader.vertexShader = shader.vertexShader.replace("#include <logdepthbuf_vertex>", "gl_PointSize = clamp(gl_PointSize, 2.5, 8.0);\n#include <logdepthbuf_vertex>");
+      shader.vertexShader = shader.vertexShader.replace("#include <logdepthbuf_vertex>", "gl_PointSize = clamp(gl_PointSize, 3.75, 12.0);\n#include <logdepthbuf_vertex>");
     };
     this.material.customProgramCacheKey = () => "dimos-lidar-round-dots-v1";
     this.geometry.setAttribute("position", this.positions); this.geometry.setAttribute("color", this.colors);

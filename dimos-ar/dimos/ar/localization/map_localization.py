@@ -143,6 +143,7 @@ class MapClient:
     pending_alignment: PendingAlignment | None = None
     relative_alignment: RelativeAlignment | None = None
     next_attempt: Literal["vps", "tag"] = "vps"
+    initial_vps_failures: int = 0
 
     def reset_reference(self) -> None:
         self.alignment = None
@@ -151,6 +152,7 @@ class MapClient:
         self.manual = True
         self.relative_alignment = None
         self.next_attempt = "vps"
+        self.initial_vps_failures = 0
         self.force = False
 
     def request_manual_alignment(self) -> None:
@@ -167,6 +169,7 @@ class MapClient:
         self.manual = False
 
     def acknowledge_alignment(self, alignment: MapAlignment) -> None:
+        self.initial_vps_failures = 0
         self.alignment = alignment
         self.relative_alignment = None
         pending = self.pending_alignment
@@ -189,6 +192,7 @@ class MapClient:
         self.episode = None
 
     def accept_relative_alignment(self, alignment: RelativeAlignment) -> None:
+        self.initial_vps_failures = 0
         self.relative_alignment = alignment
         self.manual = self.force = False
         self.next_attempt = "tag"
@@ -289,6 +293,10 @@ class MapLocalization:
 
     def _emit(self, client_id: str, body: dict[str, Any]) -> None:
         self._send(client_id, encode_text(body))
+
+    @property
+    def context(self) -> dict[str, str]:
+        return {"map_code": self._map_code, "odom_reference_id": self._odometry.reference_id}
 
     def _context(self) -> dict[str, Any]:
         return {"map_code": self._map_code, "odom_reference_id": self._odometry.reference_id}
@@ -578,7 +586,9 @@ class MapLocalization:
         self._emit(client_id, payload)
         return episode
 
-    def _offer_tag_fallback(self, client_id: str | None = None) -> None:
+    def _offer_tag_fallback(
+        self, client_id: str | None = None, *, query_failed: bool = False
+    ) -> None:
         if self._marker is None:
             return
         for key, client in self._clients.items():
@@ -589,10 +599,22 @@ class MapLocalization:
                 and self._active(client)
                 and self._headset_due(client)
             ):
+                # Count unsuccessful cloud queries, never missing captures or
+                # admission waits. Existing relative alignments can recover
+                # immediately; initial setup gives VPS two actual attempts.
+                if query_failed and client.relative_alignment is None:
+                    client.initial_vps_failures = min(2, client.initial_vps_failures + 1)
+                    if client.initial_vps_failures < 2:
+                        continue
                 client.next_attempt = "tag"
                 # Cloud admission can defer for 30 s; local tag recovery only
                 # needs the ordinary short retry backoff, not that cloud wait.
                 client.retry_at = min(client.retry_at, self._clock() + 2.0)
+                self._emit(key, {
+                    "type": "localization_status", **self._context(),
+                    "scope": "headset", "status": "deferred",
+                    "reason": "vps_failed_using_marker", "retry_after_s": 2.0,
+                })
 
     def _tag_unavailable(self, key: str) -> None:
         client = self._clients[key]
@@ -607,7 +629,7 @@ class MapLocalization:
     def _robot_failed(self, reason: str) -> None:
         self._robot_status("failed", reason)
         self._robot_retry = self._clock() + 2.0
-        self._offer_tag_fallback()
+        self._offer_tag_fallback(query_failed=reason == "robot_localization_failed")
 
     def _finish_capture(
         self,
@@ -802,7 +824,7 @@ class MapLocalization:
                 if localized is None or anchor is None:
                     self._finish_capture(key, "failed", "headset_localization_failed")
                     client.retry_at = self._clock() + 2.0
-                    self._offer_tag_fallback(key)
+                    self._offer_tag_fallback(key, query_failed=localized is None)
                     return
                 map_client = np.asarray(pose_to_matrix(localized.pose), dtype=np.float64)
                 pose = _pose_payload(map_client)
@@ -844,7 +866,7 @@ class MapLocalization:
                 )
                 self._finish_capture(key, "failed", "headset_localization_failed")
                 client.retry_at = self._clock() + 2.0
-                self._offer_tag_fallback(key)
+                self._offer_tag_fallback(key, query_failed=True)
 
     async def _tag(
         self,

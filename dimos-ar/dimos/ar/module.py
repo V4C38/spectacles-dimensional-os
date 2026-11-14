@@ -81,6 +81,7 @@ from dimos.ar.websocket.protocol import (
     LocalizationObservationsRequest,
     LocalizationStartRequest,
     LocalizationTracking,
+    ResumeOperationRequest,
     StateRequest,
     StateSnapshot,
     TimeSync,
@@ -249,6 +250,7 @@ class ARModule(Module):  # type: ignore[misc]
     _manipulation_service: ManipulationService | None = None
     _interaction_controller: InteractionController
     _stationary_task: asyncio.Task[None] | None = None
+    _resume_task: asyncio.Task[None] | None = None
 
     @rpc
     def build(self) -> None:
@@ -291,9 +293,11 @@ class ARModule(Module):  # type: ignore[misc]
                 relay_url=self.config.ip_relay_url,
                 loop=self._loop,
                 hello_supplier=self._hello_body,
+                presence_context=lambda: self._map_localization.context if self._map_localization else None,
                 on_connect=self._on_client_connect,
                 on_nav_goal_request=self._on_nav_goal_request,
                 on_estop_request=self._on_estop_request,
+                on_resume_operation_request=self._on_resume_operation_request,
                 on_lidar_settings_request=self._on_lidar_settings_request,
                 on_state_request=self._on_state_request,
                 on_localization_start_request=self._on_localization_start_request,
@@ -374,6 +378,7 @@ class ARModule(Module):  # type: ignore[misc]
             self._safety = EmergencyStopController(
                 estop_available=self._capabilities.supports(CapabilityName.ESTOP),
                 effects=(self._clear_navigation, self._publish_stop),
+                manipulation=self._manipulation_service is not None,
             )
             transforms = OdomMapTransform()
             self._odom_map_transform = transforms
@@ -427,7 +432,9 @@ class ARModule(Module):  # type: ignore[misc]
                 commit_target=self._commit_shared_target,
                 submit_goal=self._submit_navigation_goal,
                 cancel_joystick=self._cancel_tele_cmd_vel,
-                stop_navigation=lambda: self._safety.on_estop_request(),
+                stop_navigation=lambda: self._safety.controlled_stop(),
+                operation_stopped=lambda: self._safety.stopped,
+                retire_navigation=lambda: self._nav_goal_coordinator.on_estop(),
                 broadcast_state=self._broadcast_state,
                 send=lambda client, text: self._ws_server.schedule_send_to_client(client, text),
                 broadcast=lambda text: self._ws_server.schedule_broadcast_text(text),
@@ -509,6 +516,8 @@ class ARModule(Module):  # type: ignore[misc]
         self._cancel_tele_cmd_vel()
         if self._stationary_task is not None:
             self._loop.call_soon_threadsafe(self._stationary_task.cancel)
+        if self._resume_task is not None:
+            self._loop.call_soon_threadsafe(self._resume_task.cancel)
         for name, service in (
             ("interaction", getattr(self, "_interaction_controller", None)),
             ("navigation", getattr(self, "_navigation_service", None)),
@@ -565,6 +574,16 @@ class ARModule(Module):  # type: ignore[misc]
         idle = True
         if self._capabilities.supports(CapabilityName.AGENT):
             idle = self._agent_service.idle
+        safety = self._safety.snapshot()
+        if (
+            self._interaction_controller.mode_task is not None
+            or self._interaction_controller.native_mode_uncertain
+            or (
+                isinstance(self._navigation_service, NavigationControlService)
+                and (self._navigation_service.faulted or self._navigation_service.stop_pending)
+            )
+        ):
+            safety["can_resume"] = False
         return StateSnapshot(
             connected_clients=self._ws_server.connection_count,
             lidar=self._lidar_settings,
@@ -574,6 +593,7 @@ class ARModule(Module):  # type: ignore[misc]
             else self._nav_goal_coordinator.nav_state(),
             agent=AgentState(idle=idle),
             nav_preview_costmap_ts=self._previews.costmap_ts,
+            safety=safety,
         )
 
     def _broadcast_state(self) -> None:
@@ -627,7 +647,7 @@ class ARModule(Module):  # type: ignore[misc]
     ) -> None:
         logger.info("AR client session ready", client_id=client_id)
         self._interaction_controller.state.connect(client_id)
-        self._lidar_subscriptions[client_id] = DEFAULT_LIDAR_SETTINGS
+        self._lidar_subscriptions.setdefault(client_id, DEFAULT_LIDAR_SETTINGS)
         if self._manipulation_service is not None:
             self._manipulation_service.connect(client_id)
         self._ws_server.schedule_send_to_client(
@@ -680,11 +700,16 @@ class ARModule(Module):  # type: ignore[misc]
             self._map_localization.disconnect(client_id)
         self._policy.on_disconnect(client_id)
         if self._ws_server.logical_session_count == 0:
+            self._interaction_controller.state.stop("last_disconnect")
+            self._interaction_controller.stop_agent()
             if self._manipulation_service is not None:
-                self._interaction_controller.state.request_manipulation_stop()
-                self._manipulation_service.emergency_stop(
-                    self._interaction_controller.state.epoch,
-                    self._interaction_controller.state.revision,
+                state = self._interaction_controller.state
+                request_id = f"disconnect-stop-{state.epoch}-{state.revision}"
+                state.begin_manipulation_motion(request_id)
+                self._manipulation_service.controlled_stop(
+                    state.epoch,
+                    state.revision,
+                    request_id,
                 )
             self._cancel_tele_cmd_vel()
             self._safety.on_last_disconnect()
@@ -729,7 +754,7 @@ class ARModule(Module):  # type: ignore[misc]
 
     def _submit_navigation_goal(self, msg: NavGoalRequest) -> bool:
         service = self._navigation_service
-        if service is None or getattr(self, "_requires_mapping_restart", False):
+        if service is None or self._safety.stopped or getattr(self, "_requires_mapping_restart", False):
             return False
         goal = self._nav_goal_coordinator.submit_goal(msg)
         self._broadcast_state()
@@ -769,7 +794,11 @@ class ARModule(Module):  # type: ignore[misc]
         return await self._interaction_controller.observe_preview(client_id, request, frame)
 
     def _on_manipulation_snapshot(self, snapshot: dict[str, Any]) -> None:
-        return self._interaction_controller.observe_manipulation_snapshot(snapshot)
+        previous = self._safety.snapshot()
+        self._safety.observe_manipulation(snapshot)
+        self._interaction_controller.observe_manipulation_snapshot(snapshot)
+        if previous != self._safety.snapshot():
+            self._broadcast_state()
 
     def _on_manipulation_result(self, request: ManipulationRequest, result: dict[str, Any]) -> None:
         return self._interaction_controller.observe_manipulation_result(request, result)
@@ -797,9 +826,51 @@ class ARModule(Module):  # type: ignore[misc]
         self._cancel_tele_cmd_vel()
         self._broadcast_interaction()
         self._safety.on_estop_request()
+        self._interaction_controller.stop_agent()
         # A goal can be accepted before native path following starts. Publish
         # the stop fact even when the legacy navigation phase was already idle.
         self._broadcast_state()
+
+    def _on_resume_operation_request(self, msg: ResumeOperationRequest, client_id: str) -> None:
+        state = self._interaction_controller.state
+        if (
+            not self._capabilities.supports(CapabilityName.ESTOP)
+            or msg.epoch != state.epoch
+            or state.authority is not None
+            or self._interaction_controller.mode_task is not None
+            or self._interaction_controller.native_mode_uncertain
+            or self._resume_task is not None
+            or (
+                isinstance(self._navigation_service, NavigationControlService)
+                and (self._navigation_service.faulted or self._navigation_service.stop_pending)
+            )
+            or not self._safety.begin_resume(msg.stop_id)
+        ):
+            return
+        if self._manipulation_service is None:
+            self._safety.finish_resume(msg.stop_id, succeeded=True)
+            self._broadcast_state()
+            return
+        self._broadcast_state()
+        revision = state.reserve_manipulation_resume()
+        self._resume_task = asyncio.create_task(
+            self._resume_manipulation_operation(msg.stop_id, client_id, msg.epoch, revision)
+        )
+
+    async def _resume_manipulation_operation(
+        self, stop_id: str, client_id: str, epoch: str, revision: int
+    ) -> None:
+        succeeded = False
+        try:
+            service = self._manipulation_service
+            if service is not None:
+                succeeded = await service.resume_operation(client_id, epoch, revision)
+        except Exception:
+            logger.exception("Resume operation failed")
+        finally:
+            self._safety.finish_resume(stop_id, succeeded=succeeded)
+            self._resume_task = None
+            self._broadcast_state()
 
     def _update_lidar_aggregate(self) -> None:
         active = [settings for settings in self._lidar_subscriptions.values() if settings.enabled]
@@ -874,7 +945,7 @@ class ARModule(Module):  # type: ignore[misc]
     ) -> None:
         if not self._capabilities.supports_navigation(NAV_JOYSTICK) or getattr(
             self, "_requires_mapping_restart", False
-        ):
+        ) or self._safety.stopped:
             return
         if not self._native_authorized(_client_id, msg, "joystick"):
             return

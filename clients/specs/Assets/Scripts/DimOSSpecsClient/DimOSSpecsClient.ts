@@ -1,3 +1,4 @@
+import { SpecsPresenceRenderer } from "./presentation/SpecsPresenceRenderer";
 import { SpecsRuntimeCoordinator } from "./SpecsRuntimeCoordinator";
 import { isSelectionEligible } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
 import { ClientTrackingOriginStore } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
@@ -71,6 +72,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
   private targetPriority: SpecsTargetPriority<InteractableHitInfo> | null = null;
   private previewRoute: NavigationRouteRenderer | null = null;
   private notifications: ViewerNotificationPresenter | null = null;
+  private presence: SpecsPresenceRenderer | null = null;
   private lasers: CursorLaserPresenter | null = null;
   private laserUpdate: DispatchedUpdateEvent | null = null;
   private laserStart: DispatchedDelayedEvent | null = null;
@@ -176,6 +178,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     this.manipulation = new SpecsManipulationController(session, () => clientTrackingOriginStore.T_odom_client,
       parent, this.cameraObject, () => this.selection.toggle(), () => this.emergencyStop(), () => this.uiPresenter?.realign());
     this.lasers = new CursorLaserPresenter(parent, readSikLaserPointers);
+    this.presence = new SpecsPresenceRenderer(parent);
     const activeRouteRenderer = new NavigationRouteRenderer(parent);
     const navigationController = new SpecsNavigationController({
       session,
@@ -230,6 +233,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       if (this.laserStart) dispatcher.removeEvent(this.laserStart);
       if (this.laserUpdate) dispatcher.removeEvent(this.laserUpdate);
       this.lasers?.dispose();
+      this.presence?.dispose();
       this.unsubscribeView?.();
       this.unsubscribeView = null;
       this.unsubscribeOutbound?.();
@@ -261,6 +265,8 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       this.laserUpdate = dispatcher.createLateUpdateEvent("SpecsLaserUpdate", () => {
         if (!this.suspended && this.enabled && this.getSceneObject().isEnabledInHierarchy) this.lasers?.tick();
         else this.lasers?.reset();
+        this.session?.presence.publish(() => ({ pointers: this.lasers?.presencePointers() ?? [], panel: this.uiPresenter.presencePanel() }), !this.suspended && this.enabled && this.getSceneObject().isEnabledInHierarchy);
+        this.presence?.update(this.suspended ? [] : this.session?.presence.snapshot() ?? []);
       });
     });
     const session = this.session!;

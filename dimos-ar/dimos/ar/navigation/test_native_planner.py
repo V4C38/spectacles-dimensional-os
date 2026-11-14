@@ -146,7 +146,7 @@ def test_synchronously_completed_goal_is_still_accepted():
         _lock=threading.RLock(), _ar_latest_goal_ts=float('-inf'),
         _ar_stopped_at=float('-inf'), _current_goal=None,
     )
-    planner.handle_goal_request = lambda goal: setattr(planner, '_ar_latest_goal_ts', goal.ts)
+    planner.handle_goal_request = lambda goal, **_kwargs: setattr(planner, '_ar_latest_goal_ts', goal.ts)
     owner._planner = planner
     assert owner.ar_navigation_goal(PoseStamped(ts=100), "epoch", 1, time.monotonic() + 0.5)
     assert not owner._ar_fence.allowed()
@@ -199,3 +199,75 @@ def test_recovery_requires_an_available_planner_and_confirmed_empty_goal():
     assert module.ar_navigation_recover("epoch", 2, time.monotonic() + 0.5)
     module._planner.retire_goal_requests.assert_called_once()
     assert not module._ar_fence.allowed()
+
+
+def takeover_planner(monkeypatch):
+    from dimos.ar.navigation.control_fence import NavigationControlFence
+    from dimos.ar.navigation.native_planner import ARReplanningAStarPlanner
+
+    module = object.__new__(ARReplanningAStarPlanner)
+    module._ar_fence = NavigationControlFence()
+    module._ar_stop_write_failed = False
+    module._emit_stop_velocity = Mock()
+    planner = object.__new__(ARGlobalPlanner)
+    planner._lock = threading.RLock()
+    planner._ar_latest_goal_ts = float("-inf")
+    planner._ar_stopped_at = float("-inf")
+    planner._ar_control_fence = module._ar_fence
+    planner._current_goal = None
+    planner._ar_emit_status = Mock()
+    module._planner = planner
+    monkeypatch.setattr(GlobalPlanner, "handle_goal_request", lambda self, goal:
+                        setattr(self, "_current_goal", goal))
+    monkeypatch.setattr(GlobalPlanner, "cancel_goal", lambda self, **_kwargs:
+                        setattr(self, "_current_goal", None))
+    return module
+
+
+def test_all_native_goal_entrypoints_respect_manual_latch_and_explicit_ar_goal(monkeypatch):
+    import time
+
+    module = takeover_planner(monkeypatch)
+    assert module.set_goal(PoseStamped(ts=time.time() + 1))
+    assert module.ar_navigation_agent_manual(True, 0)
+    assert module._planner._current_goal is None
+    assert not module.set_goal(PoseStamped(ts=time.time() + 2))
+    # target, goal_request, and clicked_point subscriptions all call this same
+    # native handler, so they cannot bypass the set_goal RPC admission.
+    assert not module._planner.handle_goal_request(PoseStamped(ts=time.time() + 3))
+    manual = PoseStamped(ts=time.time() + 4)
+    assert module.ar_navigation_goal(manual, "human", 1, time.monotonic() + 1)
+    assert module._planner._current_goal is manual
+    assert not module._planner.handle_goal_request(PoseStamped(ts=time.time() + 5))
+    assert module._planner._current_goal is manual
+    assert not module.ar_navigation_agent_manual(False, 0)
+
+
+def test_takeover_fences_planning_before_waiting_and_rejects_uncertain_stop(monkeypatch):
+    import time
+
+    module = takeover_planner(monkeypatch)
+    entered, finish = threading.Event(), threading.Event()
+
+    def plan(self, goal):
+        entered.set()
+        assert finish.wait(2)
+        self._current_goal = goal
+
+    monkeypatch.setattr(GlobalPlanner, "handle_goal_request", plan)
+    results = []
+    worker = threading.Thread(target=lambda: results.append(module.set_goal(PoseStamped(ts=time.time()))))
+    worker.start()
+    assert entered.wait(2)
+    try:
+        assert not module.ar_navigation_agent_manual(True, 0)
+        assert not module._ar_fence.allowed()
+        assert module._ar_fence.admit_native_agent() is None
+        module._emit_stop_velocity.assert_called_once()
+    finally:
+        finish.set()
+        worker.join(2)
+    assert results == [False]
+    assert module.ar_navigation_agent_manual(True, 0)
+    assert module._planner._current_goal is None
+    assert module.ar_navigation_agent_manual(False, 0)

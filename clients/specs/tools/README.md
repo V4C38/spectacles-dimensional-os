@@ -227,3 +227,45 @@ checks remain opt-in through Integration Test Harness and cannot run on device.
 
 Successful non-golden raw recordings are discarded after validation unless extra
 media is requested. Golden footage, screenshots, logs and failure recordings remain.
+
+### Explicit production-project review
+
+When explicitly requested, use `review.py --production-project --suite all` to run
+in the existing production project. The runner preserves the authored harness gate,
+attaches temporary scenarios through MCP, and disables/removes those scenarios on
+exit. It removes `Assets/Review` fixtures and audits the production compiler cache
+before accepting the result. Default reviews continue to use disposable projects.
+The same focus budget applies across all suites and retries. Never deploy while a
+production-project review is running.
+
+
+## TypeScript cache folder error
+
+Lens Studio 5.15 can fail to remove its generated TypeScript cache when Finder has
+created `Cache/TypeScript/.DS_Store`. The native log reports `Can't remove directory`
+followed by “Failed to perform file operation on folder”. This is local Finder
+metadata, not a missing source dependency. The cache and `.DS_Store` are ignored by
+Git; a fresh checkout does not need either.
+
+Close the project in Lens Studio, then run from the repository root:
+
+```sh
+python3 - <<'PY'
+from pathlib import Path
+import shutil
+import time
+
+metadata = Path("clients/specs/Cache/TypeScript/.DS_Store")
+if metadata.is_file():
+    backup = Path("Review Data/native-compile") / f"cache-recovery-{time.time_ns()}"
+    backup.mkdir(parents=True)
+    shutil.move(str(metadata), str(backup / "TypeScript.DS_Store"))
+    print(f"Preserved Finder metadata in {backup}")
+PY
+```
+
+Reopen `clients/specs/spectacles-dimensional-os.esproj` in Lens Studio 5.15.4 and
+wait for successful compilation. Avoid browsing the generated TypeScript folder
+in Finder while it rebuilds. Preserve the native logs if the error persists;
+these steps address the `.DS_Store` signature, not every possible filesystem error.
+Do not commit generated caches or rebuild the Core archive to recover this error.

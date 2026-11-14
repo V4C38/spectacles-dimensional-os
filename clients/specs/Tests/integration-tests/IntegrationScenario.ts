@@ -104,6 +104,13 @@ export class ReviewScenario extends BaseScriptComponent {
     if (!this.root)
       throw new Error("Production composition root missing");
     const root = this.root;
+    // Fixture PIN/IP submissions must neither inherit nor overwrite device preferences.
+    const storedHosts = new Map<string, string>();
+    const hostStore = root.uiPresenter.setupWizardController.deps.hostStore;
+    hostStore.getString = (key: string) => storedHosts.get(key) ?? "";
+    hostStore.putString = (key: string, value: string) => { storedHosts.set(key, value); };
+    root.uiPresenter.setupWizardController.invalidatePending();
+    root.session.stop();
     this.peer = new IntegrationV2Fixture(value => root.session.onTransportText(JSON.stringify(value) + "\n"), "native-integration", () => getTime());
     this.peer.onUpload = data => {
       this.batches.push(decodeLocalizationObservations(data));
@@ -143,6 +150,7 @@ export class ReviewScenario extends BaseScriptComponent {
     });
     root.uiPresenter.setupWizardController.deps.previewTexture = () => CAMERA_FIXTURE;
     root.uiPresenter.setupWizardController.deps.ipRelayClient.resolve = async () => null;
+    root.uiPresenter.setupWizardController.start(false);
     // Keep fixture preference commands out of persistent device settings. The
     // existing adapter object stays installed; the owner still applies its policy.
     root.uiPresenter.lidarDisplay.store.write = () => {};

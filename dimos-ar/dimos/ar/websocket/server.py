@@ -22,6 +22,8 @@ from dimos.ar.async_execution import BoundedWorker
 from dimos.ar.manipulation.protocol import ManipulationRequest
 from dimos.ar.navigation.types import NavGoalRequest, NavJoystickRequest
 from dimos.ar.replication.interaction import InteractionRequest
+from dimos.ar.replication.presence import ClientPresence, PresenceRelay
+from dimos.ar.robot.capabilities import CapabilityName
 from dimos.ar.timing_diagnostics import LatencyHistogram, TimingSummary
 from dimos.ar.websocket.bulk import (
     BULK_BYTES_PER_SECOND,
@@ -44,6 +46,7 @@ from dimos.ar.websocket.protocol import (
     LocalizationObservation,
     LocalizationStartRequest,
     LocalizationTracking,
+    ResumeOperationRequest,
     StateRequest,
     TimeSync,
     UserMessageRequest,
@@ -55,6 +58,7 @@ from dimos.ar.websocket.protocol import (
 )
 from dimos.ar.websocket.send_queue import ClientSendQueue, peek_frame_type
 from dimos.ar.websocket.server_discovery import IpRelayPublisher, lan_ip
+from dimos.ar.websocket.speech import LocalSpeechTranscriber, validate_recording
 from dimos.core.global_config import global_config
 from dimos.utils.logging_config import setup_logger
 
@@ -81,6 +85,7 @@ DisconnectHandler = Callable[[ws_server.ServerConnection, str], None]
 PING_INTERVAL_S = 30.0
 PING_TIMEOUT_S = 30.0
 HELLO_TIMEOUT_S = 5.0
+SESSION_RECOVERY_S = 2.0
 DEFAULT_MAX_FRAME_BYTES = 4_194_304
 CONTROL_BATCH_MAX_BYTES = 65_536
 CONTROL_RECORD_MAX_BYTES = 16_384
@@ -118,6 +123,8 @@ class ControlConnection:
     ingress_timing: TimingSummary = dataclass_field(init=False)
     bulk_peer: BulkPeer | None = None
     capture_id: str | None = None
+    presence: bool = False
+    presence_budget: TokenBucket = dataclass_field(default_factory=lambda: TokenBucket(16_384, 16_384))
     retired: bool = False
 
     def __post_init__(self) -> None:
@@ -157,9 +164,11 @@ class WebSocketServer:
         hello_supplier: HelloSupplier,
         max_frame_bytes: int = DEFAULT_MAX_FRAME_BYTES,
         relay_url: str | None = None,
+        presence_context: Callable[[], dict[str, str] | None] = lambda: None,
         on_connect: ConnectHandler | None = None,
         on_nav_goal_request: NavGoalRequestHandler | None = None,
         on_estop_request: EstopRequestHandler | None = None,
+        on_resume_operation_request: Callable[[ResumeOperationRequest, str], None] | None = None,
         on_lidar_settings_request: LidarSettingsRequestHandler | None = None,
         on_state_request: StateRequestHandler | None = None,
         on_localization_start_request: LocalizationStartRequestHandler | None = None,
@@ -176,6 +185,7 @@ class WebSocketServer:
         ]
         | None = None,
     ) -> None:
+        self._presence = PresenceRelay(presence_context)
         self._sessions: dict[str, LogicalSession] = {}
         self._sockets: dict[ws_server.ServerConnection, ControlConnection] = {}
         self._admissions: dict[ws_server.ServerConnection, HandshakeAdmission] = {}
@@ -188,6 +198,7 @@ class WebSocketServer:
         self._on_connect = on_connect
         self._on_nav_goal_request = on_nav_goal_request
         self._on_estop_request = on_estop_request
+        self._on_resume_operation_request = on_resume_operation_request
         self._on_lidar_settings_request = on_lidar_settings_request
         self._on_state_request = on_state_request
         self._on_localization_start_request = on_localization_start_request
@@ -208,6 +219,8 @@ class WebSocketServer:
         self._bulk_budget = TokenBucket(BULK_BYTES_PER_SECOND, MAX_BULK_RECORD_BYTES)
         self._encoder = BoundedWorker("ar-bulk-encode")
         self._hello_worker = BoundedWorker("ar-hello", parallelism=2)
+        self._speech = LocalSpeechTranscriber()
+        self._speech_tasks: dict[str, tuple[str, asyncio.Task[None], ControlConnection]] = {}
         self._pending_handshakes = 0
         self._bridge_lock = threading.Lock()
         self._bridge_fifo: deque[tuple[ws_server.ServerConnection | None, str]] = deque()
@@ -349,6 +362,7 @@ class WebSocketServer:
             ws_logger.removeFilter(_handshake_noise_filter)
             monitor.cancel()
             tasks = tuple(self._bulk_preparations)
+            tasks += tuple(task for _, task, _ in self._speech_tasks.values())
             if self._bridge_task is not None:
                 tasks += (self._bridge_task,)
             for task in tasks:
@@ -356,6 +370,7 @@ class WebSocketServer:
             await asyncio.gather(monitor, *tasks, return_exceptions=True)
             self._encoder.close()
             self._hello_worker.close()
+            self._speech.close()
 
     async def _monitor_loop(self) -> None:
         histogram = LatencyHistogram()
@@ -364,6 +379,13 @@ class WebSocketServer:
             expected = time.monotonic() + 0.05
             await asyncio.sleep(0.05)
             now = time.monotonic()
+            snapshot = self._presence.snapshot(now)
+            if snapshot is not None:
+                for connection in self._active_connections():
+                    if connection.presence and connection.sender is not None:
+                        text = self._presence.encode(snapshot, connection.client_id, connection.presence_budget)
+                        if text is not None:
+                            connection.sender.enqueue(text)
             histogram.add(max(0, now - expected) * 1000)
             if now >= next_report:
                 logger.info(
@@ -386,7 +408,7 @@ class WebSocketServer:
             await websocket.close(1008, "Not Found")
             return
 
-        if self.connection_count + self._pending_handshakes >= MAX_CONTROL_CLIENTS:
+        if self._pending_handshakes >= MAX_CONTROL_CLIENTS:
             await websocket.close(1013, "client capacity reached")
             return
         self._pending_handshakes += 1
@@ -410,6 +432,9 @@ class WebSocketServer:
             outbound = ClientSendQueue(
                 websocket,
                 on_failure=lambda reason: self._retire_connection(websocket, client_id, reason),
+                on_transport_failure=lambda reason: self._retire_connection(
+                    websocket, client_id, reason, resumable=True
+                ),
                 client_id=client_id,
             )
             connection.sender = outbound
@@ -485,37 +510,11 @@ class WebSocketServer:
             if registered and owns_session and connection is not None and not connection.retired:
                 connection.retired = True
                 session = self._sessions.get(client_id)
-                if self._on_disconnect is not None:
-                    try:
-                        if (
-                            session is not None
-                            and self._stop_event is not None
-                            and not self._stop_event.is_set()
-                        ):
-                            deadline = time.monotonic() + 1.0
-                            if self._on_suspend is not None:
-                                self._on_suspend(client_id, deadline)
-
-                            def expire() -> None:
-                                if self._sessions.get(client_id) is not session:
-                                    return
-                                self._sessions.pop(client_id)
-                                session.disconnect_handle = None
-                                if self._on_disconnect is not None:
-                                    self._on_disconnect(websocket, client_id)
-
-                            session.disconnect_handle = self._loop.call_later(1.0, expire)
-                        else:
-                            self._sessions.pop(client_id, None)
-                            self._on_disconnect(websocket, client_id)
-                    except Exception:
-                        if session is not None and session.disconnect_handle is None:
-                            self._sessions.pop(client_id, None)
-                        logger.exception(
-                            "AR client disconnect callback failed", client_id=client_id
-                        )
-                elif session is not None:
+                try:
+                    self._end_session(websocket, client_id, session, resumable=True)
+                except Exception:
                     self._sessions.pop(client_id, None)
+                    logger.exception("AR client disconnect callback failed", client_id=client_id)
             try:
                 if peer is not None:
                     if peer.task is not None:
@@ -540,6 +539,7 @@ class WebSocketServer:
         if connection is None or connection.websocket is not websocket:
             return None
         assert session is not None
+        self._presence.remove(client_id)
         session.connection = None
         connection.bulk_token = ""
         connection.capture_id = None
@@ -548,11 +548,56 @@ class WebSocketServer:
             peer.task.cancel()
         return peer
 
+    def _end_session(
+        self,
+        websocket: ws_server.ServerConnection,
+        client_id: str,
+        session: LogicalSession | None,
+        *,
+        resumable: bool,
+    ) -> None:
+        if session is None or self._sessions.get(client_id) is not session:
+            return
+        if session.disconnect_handle is not None:
+            return
+        if resumable and self._stop_event is not None and not self._stop_event.is_set():
+            deadline = time.monotonic() + SESSION_RECOVERY_S
+            try:
+                if self._on_suspend is not None:
+                    self._on_suspend(client_id, deadline)
+            except Exception:
+                # A failed suspend cannot leave an admitted identity alive
+                # without the authority owner's bounded recovery fence.
+                logger.exception("AR client suspend callback failed", client_id=client_id)
+                self._sessions.pop(client_id, None)
+                if self._on_disconnect is not None:
+                    self._on_disconnect(websocket, client_id)
+                return
+
+            def expire() -> None:
+                if self._sessions.get(client_id) is not session:
+                    return
+                self._sessions.pop(client_id)
+                session.disconnect_handle = None
+                if self._on_disconnect is not None:
+                    try:
+                        self._on_disconnect(websocket, client_id)
+                    except Exception:
+                        logger.exception("AR client disconnect callback failed", client_id=client_id)
+
+            session.disconnect_handle = self._loop.call_later(SESSION_RECOVERY_S, expire)
+            return
+        self._sessions.pop(client_id, None)
+        if self._on_disconnect is not None:
+            self._on_disconnect(websocket, client_id)
+
     def _retire_connection(
         self,
         websocket: ws_server.ServerConnection,
         client_id: str,
         reason: str,
+        *,
+        resumable: bool = False,
     ) -> None:
         connection = self._sockets.get(websocket)
         if connection is None or connection.retired:
@@ -561,7 +606,13 @@ class WebSocketServer:
         connection.retired = True
         peer = self._detach_session(websocket, client_id)
         if owns_session:
-            self._sessions.pop(client_id, None)
+            try:
+                self._end_session(
+                    websocket, client_id, self._sessions.get(client_id), resumable=resumable
+                )
+            except Exception:
+                self._sessions.pop(client_id, None)
+                logger.exception("AR client disconnect callback failed", client_id=client_id)
 
         async def close() -> None:
             try:
@@ -578,11 +629,6 @@ class WebSocketServer:
             except TimeoutError:
                 logger.warning("Retired transport close timed out", client_id=client_id)
 
-        if owns_session and self._on_disconnect is not None:
-            try:
-                self._on_disconnect(websocket, client_id)
-            except Exception:
-                logger.exception("AR client disconnect callback failed", client_id=client_id)
         task = asyncio.create_task(close())
         self._closing_tasks.add(task)
         task.add_done_callback(self._closing_tasks.discard)
@@ -616,8 +662,19 @@ class WebSocketServer:
                 ),
                 None,
             )
-            if session is None or session.disconnect_handle is None or session.claimed:
+            if session is None or session.claimed:
                 raise ValueError("resume session expired or still connected")
+            if session.connection is not None:
+                # Possession of the logical resume token authorizes replacing
+                # its old transport, including before close detection catches up.
+                self._retire_connection(
+                    session.connection.websocket,
+                    session.client_id,
+                    "resumed by successor transport",
+                    resumable=True,
+                )
+            if session.disconnect_handle is None:
+                raise ValueError("resume session expired")
             client_id = session.client_id
             resume_handle = session.disconnect_handle
             session.claimed = True
@@ -629,10 +686,13 @@ class WebSocketServer:
             time_sync = TimeSync(ts_client=hello_request.ts_client, ts_server=ts_server)
             body = await self._hello_worker.run(lambda: self._hello_supplier(client_id))
             token = secrets.token_hex(32)
-            connection = ControlConnection(websocket, client_id, time_sync, token)
+            next_resume_token = secrets.token_hex(32) if resume_handle is not None else session.resume_token
+            connection = ControlConnection(websocket, client_id, time_sync, token, presence=hello_request.presence)
             admission = HandshakeAdmission(session, connection, resume_handle)
             self._admissions[websocket] = admission
             req = getattr(websocket, "request", None)
+            speech_error = (self._speech.availability_error()
+                            if body.capabilities[CapabilityName.AGENT].available else None)
             hello = Hello(
                 client_id=client_id,
                 time_sync=time_sync,
@@ -647,7 +707,11 @@ class WebSocketServer:
                 bulk_url="/ws/bulk" if req is not None and req.path == "/ws" else "/bulk",
                 bulk_token=token,
                 bulk_epoch=self.bulk.epoch,
-                resume_token=session.resume_token,
+                resume_token=next_resume_token,
+                presence=hello_request.presence,
+                speech_transcription=(body.capabilities[CapabilityName.AGENT].available
+                                      and speech_error is None),
+                speech_transcription_reason=speech_error,
             )
 
             def resume_current() -> bool:
@@ -664,6 +728,7 @@ class WebSocketServer:
             if resume_handle is not None:
                 resume_handle.cancel()
                 session.disconnect_handle = None
+                session.resume_token = next_resume_token
             admission.completed = True
             return admission
         finally:
@@ -671,9 +736,45 @@ class WebSocketServer:
             if admission is None or not admission.completed:
                 self._admissions.pop(websocket, None)
 
+    def _start_transcription(
+        self, client_id: str, connection: ControlConnection, request_id: str, recording: bytes
+    ) -> None:
+        async def transcribe() -> None:
+            payload: dict[str, Any] = {
+                "type": "speech_transcription_result", "request_id": request_id,
+            }
+
+            def progress(status: str) -> None:
+                current = self._speech_tasks.get(client_id)
+                if (current is not None and current[1] is task
+                        and self._connection(client_id) is connection):
+                    self.schedule_send_to(connection.websocket, encode_text({
+                        **payload, "status": status,
+                    }))
+
+            try:
+                payload.update(
+                    status="completed", text=await self._speech.transcribe(recording, progress)
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - optional STT failures return a bounded rejection
+                logger.warning("AR dictation failed", error=type(exc).__name__)
+                payload.update(status="rejected", message=str(exc)[:512] or "Try recording again.")
+            finally:
+                current = self._speech_tasks.get(client_id)
+                if current is not None and current[1] is asyncio.current_task():
+                    del self._speech_tasks[client_id]
+            if self._connection(client_id) is connection:
+                self.schedule_send_to(connection.websocket, encode_text(payload))
+
+        task = asyncio.create_task(transcribe())
+        self._speech_tasks[client_id] = (request_id, task, connection)
+
     async def _handle_bulk(self, websocket: ws_server.ServerConnection) -> None:
         client_id: str | None = None
         peer: BulkPeer | None = None
+        connection: ControlConnection | None = None
         try:
             async with asyncio.timeout(HELLO_TIMEOUT_S):
                 raw = await websocket.recv()
@@ -732,6 +833,7 @@ class WebSocketServer:
 
                 peer.task.add_done_callback(sender_done)
             upload: BulkUpload | None = None
+            speech_upload: tuple[str, str] | None = None
             requests = TokenBucket(20, 40)
             while True:
                 async with asyncio.timeout(5 if upload is not None else None):
@@ -749,8 +851,10 @@ class WebSocketServer:
                     # each bounded chunk so control callbacks remain runnable.
                     await asyncio.sleep(0)
                     if completed is not None:
-                        capture_current = upload.capture_id == connection.capture_id
-                        if capture_current:
+                        capture_current = speech_upload is not None or upload.capture_id == connection.capture_id
+                        if speech_upload is not None:
+                            self._start_transcription(identity, connection, speech_upload[0], completed)
+                        elif capture_current:
                             await self._handle_binary(completed, connection.websocket, identity)
                         await websocket.send(
                             json.dumps(
@@ -764,6 +868,7 @@ class WebSocketServer:
                             + "\n"
                         )
                         upload = None
+                        speech_upload = None
                         peer.uploading = False
                     continue
                 if (
@@ -800,13 +905,36 @@ class WebSocketServer:
                     else:
                         peer.enqueue(asset)
                 elif request.get("type") == "bulk_upload_begin":
-                    if upload is not None or request.get("kind") != "localization":
-                        raise ValueError("only one localization upload may be active")
+                    if upload is not None or request.get("kind") not in {"localization", "speech"}:
+                        raise ValueError("only one upload may be active")
                     upload_id, total_bytes = request.get("upload_id"), request.get("total_bytes")
                     if type(upload_id) is not int or type(total_bytes) is not int:
                         raise ValueError("bulk upload requires integer bounds")
                     capture_id = request.get("capture_id")
-                    if not isinstance(capture_id, str) or capture_id != connection.capture_id:
+                    if request.get("kind") == "speech":
+                        speech_upload = validate_recording(request.get("request_id"), request.get("mime_type"), total_bytes)
+                        unavailable = self._speech.availability_error()
+                        if unavailable is not None:
+                            speech_upload = None
+                            await websocket.send(json.dumps({
+                                "type": "bulk_upload_result", "upload_id": upload_id,
+                                "status": "rejected", "code": "speech_unavailable",
+                            }) + "\n")
+                            continue
+                        if identity in self._speech_tasks or len(self._speech_tasks) >= 4:
+                            speech_upload = None
+                            await websocket.send(json.dumps({
+                                "type": "bulk_upload_result", "upload_id": upload_id,
+                                "status": "rejected", "code": "speech_busy",
+                            }) + "\n")
+                            continue
+                        # The authenticated hello inventory owns admission; a
+                        # clip cannot grant an unavailable agent capability.
+                        body = await self._hello_worker.run(lambda: self._hello_supplier(identity))
+                        if not body.capabilities[CapabilityName.AGENT].available:
+                            raise ValueError("agent dictation is unavailable")
+                        capture_id = None
+                    elif not isinstance(capture_id, str) or capture_id != connection.capture_id:
                         await websocket.send(
                             json.dumps(
                                 {
@@ -831,6 +959,7 @@ class WebSocketServer:
                         raise ValueError("invalid bulk cancellation id")
                     if upload is not None and upload.identity == upload_id:
                         upload = None
+                        speech_upload = None
                         peer.uploading = False
                     await websocket.send(
                         json.dumps(
@@ -842,6 +971,12 @@ class WebSocketServer:
                         )
                         + "\n"
                     )
+                elif request.get("type") == "speech_transcription_cancel":
+                    request_id = request.get("request_id")
+                    pending = self._speech_tasks.get(identity)
+                    if pending is not None and pending[0] == request_id:
+                        del self._speech_tasks[identity]
+                        pending[1].cancel()
                 else:
                     raise ValueError("unsupported bulk record")
         except asyncio.CancelledError:
@@ -853,6 +988,10 @@ class WebSocketServer:
                 current_connection = self._connection(client_id)
                 if current_connection is not None and current_connection.bulk_peer is peer:
                     current_connection.bulk_peer = None
+                pending = self._speech_tasks.get(client_id)
+                if peer is not None and pending is not None and pending[2] is connection:
+                    del self._speech_tasks[client_id]
+                    pending[1].cancel()
             if peer is not None and peer.task is not None:
                 peer.task.cancel()
                 await asyncio.gather(peer.task, return_exceptions=True)
@@ -887,6 +1026,11 @@ class WebSocketServer:
         websocket: ws_server.ServerConnection,
         client_id: str,
     ) -> None:
+        if isinstance(inbound, ClientPresence):
+            connection = self._connection(client_id)
+            if connection is not None and connection.presence and connection.websocket is websocket:
+                self._presence.receive(client_id, inbound, time.monotonic())
+            return
         if isinstance(inbound, ClientError):
             logger.error(
                 "Client reported decode error",
@@ -916,6 +1060,10 @@ class WebSocketServer:
         if isinstance(inbound, EstopRequest):
             if self._on_estop_request is not None:
                 self._on_estop_request(inbound, websocket)
+            return
+        if isinstance(inbound, ResumeOperationRequest):
+            if self._on_resume_operation_request is not None:
+                self._on_resume_operation_request(inbound, client_id)
             return
         if isinstance(inbound, LidarSettingsRequest):
             if self._on_lidar_settings_request is not None:

@@ -103,7 +103,7 @@ export class LauncherPreferences {
   hydrate(preferences) {
     if (this.edited) return false;
     for (const key of Object.keys(this.values)) {
-      if (typeof preferences[key] === "string") this.values[key] = preferences[key];
+      if (typeof preferences[key] === "string") this.values[key] = key.endsWith("_source") && preferences[key] === "simulated" ? "auto" : preferences[key];
     }
     this.replayStreams = structuredClone(preferences.replay_streams || {});
     this.playbackRobot = null;

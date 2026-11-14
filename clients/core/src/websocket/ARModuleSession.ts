@@ -1,3 +1,4 @@
+import { PresenceController } from "../replication/PresenceController";
 import { DeferredAssetReplies } from "./DeferredAssetReplies";
 import { BulkTransfer, utf8Bytes } from "./BulkTransfer";
 import type { ManipulationState } from "../manipulation/ManipulationTypes";
@@ -11,6 +12,7 @@ import {
   decodeLidar,
   decodeOutboundObject,
   encodeEstopRequest,
+  encodeResumeOperationRequest,
   encodeHelloRequest,
   encodeLocalizationObservations,
   encodeStateRequest,
@@ -113,6 +115,7 @@ export interface ARModuleSessionState {
   readonly agentMessage: string | null;
   readonly agentMessageRevision: number;
   readonly lastError: string | null;
+  readonly localizationNotice?: string | null;
 }
 
 export interface ARModuleSessionDependencies {
@@ -143,7 +146,7 @@ class ControlChannelScheduler {
 
   receive(line: string): void {
     const type = /"type"\s*:\s*"([^"]+)"/.exec(line)?.[1];
-    if (this.ready() && type && ["state", "pose", "manipulation_state", "interaction_state"].includes(type)) {
+    if (this.ready() && type && ["state", "pose", "manipulation_state", "interaction_state", "presence_state"].includes(type)) {
       if (this.inbound.has(type)) this.coalesced++;
       this.inbound.set(type, line);
       return;
@@ -167,7 +170,7 @@ class ControlChannelScheduler {
     const bytes = utf8Bytes(text);
     if (bytes > 16384) throw new Error("Control frame exceeds 16KiB");
     this.rollTraffic();
-    const stream = /"(?:action)":"(?:update)"|"type":"client_pose"/.test(text);
+    const stream = /"(?:action)":"(?:update)"|"type":"(?:client_pose|client_presence)"/.test(text);
     const value = stream ? JSON.parse(text) as { type: string; action?: string; group_id?: string } : null;
     const key = value ? `${value.type}:${value.action ?? ""}:${value.group_id ?? ""}` : "";
     this.streams.delete(key);
@@ -214,6 +217,7 @@ class ControlChannelScheduler {
 }
 
 export class ARModuleSession {
+  readonly presence: PresenceController;
   readonly collaboration: CollaborationController;
   private readonly transport: WebSocketTransport;
   private readonly clock: ClientClock;
@@ -237,6 +241,7 @@ export class ARModuleSession {
   private agentMessage: string | null = null;
   private agentMessageRevision = 0;
   private lastError: string | null = null;
+  private localizationNoticeUntil = 0;
   private readonly decodeReports = new Map<string, { at: number; suppressed: number }>();
   private manipulationError: string | null = null;
   private helloDeadline: number | null = null;
@@ -251,8 +256,14 @@ export class ARModuleSession {
   private readonly bulk: BulkTransfer;
   private readonly assetReplies: DeferredAssetReplies;
   private reportWindow = { at: 0, count: 0 };
+  private speechSerial = 0;
+  private pendingSpeech: { id: string; data: Uint8Array; mime: string; started: boolean; deadline: number;
+    progress?: (status: "preparing" | "transcribing") => void;
+    resolve: (text: string) => void; reject: (error: Error) => void } | null = null;
 
   constructor(deps: ARModuleSessionDependencies) {
+    this.presence = new PresenceController({ ready: () => this.phase === "ready" && this.hello?.presence === true,
+      clientId: () => this.hello?.client_id ?? null, now: () => deps.clock.now(), send: text => this.sendText(text) }, deps.clientTrackingOriginStore);
     this.collaboration = new CollaborationController({ ready: () => this.phase === "ready",
       clientId: () => this.hello?.client_id ?? null, now: () => deps.clock.now(), send: text => this.sendText(text) });
     this.bulk = new BulkTransfer(deps.clock, () => this.bulkChanged(), data => this.applyLidar(data), reason => this.fail(reason));
@@ -310,6 +321,12 @@ export class ARModuleSession {
     this.assetReplies.tick(frameStart);
     this.collaboration.tick();
     const now = this.clock.now();
+    const speech = this.pendingSpeech;
+    if (speech && now >= speech.deadline) this.cancelSpeechTranscription("Transcription timed out. Try recording again.");
+    else if (speech && !speech.started && !this.bulk.uploading && this.bulk.diagnostics().ready) {
+      try { this.bulk.uploadSpeech(speech.data, speech.id, speech.mime); speech.started = true; }
+      catch (error) { this.cancelSpeechTranscription(errorMessage(error)); }
+    }
     if (this.phase === "awaiting_hello" && this.helloDeadline !== null && now >= this.helloDeadline) {
       this.fail("hello timeout");
       return;
@@ -335,7 +352,7 @@ export class ARModuleSession {
     this.phase = "awaiting_hello";
     this.pendingHelloTs = tsClient;
     this.helloDeadline = tsClient + this.helloTimeoutS;
-    this.transport.sendText(encodeHelloRequest({ ts_client: tsClient, resume_token: this.resumeToken }));
+    this.transport.sendText(encodeHelloRequest({ ts_client: tsClient, presence: true, resume_token: this.resumeToken }));
     this.emitView();
   }
 
@@ -429,8 +446,30 @@ export class ARModuleSession {
   }
 
   cancelLocalizationSubmission(): void {
-    this.bulk.cancelUpload();
+    this.bulk.cancelUpload("localization");
     this.localizationSubmission.cancel();
+  }
+
+  /** Audio produces a draft transcript; it never submits an agent instruction. */
+  transcribeSpeech(data: Uint8Array, mimeType: string, progress?: (status: "preparing" | "transcribing") => void): { result: Promise<string>; cancel: () => void } {
+    requireCapability(this, "agent");
+    if (this.hello?.speech_transcription !== true) throw new Error("This server does not support browser dictation");
+    if (this.pendingSpeech) throw new Error("Transcription is already pending");
+    if (data.byteLength < 6 || data.byteLength > 2097152) throw new Error("Recording exceeds the 2 MiB limit");
+    if (!/^(audio\/(webm|ogg|mp4|wav))(;codecs=[a-zA-Z0-9., -]+)?$/.test(mimeType)) throw new Error("Unsupported recording format");
+    const id = `speech-${++this.speechSerial}`;
+    const result = new Promise<string>((resolve, reject) => {
+      this.pendingSpeech = { id, data, mime: mimeType, started: false, deadline: this.clock.now() + 240, progress, resolve, reject };
+    });
+    return { result, cancel: () => { if (this.pendingSpeech?.id === id) this.cancelSpeechTranscription("Recording cancelled"); } };
+  }
+
+  private cancelSpeechTranscription(reason: string): void {
+    const speech = this.pendingSpeech;
+    this.pendingSpeech = null;
+    if (!speech) return;
+    this.bulk.cancelSpeech(speech.id);
+    speech.reject(new Error(reason));
   }
 
   requestEstop(): void {
@@ -439,6 +478,13 @@ export class ARModuleSession {
     this.assetReplies.invalidate("interaction_state");
     this.collaboration.cancel();
     this.sendText(encodeEstopRequest());
+  }
+
+  requestResumeOperation(): void {
+    requireCapability(this, "estop");
+    const safety = this.state?.safety, epoch = this.collaboration.raw()?.epoch;
+    if (!safety?.can_resume || !safety.stop_id || !epoch) return;
+    this.sendText(encodeResumeOperationRequest(epoch, safety.stop_id));
   }
 
   requestState(): void {
@@ -463,6 +509,8 @@ export class ARModuleSession {
       capabilities: this.hello?.capabilities ?? null,
       nav: this.state?.nav ?? null,
       agentMessage: this.agentMessage,
+      localizationNotice: this.clock.now() < this.localizationNoticeUntil
+        ? "VPS could not localize. Look at the robot marker." : null,
       agentMessageRevision: this.agentMessageRevision,
       lastError: this.lastError,
     };
@@ -478,10 +526,16 @@ export class ARModuleSession {
 
   private dispatchText(line: string): void {
     let message: Exclude<Outbound, Lidar>;
+    let pendingRoutes: Readonly<{ preview?: boolean; active_goal?: boolean }> = {};
     try {
       const value = JSON.parse(line) as Record<string, unknown>;
+      if (value.type === "interaction_state") {
+        const previous = this.collaboration.raw();
+        if (previous && value.epoch === previous.epoch && Number(value.revision) <= previous.revision) return;
+      }
       this.observeAssetFacts(value);
       const hydrated = this.bulk.hydrate(value);
+      pendingRoutes = hydrated.pendingRoutes;
       if (hydrated.unavailable && value.type === "manipulation_result") {
         this.retireAssetReply(String(value.request_id ?? value.preview_id ?? value.type), value); return;
       }
@@ -534,12 +588,16 @@ export class ARModuleSession {
       this.fail("unexpected hello after handshake");
       return;
     }
-    this.applyReadyMessage(message);
+    this.applyReadyMessage(message, false, pendingRoutes);
   }
 
   private bulkChanged(): void {
+    const result = this.bulk.uploadResult();
+    if (result?.kind === "speech" && result.status === "rejected") {
+      this.cancelSpeechTranscription(`Audio upload rejected: ${result.code ?? "try again"}`);
+    }
     if (!this.bulk.uploading) {
-      this.localizationSubmission.uploadSettled(this.clock.now(), this.bulk.uploadResult()?.status === "accepted");
+      if (result?.kind !== "speech") this.localizationSubmission.uploadSettled(this.clock.now(), result?.status === "accepted");
     }
     this.assetReplies.markDirty();
   }
@@ -571,15 +629,16 @@ export class ARModuleSession {
     this.emitView();
   }
 
-  private applyReadyMessage(message: Exclude<Outbound, Lidar | Hello>, completedAssets = false): void {
+  private applyReadyMessage(message: Exclude<Outbound, Lidar | Hello>, completedAssets = false, pendingRoutes: Readonly<{ preview?: boolean; active_goal?: boolean }> = {}): void {
     switch (message.type) {
+      case "presence_state": this.presence.apply(message); return;
       case "manipulation_state":
         this.manipulationError = null;
-        this.manipulation = !message.available && this.manipulation ? { ...this.manipulation, available: false, message: message.message } : message;
+        this.manipulation = !message.available && this.manipulation ? { ...this.manipulation, ...message } : message;
         break;
       case "manipulation_result": this.emitOutbound(message); return;
       case "interaction_state":
-        if (!(completedAssets ? this.collaboration.completeAssets(message) : this.collaboration.apply(message))) return;
+        if (!(completedAssets ? this.collaboration.completeAssets(message) : this.collaboration.apply(message, pendingRoutes))) return;
         break;
       case "interaction_result":
         this.collaboration.accept(message);
@@ -592,6 +651,7 @@ export class ARModuleSession {
         break;
       case "localization_context":
         if (message.odom_reference_id !== this.hello?.odom_reference_id) return;
+        if (message.reset) this.localizationNoticeUntil = 0;
         this.clientTrackingOriginStore.setMapContext(message, message.reset);
         if (!this.clientTrackingOriginStore.hasTrackingOrigin) this.alignmentRequired = true;
         break;
@@ -607,12 +667,14 @@ export class ARModuleSession {
           this.cancelLocalizationSubmission();
           this.captureEpisodeId = null;
         }
+        if (message.reason === "vps_failed_using_marker") this.localizationNoticeUntil = this.clock.now() + 5;
         break;
       case "localization_result":
         if (!this.localizationSubmission.accept(message.ts, this.clock.now())) return;
         try {
           this.clientTrackingOriginStore.setFromLocalizationResult(message);
           this.alignmentRequired = false;
+          this.localizationNoticeUntil = 0;
         } catch (error) {
           this.fail(errorMessage(error));
           return;
@@ -629,6 +691,15 @@ export class ARModuleSession {
         this.agentMessage = message.text;
         this.agentMessageRevision++;
         break;
+      case "speech_transcription_result": {
+        const speech = this.pendingSpeech;
+        if (!speech || speech.id !== message.request_id) return;
+        if (message.status === "preparing" || message.status === "transcribing") { speech.progress?.(message.status); break; }
+        this.pendingSpeech = null;
+        if (message.status === "completed") speech.resolve(message.text ?? "");
+        else speech.reject(new Error(message.message ?? "Speech could not be transcribed. Try recording again."));
+        break;
+      }
       case "agent_skill":
         this.emitOutbound(message);
         this.emitView();
@@ -689,7 +760,7 @@ export class ARModuleSession {
     this.lastError = reason;
     this.helloDeadline = null;
     this.pendingHelloTs = null;
-    if (!this.recoveryUntil) this.recoveryUntil = this.clock.now() + 1;
+    if (!this.recoveryUntil) this.recoveryUntil = this.clock.now() + 2;
     this.clearConnectionFacts(this.resumeToken !== undefined && this.clock.now() < this.recoveryUntil);
     this.phase = "failed";
     if (this.wantConnected) {
@@ -700,7 +771,10 @@ export class ARModuleSession {
   }
 
   private clearConnectionFacts(preserveInteraction = false): void {
+    this.cancelSpeechTranscription("Disconnected while transcribing");
+    this.localizationNoticeUntil = 0;
     this.control.clear();
+    this.presence.reset();
     this.captureId = null;
     this.assetReplies.reset();
     this.bulk.reset();

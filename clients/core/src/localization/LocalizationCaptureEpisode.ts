@@ -26,6 +26,8 @@ export interface LocalizationCaptureConfig {
 export interface LocalizationCaptureState {
   phase: LocalizationCapturePhase;
   lastError: string | null;
+  /** Null means no automatic retry is scheduled. */
+  retryInS?: number | null;
   capturePolicy?: CapturePolicy | null;
   capturedCount?: number;
   observationCount?: number;
@@ -183,6 +185,8 @@ export class LocalizationCaptureEpisode {
       phase: episode.phase,
       capturePolicy: this.request?.capture_policy ?? null,
       lastError: episode.phase === "failed" ? episode.failure.message : null,
+      retryInS: episode.phase === "failed" && episode.retryAt !== null
+        ? Math.max(0, episode.retryAt - this.clock.now()) : null,
       capturedCount: episode.phase === "capturing" ? episode.observations.length
         : episode.phase === "awaiting_result" ? episode.capturedCount : 0,
       observationCount: this.request?.observation_count ?? 0,
@@ -378,7 +382,7 @@ export class LocalizationCaptureEpisode {
       return;
     }
     if (message.type === "localization_status") {
-      if (message.episode_id && message.episode_id === this.request?.episode_id) this.resetIdle();
+      if (message.episode_id && message.episode_id === this.request?.episode_id) this.resetIdle(message.status === "succeeded");
       return;
     }
     if (message.type !== "localization_result") return;
@@ -492,12 +496,13 @@ export class LocalizationCaptureEpisode {
   private captureFailed(error: unknown): void {
     if (this.request?.episode_id) {
       this.captureProgress("unavailable");
-      this.resetIdle();
+      this.resetIdle(false);
       return;
     }
     this.enterFailed(errorMessage(error));
     if (error !== null && typeof error === "object" && "retryable" in error && error.retryable === false && this.episode.phase === "failed") {
       this.episode.retryAt = null;
+      this.camera.stop();
     }
   }
 
@@ -506,12 +511,12 @@ export class LocalizationCaptureEpisode {
     this.recoveryRequestedUntil = null;
     if (this.request?.episode_id) {
       this.captureProgress("unavailable");
-      this.resetIdle();
+      this.resetIdle(false);
       return;
     }
     const runtimeRetryAt = kind === "result_timeout" ? this.runtimeRetryDeadline() : null;
     this.session.cancelLocalizationSubmission();
-    this.camera.stop();
+    this.camera.retire();
     this.episode = {
       phase: "failed", request: this.episode.request, failure: { kind, message: reason },
       retryAt: Math.max(this.clock.now() + this.retryBackoffS, runtimeRetryAt ?? -Infinity),
@@ -519,12 +524,12 @@ export class LocalizationCaptureEpisode {
     this.trace("failed", reason);
   }
 
-  private resetIdle(): void {
+  private resetIdle(stopCamera = true): void {
     this.recoveryUntil = null;
     this.recoveryRequestedUntil = null;
     this.runtimeMisses = 0;
     this.session.cancelLocalizationSubmission();
-    this.camera.retire(true);
+    this.camera.retire(stopCamera);
     this.episode = { phase: "idle", request: null, retryAt: null };
   }
 

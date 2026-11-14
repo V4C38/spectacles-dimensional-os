@@ -36,6 +36,7 @@ class MockRuntimeClient:
         self.pending = asyncio.Queue()
         self.frames = deque(maxlen=10000)
         self.state = None
+        self.safety = None
         self.simulated = False
 
     async def read_control(self):
@@ -47,6 +48,8 @@ class MockRuntimeClient:
                     self.shared = frame
                 elif frame["type"] == "manipulation_state":
                     self.state = frame
+                elif frame["type"] == "state":
+                    self.safety = frame.get("safety")
                 self.pending.put_nowait(frame)
 
     async def receive(self, predicate, timeout=60):
@@ -75,6 +78,8 @@ class MockRuntimeClient:
 
     async def command(self, action, **payload):
         self.require_simulated()
+        if action == "resume":
+            return await self.resume_operation()
         if action in {"execute", "reset_joints", "prepare_shutdown"} and self.shared["motion_busy"]:
             await self.wait(lambda: not self.shared["motion_busy"])
         credentials = {"epoch": self.shared["epoch"]}
@@ -86,6 +91,22 @@ class MockRuntimeClient:
             credentials["target_revision"] = target["revision"]
         return await self.request("manipulation_request", action,
                                   group_id=self.group, **credentials, **payload)
+
+    async def resume_operation(self):
+        self.require_simulated()
+        await self.wait(lambda: self.safety is not None)
+        if not self.safety["stopped"]:
+            return {"status": "resumed"}
+        await self.wait(lambda: self.safety.get("can_resume") is True
+                        and bool(self.safety.get("stop_id"))
+                        and self.shared.get("authority") is None)
+        await self.socket.send(json.dumps({
+            "type": "resume_operation_request", "epoch": self.shared["epoch"],
+            "stop_id": self.safety["stop_id"],
+        }))
+        await self.wait(lambda: self.safety is not None and not self.safety["stopped"]
+                        and self.state is not None and not self.state.get("stopped"))
+        return {"status": "resumed"}
 
     async def acquire(self, kind, pose, speed_scale=0.2):
         self.require_simulated()
@@ -193,8 +214,9 @@ async def mock_runtime(url):
                 assert model["visual_profile"] == "openyam"
                 assert set(model["gripper_joints"]) >= {"joint7", "joint8"}
                 client.group = state["groups"][0]["id"]
-                if state.get("stopped"):
-                    assert (await client.command("resume"))["status"] == "resumed"
+                await client.wait(lambda: client.safety is not None)
+                if client.safety["stopped"]:
+                    assert (await client.resume_operation())["status"] == "resumed"
                 yield client, state
             finally:
                 for task in tasks:

@@ -29,6 +29,7 @@ export interface SpecsUISnapshot {
   lidarReceived: number;
   debugEnabled: boolean;
   debugText: string;
+  resumeOperation?: boolean;
   estopAvailable: boolean;
   estopPressed: boolean;
   alignmentReview: boolean;

@@ -20,7 +20,7 @@ import { ARM_PANEL_STYLE, PanelHeightAnimation } from "DimOSARClient.lspkg/Scrip
 
 import { ROBOT_LABEL_STYLE, WORLD_DASH_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldPresentation";
 import type { Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
-import { COLOR_WHITE, SnapOS2Styles, createRobotLabelText, setButtonStyle, uiMaterialLayer } from "../presentation/UIKit";
+import { COLOR_WHITE, SnapOS2Styles, createRobotLabelText, setButtonStyle, uiMaterialLayer, uprightFacingRotation } from "../presentation/UIKit";
 
 import { MarkerCorrectionRenderer } from "../presentation/MarkerCorrectionRenderer";
 
@@ -177,7 +177,7 @@ export class EndEffectorStatusView {
       plateAlpha: 0.94, warningColor: [1, 0.65, 0], neutralColor: [1, 1, 1],
     });
     if (!sample.notification) return;
-    const rotation = camera.getTransform().getWorldRotation();
+    const rotation = uprightFacingRotation(anchor.getTransform().getWorldPosition(), camera);
     const transform = this.presenter.root.getTransform();
     transform.setWorldPosition(anchor.getTransform().getWorldPosition().add(rotation.multiplyVec3(
       new vec3(END_EFFECTOR_STATUS_STYLE.rightM * 100, END_EFFECTOR_STATUS_STYLE.upM * 100, 0))));
@@ -235,11 +235,12 @@ export class ManipulationRenderer {
     this.sphere = new WorldMeshRenderer(this.handle, "EndEffectorSphere", ARM_MATERIAL);
     configureArmMaterial(this.sphere.material);
     (this.sphere.material.mainPass as Pass & { fill: number }).fill = 0.75;
-    const handleGeometry = sphereMesh(1.2, 20, 16);
+    const handleRadiusCm = 1.8;
+    const handleGeometry = sphereMesh(handleRadiusCm, 20, 16);
     this.sphere.triangles(handleGeometry.positions, handleGeometry.indices, [0.82, 0.82, 0.82, 1], undefined, handleGeometry.normals);
     this.correction = new MarkerCorrectionRenderer(this.object, this.sphere);
     const collider = this.handle.createComponent("Physics.ColliderComponent") as ColliderComponent;
-    collider.shape = Shape.createSphereShape(); (collider.shape as SphereShape).radius = 3.6;
+    collider.shape = Shape.createSphereShape(); (collider.shape as SphereShape).radius = handleRadiusCm;
     const hit = this.handle.createComponent(Interactable.getTypeName()) as Interactable;
     hit.keepHoverOnTrigger = true; hit.useFilteredPinch = true; hit.enableInstantDrag = true;
     this.subscriptions.push(hit.onHoverEnter.add(e => this.handleHover.add(String(e.interactor.inputType))));
@@ -284,8 +285,20 @@ export class ManipulationRenderer {
     if (intent.canManipulate && this.capture.pressGripper(sourceId)) this.core.action("gripper");
     return true;
   }
-  ownsMesh(object: SceneObject): boolean { return object === this.base || [...this.picks.values()].includes(object); }
-  ownsHandle(object: SceneObject): boolean { return object === this.handle; }
+  ownsMesh(object: SceneObject): boolean {
+    for (let current: SceneObject | null = object; current; current = current.getParent()) {
+      if (current === this.base || [...this.picks.values()].includes(current)) return true;
+      if (current === this.object) break;
+    }
+    return false;
+  }
+  ownsHandle(object: SceneObject): boolean {
+    for (let current: SceneObject | null = object; current; current = current.getParent()) {
+      if (current === this.handle) return true;
+      if (current === this.object) break;
+    }
+    return false;
+  }
 
   apply(input: {
     state: ManipulationState | null | undefined;
@@ -443,7 +456,7 @@ export class ManipulationRenderer {
         entry.label.getSceneObject().enabled = angle != null;
         entry.label.text = angle == null ? "" : typeof angle === "string" ? angle : `${name} ${(angle * 180 / Math.PI).toFixed(1)}°`;
         entry.label.getSceneObject().getTransform().setWorldPosition(new vec3(p[0],p[1]+4.5,p[2]));
-        entry.label.getSceneObject().getTransform().setWorldRotation(camera.getTransform().getWorldRotation());
+        entry.label.getSceneObject().getTransform().setWorldRotation(uprightFacingRotation(entry.label.getSceneObject().getTransform().getWorldPosition(), camera));
       };
       debug("base", root); debug("current-ee", observed?.pose, observed?.pose ? endEffectorAngles(root, observed.pose) : undefined); debug("target-ee", displayedPose, displayedPose ? endEffectorAngles(root, displayedPose) : undefined);
       const rawPoses = linkPoses(model, observedValues);
@@ -460,17 +473,17 @@ export class ManipulationRenderer {
       this.hoverProgress += ((now < this.hoverUntil ? 1 : 0) - this.hoverProgress) * (1 - Math.exp(-14 * dt));
       this.controls.gripper.sceneObject.enabled = markerAction.available && !state.stopped && (!intent.dragging || markerAction.allowDuringGrab) && this.hoverProgress > 0.01;
       this.controls.gripper.sceneObject.getTransform().setLocalScale(new vec3(1, 1, 1).uniformScale(Math.max(0.01, this.hoverProgress)));
-      this.controls.gripper.sceneObject.getTransform().setWorldPosition(p.add(new vec3(0, -5, 0)));
-      this.controls.gripper.sceneObject.getTransform().setWorldRotation(camera.getTransform().getWorldRotation());
+      this.controls.gripper.sceneObject.getTransform().setWorldPosition(p.add(new vec3(0, -7, 0)));
+      this.controls.gripper.sceneObject.getTransform().setWorldRotation(uprightFacingRotation(this.controls.gripper.sceneObject.getTransform().getWorldPosition(), camera));
       this.controls.previewMenu.enabled = selected && !intent.dragging && !state.stopped && this.hoverProgress > 0.01;
       this.controls.previewMenu.getTransform().setLocalScale(new vec3(1,1,1).uniformScale(Math.max(0.01, this.hoverProgress)));
-      this.controls.previewMenu.getTransform().setWorldPosition(p.add(new vec3(0, 5, 0)));
-      this.controls.previewMenu.getTransform().setWorldRotation(camera.getTransform().getWorldRotation());
+      this.controls.previewMenu.getTransform().setWorldPosition(p.add(new vec3(0, 7, 0)));
+      this.controls.previewMenu.getTransform().setWorldRotation(uprightFacingRotation(this.controls.previewMenu.getTransform().getWorldPosition(), camera));
     }
     this.controls.gripper.labelText.text = markerAction.label;
     this.controls.gripper.button.inactive = !markerAction.enabled;
     setButtonStyle(this.controls.gripper.button, SnapOS2Styles.Secondary);
-    this.place(this.base, root, origin); this.base.getTransform().setWorldRotation(camera.getTransform().getWorldRotation());
+    this.place(this.base, root, origin); this.base.getTransform().setWorldRotation(uprightFacingRotation(this.base.getTransform().getWorldPosition(), camera));
     this.nameLabel.text = title;
     this.controls.panelTitle.text = title.length > 15 ? `${title.slice(0,14)}…` : title;
     this.controls.rescan.sceneObject.enabled = this.localizationAvailable;
@@ -483,7 +496,7 @@ export class ManipulationRenderer {
       : [0.82, 0.82, 0.82, 1]);
     this.correction.update(this.handle.enabled ? origin : null, now);
 
-    this.controls.speedLabel.text = `Speed · ${Math.round(interaction.speedScale * 100)}%`;
+    this.controls.speedLabel.text = `${Math.round(interaction.speedScale * 100)}%`;
     const speedValue = (interaction.speedScale - 0.05) / 0.95;
     if (this.controls.speed.currentValue !== speedValue) {
       this.controls.syncingSpeed = true; this.controls.speed.currentValue = speedValue; this.controls.syncingSpeed = false;

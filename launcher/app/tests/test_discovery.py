@@ -28,7 +28,7 @@ async def test_discovery_failure_is_not_empty_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_auto_no_devices_never_starts_and_suggests_explicit_simulation(monkeypatch):
+async def test_auto_no_devices_never_starts_or_switches_to_simulation(monkeypatch):
     from fastapi import HTTPException
 
     import app
@@ -39,7 +39,7 @@ async def test_auto_no_devices_never_starts_and_suggests_explicit_simulation(mon
     with pytest.raises(HTTPException) as error:
         await app.api_armodule_start(app.StartBody(blueprint="unitree_go2_ar", client="webxr", profile_id="go2", source=app.SourceBody(mode="auto")))
     assert error.value.status_code == 409
-    assert error.value.detail["suggest_simulated"]
+    assert error.value.detail["suggest_simulated"] is False
     start.assert_not_awaited()
 
 

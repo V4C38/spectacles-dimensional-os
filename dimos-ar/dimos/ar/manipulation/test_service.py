@@ -35,6 +35,122 @@ def test_advisory_outcomes_identify_the_attempted_pose_and_source_revision(statu
 
 
 @pytest.mark.asyncio
+async def test_generic_resume_dispatches_a_new_unowned_native_admission():
+    calls = []
+
+    class Runtime:
+        def ar_manipulation_command(self, client, body):
+            calls.append((client, body))
+            return {"status": "resumed"}
+
+        def ar_manipulation_stop(self):
+            pass
+
+        def ar_manipulation_disconnect(self, _client):
+            pass
+
+    service = ManipulationService(Runtime(), lambda *_args: None, lambda _frame: None)
+    service.connect("client")
+    service._latest_snapshot = {"available": True, "groups": [{"id": "arm"}]}
+    try:
+        assert await service.resume_operation("client", "epoch", 8)
+        client, body = calls[0]
+        assert client == "client"
+        assert body["action"] == "resume" and body["group_id"] == "arm"
+        assert body["authority_epoch"] == "epoch" and body["authority_revision"] == 8
+        assert body["authority_lease"] is None
+        assert time.monotonic() < body["authority_deadline"] <= time.monotonic() + 0.5
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_controlled_stop_coalesces_pending_intent_and_reconciles_latest_cancel_receipt():
+    entered, release = threading.Event(), threading.Event()
+    calls, receipts = [], []
+
+    class Runtime:
+        def ar_manipulation_controlled_stop(self, epoch, revision):
+            calls.append((epoch, revision))
+            if revision == 1:
+                entered.set()
+                assert release.wait(3)
+            return {"status": "aborted"}
+
+    service = ManipulationService(Runtime(), lambda *_: None, lambda _: None,
+                                  on_result=lambda request, result: receipts.append((request, result)))
+    service._quiescent = True
+    try:
+        service.controlled_stop("source", 1, "first")
+        assert await asyncio.to_thread(entered.wait, 1)
+        service.controlled_stop("source", 2, "obsolete")
+        service.controlled_stop("source", 3, "latest")
+        assert len(service._tasks) == 1
+        release.set()
+        await asyncio.gather(*tuple(service._tasks))
+        assert calls == [("source", 1), ("source", 3)]
+        assert len(receipts) == 1
+        request, result = receipts[0]
+        assert request.request_id == "latest" and request.action == "cancel"
+        assert request.payload == {"authority_epoch": "source", "authority_revision": 3}
+        assert result == {"status": "aborted"}
+    finally:
+        release.set()
+        await service.close()
+
+
+def test_late_controlled_stop_receipt_cannot_clear_new_source_motion():
+    from dimos.ar.replication.interaction import InteractionCoordinator
+
+    state = InteractionCoordinator()
+    old_epoch = state.epoch
+    state.begin_manipulation_motion("old-cancel")
+    state.reset()
+    state.begin_manipulation_motion("new-execute")
+    state.observe_manipulation_result(
+        ManipulationRequest("old-cancel", "cancel", "", {
+            "authority_epoch": old_epoch, "authority_revision": 1,
+        }),
+        {"status": "aborted"},
+    )
+    assert state.manipulation_motion_pending("new-execute") and state.motion_busy
+
+
+@pytest.mark.asyncio
+async def test_acquire_receipt_started_before_suspend_cannot_restore_following_cache():
+    from unittest.mock import Mock
+
+    entered, release = threading.Event(), threading.Event()
+
+    class Runtime:
+        def ar_manipulation_command(self, *_args):
+            entered.set()
+            assert release.wait(3)
+            return {"status": "acquired", "token": "obsolete"}
+
+        def ar_manipulation_suspend(self, *_args):
+            pass
+
+    service = ManipulationService(Runtime(), lambda *_: None, lambda _: None)
+    service._quiescent = True
+    service.connect("a")
+    request = ManipulationRequest("acquire", "acquire", "arm", {"authority_lease": "lease"})
+    try:
+        service.submit(request, "a")
+        assert await asyncio.to_thread(entered.wait, 1)
+        service.suspend("a", time.monotonic() + 2)
+        release.set()
+        await asyncio.gather(*tuple(service._tasks))
+        assert service._shared_following["a"].token is None
+        service.submit = Mock()
+        service.follow_shared("a", "arm", {"authority_lease": "lease"})
+        service.submit.assert_not_called()
+    finally:
+        release.set()
+        await service.close()
+
+
+@pytest.mark.asyncio
 async def test_stop_dispatch_is_independent_of_blocking_plan():
     entered, release, cancelled = threading.Event(), threading.Event(), threading.Event()
 
@@ -803,7 +919,7 @@ async def test_advisory_pending_age_preserves_equal_request_ids_from_different_c
 
 
 @pytest.mark.asyncio
-async def test_shared_follow_cache_waits_for_ack_survives_suspend_and_retires_on_disconnect():
+async def test_shared_follow_cache_requires_fresh_ack_after_suspend_and_disconnect():
     from types import SimpleNamespace
     from unittest.mock import Mock
 
@@ -828,8 +944,15 @@ async def test_shared_follow_cache_waits_for_ack_survives_suspend_and_retires_on
         service.suspend("a", time.monotonic() + 1)
         await asyncio.gather(*tuple(service._tasks))
         service.connect("a")
+        service.submit.reset_mock()
         service.follow_shared("a", "arm", body)
-        assert service.submit.call_args.args[0].payload["sequence"] == 2
+        service.submit.assert_not_called()
+        service._reply(
+            "a", ManipulationRequest("resume", "acquire", "arm", {"authority_lease": "lease"}),
+            {"status": "acquired", "token": "resumed-token"},
+        )
+        assert service.submit.call_args.args[0].payload["sequence"] == 1
+        assert service.submit.call_args.args[0].payload["token"] == "resumed-token"
         service.disconnect("a")
         service.connect("a")
         service.submit.reset_mock()

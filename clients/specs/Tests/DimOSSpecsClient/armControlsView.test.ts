@@ -12,7 +12,7 @@ vi.mock("../mocks/UIKit.ts", () => {
     createIconButton: (parent: any, name: string) => ({ sceneObject: parent.makeChild(name), labelText: {},
       button: { inactive: false, onTriggerDown: event(), onTriggerUp: event(),
         interactable: { onHoverEnter: event(), onHoverExit: event() } } }),
-    createText: () => ({}), panelButtonLayer: vi.fn(), uiMaterialLayer: vi.fn(),
+    createText: (options: any) => ({ text: options.text }), configurePanelText: vi.fn(), panelButtonLayer: vi.fn(), uiMaterialLayer: vi.fn(),
     configureControlPanelFrame: vi.fn(), isFrameInitialized: (frame: Frame) => frame.initialized,
   };
 });
@@ -54,6 +54,10 @@ it("routes arm commands through Core and releases native registrations", () => {
     const core = { interaction: { snapshot: () => intent }, action: vi.fn() };
     let enabled = true;
     const view = new ManipulationControlsView(makeNode(), core as never, () => enabled, vi.fn(), vi.fn());
+    expect(view.gripper.labelText.size).toBe(view.buttons.get("plan")!.labelText.size);
+    expect(view.gripper.labelText.size).toBe(view.buttons.get("execute")!.labelText.size);
+    expect(view.speedTitle.text).toBe("Movement speed");
+    expect(view.panelPresenter.frame.allowScaling).toBe(false);
     const press = (key: string) => (view.buttons.get(key)!.button.onTriggerDown as any).fire();
     press("estop"); expect(core.action).toHaveBeenLastCalledWith("estop");
     intent.stopped = true; press("estop"); expect(core.action).toHaveBeenLastCalledWith("resume");

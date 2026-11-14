@@ -18,7 +18,8 @@ export class PairedBulk implements BindableWebSocketTransport {
       this.receive({ type: "bulk_upload_result", upload_id: request.upload_id, status: "cancelled" });
     }
     if (request.type === "bulk_upload_begin") {
-      if (typeof request.capture_id !== "string" || !request.capture_id.trim()) throw new Error("Capture generation missing");
+      if (request.kind === "localization" && (typeof request.capture_id !== "string" || !request.capture_id.trim())) throw new Error("Capture generation missing");
+      if (request.kind === "speech" && typeof request.request_id !== "string") throw new Error("Transcription identity missing");
       this.upload = { id: request.upload_id, bytes: new Uint8Array(request.total_bytes), offset: 0 };
       this.receive({ type: "bulk_upload_ready", upload_id: request.upload_id });
     }

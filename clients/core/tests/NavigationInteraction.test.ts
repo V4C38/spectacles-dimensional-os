@@ -371,3 +371,17 @@ it("preserves a held navigation draft and its robot target through a correction"
   expect(f.authority.collaboration.snapshot().rawTarget!.position).toEqual(before);
   expect(f.commands.cancel).not.toHaveBeenCalled();
 });
+
+it("retains the last complete route through a new local submission and an origin correction", () => {
+  const f = liveFixture();
+  const path: [number, number, number, number][] = [[0,0,0,0], [2,0,0,0]];
+  f.view.nav = { state: "following_path", outcome: null };
+  f.view.nav_goal = { type: "nav_goal", ts: 1, pose: [2,0,0,0], path_poses: path };
+  f.core.applyView(f.view, f.origin, null, 1);
+  expect(f.core.activePath()).toBe(path);
+  f.core.hold(2, f.point(2), true, "hand");
+  f.core.hold(2.2, f.point(3), true, "hand");
+  expect(f.core.activePath()).toBe(path);
+  f.core.applyView(f.view, { ...f.origin, position: [0.1,0,0], ts: 2 }, null, 2.3);
+  expect(f.core.activePath()).toBe(path);
+});

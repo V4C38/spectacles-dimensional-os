@@ -66,3 +66,50 @@ def test_agent_resume_waits_for_previous_manual_motion_to_finish() -> None:
     assert gate.manual
     assert gate.set_manual(False, lambda: True)
     assert not gate.manual
+
+
+def test_takeover_during_resume_cannot_reenable_the_retired_generation() -> None:
+    gate = AgentTurnGate(threading.RLock())
+
+    def resume() -> bool:
+        gate.retire()
+        return True
+
+    assert not gate.set_manual(False, resume)
+    assert gate.manual
+    with pytest.raises(RuntimeError, match="retired"):
+        gate.run_effect(0, lambda: None)
+
+
+def test_stream_publication_is_atomic_with_stop_and_cannot_cross_resume() -> None:
+    gate = AgentTurnGate(threading.RLock())
+    assert gate.set_manual(False, lambda: True)
+    generation = gate.generation
+    entered, finish, retired = threading.Event(), threading.Event(), threading.Event()
+    queue = []
+
+    def publish() -> None:
+        entered.set()
+        assert finish.wait(2)
+        queue.append("old progress")
+
+    worker = threading.Thread(target=lambda: gate.publish(generation, publish))
+    worker.start()
+    assert entered.wait(2)
+
+    def stop() -> None:
+        gate.retire()
+        retired.set()
+
+    stopping = threading.Thread(target=stop)
+    stopping.start()
+    try:
+        assert not retired.wait(.01)
+    finally:
+        finish.set()
+        worker.join(2)
+        stopping.join(2)
+    assert gate.manual
+    assert gate.set_manual(False, lambda: queue.clear() is None)
+    assert queue == []
+    assert not gate.publish(generation, lambda: queue.append("late old progress"))

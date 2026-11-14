@@ -1,7 +1,9 @@
+import type { PresencePanel } from "@dimos-ar-client/ClientContracts";
+import { webxrToClientTrackingPose } from "../utilities/WebXRCoordinates";
 import { label, button, place, rect, surface, setText, clip, cameraIcon, gearIcon, layoutText, iconClose, scrollLabel, messageField, tabs, sectionHeading } from "./PanelWidgets";
 import { panelChrome } from "./RobotPanelFrame";
 import { updatePanelGesture, type PanelGesture } from "./PanelInteraction";
-import { PanelPageTransitions, PANEL_TOP, RUNTIME_LAYOUTS, SETUP_LAYOUTS, panelFooterY, panelProfile, type PanelProfile } from "./PanelPresentation";
+import { PanelPageTransitions, PANEL_TOP, RUNTIME_LAYOUTS, SETUP_LAYOUTS, panelFooterY, runtimeProfile, type PanelProfile } from "./PanelPresentation";
 import { SpeedSlider } from "./SpeedSlider";
 import { SETUP_SUCCESS_STYLE, strokeJoints2D, STROKE_JOIN_SEGMENTS } from "@dimos-ar-client/presentation/WorldPresentation";
 import { CONTROL_PANEL_COPY as COPY, CONTROL_PANEL_LAYOUT, CONTROL_PANEL_SCALE, robotBadgeText, sensorStatusText, PanelHeightAnimation } from "@dimos-ar-client/presentation/ControlPanelPresentation";
@@ -261,10 +263,10 @@ export class MainMenuView {
     const inputField = humanField.surface;
     inputField.name = "Agent dictation field";
     const inputLabel = humanField.content;
-    const type = button(this.chat, COPY.send, -(HALF_WIDTH + GAP) / 2, -0.196, HALF_WIDTH, ACTION_HEIGHT, () => {
+    const type = button(this.chat, COPY.send, (HALF_WIDTH + GAP) / 2, -0.196, HALF_WIDTH, ACTION_HEIGHT, () => {
       if (this.agentEnabled && handlers.onAgentText(this.draft)) this.setDraft("");
     }, "primary");
-    const clear = button(this.chat, COPY.clear, (HALF_WIDTH + GAP) / 2, -0.196, HALF_WIDTH, ACTION_HEIGHT, () => this.setDraft(""));
+    const clear = button(this.chat, COPY.clear, -(HALF_WIDTH + GAP) / 2, -0.196, HALF_WIDTH, ACTION_HEIGHT, () => this.setDraft(""));
     surface(this.manualHelp, 0, 0, CONTENT, 0.18, 0.024, C.fill);
     label(this.manualHelp, COPY.manualGuidance, 0, 0, CONTENT - 0.056, 0.13, 23, C.muted);
     const hud = label(this.console, "", 0, -0.251, CONTENT, 0.018, 13, C.muted);
@@ -285,10 +287,11 @@ export class MainMenuView {
     this.speedGroup.position.set(0, 0.025 / HEIGHT, 0);
     this.sensorsPage.add(this.speedGroup);
     this.speedSlider.position.set(0, -0.025 / HEIGHT, 0);
+    this.speedSlider.scale.y = 2;
     this.speedSlider.userData.depthM = DIMOS_AR_DESIGN.depth.controlOverlap * 2;
     this.speedGroup.add(this.speedSlider);
-    sectionHeading(this.speedGroup, "Movement speed", 0.02);
-    const speedValue = label(this.speedGroup, "50%", CONTENT / 2 - 0.09, 0.02, 0.18, 0.03, 21, C.ink, "right");
+    sectionHeading(this.speedGroup, "Movement speed", 0.03);
+    const speedValue = label(this.speedGroup, "50%", CONTENT / 2 - 0.09, 0.03, 0.18, 0.03, 21, C.ink, "right");
     sectionHeading(this.settingsPage, COPY.headset, -0.014).userData.panelRow = "headset";
     const debugToggle = button(this.settingsPage, "Debug · Off", 0, -0.084, CONTENT, ACTION_HEIGHT, handlers.onDebug);
     button(this.settingsPage, COPY.diagnostics, 0, -0.152, CONTENT, ACTION_HEIGHT, () => { this.page = "diagnostics"; }).userData.panelRow = "diagnostics";
@@ -360,10 +363,11 @@ export class MainMenuView {
       this.capabilityKey = capabilityKey;
       const rows: [string,number,number?][] = [];
       if (this.localizationGroup.visible) rows.push(["localize",.064]);
-      if (this.speedGroup.visible) rows.push(["speed",.08]);
+      if (this.speedGroup.visible) rows.push(["speed",.10]);
       if (this.lidarGroup.visible) rows.push(["lidar",.03,.01],["tabs",.064,.01],["range",.064],["points",.064]);
       if (!rows.length) rows.push(["empty",.03]);
-      this.capabilityProfile = panelProfile(.23, rows, true, .04);
+      // Use the space below the header so all capabilities fit with the runtime footer gap.
+      this.capabilityProfile = runtimeProfile(.24, rows);
       this.fittedContent.set(this.capabilityBody, this.capabilityProfile.height);
       const r = this.capabilityProfile.rows;
       this.localizationGroup.position.y = (r.localize ?? 0)/HEIGHT;
@@ -450,6 +454,12 @@ export class MainMenuView {
     setText(this.pageViews.sensors.sensorStatus, sensorStatusText(snap.lidarAvailable, snap.lidarReceived ?? 0, snap.cameraStatus, snap.trackingStatus, snap.surfaceCount));
     this.pageViews.runtime.estop.feedbackPressed = snap.estopPressed === true;
     setText(this.pageViews.settings.localize, snap.hasTrackingOrigin ? COPY.relocalize : COPY.localizeRobot);
+    this.pageViews.runtime.estop.mesh!.userData.resumeOperation = snap.resumeOperation === true;
+    const stopLabel = snap.resumeOperation ? "Resume operation" : COPY.stop;
+    if (this.pageViews.runtime.estop.text !== stopLabel) {
+      setText(this.pageViews.runtime.estop, stopLabel);
+      this.pageViews.runtime.estop.setSurface(snap.resumeOperation ? "primary" : "danger");
+    }
     this.pageViews.runtime.estop.setEnabled(snap.estopAvailable);
     setText(this.pageViews.runtime.hud, clip(speech?.error || snap.hudText || (snap.operatingMode === "agent" && speechStatus !== "Off" ? speechStatus ?? "" : "") || "", 100));
     this.pageViews.runtime.hud.color(toneCss(speech?.error ? "warn" : snap.hudTone ?? "muted"));
@@ -535,6 +545,15 @@ export class MainMenuView {
     this.pageViews.setup.previewLabel.position.y = (rows.previewLabel ?? 0) / HEIGHT;
     this.preview.visible = this.pageViews.setup.previewLabel.visible = capture;
     this.fittedContent.set(this.wizardBody, profile.height);
+  }
+
+  presencePanel(): PresencePanel | null {
+    if (!this.panelShown || !this.panel.visible || this.wizard.visible) return null;
+    this.plate.updateWorldMatrix(true, false);
+    const scale = this.plate.getWorldScale(new THREE.Vector3());
+    const pose = webxrToClientTrackingPose({ position: this.plate.getWorldPosition(new THREE.Vector3()).toArray(),
+      orientation: this.plate.getWorldQuaternion(new THREE.Quaternion()).toArray() });
+    return { ...pose, width: WIDTH * Math.abs(scale.x), height: this.heightController.height * Math.abs(scale.y) };
   }
 
   private applyHeight(): void {
@@ -653,7 +672,8 @@ export class MainMenuView {
   }
 
   isEmergencyTarget(object: THREE.Object3D | undefined): boolean {
-    return object === this.pageViews.runtime.estop.mesh && this.pageViews.runtime.estop.enabled;
+    return !!object && object === this.pageViews.runtime.estop.mesh && this.pageViews.runtime.estop.enabled &&
+      !object.userData.resumeOperation;
   }
 
   isSpeechTarget(object: THREE.Object3D | undefined): boolean {

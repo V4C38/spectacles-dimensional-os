@@ -42,3 +42,24 @@ test("launcher shared controls retain metrics, keyboard focus and enabled-only h
   await expect(page.locator("#select")).toBeFocused();
   await expect(page.locator("#select")).toHaveCSS("outline-width", "2px");
 });
+
+const launcherLogModule = readFileSync(new URL("../../../../launcher/app/static/log-console.mjs", import.meta.url), "utf8");
+
+test("launcher logs highlight failures and confirmed connections without coloring ordinary progress", async ({ page }) => {
+  await page.setContent(`<style>${launcherCss}</style><div class="log" id="log"></div>`);
+  const tones = await page.evaluate(async source => {
+    const { logConsole } = await import(`data:text/javascript,${encodeURIComponent(source)}`);
+    const logEl = document.querySelector("#log")!;
+    const logger = logConsole({ logEl, logFilterLevel: { value: "debug" },
+      logFilterSource: { value: "all" }, copyLogBtn: {} });
+    for (const line of ["Start error: device unavailable", "WebRTC connected", "Preparing camera", "CAN ready"])
+      logger.appendLog(line);
+    await new Promise(requestAnimationFrame);
+    return [...logEl.children].map(node => ({ tone: (node as HTMLElement).dataset.tone,
+      color: getComputedStyle(node).color }));
+  }, launcherLogModule);
+  expect(tones.map(line => line.tone)).toEqual(["error", "success", "normal", "success"]);
+  expect(tones[0].color).not.toBe(tones[2].color);
+  expect(tones[1].color).not.toBe(tones[2].color);
+  expect(tones[1].color).toBe(tones[3].color);
+});

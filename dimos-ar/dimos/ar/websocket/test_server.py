@@ -447,7 +447,7 @@ async def test_unhandshaken_socket_does_not_count_as_active_or_trigger_disconnec
             hello = await _send_hello_request(ws)
             await h.wait_for_connection(hello["client_id"])
             assert h._server.connection_count == 1
-        assert await asyncio.to_thread(disconnected.wait, 2)
+        assert await asyncio.to_thread(disconnected.wait, 3)
         assert remaining == [0]
         assert h.disconnected_client_ids == [hello["client_id"]]
     finally:
@@ -515,7 +515,7 @@ async def test_disconnect_retires_authority_before_transport_cleanup(
             await old.close()
             assert await asyncio.to_thread(entered.wait, 1)
             assert h._server.connection_count == 0
-            async with asyncio.timeout(2):
+            async with asyncio.timeout(3):
                 while not h.disconnected_client_ids:
                     await asyncio.sleep(0.01)
             assert h.disconnected_client_ids == [old_id]
@@ -585,7 +585,7 @@ async def test_disconnect_callback_and_bulk_close_failures_still_stop_sender(mon
             await ws.close()
             assert await asyncio.to_thread(stopped.wait, 1)
             assert h._server.connection_count == 0
-            async with asyncio.timeout(2):
+            async with asyncio.timeout(3):
                 while not h.disconnected_client_ids:
                     await asyncio.sleep(0.01)
             assert h.disconnected_client_ids == [client_id]
@@ -688,7 +688,7 @@ async def test_stop_at_rate_limit_is_honored_then_flooding_peer_retires():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("delay", [0.1, 0.5, 0.9])
+@pytest.mark.parametrize("delay", [0.1, 0.9, 1.8])
 async def test_resumable_socket_preserves_identity_without_disconnect_callback(harness, delay):
     url = f"ws://127.0.0.1:{harness.port}/"
     async with websockets.connect(url) as first:
@@ -733,7 +733,7 @@ async def test_expired_resume_cannot_restore_authority(harness):
         )
         hello = json.loads(await first.recv())
         await harness.wait_for_connection(hello["client_id"])
-    await asyncio.sleep(1.1)
+    await asyncio.sleep(2.1)
     assert harness.disconnected_client_ids == [hello["client_id"]]
     async with websockets.connect(url) as second:
         await second.send(
@@ -748,6 +748,49 @@ async def test_expired_resume_cannot_restore_authority(harness):
         )
         with pytest.raises(websockets.ConnectionClosed):
             await second.recv()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport_failed", [False, True])
+async def test_resume_replaces_old_transport_without_retiring_logical_owner(
+    harness, monkeypatch, transport_failed
+):
+    monkeypatch.setattr("dimos.ar.websocket.server.MAX_CONTROL_CLIENTS", 1)
+    url = f"ws://127.0.0.1:{harness.port}/"
+    async with websockets.connect(url) as first:
+        hello = await _send_hello_request(first)
+        identity = hello["client_id"]
+        await harness.wait_for_connection(identity)
+        if transport_failed:
+            async def fail_sender():
+                sender = harness._server._connection(identity).sender
+                sender._fail("outbound send timeout", transport=True)
+
+            await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(fail_sender(), harness.loop))
+            assert harness._server.logical_session_count == 1
+            assert harness.disconnected_client_ids == []
+        async with websockets.connect(url) as second:
+            await second.send(json.dumps({
+                "type": "hello_request", "protocol_version": 2, "ts_client": 2,
+                "resume_token": hello["resume_token"],
+            }))
+            resumed = json.loads(await second.recv())
+            await harness.wait_for_connection(identity)
+            assert resumed["client_id"] == identity
+            assert resumed["bulk_token"] != hello["bulk_token"]
+            assert resumed["resume_token"] != hello["resume_token"]
+            await asyncio.sleep(0.05)
+            assert harness._server.connection_count == 1
+            assert harness.disconnected_client_ids == []
+            async with websockets.connect(url) as obsolete:
+                await obsolete.send(json.dumps({
+                    "type": "hello_request", "protocol_version": 2, "ts_client": 3,
+                    "resume_token": hello["resume_token"],
+                }))
+                with pytest.raises(websockets.ConnectionClosed):
+                    await obsolete.recv()
+            assert harness._server._connection(identity).bulk_token == resumed["bulk_token"]
+            assert harness.disconnected_client_ids == []
 
 
 @pytest.mark.asyncio

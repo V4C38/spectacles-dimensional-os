@@ -391,7 +391,7 @@ async def test_native_mode_acknowledgement_survives_requester_retirement(retirem
     entered, release = asyncio.Event(), asyncio.Event()
     calls = []
 
-    async def call(method, manual, **kwargs):
+    async def call(method, manual=None, **kwargs):
         calls.append((method, manual))
         entered.set()
         await release.wait()
@@ -418,7 +418,7 @@ async def test_native_mode_acknowledgement_survives_requester_retirement(retirem
     await task
     assert len(calls) == (2 if retirement == "source" and mode == "agent" else 1)
     if retirement == "source" and mode == "agent":
-        assert calls[-1] == ("ar_agent_set_manual", True)
+        assert calls[-1] == ("ar_agent_takeover", None)
     expected_mode = "manual" if retirement == "source" else mode
     assert module._interaction_controller.state.mode == expected_mode
     assert not module._interaction_controller.native_mode_uncertain
@@ -484,9 +484,9 @@ async def test_retired_source_resume_stays_fenced_until_pause_is_confirmed(pause
     entered, release = asyncio.Event(), asyncio.Event()
     calls = []
 
-    async def call(method, manual, **kwargs):
-        calls.append(manual)
-        if not manual:
+    async def call(method, manual=None, **kwargs):
+        calls.append(method)
+        if method == "ar_agent_set_manual" and manual is False:
             entered.set()
             await release.wait()
             return True
@@ -502,7 +502,7 @@ async def test_retired_source_resume_stays_fenced_until_pause_is_confirmed(pause
     module._interaction_controller.state.reset()
     release.set()
     await task
-    assert calls == [False, True]
+    assert calls == ["ar_agent_set_manual", "ar_agent_takeover"]
     assert module._interaction_controller.state.mode == "manual"
     assert module._interaction_controller.native_mode_uncertain
     assert module._interaction_controller.mode_task is None
@@ -595,8 +595,8 @@ async def test_compensating_pause_keeps_motion_admission_busy_during_idle_notifi
     resumed, release_resume = asyncio.Event(), asyncio.Event()
     pausing, release_pause = asyncio.Event(), asyncio.Event()
 
-    async def call(method, manual, **kwargs):
-        if not manual:
+    async def call(method, manual=None, **kwargs):
+        if method == "ar_agent_set_manual" and manual is False:
             resumed.set()
             await release_resume.wait()
         else:

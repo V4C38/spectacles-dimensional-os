@@ -1123,3 +1123,7 @@ body.resizing {
 }
 .policy-fields .field { margin: 0; }
 @media (max-width: 500px) { .policy-fields { grid-template-columns: 1fr; } }
+
+.log-line[data-tone="error"] { color: var(--ansi-red); }
+.log-line[data-tone="success"] { color: var(--ansi-green); }
+.log-line[data-tone="error"] [class*="ansi-fg-"] { color: inherit; }

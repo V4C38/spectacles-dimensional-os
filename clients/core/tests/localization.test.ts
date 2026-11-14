@@ -624,6 +624,7 @@ describe("localization capture", () => {
     clock.nowS = 15;
     controller.tick();
     expect(controller.view().phase).toBe("failed");
+    expect(controller.view().retryInS).toBe(2);
     clock.nowS = 20;
     controller.tick();
     expect(startRequestCount(transport)).toBe(1);
@@ -672,6 +673,8 @@ describe("localization capture", () => {
     await settleCapture();
     expect(controller.view().phase).toBe("awaiting_result");
     expect(startRequestCount(transport)).toBe(0);
+    expect(capture.startCount).toBe(1);
+    expect(capture.stopCount).toBe(0);
   });
 
   it("requestStart sends while idle and throws while capturing", () => {
@@ -842,7 +845,7 @@ describe("localization capture", () => {
     expect(controller.view().phase).toBe("capturing");
   });
 
-  it("fails the episode when capture rejects", async () => {
+  it("keeps the camera ready for automatic recovery when a capture rejects", async () => {
     const { controller, session, capture } = makeController();
     const pending = capture.defer();
     deliverRequest(session, { result_timeout_s: 15, type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: "any_angle", observation_count: 1 });
@@ -850,7 +853,8 @@ describe("localization capture", () => {
     pending.reject(new Error("jpeg failed"));
     await settleCapture();
     expect(controller.view()).toMatchObject({ phase: "failed", lastError: "jpeg failed" });
-    expect(capture.stopCount).toBe(1);
+    expect(controller.view().retryInS).toBe(2);
+    expect(capture.stopCount).toBe(0);
   });
 
   it("ignores a stale capture after replacement while in flight", async () => {
@@ -1000,6 +1004,26 @@ it("honors a host's explicit exhausted retry budget without changing ordinary ca
   const calls = f.capture.calls;
   f.clock.nowS += 60; f.controller.tick(); f.controller.tick();
   expect(f.capture.calls).toBe(calls);
+});
+
+it("keeps a healthy camera across failed server episodes and stops on leaving setup", async () => {
+  const f = makeController();
+  const context = { map_code: "office", odom_reference_id: "fixture-odom" };
+  f.session.onTransportText(JSON.stringify({ type: "localization_context", ...context, reset: true }) + "\n");
+  const request = { result_timeout_s: 15, type: "localization_observations_request", purpose: "headset",
+    capture_id: "first", episode_id: "first", capture_policy: "any_angle", observation_count: 1 } as const;
+  deliverRequest(f.session, request); f.controller.tick(); await settleCapture();
+  f.session.onTransportText(JSON.stringify({ type: "localization_status", ...context, scope: "headset",
+    episode_id: "first", status: "failed", reason: "headset_localization_failed" }) + "\n");
+  expect(f.controller.view().phase).toBe("idle");
+  expect(f.capture.stopCount).toBe(0);
+  f.clock.nowS += 2;
+  deliverRequest(f.session, { ...request, capture_id: "second", episode_id: "second" });
+  f.controller.tick(); await settleCapture();
+  expect(f.capture.startCount).toBe(1);
+  expect(f.capture.calls).toBe(2);
+  f.controller.pause();
+  expect(f.capture.stopCount).toBe(1);
 });
 
 it("suspends camera hardware while preserving an already submitted localization result", async () => {

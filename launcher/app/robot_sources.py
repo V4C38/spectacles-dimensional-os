@@ -16,28 +16,30 @@ class BlueprintDefinition:
     id: str
     robot: Literal["unitree_go2", "openyam"]
     cli: str
-    label: str
     description: str
     agent: bool = False
     manipulation: bool = False
+
+    @property
+    def label(self) -> str:
+        return self.cli.removeprefix("dimos-ar.")
 
 
 # This order is also the launcher menu order. Consumers derive facts from here.
 BLUEPRINTS = {
     item.id: item for item in (
         BlueprintDefinition(
-            "unitree_go2_ar", "unitree_go2", "dimos-ar.unitree-go2-ar", "Unitree Go2",
+            "unitree_go2_ar", "unitree_go2", "dimos-ar.unitree-go2-ar",
             "Unitree Go2 with ARModule\nManual Mode: place navigation goals from the headset.",
         ),
         BlueprintDefinition(
             "unitree_go2_ar_agentic", "unitree_go2", "dimos-ar.unitree-go2-ar-agentic",
-            "Unitree Go2 Agentic",
             "Unitree Go2 with ARModule\nManual Mode: place navigation goals from the headset."
             "\nAgent Mode: voice commands via LLM and MCP (API key required)",
             agent=True,
         ),
         BlueprintDefinition(
-            "openyam_ar_planner", "openyam", "dimos-ar.openyam-ar-planner", "OpenYAM AR Planner",
+            "openyam_ar_planner", "openyam", "dimos-ar.openyam-ar-planner",
             "OpenYAM · manipulation: plan/review/execute or grab the end effector to follow.",
             manipulation=True,
         ),
@@ -54,7 +56,7 @@ def blueprint_definition(blueprint: str) -> BlueprintDefinition:
 
 
 def blueprint_metadata() -> list[dict[str, Any]]:
-    return [asdict(item) for item in BLUEPRINTS.values()]
+    return [{**asdict(item), "label": item.label} for item in BLUEPRINTS.values()]
 
 
 class SourceBody(BaseModel):
@@ -73,12 +75,12 @@ class SourceSelectionRequired(ValueError):
         if devices:
             message = "Choose a robot"
         elif automatic:
-            message = "No devices found; confirm Simulated with another Start click"
+            message = "No devices found; connect the device and retry Auto, or explicitly choose Simulate hardware"
         else:
             message = "Selected device unavailable; refresh or choose another connection"
         super().__init__(message)
         self.devices = devices
-        self.suggest_simulated = not devices and automatic
+        self.suggest_simulated = False
 
 
 @dataclass(frozen=True)

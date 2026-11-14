@@ -72,7 +72,7 @@ export class ScopedRequests {
 /** Service readiness and discovery facts have one owner independent of the DOM. */
 export class HardwareDiscovery {
   constructor(request) {
-    this.request = request;
+    this.request = (path, options) => request(path, options);
     this.requests = new ScopedRequests();
     this.canStatus = { ready: false, state: "checking", message: "Checking can0…" };
     this.plannerStatus = { ready: false, state: "checking", message: "Checking manipulation dependencies…" };

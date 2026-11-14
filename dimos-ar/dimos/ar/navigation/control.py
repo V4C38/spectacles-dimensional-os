@@ -61,17 +61,22 @@ class NavigationControlService:
         self._generation = 0
         self._closed = False
         self._fault = False
+        self._stop_pending = False
 
     @property
     def faulted(self) -> bool:
         return self._fault
+
+    @property
+    def stop_pending(self) -> bool:
+        return self._stop_pending
 
     def start(self) -> None:
         self._heartbeat = asyncio.create_task(self._renew())
 
     async def _renew(self) -> None:
         while not self._closed:
-            if not self._fault:
+            if not self._fault and not self._stop_pending:
                 epoch, revision = self._state()
                 try:
                     await self._rpc.call(
@@ -87,7 +92,7 @@ class NavigationControlService:
             await asyncio.sleep(HEARTBEAT_INTERVAL_S)
 
     def submit(self, goal: PoseStamped, epoch: str, revision: int) -> bool:
-        if self._closed or self._fault:
+        if self._closed or self._fault or self._stop_pending:
             return False
         self._pending = goal, epoch, revision, self._generation
         if self._worker is None or self._worker.done():
@@ -117,28 +122,42 @@ class NavigationControlService:
     def cancel(self) -> None:
         self._pending = None
         self._generation += 1
-        if self._fault and not self._closed and (self._recovery is None or self._recovery.done()):
+        if self._closed:
+            return
+        self._stop_pending = True
+        if self._recovery is None or self._recovery.done():
             self._recovery = asyncio.create_task(self._recover())
 
     async def _recover(self) -> None:
-        # A timeout does not cancel native work. An explicit Stop can recover
-        # only after the actual old admission finishes and native stop is acknowledged.
-        await self._rpc.wait_idle("ar_navigation_goal")
-        await self._rpc.wait_idle("ar_navigation_recover")
-        if self._closed:
-            return
-        epoch, revision = self._state()
-        try:
-            stopped = await self._rpc.call(
-                "ar_navigation_recover", epoch, revision, time.monotonic() + 0.5
-            )
-        except Exception:
-            logger.exception("Native navigation stop could not be confirmed")
-            return
-        if stopped and self._state()[0] == epoch and not self._closed:
-            self._fault = False
-            if self._on_recovered is not None:
-                self._on_recovered()
+        # Stop is not complete merely because its Bool was sent. Withhold native
+        # admission/heartbeats until the old work drains and cancellation is
+        # acknowledged. Repeated Stops also require their own current generation.
+        reported = False
+        while self._stop_pending and not self._closed:
+            await self._rpc.wait_idle("ar_navigation_goal")
+            await self._rpc.wait_idle("ar_navigation_recover")
+            if self._closed:
+                return
+            epoch, revision = self._state()
+            generation = self._generation
+            try:
+                stopped = await self._rpc.call(
+                    "ar_navigation_recover", epoch, revision, time.monotonic() + 0.5
+                )
+            except Exception:
+                stopped = False
+                self._fault = True
+                if not reported:
+                    logger.exception("Native navigation stop could not be confirmed")
+                    reported = True
+            if (stopped and self._state()[0] == epoch
+                    and generation == self._generation and not self._closed):
+                self._stop_pending = False
+                self._fault = False
+                if self._on_recovered is not None:
+                    self._on_recovered()
+                return
+            await asyncio.sleep(0.1)
 
     async def close(self) -> None:
         self._closed = True

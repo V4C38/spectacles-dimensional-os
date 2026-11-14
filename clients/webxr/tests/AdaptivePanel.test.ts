@@ -141,8 +141,11 @@ it.each(["settings", "sensors", "diagnostics", "alignment"] as const)("fits the 
   });
 });
 
-it("keeps space above Emergency Stop through every runtime page resize", () => {
-  const f = harness(); f.apply(); f.settle();
+it.each([false, true].flatMap(localizationAvailable =>
+  [false, true].flatMap(manipulationAvailable =>
+    [false, true].map(lidarAvailable => ({ localizationAvailable, manipulationAvailable, lidarAvailable }))))
+)("keeps space above Emergency Stop through every runtime page resize with %j", capabilities => {
+  const f = harness(); Object.assign(f.snap, capabilities); f.apply(); f.settle();
   for (const page of ["agent", "settings", "sensors", "diagnostics", "alignment", "manual", "agent"] as const) {
     f.internals.page = page === "settings" || page === "sensors" || page === "diagnostics" ? page : "main";
     f.apply({ operatingMode: page === "agent" ? "agent" : "manual",

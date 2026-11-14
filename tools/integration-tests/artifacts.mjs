@@ -47,7 +47,7 @@ export function nativeProvenanceMatches(value, canonicalRoot = resolve(repositor
   try {
     return value?.publicationEligible === true
       && resolve(value.selectedRoot) === resolve(canonicalRoot)
-      && resolve(value.workspaceRoot) !== resolve(value.selectedRoot)
+      && (value.productionProject === true || resolve(value.workspaceRoot) !== resolve(value.selectedRoot))
       && sameFiles(value.productionFiles, value.selectedFiles)
       && sameFiles(nativeProjectFiles(value.selectedRoot), value.selectedFiles)
       && sameFiles(nativeProjectFiles(value.workspaceRoot), value.workspaceFiles);
@@ -62,10 +62,11 @@ export function beginNativeProvenance(selectedRoot, workspaceRoot, canonicalRoot
   const productionFiles = marker.productionFiles ?? null;
   const expected = { ...(productionFiles ?? workspaceFiles), ...(marker.sceneOverlays ?? {}) };
   return {
+    productionProject: marker.kind === "dimos-specs-production-review",
     selectedRoot: resolve(selectedRoot), workspaceRoot: resolve(workspaceRoot),
     selectedFiles, productionFiles, workspaceFiles,
     publicationEligible: resolve(selectedRoot) === resolve(canonicalRoot)
-      && resolve(workspaceRoot) !== resolve(selectedRoot)
+      && (marker.kind === "dimos-specs-production-review" || resolve(workspaceRoot) !== resolve(selectedRoot))
       && Boolean(sameFiles(productionFiles, selectedFiles) && sameFiles(expected, workspaceFiles)),
   };
 }
@@ -82,6 +83,7 @@ export function recordNativeSceneOverlay(value) {
   if (!existsSync(scene)) return value;
   const digest = createHash("sha256").update(readFileSync(scene)).digest("hex");
   value.workspaceFiles["Assets/Scene.scene"] = digest;
+  if (value.productionProject) value.selectedFiles["Assets/Scene.scene"] = digest;
   return value;
 }
 

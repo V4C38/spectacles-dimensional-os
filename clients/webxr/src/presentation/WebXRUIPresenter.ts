@@ -56,6 +56,7 @@ export interface WebXRUISnapshot {
   estopPressed?: boolean;
   alignmentReview?: { reason: string; pending: boolean } | null;
   agentAvailable: boolean;
+  resumeOperation?: boolean;
   estopAvailable: boolean;
   estopReason: string | null;
   agentMessage: string | null;
@@ -149,12 +150,12 @@ export class WebXRUIPresenter {
       this.hudTone = null;
     }
     if (!this.setupCompleted) {
-      this.ensureWizardLidarOff();
+      this.syncLidarSelection();
       if (this.wizardStep === "localization" && this.session.view().connection === "ready" &&
           this.session.view().hasTrackingOrigin) this.completeSetup();
       return;
     }
-    this.sendPostWizardLidarDefault();
+    this.syncLidarSelection();
   }
 
   snapshot(): WebXRUISnapshot {
@@ -168,7 +169,7 @@ export class WebXRUIPresenter {
       connect: "",
       localization: localizationProviderLabel(kind),
     };
-    const issue = kind === "unavailable" ? null : this.localizationError ?? this.cameraError() ?? (episode.phase === "failed" ? episode.lastError : null);
+    const issue = kind === "unavailable" ? null : this.localizationError ?? this.cameraError() ?? (episode.phase === "failed" && episode.retryInS == null ? episode.lastError : null);
     const guidance = localizationGuidance(kind);
     const card = this.wizardStep === "connect"
       ? { title: view.connection === "ready" ? "Connected to dimOS ARModule" : "Connecting", body: view.connection === "ready" ? `Robot: ${view.hello?.robot.display_name ?? "Unavailable"}\n${availableFeatures(view.capabilities)}` : "Waiting for the launcher." }
@@ -211,7 +212,8 @@ export class WebXRUIPresenter {
       manipulationAvailable: view.capabilities?.manipulation?.available === true,
       lidarAvailable: view.capabilities?.lidar.available === true,
       agentAvailable: view.capabilities?.agent.available === true,
-      estopAvailable: view.capabilities?.estop.available === true,
+      resumeOperation: view.state?.safety?.stopped === true,
+      estopAvailable: view.state?.safety?.stopped ? view.state.safety.can_resume : view.capabilities?.estop.available === true,
       estopReason: view.capabilities?.estop.reason ?? null,
       agentMessage: view.agentMessage,
       hudText: this.hudText,
@@ -233,7 +235,7 @@ export class WebXRUIPresenter {
     this.menuOpen = false;
     this.sensors.resetPostSetup();
     this.requestStateIfReady();
-    this.sendPostWizardLidarDefault();
+    this.syncLidarSelection();
   }
 
   nextSetup(): void {
@@ -293,6 +295,11 @@ export class WebXRUIPresenter {
   }
 
   estop(): void {
+    const safety = this.session.view().state?.safety;
+    if (safety?.stopped) {
+      if (safety.can_resume) this.session.requestResumeOperation();
+      return;
+    }
     if (this.session.view().capabilities?.estop.available !== true) {
       return;
     }
@@ -312,7 +319,6 @@ export class WebXRUIPresenter {
     this.session.requestState();
   }
 
-  private ensureWizardLidarOff(): void { this.sensors.syncSetup(false); }
+  private syncLidarSelection(): void { this.sensors.syncSetup(false); }
 
-  private sendPostWizardLidarDefault(): void { this.sensors.syncSetup(true); }
 }

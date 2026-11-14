@@ -60,7 +60,6 @@ class ManipulationRuntime:
         self._control_epoch: str | None = None
         self._control_deadline = 0.0
         self._control_revision = -1
-        self._reconnect_deadline = 0.0
         self._retired_control_epochs: set[str] = set()
 
     def start(self) -> None:
@@ -395,10 +394,20 @@ class ManipulationRuntime:
             return self.native_command(client_id, group, action, body, admission)
         return self.plan_or_evaluate(client_id, group, action, body, request, admission)
 
-    def cancel(self, client_id: str) -> dict[str, Any]:
+    def cancel(
+        self,
+        client_id: str | None,
+        *,
+        epoch: str | None = None,
+        revision: int | None = None,
+    ) -> dict[str, Any]:
         with self.lock:
-            if self.session.owner not in (None, client_id):
+            if client_id is not None and self.session.owner not in (None, client_id):
                 raise ManipulationError("ownership", "cannot cancel another owner's operation")
+            if epoch is not None and revision is not None:
+                if epoch != self._control_epoch or revision < self.authority().revision:
+                    raise ManipulationError("retired", "controlled stop authority retired")
+                self.authority().stop(epoch, revision)
             was_stopped = self.session.begin_cancel()
             self.retire()
             generation = self.session.generation
@@ -801,7 +810,7 @@ class ManipulationRuntime:
             }
             if not evaluation.success:
                 result["code"] = self.adapter.evaluation_code(evaluation)
-        except Exception as exc:  # noqa: BLE001 — native IK failures are advisory wire results
+        except Exception as exc:  # noqa: BLE001 — native IK failures become advisory wire results
             result = {
                 "status": "infeasible",
                 "code": spatial_error_code(str(exc), "ik_failed"),
@@ -1035,18 +1044,31 @@ class ManipulationRuntime:
                 else None
             )
 
-    def suspend(self, client_id: str, deadline: float) -> None:
+    def suspend(self, client_id: str, deadline: float, token: str | None = None) -> None:
         with self.lock:
             now = time.monotonic()
-            if self.session.owner == client_id and now < deadline <= now + 1.05:
-                self._reconnect_deadline = deadline
+            if (
+                self.session.owner != client_id
+                or token is None
+                or self.session.token != token
+                or not now < deadline <= now + 2.05
+            ):
+                return
+            generation = self.session.generation
+        # Recovery reserves editing authority on the server, never motion.
+        # A fresh native token is required after the transport returns.
+        self.retire_following(generation)
 
     def disconnect(self, client_id: str) -> None:
         with self.lock:
             self.session.retire_client(client_id)
-            owned = self.session.owner == client_id
+            owned = self.session.owner == client_id and self.session.token is not None
+            generation = self.session.generation
         if owned:
-            self.emergency_stop()
+            # A lost editor retires only its following generation. Accepted
+            # executions belong to the robot, and another editor may already
+            # have taken over by the time this callback reaches native code.
+            self.retire_following(generation)
 
     def emergency_stop(
         self,
@@ -1134,9 +1156,6 @@ class ManipulationRuntime:
                 stalled = tail.stalled(now=now)
                 if expired or arrived or stalled:
                     if self.retire_following(generation):
-                        with self.lock:
-                            if not arrived and not self.session.stopped:
-                                self._following_failure = "Target not reached"
                         logger.info(
                             "Following target finished",
                             generation=tail.generation,
@@ -1162,7 +1181,11 @@ class ManipulationRuntime:
                         if isinstance(failure, (str, dict)) and failure:
                             if self.retire_following(generation):
                                 with self.lock:
-                                    self._following_failure = "Target not reached"
+                                    self._following_failure = (
+                                        failure.get("message", "IK failed")
+                                        if isinstance(failure, dict)
+                                        else failure
+                                    )
                         else:
                             tail.refreshed_at = time.monotonic()
                             with self.lock:
@@ -1182,34 +1205,9 @@ class ManipulationRuntime:
                 self.retire_following(generation)
         with self.lock:
             generation = self.session.generation
-            reconnect = (
-                self.session.token is not None and time.monotonic() < self._reconnect_deadline
-            )
-            cached = self._following_target if reconnect else None
-            group = self.session.group_id
-        if cached is not None and cached.group == group:
-            try:
-                self.fresh(cached.group)
-                with self.lock:
-                    current = generation == self.session.generation and not self.session.stopped
-                if current:
-                    self.adapter.task_invoke(
-                        self.config.following_tasks[cached.group],
-                        "set_target",
-                        {
-                            "pose": self.pose(cached.body),
-                            "value": cached.body["speed_scale"],
-                            "t_now": None,
-                        },
-                    )
-            except ValueError:
-                self.retire_following(generation)
-        with self.lock:
-            generation = self.session.generation
             expired = (
                 self.session.token is not None
                 and time.monotonic() - self.session.updated_at > 0.5
-                and time.monotonic() >= self._reconnect_deadline
             )
         if expired:
             self.retire_following(generation)

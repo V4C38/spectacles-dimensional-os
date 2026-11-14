@@ -145,6 +145,32 @@ export class ReviewScenario extends BaseScriptComponent {
     }
     this.wire(result);
   }
+  private checkEndEffectorControls(): void {
+    const renderer = this.root.manipulation.renderer, handle = renderer.handle;
+    const collider = handle.getComponent("Physics.ColliderComponent") as ColliderComponent;
+    const vertices = renderer.sphere.visual.mesh.extractVerticesForAttribute("position");
+    const matrix = renderer.sphere.object.getTransform().getWorldTransform(), center = handle.getTransform().getWorldPosition();
+    let radius = 0;
+    for (let i = 0; i < vertices.length; i += 3) {
+      radius = Math.max(radius, matrix.multiplyPoint(new vec3(vertices[i],vertices[i+1],vertices[i+2])).distance(center));
+    }
+    this.check("ee_collider_matches_visible_marker", Math.abs((collider.shape as SphereShape).radius * handle.getTransform().getWorldScale().x - radius) < .01);
+    const controls = renderer.controls, preview = controls.buttons.get("plan"), execute = controls.buttons.get("execute");
+    this.check("ee_action_font_sizes_match", Math.abs(controls.gripper.labelText.size - preview.labelText.size) < .01 && Math.abs(controls.gripper.labelText.size - execute.labelText.size) < .01);
+    this.check("mini_panel_scaling_disabled", !controls.panelPresenter.frame.allowScaling);
+    this.check("mini_panel_speed_heading", controls.speedTitle.text === "Movement speed" && controls.speedTitle.getSceneObject().isEnabledInHierarchy);
+    const slider = this.root.uiPresenter.mainMenuView.speedSlider;
+    this.check("main_menu_speed_slider_height", Math.abs(slider.size.y - 4.5) < .01 && Math.abs(slider.knobSize.y - 4.8) < .01);
+    const probe = Physics.createGlobalProbe();
+    for (const [name, control] of [["preview",preview],["execute",execute],["gripper",controls.gripper]] as const) {
+      const target = control.button.collider.getSceneObject().getTransform().getWorldPosition();
+      const toward = this.root.cameraObject.getTransform().getWorldPosition().sub(target).normalize();
+      probe.rayCastAll(target.add(toward.uniformScale(30)), target.sub(toward.uniformScale(2)), hits => {
+        this.check(`ee_button_ray_${name}`, hits.some(hit => hit.collider === control.button.collider) && !hits.some(hit => hit.collider === collider));
+      });
+    }
+  }
+
   private pressControl(button: any): void {
     this.drag!.unhover();
     this.drag!.ray(this.root.cameraObject.getTransform().getWorldPosition(),
@@ -282,10 +308,12 @@ export class ReviewScenario extends BaseScriptComponent {
         return control.sceneObject.isEnabledInHierarchy && control.labelText.enabled &&
           control.button.visual.renderMeshVisual.enabled;
       }) && arm.renderer.controls.speed.getSceneObject().isEnabledInHierarchy);
-      const expected = arm.renderer.base.getTransform().getWorldPosition().add(
-        root.cameraObject.getTransform().getWorldRotation().multiplyVec3(new vec3(0, -13, 0)));
+      const basePosition = arm.renderer.base.getTransform().getWorldPosition();
+      const toward = root.cameraObject.getTransform().getWorldPosition().sub(basePosition);
+      const facing = quat.lookAt(toward.normalize(), vec3.up());
+      const expected = basePosition.add(facing.multiplyVec3(new vec3(0, -13, 0)));
       const top = presenter.root.getTransform().getWorldPosition().add(
-        root.cameraObject.getTransform().getWorldRotation().multiplyVec3(new vec3(0,
+        presenter.root.getTransform().getWorldRotation().multiplyVec3(new vec3(0,
           arm.renderer.menuHeight.height * 50 * presenter.root.getTransform().getWorldScale().x, 0)));
       this.check("manipulation_frame_anchor", top.distance(expected) < .1);
       presenter.reset();
@@ -324,6 +352,7 @@ export class ReviewScenario extends BaseScriptComponent {
       this.scene("manipulation_preview");
     } else if (this.phase === 3) {
       this.check("selected_ee_gripper", ["Open", "Close"].includes(arm.renderer.controls.gripper.labelText.text));
+      this.checkEndEffectorControls();
       this.check("manipulation_plan", !this.previewControlPending && !!arm.core.interaction.plan &&
         this.sent.some(command => command.action === "plan"));
       this.pressControl(arm.renderer.controls.buttons.get("execute").button);

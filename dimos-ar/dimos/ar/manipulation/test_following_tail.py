@@ -138,14 +138,14 @@ def test_stale_feedback_aborts_tail(tail_runtime):
     assert module.following_tail is None
 
 
-def test_stationary_unreached_tail_finishes_with_visible_failure(tail_runtime):
+def test_stationary_unreached_tail_returns_to_idle_without_spatial_error(tail_runtime):
     module, now, observation, request = tail_runtime
     module.advance()
     now[0] += 2.01
     refresh(module, observation)
     module.advance()
     assert module.following_tail is None
-    assert module._following_failure == "Target not reached"
+    assert module._following_failure is None
     assert not module.session.stopped
     module.adapter.task_invoke.assert_any_call("follow", "clear")
     module.descriptor = {}
@@ -153,7 +153,7 @@ def test_stationary_unreached_tail_finishes_with_visible_failure(tail_runtime):
     module.adapter.get_state().error = None
     observation.gripper_position = None
     module.adapter.feedback.ts = time.time()
-    assert module.snapshot()["message"] == "Target not reached"
+    assert module.snapshot()["message"] is None
     module.revoke_authority("robot", "b", 7, "superseded")
     module.command("replacement", request("acquire", revision=8, lease="b"))
     assert module._following_failure is None

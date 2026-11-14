@@ -125,7 +125,7 @@ describe("paired v2 bulk records", () => {
     f.bulk.uploadLocalization(new Uint8Array(100000), "old-capture");
     f.peer.receive({ type: "bulk_upload_result", upload_id: 1, status: "rejected", code: "capture_retired" });
     expect(f.bulk.uploading).toBe(false);
-    expect(f.bulk.uploadResult()).toEqual({ id: 1, status: "rejected", code: "capture_retired" });
+    expect(f.bulk.uploadResult()).toEqual({ id: 1, kind: "localization", status: "rejected", code: "capture_retired" });
     expect(f.failures).toEqual([]);
     expect(() => f.bulk.uploadLocalization(new Uint8Array(10), "")).toThrow("generation");
     expect(() => f.bulk.uploadLocalization(new Uint8Array(4194305), "capture")).toThrow("unavailable");

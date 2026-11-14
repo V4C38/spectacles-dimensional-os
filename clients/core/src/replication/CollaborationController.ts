@@ -22,6 +22,7 @@ interface LocalAuthoritySession {
   grantRevision: number | null;
   lease: string | null;
   kind: InteractionKind;
+  takeover: boolean;
   sequence: number;
   settings: InteractionSettings;
   queued: InteractionPose | null;
@@ -42,6 +43,7 @@ interface SettlingTarget {
 /** Owns shared facts and local authority; presentation interpolation has a separate owner. */
 export class CollaborationController {
   private state: ReadonlyFacts<InteractionState> | null = null;
+  private routes: ReadonlyFacts<Pick<InteractionState, "preview" | "active_goal">> = { preview: null, active_goal: null };
   private local: LocalAuthoritySession | null = null;
   private serial = 0;
   private readonly presentation = new TargetPresentation();
@@ -53,14 +55,16 @@ export class CollaborationController {
 
   raw(): ReadonlyFacts<InteractionState> | null { return this.state; }
   navigation(): ReadonlyFacts<Pick<InteractionState, "preview" | "active_goal">> {
-    return { preview: this.state?.preview ?? null, active_goal: this.state?.active_goal ?? null };
+    return this.routes;
   }
   clearNavigation(): void {
     if (this.state) this.state = { ...this.state, preview: null, active_goal: null };
+    this.routes = { preview: null, active_goal: null };
   }
   completeAssets(state: ReadonlyFacts<InteractionState>): boolean {
     if (!this.state || this.state.epoch !== state.epoch || this.state.revision !== state.revision) return false;
     this.state = { ...this.state, preview: state.preview, active_goal: state.active_goal };
+    this.routes = { preview: state.preview, active_goal: state.active_goal };
     return true;
   }
   get denialRevision(): number { return this.denial; }
@@ -87,15 +91,18 @@ export class CollaborationController {
     else settings = { speed_scale: rawTarget?.speed_scale, gripper: rawTarget?.gripper };
     return {
       blocked,
+      canTakeover: domain === "navigation" && this.state?.mode === "agent" &&
+        !this.state.motion_busy && !authority && (!local || local.takeover),
+      takeoverPending: !!local?.takeover && (local.awaitingGrant || !ownsAuthority),
       pending: predicting && !!local && (local.awaitingGrant || local.lease !== null && !ownsAuthority),
       ownsAuthority, authority, planning: authority?.kind === "navigation_planning",
       mode: this.state?.mode ?? "manual", settings, settling: !!settling,
       target, rawTarget, phase: rawTarget?.phase ?? null,
       stale: !!authority?.held && now - this.lastStateAt > ACTIVE_TARGET_STALE_S,
-      preview: this.state?.preview ?? null, activeGoal: this.state?.active_goal ?? null,
+      preview: this.routes.preview, activeGoal: this.routes.active_goal,
     };
   }
-  apply(state: ReadonlyFacts<InteractionState>): boolean {
+  apply(state: ReadonlyFacts<InteractionState>, pendingRoutes: Readonly<{ preview?: boolean; active_goal?: boolean }> = {}): boolean {
     const previous = this.state;
     if (previous?.epoch === state.epoch) {
       if (state.revision <= previous.revision) return false;
@@ -105,6 +112,16 @@ export class CollaborationController {
       if (this.local.awaitingGrant) this.retireAcquisition(this.local.acquisitionId);
       this.clearLocal();
     }
+    // Control facts take effect immediately. A route and its endpoint are one
+    // presentation frame: retain the previous complete frame until the newest
+    // envelope's bulk asset is ready, without retaining old authority facts.
+    const sameEpoch = previous?.epoch === state.epoch;
+    const sameLease = sameEpoch && !!state.authority &&
+      previous?.authority?.lease_id === state.authority.lease_id;
+    this.routes = {
+      preview: pendingRoutes.preview ? (sameLease ? this.routes.preview : null) : state.preview,
+      active_goal: pendingRoutes.active_goal && sameEpoch ? this.routes.active_goal : state.active_goal,
+    };
     this.state = state;
     this.lastStateAt = this.port.now();
     this.presentation.apply(state.targets, this.port.now());
@@ -187,19 +204,21 @@ export class CollaborationController {
       this.finishDeferred();
     } else this.flush(true);
   }
-  begin(kind: InteractionKind, sourceId: string, pose?: ReadonlyPose, settings: InteractionSettings = {}): boolean {
-    if (!this.port.ready() || !this.state || this.snapshot(interactionDomain(kind), settings.group_id).blocked) return false;
+  begin(kind: InteractionKind, sourceId: string, pose?: ReadonlyPose, settings: InteractionSettings = {}, takeover = false): boolean {
+    const snapshot = this.snapshot(interactionDomain(kind), settings.group_id);
+    if (!this.port.ready() || !this.state || (snapshot.blocked && !(takeover && snapshot.canTakeover))) return false;
+    if (takeover && (kind !== "live" || !snapshot.canTakeover)) return false;
     if (this.local) return this.local.kind === kind && this.local.settings.group_id === settings.group_id;
     const request = this.id();
     this.settling = null;
     this.local = {
       acquisitionId: request, awaitingGrant: true, grantRevision: null, lease: null,
-      kind, sequence: 0, settings: { ...settings }, queued: null, deferred: null,
+      kind, takeover, sequence: 0, settings: { ...settings }, queued: null, deferred: null,
       lastSent: -Infinity, lastRenewed: -Infinity,
     };
     if (pose) this.presentation.prediction = clone(pose);
     this.port.send(JSON.stringify({ type: "interaction_request", request_id: request,
-      action: "acquire", epoch: this.state.epoch, acquisition_id: request,
+      action: takeover ? "takeover" : "acquire", epoch: this.state.epoch, acquisition_id: request,
       source_id: sourceId, kind, ...settings, ...(pose ? clone(pose) : {}) }) + "\n");
     return true;
   }
@@ -257,6 +276,7 @@ export class CollaborationController {
     this.settling = null;
     this.clearLocal();
     this.state = null;
+    this.routes = { preview: null, active_goal: null };
     this.presentation.reset();
     this.lastStateAt = -Infinity;
     this.cancelled.clear();

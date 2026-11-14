@@ -64,6 +64,10 @@ export interface ServerInfo {
 }
 
 export interface Hello {
+  presence?: boolean;
+  /** Browser audio can be transcribed into a draft by this server. */
+  speech_transcription?: boolean;
+  speech_transcription_reason?: string;
   resume_token: string;
   /** Configured provider inventory. */
   localization: { providers: ("fiducial_marker" | "vps")[] };
@@ -98,6 +102,7 @@ export interface AgentState {
 }
 
 export interface State {
+  safety?: { stopped: boolean; can_resume: boolean; stop_id?: string };
   playback?: { state: "playing" | "ended"; elapsed_s: number; duration_s: number };
   nav_preview_costmap_ts?: number;
   type: "state";
@@ -110,6 +115,14 @@ export interface State {
 export interface AgentMessage {
   type: "agent_message";
   text: string;
+}
+
+export interface SpeechTranscriptionResult {
+  type: "speech_transcription_result";
+  request_id: string;
+  status: "preparing" | "transcribing" | "completed" | "rejected";
+  text?: string;
+  message?: string;
 }
 
 export interface AgentSkill {
@@ -204,7 +217,30 @@ export interface Lidar {
   points: Vec3[];
 }
 
+/** Passive world-space cues; a missing pointer/panel is hidden. */
+export interface PresencePointer {
+  id: number;
+  start: Vec3;
+  control: Vec3;
+  end: Vec3;
+  opacity: number;
+  cursor: boolean;
+}
+export interface PresencePanel {
+  position: Vec3;
+  orientation: Quat;
+  width: number;
+  height: number;
+}
+export interface PresenceCues { pointers: PresencePointer[]; panel: PresencePanel | null; }
+export interface ClientPresence extends PresenceCues, MapContext { type: "client_presence"; }
+export interface PresenceState extends MapContext {
+  type: "presence_state";
+  clients: (PresenceCues & { client_id: string; age_s: number })[];
+}
+
 export type Outbound =
+  | PresenceState
   | ManipulationOutbound
   | InteractionState
   | InteractionResult
@@ -218,6 +254,7 @@ export type Outbound =
   | Pose
   | Lidar
   | AgentMessage
+  | SpeechTranscriptionResult
   | AgentSkill;
 
 export interface ClientError {
@@ -232,6 +269,7 @@ export interface ClientError {
 }
 
 export interface HelloRequest {
+  presence?: boolean;
   protocol_version: 2;
   type: "hello_request";
   resume_token?: string;
@@ -272,6 +310,12 @@ export interface NavGoalRequest {
 
 export interface EstopRequest {
   type: "estop_request";
+}
+
+export interface ResumeOperationRequest {
+  type: "resume_operation_request";
+  epoch: string;
+  stop_id: string;
 }
 
 export interface LidarSettingsRequest extends LidarSettings {
@@ -333,9 +377,11 @@ export type Inbound =
   | NavGoalRequest
   | NavJoystickRequest
   | EstopRequest
+  | ResumeOperationRequest
   | LidarSettingsRequest
   | UserMessageRequest
-  | ClientPose;
+  | ClientPose
+  | ClientPresence;
 
 export const AR_MODULE_CLIENT_CONFIG = {
   port: 8787,
@@ -429,6 +475,8 @@ export interface InteractionSettings { group_id?: string; speed_scale?: number; 
 export type InteractionDomain = "navigation" | "manipulation";
 export interface InteractionSnapshot {
   readonly blocked: boolean;
+  readonly canTakeover?: boolean;
+  readonly takeoverPending?: boolean;
   readonly pending: boolean;
   readonly ownsAuthority: boolean;
   readonly authority: ReadonlyFacts<InteractionAuthority> | null;
@@ -449,7 +497,7 @@ export interface InteractionAuthorityPort {
   readonly denialRevision: number;
   raw(): ReadonlyFacts<InteractionState> | null;
   snapshot(domain?: InteractionDomain, groupId?: string, now?: number): InteractionSnapshot;
-  begin(kind: InteractionKind, sourceId: string, pose?: ReadonlyFacts<InteractionPose>, settings?: InteractionSettings): boolean;
+  begin(kind: InteractionKind, sourceId: string, pose?: ReadonlyFacts<InteractionPose>, settings?: InteractionSettings, takeover?: boolean): boolean;
   update(pose: ReadonlyFacts<InteractionPose>, settings?: InteractionSettings): void;
   credentials(): InteractionCredentials | null;
   release(pose?: ReadonlyFacts<InteractionPose>, kinds?: readonly InteractionKind[]): number | null;

@@ -50,7 +50,7 @@ async def test_official_mock_manipulation_contract():
         await client.socket.send(json.dumps({"type": "estop_request"}))
         await client.receive(lambda frame: frame["type"] == "manipulation_state"
                              and frame.get("stopped") and frame.get("stop_confirmed"))
-        assert (await client.command("resume"))["status"] == "resumed"
+        assert (await client.resume_operation())["status"] == "resumed"
 
 
 @pytest.mark.asyncio

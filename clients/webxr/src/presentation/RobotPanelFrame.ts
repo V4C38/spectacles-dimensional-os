@@ -3,7 +3,7 @@ import * as THREE from "three";
 import { registerRayTarget, UI_CONTROL_RAY_PRIORITY } from "../input/WebXRInteraction";
 import { disposeObjectTrees } from "./SceneResources";
 
-/** The same bottom move bar and corner scaling affordances as the runtime window. */
+/** Move bar for the fixed-size robot panel; scaling corners stay disabled. */
 export class RobotPanelFrame {
   readonly object=new THREE.Group();
   readonly pinLines: THREE.Mesh;
@@ -16,6 +16,9 @@ export class RobotPanelFrame {
     const chrome = panelChrome(this.object, ARM_PANEL_STYLE.cornerM, .5);
     this.bar = chrome.bar; this.zones.push(chrome.barZone, chrome.cornerZones.left, chrome.cornerZones.right);
     this.corners.push(chrome.cornerArcs.left, chrome.cornerArcs.right);
+    for (const mesh of [chrome.cornerZones.left, chrome.cornerZones.right, ...this.corners]) {
+      mesh.visible = false; mesh.userData.rayDisabled = true;
+    }
     for (const [i,mesh] of this.zones.entries()) { mesh.userData.manipulationPanel=true; mesh.userData.panelHandle=["bar","left","right"][i]; }
     this.pinLines = panelIcon(PANEL_PIN_SEGMENTS);
     this.pinLines.name = "ArmPanelPinIcon";

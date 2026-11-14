@@ -29,6 +29,7 @@ def test_blueprint_metadata_and_shell_menu_share_the_registry():
         f"{item.id}\t{item.label}\t{int(item.manipulation)}" for item in BLUEPRINTS.values()
     ]
     for item in BLUEPRINTS.values():
+        assert item.label == item.cli.removeprefix("dimos-ar.")
         body = StartBody(blueprint=item.id, profile_id="profile", source={"mode": "auto"})
         assert body.blueprint == item.id
         assert ResolvedRobotSource().cli_arguments(item.id) == ("run", item.cli)
@@ -40,7 +41,7 @@ def test_blueprint_metadata_and_shell_menu_share_the_registry():
 def test_missing_devices_require_an_explicit_choice(mode):
     with pytest.raises(SourceSelectionRequired) as error:
         resolve_robot_source("unitree_go2", SourceBody(mode=mode, device_id="missing"))
-    assert error.value.suggest_simulated is (mode == "auto")
+    assert error.value.suggest_simulated is False
 
 
 def test_selected_device_resolves_to_its_native_transport():

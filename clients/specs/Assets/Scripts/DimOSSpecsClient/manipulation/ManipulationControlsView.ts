@@ -1,6 +1,6 @@
 import { Frame } from "SpectaclesUIKit.lspkg/Scripts/Components/Frame/Frame";
-import { ARM_PANEL_STYLE, clampArmPanelScale, PANEL_PIN_SEGMENTS, PANEL_SCAN_SEGMENTS } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
-import { configureControlPanelFrame, isFrameInitialized, COLOR_WHITE, createIconButton, createText, panelButtonLayer, SnapOS2Styles, uiMaterialLayer, type IconButtonResult } from "../presentation/UIKit";
+import { ARM_PANEL_STYLE, CONTROL_PANEL_SCALE, PANEL_PIN_SEGMENTS, PANEL_SCAN_SEGMENTS } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
+import { configureControlPanelFrame, configurePanelText, isFrameInitialized, COLOR_WHITE, createIconButton, createText, panelButtonLayer, SnapOS2Styles, uiMaterialLayer, uprightFacingRotation, type IconButtonResult } from "../presentation/UIKit";
 import { Slider } from "SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider";
 import type { ManipulationController } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationController";
 
@@ -31,15 +31,14 @@ export class SpecsArmPanelPresenter {
     this.root.enabled = false;
     this.subscriptions.push(this.frame.onInitialized.add(() => this.configure()));
     this.subscriptions.push(this.frame.onTranslationStart.add(() => { if (!this.configuring) this.pinned = true; }));
-    this.subscriptions.push(this.frame.onScalingUpdate.add(() => { if (!this.configuring) { this.pinned = true; this.clamp(); } }));
   }
   private configure(): void {
     if (this.configured || !isFrameInitialized(this.frame)) return;
     this.configuring = true;
-    configureControlPanelFrame(this.frame, { width: ARM_PANEL_STYLE.widthM, height: .228 }, true);
+    configureControlPanelFrame(this.frame, { width: ARM_PANEL_STYLE.widthM, height: .228 }, false);
     this.frame.roundedRectangle.cornerRadius = ARM_PANEL_STYLE.cornerM * 100;
     this.frame.showCloseButton = false; this.frame.showFollowButton = false;
-    this.frame.onlyInteractOnBorder = true; this.frame.allowTranslation = true; this.frame.allowScaling = true;
+    this.frame.onlyInteractOnBorder = true; this.frame.allowTranslation = true; this.frame.allowScaling = false;
     this.frame.setUseFollow(false); this.frame.setFollowing(false);
     this.frame.content.getTransform().setLocalScale(vec3.one());
     this.configured = true; this.configuring = false;
@@ -61,27 +60,15 @@ export class SpecsArmPanelPresenter {
         height * 100 - this.frame.border * 2 - this.frame.padding.y);
       this.content.getTransform().setLocalPosition(new vec3(0, height * 50, 0));
       this.height = height;
-      this.frame.autoScaleContent = true;
+      this.frame.autoScaleContent = false;
     }
     if (!this.pinned) {
-      const q = camera.getTransform().getWorldRotation();
+      const q = uprightFacingRotation(base.getTransform().getWorldPosition(), camera);
       const scale = ARM_PANEL_STYLE.defaultScale * .75;
       this.root.getTransform().setWorldPosition(base.getTransform().getWorldPosition().add(q.multiplyVec3(new vec3(0, -13 - height * 50 * scale, 0))));
       this.root.getTransform().setWorldRotation(q);
     }
     this.configuring = false;
-  }
-  private clamp(): void {
-    const scale = this.content.getTransform().getWorldScale().x;
-    if (!(scale > 0)) return;
-    const target = clampArmPanelScale(scale / .75) * .75;
-    if (Math.abs(target - scale) < 1e-6) return;
-    this.configuring = true;
-    const ratio = target / scale, size = this.frame.innerSize;
-    this.frame.autoScaleContent = false;
-    this.frame.innerSize = new vec2(size.x * ratio, size.y * ratio);
-    const content = this.frame.content.getTransform(); content.setLocalScale(content.getLocalScale().uniformScale(ratio));
-    this.frame.autoScaleContent = true; this.configuring = false;
   }
   dispose(): void { for (const unsubscribe of this.subscriptions) unsubscribe(); this.root.destroy(); }
 }
@@ -96,6 +83,7 @@ export class ManipulationControlsView {
   readonly buttons = new Map<string, IconButtonResult>();
   readonly speed: Slider;
   readonly speedLabel: Text;
+  readonly speedTitle: Text;
   readonly panelTitle: Text;
   readonly rescan: IconButtonResult;
   readonly scanIcon: WorldMeshRenderer;
@@ -110,6 +98,7 @@ export class ManipulationControlsView {
     this.previewMenu = this.node(parent, "PreviewMenu");
     const add = (key: string, text: string, action: () => void, style = SnapOS2Styles.Secondary) => {
       const button = createIconButton(key === "plan" || key === "execute" ? this.previewMenu : this.panel, key, text, key === "estop" ? 20 : key === "plan" || key === "execute" ? 9.5 : key === "reset" || key === "stop" ? 9.2 : 14, ARM_PANEL_STYLE.buttonHeightM*100, vec3.zero(), style);
+      panelButtonLayer(button, false, key === "plan" || key === "execute" ? CONTROL_PANEL_SCALE.runtime * .75 : CONTROL_PANEL_SCALE.runtime / ARM_PANEL_STYLE.defaultScale);
       this.subscriptions.push(button.button.onTriggerDown.add(() => { if ((enabled() || key === "estop" || key === "stop") && !button.button.inactive) action(); }));
       button.labelText.size = ARM_PANEL_STYLE.buttonFontM * 100 * 32 / 0.69492703;
       if (key === "plan" || key === "execute") {
@@ -127,22 +116,29 @@ export class ManipulationControlsView {
     const speedRoot = this.node(this.panel, "ManipulationSpeed");
     this.speed = speedRoot.createComponent(Slider.getTypeName()) as Slider;
     this.speed.size = new vec3(14, 2.25, 0.5); this.speed.knobSize = new vec2(2.4, 2.4);
+    this.speedTitle = createText({ parent: speedRoot, name: "MovementSpeedTitle", text: "Movement speed",
+      fontSize: 0.011 * 100 * 32 / 0.69492703, color: COLOR_WHITE, position: new vec3(-7, 2.2, 1.4),
+      horizontalAlignment: HorizontalAlignment.Left, worldSpaceRect: Rect.create(0, 11, -1, 1) });
+    configurePanelText(this.speedTitle);
     this.speedLabel = createText({ parent: speedRoot, name: "SpeedLabel", text: "", fontSize: 0.011 * 100 * 32 / 0.69492703, color: COLOR_WHITE,
-      position: new vec3(0, 2, 0), horizontalAlignment: HorizontalAlignment.Center, worldSpaceRect: Rect.create(-12, 12, -2, 2) });
+      position: new vec3(7, 2.2, 1.4), horizontalAlignment: HorizontalAlignment.Right, worldSpaceRect: Rect.create(-3, 0, -1, 1) });
+    configurePanelText(this.speedLabel);
     this.subscriptions.push(this.speed.onValueChange.add(value => {
       if (!this.syncingSpeed && core.interaction.snapshot().canManipulate) core.interaction.setSpeedScale(0.05 + Math.max(0, Math.min(1, value)) * 0.95);
     }));
     this.gripper = createIconButton(parent, "Gripper", "Open", 9.5, 3.2, vec3.zero());
+    panelButtonLayer(this.gripper, false, CONTROL_PANEL_SCALE.runtime * .75);
+    this.gripper.labelText.size = ARM_PANEL_STYLE.buttonFontM * 100 * 32 / 0.69492703;
     this.subscriptions.push(this.gripper.button.interactable.onHoverEnter.add(() => hover("gripper", true)));
     this.subscriptions.push(this.gripper.button.interactable.onHoverExit.add(() => hover("gripper", false)));
     const pin = createIconButton(this.panel,"Pin to robot","",ARM_PANEL_STYLE.pinSizeM*100,ARM_PANEL_STYLE.pinSizeM*100,
       new vec3(ARM_PANEL_STYLE.pinXM*100,ARM_PANEL_STYLE.pinYM*100,.8),SnapOS2Styles.Secondary);
-    panelButtonLayer(pin);
+    panelButtonLayer(pin, false, CONTROL_PANEL_SCALE.runtime / ARM_PANEL_STYLE.defaultScale);
     this.subscriptions.push(pin.button.onTriggerUp.add(() => this.panelPresenter.reset()));
     this.panelTitle = createText({parent: this.panel, name: "ArmPanelTitle", text: "Arm", fontSize: 1.3 * 32 / .69492703, color: COLOR_WHITE,
       position: new vec3(-9.6, ARM_PANEL_STYLE.pinYM*100, 1.4), horizontalAlignment: HorizontalAlignment.Left, worldSpaceRect: Rect.create(0,12,-1.6,1.6)});
     const rescan = this.rescan = createIconButton(this.panel, "Recalibrate", "", ARM_PANEL_STYLE.pinSizeM*100, ARM_PANEL_STYLE.pinSizeM*100, new vec3((ARM_PANEL_STYLE.pinXM-.039)*100, ARM_PANEL_STYLE.pinYM*100,.8));
-    panelButtonLayer(rescan);
+    panelButtonLayer(rescan, false, CONTROL_PANEL_SCALE.runtime / ARM_PANEL_STYLE.defaultScale);
     this.subscriptions.push(rescan.button.onTriggerUp.add(() => { const intent = this.core.interaction.snapshot(); if (!intent.executing && !intent.dragging && !intent.resetting) recalibrate(); }));
     const drawIcon = (segments: readonly (readonly [number,number])[], x: number) => {
     const icon = new WorldMeshRenderer(this.panel,"PinIcon");

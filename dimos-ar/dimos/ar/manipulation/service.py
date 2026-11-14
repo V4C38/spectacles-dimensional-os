@@ -101,6 +101,7 @@ class ManipulationService:
         self._quiescing = False
         self._quiescent = False
         self._pending_stop: tuple[str | None, int | None] | None = None
+        self._pending_controlled_stop: tuple[str, int, str] | None = None
         self._authority_epoch: str | None = None
         self._authority_revision = -1
         self._pending_revoke: tuple[str, str, int, str] | None = None
@@ -123,8 +124,13 @@ class ManipulationService:
             self.submit(sample, client_id)
 
     def suspend(self, client_id: str, deadline: float) -> None:
+        state = self._shared_following.get(client_id)
+        token = state.token if state is not None else None
+        if state is not None:
+            self._shared_following[client_id] = SharedFollowing()
         self._spawn(
-            self._rpc.call("ar_manipulation_suspend", client_id, deadline), (client_id, "suspend")
+            self._rpc.call("ar_manipulation_suspend", client_id, deadline, token),
+            (client_id, "suspend"),
         )
 
     def connect(self, client_id: str) -> None:
@@ -218,7 +224,7 @@ class ManipulationService:
                 {**request.payload, "group_id": request.group_id},
                 timeout=20,
             )
-        except Exception as exc:  # noqa: BLE001 — remote native errors are advisory wire results
+        except Exception as exc:  # noqa: BLE001 — remote IK failures become advisory wire results
             code = spatial_error_code(str(exc), "ik_failed")
             result = {"status": "infeasible", "code": code, "message": str(exc)}
         if result.get("status") == "following":
@@ -248,6 +254,7 @@ class ManipulationService:
     async def _dispatch_command(
         self, request: ManipulationRequest, client_id: str, clock_offset: float
     ) -> None:
+        following = self._shared_following.setdefault(client_id, SharedFollowing()) if request.action == "acquire" else None
         body = {**request.payload, "action": request.action, "group_id": request.group_id}
         if request.action == "update":
             body["ts"] += clock_offset
@@ -277,7 +284,7 @@ class ManipulationService:
             "feasible",
         }:
             result = await self._prepare_outbound({**result, "type": "manipulation_result"})
-            self._reply(client_id, request, result)
+            self._reply(client_id, request, result, following=following)
 
     async def _state_call(self, method: str, *args: Any, timeout: float = 2.0) -> Any:
         # Invalidate snapshots captured before admission and while the command
@@ -288,7 +295,10 @@ class ManipulationService:
         finally:
             self._snapshot_generation += 1
 
-    def _reply(self, client_id: str, request: ManipulationRequest, result: dict[str, Any]) -> None:
+    def _reply(
+        self, client_id: str, request: ManipulationRequest, result: dict[str, Any],
+        *, following: SharedFollowing | None = None,
+    ) -> None:
         if request.action == "evaluate" and result.get("status") != "feasible":
             self._advisory_timing.record(counts={"failures": 1}, maxima={})
         if request.action in {"evaluate", "update"}:
@@ -318,6 +328,7 @@ class ManipulationService:
             and isinstance(result.get("token"), str)
             and client_id in self._clients
             and not self._closed
+            and (following is None or self._shared_following.get(client_id) is following)
         ):
             lease = request.payload.get("authority_lease")
             if isinstance(lease, str):
@@ -461,6 +472,67 @@ class ManipulationService:
         if key not in self._pending:
             self._spawn(self._drain_stops(), key)
 
+    def controlled_stop(self, epoch: str, revision: int, request_id: str) -> None:
+        if self._closed:
+            return
+        self._updates.clear()
+        self._snapshot_generation += 1
+        self._record_authority(epoch, revision)
+        self._pending_controlled_stop = (epoch, revision, request_id)
+        key = ("server", "controlled_stop")
+        if key not in self._pending:
+            self._spawn(self._drain_controlled_stops(), key)
+
+    async def _drain_controlled_stops(self) -> None:
+        envelope = None
+        result: dict[str, Any] = {}
+        while self._pending_controlled_stop is not None:
+            envelope, self._pending_controlled_stop = self._pending_controlled_stop, None
+            result = await self._controlled_stop(*envelope[:2])
+        if envelope is not None and self._on_result is not None and not self._closed:
+            epoch, revision, request_id = envelope
+            self._on_result(
+                ManipulationRequest(request_id, "cancel", "", {
+                    "authority_epoch": epoch, "authority_revision": revision,
+                }),
+                result,
+            )
+
+    async def _controlled_stop(self, epoch: str, revision: int) -> dict[str, Any]:
+        try:
+            try:
+                result = await self._state_call("ar_manipulation_controlled_stop", epoch, revision)
+            except TimeoutError:
+                # A timed-out waiter does not confirm cancellation. Keep this
+                # existing cancel admission busy until native work returns,
+                # then obtain a generation-fenced cancellation receipt.
+                await self._rpc.wait_idle("ar_manipulation_controlled_stop")
+                result = await self._state_call("ar_manipulation_controlled_stop", epoch, revision)
+        except Exception as exc:  # noqa: BLE001 — preserve unknown native stop outcomes as rejection facts
+            result = rejection_result("cancel", exc, transport=not isinstance(exc, ValueError))
+        return dict(result)
+
+    async def resume_operation(self, client_id: str, epoch: str, revision: int) -> bool:
+        snapshot = self._latest_snapshot
+        groups = snapshot.get("groups") if snapshot is not None else None
+        if not groups or client_id not in self._clients or self._closed:
+            return False
+        result = await self._state_call(
+            "ar_manipulation_command",
+            client_id,
+            {
+                "action": "resume",
+                "group_id": groups[0]["id"],
+                "authority_epoch": epoch,
+                "authority_revision": revision,
+                "authority_lease": None,
+                "authority_deadline": time.monotonic() + 0.5,
+                "target_revision": 0,
+            },
+            timeout=20,
+        )
+        return bool(result.get("status") == "resumed")
+
     async def _drain_stops(self) -> None:
         while self._pending_stop is not None:
             epoch, revision = self._pending_stop
@@ -486,6 +558,7 @@ class ManipulationService:
     async def close(self) -> None:
         self._closed = True
         self._pending_stop = None
+        self._pending_controlled_stop = None
         self._pending_revoke = None
         # Retire observation calls before the runtime and its RPC session shut down.
         if self._heartbeat:

@@ -62,11 +62,11 @@ export function requestLidarSettings(session: Pick<ARModuleSession, "view" | "se
 }
 
 export const OBSTACLE_HALO_M = 0.6;
-export type LidarDisplayPreferences = { pointLimit: number; obstacleRangeM: number; fullRangeM: number };
-export const DEFAULT_LIDAR_PREFERENCES: Readonly<LidarDisplayPreferences> = { pointLimit: 4000, obstacleRangeM: 0.6, fullRangeM: 5 };
+export type LidarDisplayPreferences = { pointLimit: number; obstacleRangeM: number; fullRangeM: number; mode?: LidarDisplayMode };
+export const DEFAULT_LIDAR_PREFERENCES: Readonly<LidarDisplayPreferences> = { pointLimit: 4000, obstacleRangeM: 0.6, fullRangeM: 5, mode: "obstacles" };
 export function normalizeLidarPreferences(value: Partial<LidarDisplayPreferences> | null): LidarDisplayPreferences {
   if (!value || !Number.isFinite(value.pointLimit) || !Number.isFinite(value.obstacleRangeM) || !Number.isFinite(value.fullRangeM)) return { ...DEFAULT_LIDAR_PREFERENCES };
-  return { pointLimit: Math.round(Math.max(250, Math.min(4000, value.pointLimit!)) / 250) * 250, obstacleRangeM: Math.max(0.1, Math.min(2, value.obstacleRangeM!)), fullRangeM: Math.max(0.5, Math.min(10, value.fullRangeM!)) };
+  return { pointLimit: Math.round(Math.max(250, Math.min(4000, value.pointLimit!)) / 250) * 250, obstacleRangeM: Math.max(0.1, Math.min(2, value.obstacleRangeM!)), fullRangeM: Math.max(0.5, Math.min(10, value.fullRangeM!)), mode: value.mode === "off" || value.mode === "full" ? value.mode : "obstacles" };
 }
 /** Server circle contains the body-shaped halo; clearance is measured from body bounds. */
 export function obstacleLidarSettings(bounds: Readonly<Vec3> = [0.7, 0.5, 0.55], clearanceM = OBSTACLE_HALO_M): LidarSettings {
@@ -81,14 +81,13 @@ export interface LidarPreferenceStore {
 /** Settings policy is portable. Persistence and the point-cloud renderer are host adapters. */
 export class LidarDisplayController {
   private readonly savedPreferences: LidarDisplayPreferences;
-  private wizardOffSent = false;
-  private postSetupSent = false;
+  private selectionSent = false;
 
   constructor(
     private readonly session: Pick<ARModuleSession, "view" | "sendText">,
     private readonly store?: LidarPreferenceStore,
     private readonly bodyHalo = true,
-    private readonly options: { readonly resetSetupOnDisconnect?: boolean } = {},
+    _options: { readonly resetSetupOnDisconnect?: boolean } = {},
   ) {
     this.savedPreferences = normalizeLidarPreferences(store?.read() ?? null);
   }
@@ -102,26 +101,23 @@ export class LidarDisplayController {
     return { ...this.savedPreferences };
   }
 
+  get selectedMode(): LidarDisplayMode { return this.savedPreferences.mode ?? "obstacles"; }
+
   observe(view: ARModuleSessionState): void {
-    if (view.connection !== "ready") {
-      if (this.options.resetSetupOnDisconnect) this.resetSetup();
-      return;
-    }
-    if (!view.state?.lidar) return;
-    const settings = view.state.lidar;
-    const mode = lidarModeFromSettings(settings);
-    const previous = { ...this.savedPreferences };
-    if (mode === "full") this.savedPreferences.fullRangeM = settings.max_range_m;
-    if (mode === "obstacles" && this.bodyHalo) {
-      const radius = obstacleLidarSettings(view.hello?.robot.body_bounds_m, 0).max_range_m;
-      const clearance = Math.max(0.1, Math.min(2, settings.max_range_m - radius));
-      this.savedPreferences.obstacleRangeM = Math.round(clearance * 10) / 10;
-    }
-    if (previous.fullRangeM !== this.savedPreferences.fullRangeM ||
-        previous.obstacleRangeM !== this.savedPreferences.obstacleRangeM) this.persist();
+    // Each connection gets its own server subscription. Old snapshots must never
+    // replace the user's saved selection while a settings acknowledgement settles.
+    if (view.connection !== "ready") this.selectionSent = false;
   }
 
   setMode(mode: LidarDisplayMode): boolean {
+    if (!this.sendSelection(mode)) return false;
+    this.savedPreferences.mode = mode;
+    this.selectionSent = true;
+    this.persist();
+    return true;
+  }
+
+  private sendSelection(mode: LidarDisplayMode): boolean {
     const view = this.session.view();
     if (view.connection !== "ready" || view.capabilities?.lidar.available !== true) return false;
     let settings = LIDAR_PRESETS[mode];
@@ -134,33 +130,23 @@ export class LidarDisplayController {
     return true;
   }
 
-  resetSetup(): void {
-    this.wizardOffSent = this.postSetupSent = false;
-  }
+  resetSetup(): void { this.selectionSent = false; }
 
-  resetPostSetup(): void {
-    this.postSetupSent = false;
-  }
+  // Completing or reopening setup does not change a user's sensor choice.
+  resetPostSetup(): void {}
 
-  /** Call explicitly from setup flow; observations alone never send a command. */
-  syncSetup(completed: boolean): void {
-    const view = this.session.view();
-    if (view.connection !== "ready" || view.capabilities?.lidar.available !== true) return;
-    if (completed ? this.postSetupSent : this.wizardOffSent) return;
+  /** Restore the selected subscription once per connection, including in setup. */
+  syncSetup(_completed: boolean): void {
+    if (this.selectionSent) return;
     try {
-      if (!completed) {
-        requestLidarSettings(this.session, LIDAR_PRESETS.off);
-        this.wizardOffSent = true;
-      } else if (this.setMode("obstacles")) {
-        this.postSetupSent = true;
-      }
+      if (this.sendSelection(this.selectedMode)) this.selectionSent = true;
     } catch {
       // A failed request remains eligible for the next setup refresh.
     }
   }
 
   cycle(): LidarDisplayMode {
-    this.setMode(nextLidarMode(this.mode));
+    this.setMode(nextLidarMode(this.selectedMode));
     return this.mode;
   }
 

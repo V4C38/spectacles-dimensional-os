@@ -78,7 +78,10 @@ export class SpecsRuntimeCoordinator {
     const controls = isManualControlEnabled(view, setup,
       this.deps.uiPresenter.isAlignmentReviewPending(), false, this.deps.uiPresenter.getOperatingMode());
     const navigationAvailable = view.capabilities?.navigation.available === true;
-    const navigationEnabled = controls && navigationAvailable;
+    const markerControls = isManualControlEnabled(view, setup,
+      this.deps.uiPresenter.isAlignmentReviewPending(), false, "manual") &&
+      view.state?.safety?.stopped !== true;
+    const navigationEnabled = markerControls && navigationAvailable;
     this.deps.manipulation.renderer.debugEnabled = this.deps.uiPresenter.getDebugMode();
     this.deps.manipulation.tick(controls && !!origin);
     if (!navigationAvailable) this.deps.robotPresenter.reset();

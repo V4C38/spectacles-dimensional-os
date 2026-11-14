@@ -58,6 +58,7 @@ class ReviewOptions:
     extra_media: bool = False
     prepare_only: bool = False
     keep_open: bool = False
+    production_project: bool = False
     prepared_project: Path | None = None
 
 
@@ -256,9 +257,12 @@ const gateAsset = project.assetManager.assets.find(a => a.name === "Integration 
 if (!gateAsset) throw new Error("Integration Test Harness component has not imported");
 let host = project.scene.rootSceneObjects.find(o => o.name === "Integration Test Harness");
 if (!host) host = project.scene.createSceneObject("Integration Test Harness");
-while (host.removeComponent("ScriptComponent")) {{}}
-const gate = host.addComponent("ScriptComponent") as Editor.Components.ScriptComponent;
-gate.scriptAsset = gateAsset as Editor.Assets.ScriptAsset;
+const components = host.getComponents("ScriptComponent");
+for (let i = components.length - 1; i >= 0; i--) {{
+  if (!(components[i] as any).inputNames.includes("autoRun")) host.removeComponentAt(i);
+}}
+let gate:any = host.getComponents("ScriptComponent").find((c:any)=>c.inputNames.includes("autoRun"));
+if (!gate) {{ gate=host.addComponent("ScriptComponent"); gate.scriptAsset=gateAsset as Editor.Assets.ScriptAsset; }}
 (gate as any).autoRun = true;
 const component = host.addComponent("ScriptComponent") as Editor.Components.ScriptComponent;
 component.scriptAsset = script as Editor.Assets.ScriptAsset;
@@ -406,7 +410,10 @@ def recorder_binary(destination: Path, override: Path | None) -> Path:
 
 async def run_pass(context: ReviewContext) -> dict[str, Any]:
     args, output, workspace = context.options, context.output, context.workspace
-    if args.prepared_project:
+    if getattr(args, "production_project", False):
+        project = next(args.source.glob("*.esproj"))
+        prepare_harness(workspace, args.harness)
+    elif args.prepared_project:
         marker = workspace / ".specs-review.json"
         if not marker.is_file() or json.loads(marker.read_text()).get("kind") != "dimos-specs-review":
             raise ReviewError("--prepared-project requires a disposable workspace created by this runner")
@@ -436,7 +443,7 @@ async def run_pass(context: ReviewContext) -> dict[str, Any]:
     started = time.monotonic()
     try:
         async with LensMcp(args.mcp_config, output) as mcp:
-            print(f"Opening disposable project: {project}", flush=True)
+            print(f"Opening test project: {project}", flush=True)
             await mcp.editor(
                 "const model = pluginSystem.findInterface(Editor.Model.IModel);"
                 f"if (model.project.projectDirectory.toString() !== {json.dumps(str(workspace))}) "
@@ -605,7 +612,8 @@ async def run_review(context: ReviewContext) -> dict[str, Any]:
     if args.harness is not None:
         return await run_pass(context)
     harnesses = SPECS_ROOT / "Tests/integration-tests"
-    project = args.prepared_project or copy_project(args.source, workspace, harnesses / "IntegrationScenario.ts")
+    project = (next(args.source.glob("*.esproj")) if getattr(args, "production_project", False) else
+               args.prepared_project or copy_project(args.source, workspace, harnesses / "IntegrationScenario.ts"))
     context.begin_provenance()
     suites = ["golden", "regression"] if args.suite == "all" else [args.suite]
     passes = []
@@ -619,18 +627,28 @@ async def run_review(context: ReviewContext) -> dict[str, Any]:
         write_json(directory / "results.json", result)
         passes.append(result)
     if args.suite == "all":
-        for name, harness in (("manipulation", "ManipulationProbe.ts"), ("overlap", "NavMarkerOverlapProbe.ts")):
+        for name, harness in (("manipulation", "ManipulationProbe.ts"), ("overlap", "NavMarkerOverlapProbe.ts"), ("presence", "PresenceProbe.ts")):
             directory = output / name
             directory.mkdir()
             child = context.for_pass("probe", harnesses / harness, project, directory)
             probe_result = await run_pass(child)
             write_json(directory / "results.json", probe_result)
             passes.append(probe_result)
+    passed = all(row["passed"] for row in passes)
+    if getattr(args, "production_project", False):
+        # Source identity includes the production scene. Finalize only after the
+        # editor has removed the authorized harness overlay and temporary assets.
+        return {"passed": passed, "checks": []}
+    return finalize_review(context, passed)
+
+
+def finalize_review(context: ReviewContext, scenarios_passed: bool) -> dict[str, Any]:
+    args, output = context.options, context.output
     command = ["node", str(REPO_ROOT / "tools/integration-tests/finalize.mjs"),
                "--client", "specs", "--run", str(output), "--scope", args.suite]
     completed = subprocess.run(command, check=False, env={**os.environ, "INTEGRATION_EXTRA_MEDIA": "1" if args.extra_media else "0", "INTEGRATION_DEFER_MEDIA_CLEANUP": "1"})
     result = json.loads((output / "results.json").read_text(encoding="utf-8"))
-    result["passed"] = result["passed"] and completed.returncode == 0 and all(row["passed"] for row in passes)
+    result["passed"] = result["passed"] and completed.returncode == 0 and scenarios_passed
     write_json(output / "results.json", result)
     return result
 
@@ -704,7 +722,7 @@ async def review_and_restore(context: ReviewContext) -> dict[str, Any]:
                         'const h=p.scene.rootSceneObjects.find(o=>o.name==="Integration Test Harness");'
                         'if(h)for(const raw of h.getComponents("ScriptComponent")){const c:any=raw;'
                         'if(c.inputNames.includes("autoRun"))(c as any).autoRun=false;else c.enabled=false;}'
-                        'p.save();return {autoRun:false};'
+                        'if(h){const cs=h.getComponents("ScriptComponent");for(let i=cs.length-1;i>=0;i--)if(!(cs[i] as any).inputNames.includes("autoRun"))h.removeComponentAt(i);}p.save();return {autoRun:false};'
                     )
                     write_json(output / "harness-disabled.json", disabled)
                     if context.provenance is not None:
@@ -712,6 +730,12 @@ async def review_and_restore(context: ReviewContext) -> dict[str, Any]:
             except Exception as error:
                 write_json(output / "harness-disabled.json", {"disabled": False, "error": str(error)})
                 print(f"Could not verify harness disabled: {error}", file=sys.stderr)
+        if getattr(args, "production_project", False):
+            shutil.rmtree(workspace / "Assets/Review", ignore_errors=True)
+            (workspace / "Assets/Review.meta").unlink(missing_ok=True)
+            # All overlays are now recorded; remove the temporary marker before
+            # source identity checks and golden publication.
+            (workspace / ".specs-review.json").unlink(missing_ok=True)
         if context.focus_budget.with_suffix(".aborted").exists():
             message = "Native test aborted after focus loss. Explicit user authorization is required before any retry or source restoration."
             print(message, file=sys.stderr, flush=True)
@@ -824,9 +848,12 @@ def arguments() -> ReviewOptions:
                         help="Reuse the same focus policy across retries; an aborted budget still refuses to resume")
     parser.add_argument("--extra-media", action="store_true", help="Also assemble edited diagnostic/probe videos; golden video is always produced")
     parser.add_argument("--prepare-only", action="store_true", help="Copy project/harness without using Lens Studio")
+    parser.add_argument("--production-project", action="store_true", help="Explicitly test the production project, restoring its harness and removing fixtures on exit")
     parser.add_argument("--keep-open", action="store_true", help="Leave the disposable fixture project open for debugging")
     parser.add_argument("--prepared-project", type=Path, help="Retry an existing runner-created disposable .esproj")
     args = parser.parse_args()
+    if getattr(args, "production_project", False) and (args.keep_open or args.prepare_only or args.prepared_project):
+        parser.error("--production-project cannot leave fixtures open or reuse a disposable project")
     if args.duration <= args.start_delay + 5 or args.start_delay < 0:
         parser.error("duration must leave at least five seconds after the nonnegative start delay")
     for name in ("source", "harness", "app", "mcp_config", "work_root", "output_root", "recorder_cache", "focus_budget"):
@@ -841,14 +868,21 @@ def arguments() -> ReviewOptions:
 
 def _run(args: ReviewOptions) -> int:
     run_id = "SpecsReview-" + time.strftime("%Y%m%d-%H%M%S") + f"-{os.getpid()}"
-    workspace = args.prepared_project.parent if args.prepared_project else args.work_root / run_id
+    workspace = args.source if getattr(args, "production_project", False) else args.prepared_project.parent if args.prepared_project else args.work_root / run_id
     output = args.output_root / run_id
     output.mkdir(parents=True)
     context = ReviewContext.create(args, output, workspace)
     identity = native_provenance.source_identity()
     write_json(output / "run.json", {"client": "specs", "source": identity,
                                     "startedAt": time.time()})
+    production_prepared = False
     try:
+        if getattr(args, "production_project", False):
+            if (workspace / "Assets/Review").exists() or (workspace / ".specs-review.json").exists():
+                raise ReviewError("Production project already contains review fixtures; restore them before testing")
+            write_json(workspace / ".specs-review.json", {"kind": "dimos-specs-production-review",
+                       "productionFiles": native_provenance.project_files(workspace)})
+            production_prepared = True
         if args.prepare_only:
             project = copy_project(args.source, workspace, args.harness or SPECS_ROOT / "Tests/integration-tests/IntegrationScenario.ts")
             write_json(output / "prepared.json", {"project": str(project), "workspace": str(workspace)})
@@ -864,6 +898,8 @@ def _run(args: ReviewOptions) -> int:
             except BlockingIOError as error:
                 raise ReviewError("Another native review owns this MCP connection") from error
             result = asyncio.run(review_and_restore(context))
+            if getattr(args, "production_project", False) and args.harness is None:
+                result = finalize_review(context, bool(result["scenarioPassed"]))
             if not args.keep_open:
                 result = asyncio.run(verify_source_handoff(context, result))
         if args.harness is not None and args.extra_media: make_video(output)
@@ -900,6 +936,9 @@ def _run(args: ReviewOptions) -> int:
         write_json(results_path, results)
         print(f"Review failed: {message}\nArtifacts: {output}", file=sys.stderr)
         return 130 if interrupted else 1
+    finally:
+        if production_prepared:
+            (workspace / ".specs-review.json").unlink(missing_ok=True)
 
 
 def main() -> int:

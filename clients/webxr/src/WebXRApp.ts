@@ -1,3 +1,4 @@
+import { PresenceRenderer } from "./presentation/PresenceRenderer";
 import { EnvironmentDepthRenderer } from "./presentation/EnvironmentDepthRenderer";
 import * as THREE from "three";
 import * as xb from "xrblocks";
@@ -13,6 +14,7 @@ export class WebXRApp extends xb.Script {
   private disposed = false;
   readonly inputController: WebXRInputController;
   readonly sessions: WebXRSessionController;
+  private readonly presence = new PresenceRenderer();
   private environmentDepth: EnvironmentDepthRenderer | null = null;
 
   constructor(private readonly client: DimOSWebXRClient) {
@@ -61,6 +63,7 @@ export class WebXRApp extends xb.Script {
   override init({ input }: { input: xb.Input }): void {
     const client = this.client;
     this.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.2));
+    this.add(this.presence.object);
     this.add(client.manipulation.object, client.robot.object, client.lidar.object, client.route.object,
       client.markers.object, client.navigation.marker.object, client.navigation.probeRoot,
       client.navigation.draftMarker.object, client.previewRoute.object, client.notifications.object);
@@ -76,7 +79,7 @@ export class WebXRApp extends xb.Script {
   override update(time = performance.now(), frame?: XRFrame): void {
     this.client.pumpSession();
     const current = this.sessions.sample(time, frame);
-    if (!current || !frame) return;
+    if (!current || !frame) { this.client.session.presence.publish(() => ({ pointers: [], panel: null }), false); this.presence.update([]); return; }
     const { viewer, reference, deltaS } = current;
     this.environmentDepth?.update(frame, viewer, [this.client.robot.object, this.client.route.object, this.client.previewRoute.object, this.client.manipulation.object]);
     const { position: p, orientation: q } = viewer.transform;
@@ -86,6 +89,8 @@ export class WebXRApp extends xb.Script {
     this.client.notifications.tick([p.x, p.y, p.z], [q.x, q.y, q.z, q.w], viewer.views?.[0]?.projectionMatrix[5] ?? 1, deltaS);
     this.client.ui.trackingStatus = "Tracking";
     this.inputController.update(time, frame, viewer, reference, deltaS);
+    this.client.session.presence.publish(() => ({ pointers: this.interaction?.presencePointers() ?? [], panel: this.mainMenu?.presencePanel() ?? null }));
+    this.presence.update(this.client.session.presence.snapshot());
   }
   override onSelectStart(event: xb.SelectEvent): void { this.inputController.onSelectStart(event); }
   override onSelectEnd(event: xb.SelectEvent): void { this.inputController.onSelectEnd(event); }
@@ -95,6 +100,7 @@ export class WebXRApp extends xb.Script {
   override dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.presence.dispose();
     this.environmentDepth?.dispose();
     this.sessions.detach();
     this.inputController.dispose();

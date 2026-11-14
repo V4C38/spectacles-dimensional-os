@@ -69,3 +69,8 @@ export function placePanelInFront(_panel: unknown, _camera: unknown, _offsetY = 
 
 export function isFrameInitialized(frame: { initialized?: boolean } | null): boolean { return frame?.initialized === true; }
 export function configureControlPanelFrame(_frame: unknown, _size: unknown, _scalable: boolean): void {}
+
+export function uprightFacingRotation(position: vec3, camera: SceneObject): quat {
+  const toward = camera.getTransform().getWorldPosition().sub(position);
+  return toward.length > .001 ? quat.lookAt(toward.normalize(), vec3.up()) : quat.quatIdentity();
+}

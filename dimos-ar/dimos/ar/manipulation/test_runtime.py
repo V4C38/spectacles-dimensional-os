@@ -60,14 +60,17 @@ def test_exact_plan_binding_and_stop_resume():
     assert module.session.token is None
 
 
-def test_owner_disconnect_stops_even_with_observer_present():
+def test_owner_disconnect_retires_following_without_latching_emergency_stop():
     module = runtime()
     command(module, "acquire")
     module.disconnect("observer")
     assert not module.session.stopped
     module.disconnect("a")
-    assert module.session.stopped
-    command(module, "resume", client="observer2")
+    assert module.session.token is None
+    assert module.session.owner is None
+    assert not module.session.stopped
+    module.adapter.set_estop.assert_not_called()
+    command(module, "acquire", client="observer2")
     with pytest.raises(ValueError, match="retired"):
         command(module, "acquire")
 
@@ -82,6 +85,41 @@ def test_uncertain_cancel_keeps_motion_disabled():
     assert not module.session.stop_confirmed
     with pytest.raises(ValueError, match="not confirmed"):
         command(module, "resume")
+
+
+def test_controlled_stop_cancels_execution_without_estop_and_rejects_late_authority():
+    module = runtime()
+    module.operation.begin("accepted", "executing")
+    module.cancel(None, epoch="robot-reference", revision=1)
+    assert module.operation.id is None
+    assert not module.session.stopped and module.session.stop_confirmed
+    module.adapter.cancel.assert_called_once()
+    module.adapter.set_estop.assert_not_called()
+    module.authority().revision = 3
+    command(module, "acquire", client="successor")
+    token = module.session.token
+    module.adapter.cancel.reset_mock()
+    with pytest.raises(ValueError, match="authority retired"):
+        module.cancel(None, epoch="robot-reference", revision=2)
+    assert module.session.token == token and module.session.owner == "successor"
+    module.adapter.cancel.assert_not_called()
+
+
+def test_late_disconnect_generation_cannot_retire_a_new_grab(monkeypatch):
+    module = runtime()
+    command(module, "acquire")
+    retire = module.retire_following
+
+    def replace_before_retirement(generation):
+        module.session.retire()
+        command(module, "acquire", client="successor")
+        return retire(generation)
+
+    monkeypatch.setattr(module, "retire_following", replace_before_retirement)
+    module.disconnect("a")
+    assert module.session.owner == "successor" and module.session.token is not None
+    assert not module.session.stopped
+    module.adapter.set_estop.assert_not_called()
 
 
 def test_resume_cannot_interrupt_another_owners_active_control():
@@ -1068,23 +1106,17 @@ def test_stop_does_not_wait_for_blocked_operation_observation():
     assert module.operation.id is None
 
 
-@pytest.mark.parametrize("path", ["tail", "reconnect"])
 @pytest.mark.parametrize("blocked_effect", ["observation", "target"])
-def test_stop_is_independent_of_tail_and_reconnect_effects(path, blocked_effect):
+def test_stop_is_independent_of_tail_effects(blocked_effect):
     from dimos.ar.manipulation.operation import FollowingTail
 
     module = runtime()
     body = {"position": [0.2, 0, 0], "orientation": [0, 0, 0, 1], "speed_scale": 0.5}
     observed = module.adapter.get_state().groups["arm"]
     observed.joints.name, observed.joints.position = ["joint"], [0.0]
-    if path == "tail":
-        module.following_tail = FollowingTail(
-            1, "arm", 1, "robot", body, {"joint": 0.2}, time.monotonic()
-        )
-    else:
-        command(module, "acquire")
-        module._following_target = FollowingTarget("arm", body, None, 1)
-        module.suspend("a", time.monotonic() + 1)
+    module.following_tail = FollowingTail(
+        1, "arm", 1, "robot", body, {"joint": 0.2}, time.monotonic()
+    )
     entered, release = threading.Event(), threading.Event()
     original = module.adapter.get_state
 
@@ -1114,6 +1146,66 @@ def test_stop_is_independent_of_tail_and_reconnect_effects(path, blocked_effect)
     assert not worker.is_alive()
     assert module.following_tail is None
     assert module.session.token is None
+
+
+def test_suspension_holds_native_following_without_replaying_a_cached_target(monkeypatch):
+    now = [10.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    module = runtime()
+    command(module, "acquire")
+    module._following_target = FollowingTarget(
+        "arm", {"position": [0.2, 0, 0], "orientation": [0, 0, 0, 1], "speed_scale": 0.5},
+        None, 1,
+    )
+    module.adapter.task_invoke.reset_mock()
+    module.suspend("a", now[0] + 2, module.session.token)
+    assert module.session.token is None and module.session.owner is None
+    assert not module.session.stopped
+    module.adapter.task_invoke.assert_called_once_with("follow", "clear")
+    for delay in (0.1, 0.6, 1.8):
+        now[0] = 10 + delay
+        module.advance()
+    assert all(call.args[1] != "set_target" for call in module.adapter.task_invoke.call_args_list)
+    command(module, "acquire", client="a")
+    assert module.session.token is not None
+
+
+def test_missing_following_samples_expire_after_half_a_second(monkeypatch):
+    now = [10.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    module = runtime()
+    command(module, "acquire")
+    now[0] += 0.501
+    module.advance()
+    assert module.session.token is None and not module.session.stopped
+    module.adapter.task_invoke.assert_called_with("follow", "clear")
+
+
+@pytest.mark.parametrize("event", ["suspend", "disconnect"])
+def test_editor_retirement_preserves_an_accepted_robot_operation(event):
+    module = runtime()
+    module.session.claim("a", "arm")
+    module.operation.begin("accepted", "executing")
+    generation = module.session.generation
+    if event == "suspend":
+        module.suspend("a", time.monotonic() + 2)
+    else:
+        module.disconnect("a")
+    assert module.operation.id == "accepted"
+    assert module.session.generation == generation
+    assert not module.session.stopped
+    module.adapter.task_invoke.assert_not_called()
+    module.adapter.cancel.assert_not_called()
+
+
+def test_delayed_suspend_cannot_retire_a_same_client_successor_token():
+    module = runtime()
+    old = command(module, "acquire")["token"]
+    module.retire_following()
+    fresh = command(module, "acquire")["token"]
+    assert old != fresh
+    module.suspend("a", time.monotonic() + 1.5, old)
+    assert module.session.token == fresh and module.session.owner == "a"
 
 
 def test_disconnected_client_tombstones_remain_bounded():

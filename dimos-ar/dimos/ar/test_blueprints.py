@@ -7,6 +7,17 @@ from dimos.ar.module import ARModule
 from dimos.ar.robot.profiles.profile import RobotName
 
 
+@pytest.mark.parametrize("blueprint", [unitree_go2_ar, unitree_go2_ar_agentic])
+def test_go2_blueprints_have_consistent_stream_types(blueprint) -> None:
+    if blueprint is None:
+        pytest.skip("Go2 blueprint is not installed")
+    stream_types = {}
+    for atom in blueprint.active_blueprints:
+        for stream in atom.streams:
+            prior = stream_types.setdefault(stream.name, stream.type)
+            assert stream.type == prior, f"Conflicting types for {stream.name} in {atom.module}"
+
+
 def test_unitree_go2_ar_selects_robot_explicitly() -> None:
     if unitree_go2_ar is None:
         pytest.skip("unitree_go2 blueprint is not installed")

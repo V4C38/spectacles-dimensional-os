@@ -86,7 +86,7 @@ export class NavigationGoalLifecycle {
     if (!origin || !view.hasTrackingOrigin || view.connection !== "ready" || view.capabilities?.navigation.nav_goal.available !== true) {
       this.reset(); return;
     }
-    if (this.origin !== origin) this.route = null;
+    if (!sameTrackingReference(this.origin, origin)) this.route = null;
     this.origin = origin;
     const frame = view.nav_goal;
     const freshGoal = this.isFreshGoal(frame, view);
@@ -171,7 +171,8 @@ export class NavigationGoalLifecycle {
     this.flash = null;
     this.elapsed = 0;
     this.pose = clone(pose);
-    this.route = null;
+    // Keep the last complete route while a replacement is planned/transferred.
+    // Terminal, explicit clear and tracking-reference changes still retire it.
     this.lastSent = [...pose.position];
     this.lastSentAt = now;
   }
@@ -448,7 +449,7 @@ export class NavigationInteraction {
     const draft = placement.draft ?? remoteDraft;
     const remoteLive = remote && shared.authority?.kind === "live";
     const pose = draft ?? this.directPose ?? (remoteLive || shared.phase === "committed" && !goal.pose ? remote : null) ?? goal.pose ?? this.floor ?? { position: [0, 0, 0] as Vec3, orientation: [0, 0, 0, 1] as Quat };
-    return { ...pose, blocked: shared.blocked ?? false, visible: this.armed, selected: this.selected, aiming: !!draft,
+    return { ...pose, blocked: shared.blocked && !shared.canTakeover, visible: this.armed, selected: this.selected, aiming: !!draft,
       goalActive: goal.active, cancelVisible: goal.cancelVisible && !this.dragging,
       flash: goal.flash, feedbackId: goal.feedbackId, feedbackProgress: goal.feedbackProgress,
       placementStage: draft ? "preview" : placement.probes.length ? "probe" : "none",
@@ -476,11 +477,11 @@ export class NavigationInteraction {
     this.origin = available ? origin : null; this.floor = floor; this.armed = available;
     if (!available) this.selected = false;
     const shared = this.collaboration.snapshot();
-    if (shared.blocked || this.lastDenial !== this.collaboration.denialRevision) {
+    if ((shared.blocked && !shared.takeoverPending) || this.lastDenial !== this.collaboration.denialRevision) {
       this.placement.clear(); this.previews.clear(); this.direct = null;
     }
     this.lastDenial = this.collaboration.denialRevision;
-    this.goals.apply(view, this.origin, floor);
+    if (!shared.takeoverPending) this.goals.apply(view, this.origin, floor);
   }
   tick(now: number, visibleDeltaS = 0): void {
     this.goals.tick(visibleDeltaS);
@@ -516,7 +517,8 @@ export class NavigationInteraction {
   }
   ownsDraft(sourceId: NavigationInputId): boolean { return this.placement.snapshot().draft?.ownerId === sourceId; }
   hold(now: number, placed: Placement, streamWhileDragging = true, sourceId = DEFAULT_SOURCE): boolean {
-    if (!this.armed || !this.origin || this.collaboration.snapshot().blocked) return false;
+    const shared = this.collaboration.snapshot();
+    if (!this.armed || !this.origin || shared.blocked && !(streamWhileDragging && shared.canTakeover)) return false;
     if (this.directSource !== null && this.directSource !== sourceId) return false;
     if (!streamWhileDragging) {
       if (!this.selected) return false;
@@ -527,12 +529,16 @@ export class NavigationInteraction {
     if (this.placement.snapshot().draft) return false;
     if (!placed || placed.blocked) return false;
     if (!this.direct) {
+      const previousPose = this.goals.snapshot().pose;
       if (!this.collaboration.begin("live", sourceId, clientTrackingToOdomPose({
-        position: placed.position, orientation: this.goals.snapshot().pose?.orientation ?? [0, 0, 0, 1] }, this.origin))) return false;
+        position: placed.position, orientation: previousPose?.orientation ?? [0, 0, 0, 1] }, this.origin), {}, shared.mode === "agent")) return false;
       this.placement.clear(); this.previews.clear();
-      this.direct = { source: sourceId, pose: null,
-        start: [...(this.goals.snapshot().pose?.position ?? placed.position)],
-        heading: this.goals.snapshot().pose?.orientation ?? [0, 0, 0, 1] };
+      if (shared.mode === "agent") this.goals.reset();
+      this.direct = { source: sourceId, pose: shared.mode === "agent" ? {
+        position: [...placed.position], orientation: previousPose?.orientation ?? [0, 0, 0, 1],
+      } : null,
+        start: [...(previousPose?.position ?? placed.position)],
+        heading: previousPose?.orientation ?? [0, 0, 0, 1] };
       this.heading.reset(this.direct.start, this.direct.heading, now);
     }
     const dx = placed.position[0] - this.direct.start[0], dy = placed.position[1] - this.direct.start[1];

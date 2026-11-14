@@ -27,11 +27,34 @@ async def test_motion_refused_without_explicit_simulation():
     socket = SimpleNamespace(send=AsyncMock())
     client = helper.MockRuntimeClient(socket)
     for method, arguments in [(client.command, ("resume",)),
+                              (client.resume_operation, ()),
                               (client.acquire, ("manipulation_following", {})),
                               (client.update_target, ({},)), (client.release, ())]:
         with pytest.raises(RuntimeError, match="explicitly simulated"):
             await method(*arguments)
     socket.send.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resume_waits_for_canonical_confirmation_and_sends_matching_stop_identity():
+    async def send(_text):
+        client.safety = {"stopped": False, "can_resume": False}
+        client.state = {"stopped": False}
+
+    socket = SimpleNamespace(send=AsyncMock(side_effect=send))
+    client = helper.MockRuntimeClient(socket)
+    client.simulated = True
+    client.shared = {"epoch": "source", "authority": None}
+    client.state = {"stopped": True}
+    client.safety = {"stopped": True, "can_resume": False, "stop_id": "stop"}
+    task = asyncio.create_task(client.resume_operation())
+    await asyncio.sleep(0)
+    socket.send.assert_not_called()
+    client.safety["can_resume"] = True
+    assert (await task)["status"] == "resumed"
+    assert json.loads(socket.send.call_args.args[0]) == {
+        "type": "resume_operation_request", "epoch": "source", "stop_id": "stop",
+    }
 
 
 @pytest.mark.asyncio

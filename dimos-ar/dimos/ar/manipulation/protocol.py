@@ -149,11 +149,15 @@ class ARManipulationSpec(Spec, Protocol):  # type: ignore[misc]
 
     def ar_manipulation_disconnect(self, client_id: str) -> None: ...
 
-    def ar_manipulation_suspend(self, client_id: str, deadline: float) -> None: ...
+    def ar_manipulation_suspend(
+        self, client_id: str, deadline: float, token: str | None = None
+    ) -> None: ...
 
     def ar_manipulation_stop(
         self, epoch: str | None = None, revision: int | None = None
     ) -> None: ...
+
+    def ar_manipulation_controlled_stop(self, epoch: str, revision: int) -> dict[str, Any]: ...
 
     def ar_manipulation_revoke(
         self, epoch: str, lease_id: str, revision: int, reason: str = "released"

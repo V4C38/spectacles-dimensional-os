@@ -364,7 +364,6 @@ class ManipulationFollowSession {
   private readonly state: FollowState = { episode: 0, lastFollowResult: -1, token: null, gesture: null,
     releasedFollow: null, recoveringAuthority: false, feedbackHeld: false };
   private lastSourceTs: number | null = null;
-  private lastSourceAt = 0;
   private lostAt: number | null = null;
   get view(): ReadonlyFacts<FollowState> { return this.state; }
 
@@ -381,7 +380,7 @@ class ManipulationFollowSession {
   retireReleasedTarget(): void { this.state.releasedFollow = null; this.advanceEpisode(); }
 
   retainingFeedback(fresh: boolean, now: number): boolean {
-    return !fresh && this.lastSourceTs !== null && now - (this.lostAt ?? this.lastSourceAt) <= 1;
+    return !fresh && this.lastSourceTs !== null && now - (this.lostAt ?? now) <= 2;
   }
   updateFeedback(view: ARModuleSessionState, group: string | null, fresh: boolean, now: number): void {
     const state = view.manipulation;
@@ -389,13 +388,14 @@ class ManipulationFollowSession {
       const ts = state.observations?.[group ?? ""]?.measured_at ?? null;
       if (ts !== this.lastSourceTs) {
         this.lastSourceTs = ts;
-        this.lastSourceAt = now;
       }
       this.lostAt = null;
       return;
     }
     if (this.lastSourceTs === null) return;
-    this.lostAt ??= view.connection !== "ready" || state?.available === false ? now : this.lastSourceAt;
+    // Freshness remains a native admission guard. The presentation grace starts
+    // when loss is observed, rather than spending it on the last sample's age.
+    this.lostAt ??= now;
   }
 
   holdFeedback(disconnected: boolean): { first: boolean; releaseToken: string | null } {
@@ -405,8 +405,8 @@ class ManipulationFollowSession {
     return { first: true, releaseToken: disconnected ? null : this.state.token };
   }
 
-  feedbackReleaseSent(disconnected: boolean): void {
-    if (!disconnected) this.state.token = null;
+  feedbackReleaseSent(): void {
+    this.state.token = null;
     this.advanceEpisode();
   }
 
@@ -539,6 +539,8 @@ export class ManipulationInteraction {
   private readonly follow = new ManipulationFollowSession();
   private readonly execution = new ManipulationExecutionIntent();
   get retainingFeedback(): boolean {
+    const view = this.session.view(), native = view.manipulation;
+    if (view.state?.safety?.stopped || native?.stopped || native?.protection?.state === "paused" || native?.protection?.state === "fault") return false;
     return this.follow.retainingFeedback(this.feedbackFresh, this.now());
   }
   private updateFeedback(): void {
@@ -628,7 +630,7 @@ export class ManipulationInteraction {
     return !!this.deferredNative && actions.includes(this.deferredNative.action) || this.requests.has(...actions);
   }
   snapshot(): ManipulationSnapshot {
-    const state = this.session.view().manipulation;
+    const view = this.session.view(), state = view.manipulation, safety = view.state?.safety;
     const offset = !this.followingAtTarget && targetIsOffset(
       this.target,
       state?.observations?.[this.groupId ?? ""]?.pose,
@@ -642,7 +644,7 @@ export class ManipulationInteraction {
     const resetting =
       !!state?.operation ||
       this.hasPending("reset_joints");
-    const stopped = state?.stopped === true;
+    const stopped = safety?.stopped === true || state?.stopped === true;
     const fresh = this.feedbackFresh;
     const observedGripper = state?.observations?.[this.groupId ?? ""]?.gripper;
     const gripperDraft =
@@ -663,7 +665,7 @@ export class ManipulationInteraction {
       executing,
       resetting,
       stopped,
-      stopConfirmed: state?.stop_confirmed === true && state?.protection?.state !== "fault" && (state?.protection?.state !== "paused" || state.protection.resumable === true),
+      stopConfirmed: safety ? safety.can_resume : state?.stop_confirmed === true && state?.protection?.state !== "fault" && (state?.protection?.state !== "paused" || state.protection.resumable === true),
       pendingControl: this.hasPending("cancel", "resume", "gripper"),
       following: this.following,
       followingSettled: this.followingAtTarget,
@@ -701,7 +703,7 @@ export class ManipulationInteraction {
     private readonly session: Pick<
       ARModuleSession,
       "view" | "sendText" | "subscribeOutbound"
-    > & Partial<Pick<ARModuleSession, "assetTransferDeadline">> & { collaboration: InteractionAuthorityPort },
+    > & Partial<Pick<ARModuleSession, "assetTransferDeadline" | "requestResumeOperation">> & { collaboration: InteractionAuthorityPort },
     private readonly now: () => number,
   ) {
     if (!session.collaboration) throw new Error("Manipulation requires interaction authority");
@@ -852,7 +854,7 @@ export class ManipulationInteraction {
       if (hold.first) {
         this.requests.retireAcquisitions();
         if (hold.releaseToken) this.send("release", { token: hold.releaseToken });
-        this.follow.feedbackReleaseSent(view.connection !== "ready");
+        this.follow.feedbackReleaseSent();
         this.requests.retainRelease();
       }
       return;
@@ -885,9 +887,9 @@ export class ManipulationInteraction {
       this.draft.retirePlan();
       this.status = view.manipulation?.message ?? "Target not reached";
     }
-    if (this.follow.view.gesture === "following" && !this.follow.view.token && this.feedbackFresh && !view.manipulation?.stopped && !this.hasPending("acquire", "release")) this.send("acquire");
-    const stopped = view.manipulation?.stopped === true;
-    if (stopped && !this.stoppedBefore && !recovered) this.discard("server stopped");
+    if (this.follow.view.gesture === "following" && !this.follow.view.token && this.feedbackFresh && !view.state?.safety?.stopped && !view.manipulation?.stopped && !this.hasPending("acquire", "release")) this.send("acquire");
+    const stopped = view.state?.safety?.stopped === true || view.manipulation?.stopped === true;
+    if (stopped && !this.stoppedBefore) this.discard("server stopped");
     this.stoppedBefore = stopped;
     for (const request of this.requests.expired()) {
       if (request.action === "release") {
@@ -1112,7 +1114,8 @@ export class ManipulationInteraction {
   }
   resume(): void {
     this.follow.forgetToken();
-    this.send("resume");
+    if (this.session.view().state?.safety) this.session.requestResumeOperation?.();
+    else this.send("resume");
   }
   setGripper(value: number): void {
     if (this.readOnly) return;

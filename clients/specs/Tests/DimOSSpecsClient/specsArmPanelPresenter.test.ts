@@ -22,6 +22,7 @@ it("initializes Frame on an enabled host before hiding it or using its native bu
     expect(presenter.root.enabled).toBe(false);
     expect(presenter.frame.showCloseButton).toBe(false);
     expect(presenter.frame.showFollowButton).toBe(false);
+    expect(presenter.frame.allowScaling).toBe(false);
     // SUK initialize schedules its default hide tween; setting the flag afterward
     // leaves that tween running even when the arm presenter enables the root.
     (presenter.frame as unknown as Frame).finishAnimations();
@@ -41,24 +42,32 @@ import { ARM_PANEL_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/prese
 class Vector {
   constructor(public x = 0, public y = 0, public z = 0) {}
   add(other: Vector) { return new Vector(this.x + other.x, this.y + other.y, this.z + other.z); }
+  sub(other: Vector) { return new Vector(this.x - other.x, this.y - other.y, this.z - other.z); }
+  get length() { return Math.hypot(this.x,this.y,this.z); }
+  normalize() { const n = this.length || 1; return new Vector(this.x/n,this.y/n,this.z/n); }
+  static up() { return new Vector(0,1,0); }
   uniformScale(n: number) { return new Vector(this.x * n, this.y * n, this.z * n); }
   static one() { return new Vector(1, 1, 1); }
 }
 it("attaches below a non-zero base, pins when moved, and resets to the current robot", () => {
   vi.stubGlobal("vec3", Vector);
-  const position = vi.fn(), scale = vi.fn();
-  const transform = { setWorldPosition: position, setWorldRotation: vi.fn(), setLocalScale: scale };
+  let panelPosition = new Vector();
+  const position = vi.fn((p: Vector) => { panelPosition = p; }), scale = vi.fn();
+  const transform = { getWorldPosition: () => panelPosition, setWorldPosition: position, setWorldRotation: vi.fn(), setLocalScale: scale };
   const presenter = Object.assign(Object.create(SpecsArmPanelPresenter.prototype), {
     configured: true, configuring: false, pinned: false, height: .188,
     root: { enabled: false, getTransform: () => transform },
     frame: { content: { getTransform: () => ({ setLocalScale: vi.fn() }) } },
   });
   const rotation = { multiplyVec3: (p: Vector) => p };
-  const camera = { getTransform: () => ({ getWorldRotation: () => rotation }) };
+  const lookAt = vi.fn(() => rotation);
+  vi.stubGlobal("quat", { lookAt });
+  const camera = { getTransform: () => ({ getWorldPosition: () => new Vector(120,80,0), getWorldRotation: () => { throw new Error("head roll must not be copied"); } }) };
   let basePosition = new Vector(120, 80, -240);
   const base = { getTransform: () => ({ getWorldPosition: () => basePosition }) };
   try {
     presenter.update(base, camera, .188);
+    expect(lookAt).toHaveBeenCalledWith(expect.anything(), new Vector(0,1,0));
     expect(position).toHaveBeenLastCalledWith(new Vector(120, 80 - 13 - .188 * 50 * ARM_PANEL_STYLE.defaultScale * .75, -240));
     presenter.pinned = true; basePosition = new Vector(200, 90, -100);
     presenter.update(base, camera, .188); expect(position).toHaveBeenCalledOnce();

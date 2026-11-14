@@ -58,3 +58,25 @@ def test_heartbeat_revision_does_not_discard_a_queued_goal():
     assert fence.heartbeat("epoch", 100, 1.6)
     assert fence.allowed()
     assert fence.admit("epoch", 41, 1.6, 99) is None
+
+
+def test_manual_agent_latch_blocks_raw_goals_but_allows_explicit_manual_admission():
+    fence = NavigationControlFence(lambda: 1.0)
+    old = fence.admit_native_agent()
+    assert old is not None and fence.activate(old)
+    fence.set_agent_manual(True)
+    assert not fence.allowed()
+    assert fence.admit_native_agent() is None
+    assert not fence.activate(old)
+    manual = fence.admit("human", 1, 2, 100)
+    assert manual is not None and fence.activate(manual)
+    assert fence.allowed()
+    assert fence.admit_native_agent() is None
+    assert fence.set_agent_manual(True, 0)
+    assert fence.set_agent_manual(False, 0)
+    fresh = fence.admit_native_agent()
+    assert fresh is not None and fresh != old and fence.activate(fresh)
+    assert fence.set_agent_manual(True, 2)
+    assert not fence.set_agent_manual(False, 1)
+    assert fence.admit_native_agent() is None
+    assert not fence.set_agent_manual(False)

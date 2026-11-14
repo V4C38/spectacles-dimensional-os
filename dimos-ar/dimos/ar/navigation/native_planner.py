@@ -30,13 +30,15 @@ logger = setup_logger()
 
 
 class ARGlobalPlanner(GlobalPlanner):  # type: ignore[misc]
-    def __init__(self, emit_status: Callable[[float, str], None], *args: Any, **kwargs: Any) -> None:
+    def __init__(self, emit_status: Callable[[float, str], None], *args: Any,
+                 control_fence: NavigationControlFence | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._ar_emit_status = emit_status
         self._ar_latest_goal_ts = float("-inf")
         self._ar_stopped_at = float("-inf")
+        self._ar_control_fence = control_fence
 
-    def handle_goal_request(self, goal: PoseStamped) -> None:
+    def handle_goal_request(self, goal: PoseStamped, *, control_generation: int | None = None) -> bool:
         # Serialize accepted identity with cancellation/publication. The native
         # RLock is also used by its odometry and monitoring code.
         with self._lock:
@@ -44,10 +46,25 @@ class ARGlobalPlanner(GlobalPlanner):  # type: ignore[misc]
             if not math.isfinite(stamp) or stamp <= max(
                 self._ar_latest_goal_ts, self._ar_stopped_at
             ):
-                return
+                return False
+            fence = getattr(self, "_ar_control_fence", None)
+            generation = control_generation
+            if fence is not None:
+                if generation is None:
+                    # Native topic subscriptions enter here too. They cannot
+                    # bypass the agent-mode latch through target/clicked_point.
+                    generation = fence.admit_native_agent()
+                if generation is None or not fence.current(generation):
+                    return False
             self._ar_latest_goal_ts = stamp
             self._ar_emit_status(stamp, "accepted")
             super().handle_goal_request(goal)
+            if fence is not None and generation is not None:
+                if self._current_goal is None:
+                    fence.retire_generation(generation)
+                elif not fence.activate(generation):
+                    return False
+            return True
 
     def retire_goal_requests(self) -> None:
         # The stop and goal ports are independent transports. Record the stop
@@ -77,8 +94,9 @@ class ARReplanningAStarPlanner(ReplanningAStarPlanner):  # type: ignore[misc]
             ("robot_rotation_diameter", self.config.robot_rotation_diameter),
         ) if value is not None}
         config = self.config.g.model_copy(update=overrides) if overrides else self.config.g
-        self._planner = ARGlobalPlanner(self._emit_navigation_status, config)
         self._ar_fence = NavigationControlFence()
+        self._planner = ARGlobalPlanner(self._emit_navigation_status, config,
+                                        control_fence=self._ar_fence)
         self.nav_cmd_vel = _NavigationVelocityOutput(self, self._ar_fence)
         self._ar_watchdog_stop = threading.Event()
         self._ar_watchdog: threading.Thread | None = None
@@ -168,6 +186,28 @@ class ARReplanningAStarPlanner(ReplanningAStarPlanner):  # type: ignore[misc]
             self._planner._lock.release()
 
     @rpc  # type: ignore[untyped-decorator]
+    def ar_navigation_agent_manual(self, manual: bool, generation: int | None = None) -> bool:
+        if not manual:
+            if not self._planner._lock.acquire(blocking=False):
+                return False
+            try:
+                if self._planner._current_goal is not None:
+                    return False
+                return self._ar_fence.set_agent_manual(False, generation)
+            finally:
+                self._planner._lock.release()
+        if not self._ar_fence.set_agent_manual(True, generation):
+            return False
+        self._emit_stop_velocity()
+        if self._ar_stop_write_failed or not self._planner._lock.acquire(blocking=False):
+            return False
+        try:
+            self._planner.retire_goal_requests()
+            return self._planner._current_goal is None
+        finally:
+            self._planner._lock.release()
+
+    @rpc  # type: ignore[untyped-decorator]
     def ar_navigation_goal(
         self, goal: PoseStamped, epoch: str, revision: int, deadline: float
     ) -> bool:
@@ -179,7 +219,7 @@ class ARReplanningAStarPlanner(ReplanningAStarPlanner):  # type: ignore[misc]
                 self._planner._ar_latest_goal_ts, self._planner._ar_stopped_at
             ):
                 return False
-            self._planner.handle_goal_request(goal)
+            self._planner.handle_goal_request(goal, control_generation=generation)
             current = self._planner._current_goal
             if current is None:
                 # A close target may resolve synchronously while planning. It
@@ -191,14 +231,11 @@ class ARReplanningAStarPlanner(ReplanningAStarPlanner):  # type: ignore[misc]
 
     @rpc  # type: ignore[untyped-decorator]
     def set_goal(self, goal: PoseStamped) -> bool:
-        if not self._ar_fence.admit_native_agent():
-            return False
-        self._planner.handle_goal_request(goal)
-        return True
+        return bool(self._planner.handle_goal_request(goal))
 
     def _on_stop_movement(self, msg: Bool) -> None:
         if msg.data:
-            self._ar_fence.halt()
+            self._ar_fence.set_agent_manual(True)
             self._emit_stop_velocity()
             self._planner.retire_goal_requests()
 
@@ -221,4 +258,5 @@ class _NavigationVelocityOutput(Out[Twist]):  # type: ignore[misc]
         self._fence = fence
 
     def publish(self, message: Twist) -> None:
-        super().publish(message if self._fence.allowed() else Twist.zero())
+        self._fence.publish(lambda allowed: super(_NavigationVelocityOutput, self)
+                            .publish(message if allowed else Twist.zero()))

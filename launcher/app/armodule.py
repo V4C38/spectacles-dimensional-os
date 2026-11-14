@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import ipaddress
 import json
 import math
@@ -745,20 +746,41 @@ class ProcessManager:
         on_line: Callable[[str], Awaitable[None]] | None = None,
     ) -> int:
         assert proc.stdout is not None
-        while True:
-            try:
-                raw = await asyncio.wait_for(proc.stdout.readline(), timeout=0.1)
-            except TimeoutError:
-                # A surviving child may retain the pipe after its leader exits.
-                if proc.returncode is not None:
-                    return proc.returncode
-                continue
-            if not raw:
-                break
-            line = raw.decode("utf-8", errors="replace").rstrip("\n")
+        decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        pending = ""
+        started = last_output = time.monotonic()
+
+        async def publish(line: str) -> None:
+            if not line:
+                return
             self._append_log(line)
             if on_line is not None:
                 await on_line(line)
+
+        while True:
+            try:
+                raw = await asyncio.wait_for(proc.stdout.read(4096), timeout=0.1)
+            except TimeoutError:
+                # A surviving child may retain the pipe after its leader exits.
+                if proc.returncode is not None:
+                    break
+                now = time.monotonic()
+                if self.status.phase == Phase.STARTING and now - last_output >= 15:
+                    self._append_log(
+                        f"Still starting ({int(now - started)}s elapsed); "
+                        "waiting for DimOS initialization. No new process output in 15s."
+                    )
+                    last_output = now
+                continue
+            if not raw:
+                break
+            last_output = time.monotonic()
+            # Download tools update progress with CR rather than ending a line.
+            parts = re.split(r"[\r\n]", pending + decoder.decode(raw))
+            pending = parts.pop()
+            for line in parts:
+                await publish(line)
+        await publish(pending + decoder.decode(b"", final=True))
         return await proc.wait()
 
     async def planner_status(self, *, force: bool = False) -> dict[str, Any]:

@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { SpecsCameraStream } from "../../Assets/Scripts/DimOSSpecsClient/localization/SpecsCameraStream";
+import { setMockTime } from "../setup/lens-globals";
 function stream(running: boolean) {
   return Object.assign(Object.create(SpecsCameraStream.prototype), {
     running, startedAt: 0, metrics: { starts: 0, stops: 0, frames: 0, streamingS: 0 }, generation: 0, pendingResolvers: [], latestFrame: null, provider: null, frameRegistration: null,
@@ -11,6 +12,20 @@ it("rejects requests on a stopped stream and settles all waiters on stop", async
   const active = stream(true), first = active.requestNextFrame(), second = active.requestNextFrame();
   const settled = Promise.all([expect(first).rejects.toThrow("stopped"), expect(second).rejects.toThrow("stopped")]);
   active.stop(); active.stop(); await settled;
+});
+it("bounds a missing frame wait and accepts a fresh frame without reopening healthy hardware", async () => {
+  setMockTime(10);
+  const active = stream(true), pending = active.requestNextFrame();
+  const expired = expect(pending).rejects.toThrow("timed out");
+  setMockTime(12.9); active.expirePendingFrames();
+  expect(active.diagnostics().waitingFrames).toBe(1);
+  setMockTime(13); active.expirePendingFrames(); await expired;
+  expect(active.diagnostics().waitingFrames).toBe(0);
+  expect(active.diagnostics().running).toBe(true);
+  const replacement = active.requestNextFrame();
+  (active as any).onNewFrame({ timestampSeconds: 13 });
+  expect((await replacement).timestampSeconds).toBe(13);
+  active.stop();
 });
 it.each([undefined, NaN, Infinity, 0, -1])("rejects invalid exposure %s instead of fabricating receipt time", async timestampSeconds => {
   const active = stream(true), frame = active.requestNextFrame(), rejected = expect(frame).rejects.toThrow("exposure timestamp");

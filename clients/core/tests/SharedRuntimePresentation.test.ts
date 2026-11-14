@@ -91,20 +91,19 @@ describe("setup LiDAR lifecycle", () => {
     sensors.observe(view); expect(sendText).not.toHaveBeenCalled();
     sensors.syncSetup(false); sensors.syncSetup(false); sensors.syncSetup(false);
     expect(sendText).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(sendText.mock.calls[1][0]).enabled).toBe(false);
+    expect(JSON.parse(sendText.mock.calls[1][0]).enabled).toBe(true);
     sensors.syncSetup(true); sensors.syncSetup(true);
-    expect(sendText).toHaveBeenCalledTimes(3);
-    expect(JSON.parse(sendText.mock.calls[2][0]).enabled).toBe(true);
+    expect(sendText).toHaveBeenCalledTimes(2);
     view = { ...view, connection: "disconnected" }; sensors.observe(view);
     view = { ...view, connection: "ready" }; sensors.syncSetup(true);
     expect(sendText).toHaveBeenCalledTimes(3);
     sensors.resetPostSetup(); sensors.syncSetup(true);
-    expect(sendText).toHaveBeenCalledTimes(4);
+    expect(sendText).toHaveBeenCalledTimes(3);
     sensors.resetSetup(); sensors.syncSetup(false);
-    expect(sendText).toHaveBeenCalledTimes(5);
+    expect(sendText).toHaveBeenCalledTimes(4);
   });
 
-  it("resets only the configured host lifecycle across disconnects and never sends without capability", () => {
+  it("restores the sensor subscription across disconnects and never sends without capability", () => {
     let view = ready();
     const sendText = vi.fn();
     const sensors = new LidarDisplayController({ view: () => view, sendText }, undefined, true,

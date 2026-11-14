@@ -160,3 +160,53 @@ it.each([null, { position: [3, 0, 0] as [number, number, number], blocked: true 
     expect(collaboration.begin("manipulation_planning", "arm", undefined, { group_id: "arm" })).toBe(true);
   },
 );
+
+it("captures an Agent marker grab through delayed takeover and grants native input only after the lease snapshot", () => {
+  const f = fixture();
+  f.collaboration.apply({ ...f.state, revision: 1, mode: "agent" });
+  f.nav.applyView(f.view, origin, null, 0);
+  expect(f.nav.snapshot().blocked).toBe(false);
+  f.nav.hold(0, { position: [2,0,0], blocked: false }, true, "hand");
+  const request = f.sent[0]; expect(request.action).toBe("takeover");
+  f.view.nav = { state: "resolved", outcome: "failed" };
+  f.nav.applyView(f.view, origin, null, 0.05);
+  expect(f.nav.flash()).toBeNull();
+  f.nav.hold(0.1, { position: [3,0,0], blocked: false }, true, "hand");
+  f.collaboration.apply({ ...f.state, revision: 2, mode: "agent" });
+  f.nav.applyView(f.view, origin, null, 0.2);
+  expect(f.nav.isDragging()).toBe(true); expect(f.commands).toHaveLength(0);
+  f.collaboration.accept({ type: "interaction_result", request_id: request.request_id, epoch: "robot", revision: 3,
+    status: "accepted", code: "acquired", lease_id: "lease" });
+  f.nav.applyView(f.view, origin, null, 0.3);
+  expect(f.nav.isDragging()).toBe(true); expect(f.commands).toHaveLength(0);
+  f.view.nav = { state: "idle", outcome: null };
+  f.collaboration.apply({ ...f.state, revision: 3, mode: "manual", authority: {
+    client_id: "local", source_id: "hand", acquisition_id: request.acquisition_id, lease_id: "lease",
+    kind: "live", held: true, expires_at: 2, sequence: -1,
+  } });
+  f.nav.applyView(f.view, origin, null, 0.4);
+  f.nav.hold(0.5, { position: [4,0,0], blocked: false }, true, "hand");
+  expect(f.commands).toHaveLength(1);
+  expect(f.collaboration.snapshot().mode).toBe("manual");
+});
+
+it("retires a released pending takeover and never steals another client's lease", () => {
+  const f = fixture(); f.collaboration.apply({ ...f.state, revision: 1, mode: "agent" });
+  f.nav.applyView(f.view, origin, null, 0);
+  f.nav.hold(0, { position: [2,0,0], blocked: false }, true, "hand");
+  f.nav.hold(0.1, { position: [3,0,0], blocked: false }, true, "hand");
+  const request = f.sent[0];
+  f.nav.release(0.2, { position: [3,0,0], blocked: false }, "hand");
+  expect(f.sent.at(-1)).toMatchObject({ action: "cancel_acquire", acquisition_id: request.acquisition_id });
+  f.collaboration.accept({ type: "interaction_result", request_id: request.request_id, epoch: "robot", revision: 3,
+    status: "accepted", code: "acquired", lease_id: "late-lease" });
+  expect(f.sent.at(-1)).toMatchObject({ action: "cancel", lease_id: "late-lease" });
+  f.collaboration.apply({ ...f.state, revision: 4, mode: "agent", authority: {
+    client_id: "other", source_id: "other-hand", acquisition_id: "other", lease_id: "human",
+    kind: "live", held: true, expires_at: 2, sequence: 0,
+  } });
+  f.nav.applyView(f.view, origin, null, 0.3);
+  const count = f.sent.length;
+  expect(f.nav.hold(0.4, { position: [4,0,0], blocked: false }, true, "hand")).toBe(false);
+  expect(f.sent).toHaveLength(count); expect(f.commands).toHaveLength(0);
+});

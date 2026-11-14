@@ -134,11 +134,11 @@ it("freezes the summon offset so head motion only changes its billboard", () => 
     const panel = sceneObject(), camera = sceneObject();
     const controller = new WristMenuController({ panel, anchorRoot: sceneObject(), cameraObject: camera, onMenuShow() {}, onMenuHide() {} });
     controller.tick(.016); setMockTime(.3); controller.tick(.016);
-    expect(panel.getTransform().getWorldPosition()).toEqual(new vec3(0, 20, -78));
+    expect(panel.getTransform().getWorldPosition()).toEqual(new vec3(0, 20, -93));
     camera.getTransform().setWorldPosition(new vec3(30, 0, 0));
     camera.getTransform().setWorldRotation(new quat(Math.SQRT1_2, 0, Math.SQRT1_2, 0));
     controller.tick(.1);
-    expect(panel.getTransform().getWorldPosition()).toEqual(new vec3(0, 20, -78));
+    expect(panel.getTransform().getWorldPosition()).toEqual(new vec3(0, 20, -93));
     expect((quat as any).lookAt).toHaveBeenCalled();
   } finally { (quat as any).lookAt = nativeLookAt; }
 });
@@ -156,4 +156,20 @@ it("keeps programmatic alignment review pinned through palm open and close edges
   expect(panel.getTransform().getWorldPosition()).toEqual(new vec3(9, 8, 7));
   expect(controller.isPinned()).toBe(true); expect(show).toHaveBeenCalledOnce(); expect(hide).toHaveBeenCalledOnce();
   controller.closeImmediate(); expect(controller.isPinned()).toBe(false); expect(hide).toHaveBeenCalledTimes(2);
+});
+
+
+it.each(["left", "right"] as const)("places the wrist panel 33cm toward the %s fingertips while preserving height", side => {
+  setMockTime(0);
+  const wrist = { x: 4, y: 7, z: -60 }, middle = { x: 14, y: 7, z: -60 };
+  setMockHands({ [side]: { isTracked: () => true, getPalmPitchAngle: () => 45, isFacingCamera: () => true,
+    wrist: { position: wrist }, middleMidJoint: { position: middle } } });
+  const panel = sceneObject();
+  const controller = new WristMenuController({ panel, anchorRoot: sceneObject(), onMenuShow() {}, onMenuHide() {} });
+  controller.tick(.016); setMockTime(.3); controller.tick(.016);
+  expect(controller.sourceHand()).toBe(side);
+  expect(panel.getTransform().getWorldPosition()).toEqual(new vec3(37,27,-60));
+  middle.x = wrist.x; // Partial tracking retains the last valid hand direction.
+  controller.tick(.1);
+  expect(panel.getTransform().getWorldPosition()).toEqual(new vec3(37,27,-60));
 });

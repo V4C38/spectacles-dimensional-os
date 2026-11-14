@@ -3,7 +3,7 @@
 # GitHub pins Ubuntu 24.04; macOS executes the same checks with host libraries.
 #
 # Usage (from repo root):
-#   ./launcher/scripts/run-ci.sh
+#   ./launcher/scripts/run-ci.sh [all|backend|launcher|core|specs|webxr]
 #
 # Must run outside the Cursor agent sandbox (normal terminal, or agent with
 # unrestricted / "all" permissions). Sandboxed runs fail when DimOS logging
@@ -62,18 +62,24 @@ check_runtime_tools() {
   local py
   py="$(find_ci_python)"
   "${py}" -c 'import sys; assert sys.version_info[:2] == (3, 12), "CI requires Python 3.12, matching GitHub Actions"'
-  node -e 'if (Number(process.versions.node.split(".")[0]) !== 22) throw new Error("CI requires Node 22, matching GitHub Actions")'
-  for tool in ffmpeg ffprobe; do
-    if ! command -v "${tool}" >/dev/null 2>&1; then
-      echo "Missing ${tool}; install ffmpeg before running CI." >&2
-      exit 1
-    fi
-  done
+  if [[ "$CI_JOB" != backend ]]; then
+    node -e 'if (Number(process.versions.node.split(".")[0]) !== 22) throw new Error("CI requires Node 22, matching GitHub Actions")'
+  fi
+  if [[ "$CI_JOB" == all || "$CI_JOB" == backend || "$CI_JOB" == webxr ]]; then
+    for tool in ffmpeg ffprobe; do
+      if ! command -v "${tool}" >/dev/null 2>&1; then
+        echo "Missing ${tool}; install ffmpeg before running CI." >&2
+        exit 1
+      fi
+    done
+  fi
 }
 
 hydrate_existing_lfs() {
   local pattern="$1" path
-  local paths=()
+  local paths=() patterns=()
+  # LFS accepts comma-separated globs; Git pathspecs need separate arguments.
+  IFS=',' read -r -a patterns <<< "$pattern"
   git -C "${ROOT}" lfs fetch --include="${pattern}" --exclude=""
   # `lfs pull` also checks out missing files, undoing deliberate working deletions.
   # Fresh checkout pointers exist, so hydrate only tracked files still present.
@@ -81,7 +87,7 @@ hydrate_existing_lfs() {
     if [[ -f "${ROOT}/${path}" ]]; then
       paths[${#paths[@]}]="${path}"
     fi
-  done < <(git -C "${ROOT}" ls-files -z -- "${pattern}")
+  done < <(git -C "${ROOT}" ls-files -z -- "${patterns[@]}")
   if [[ ${#paths[@]} -gt 0 ]]; then
     git -C "${ROOT}" lfs checkout -- "${paths[@]}"
   fi
@@ -199,16 +205,28 @@ run_timed() {
   echo "Timing: $1 completed in $((SECONDS - started))s"
 }
 
+CI_JOB="${1:-all}"
+case "$CI_JOB" in all|backend|launcher|core|specs|webxr) ;; *) echo "Unknown CI job: $CI_JOB" >&2; exit 2 ;; esac
+# Install audio prerequisites before backend tests, not only before planning.
 if [[ "$(uname -s)" == Linux && "${CI_PLAYWRIGHT_SYSTEM_DEPS:-install}" != preinstalled ]]; then
-  "${ROOT}/launcher/scripts/install-ci-system-deps.sh" planning
+  case "$CI_JOB" in all|backend|webxr) "${ROOT}/launcher/scripts/install-ci-system-deps.sh" planning ;; esac
 fi
 check_runtime_tools
-run_timed run_dimos_ar_job
-run_timed run_manipulation_contract_job
-run_timed run_launcher_job
-run_timed run_client_core_job
-run_timed run_client_specs_job
-run_timed run_client_webxr_job
+case "$CI_JOB" in
+  all)
+    run_timed run_dimos_ar_job
+    run_timed run_manipulation_contract_job
+    run_timed run_launcher_job
+    run_timed run_client_core_job
+    run_timed run_client_specs_job
+    run_timed run_client_webxr_job
+    ;;
+  backend) run_timed run_dimos_ar_job; run_timed run_manipulation_contract_job ;;
+  launcher) run_timed run_launcher_job ;;
+  core) run_timed run_client_core_job ;;
+  specs) run_timed run_client_specs_job ;;
+  webxr) run_timed run_client_webxr_job ;;
+esac
 
 echo ""
-echo "All CI jobs passed."
+echo "Requested CI jobs passed."

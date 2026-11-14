@@ -1,3 +1,5 @@
+import type { PresencePointer } from "@dimos-ar-client/ClientContracts";
+import { webxrToClientTrackingPoint } from "../utilities/WebXRCoordinates";
 import * as THREE from "three";
 import type * as xb from "xrblocks";
 import type { Vec3 } from "@dimos-ar-client/ClientContracts";
@@ -522,6 +524,19 @@ export class XRBlocksRayInteraction {
   }
 
   releaseCaptures(): void { this.anchors.clear(); this.dragDirections.clear(); }
+
+  presencePointers(): PresencePointer[] {
+    const result: PresencePointer[] = [];
+    for (const [controller, beam] of this.beams) {
+      if (!beam.mesh.visible || beam.mesh.material.uniforms.uOpacity.value <= .01) continue;
+      const id = controller.inputSource?.handedness === "left" ? 0 : 1;
+      if (result.some(p => p.id === id)) continue;
+      const point = (name: string) => webxrToClientTrackingPoint(beam.mesh.material.uniforms[name].value.toArray());
+      result.push({ id, start: point("uP0"), control: point("uP1"), end: point("uP2"),
+        opacity: beam.mesh.material.uniforms.uOpacity.value, cursor: controller.reticle?.visible === true });
+    }
+    return result;
+  }
 
   /** Manipulation may move the object after the ordinary hover/beam update. */
   updateCapturedEndpoints(): void {

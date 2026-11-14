@@ -264,6 +264,7 @@ export function localizationCaptureStatus(
   if (sessionView.hasTrackingOrigin && episodeView.phase === "idle") {
     return { text: "Localized", color: "success" };
   }
+  if (sessionView.localizationNotice) return { text: sessionView.localizationNotice, color: "warn" };
 
   switch (episodeView.phase) {
     case "idle":
@@ -276,6 +277,7 @@ export function localizationCaptureStatus(
     case "awaiting_result":
       return { text: `Scanning ${".".repeat(1 + Math.floor(nowS / 0.4) % 3)}\n${episodeView.capturePolicy === "any_angle" ? "Look around the mapped room" : "Look at the marker"}`, color: "neutral" };
     case "failed":
+      if (episodeView.retryInS != null) return { text: "Retrying scan automatically…", color: "neutral" };
       return {
         text: episodeView.lastError ? `Capture failed — ${episodeView.lastError}` : "Capture failed",
         color: "error",

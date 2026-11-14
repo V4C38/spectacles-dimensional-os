@@ -1,3 +1,5 @@
+import type { PresencePanel } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
+import { specsToClientTrackingPose } from "../utilities/SpecsCoordinates";
 import type { CapsuleButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/CapsuleButton";
 import type { StateName } from "SpectaclesUIKit.lspkg/Scripts/Components/Element";
 import { Slider } from "SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider";
@@ -15,7 +17,7 @@ createIconButton,
 createPanelSurface,
 createText,getFrameComponent,isFrameInitialized,
 panelButtonLayer,panelFontSize,
-setButtonSelected,
+setButtonSelected,setButtonStyle,
 setPanelFollowing,
 uiMaterialLayer,
 type IconButtonResult
@@ -96,6 +98,7 @@ export class MainMenuView {
   private readonly debug: IconButtonResult;
   private readonly realign: IconButtonResult;
   private readonly stop: CapsuleButton;
+  private readonly stopLabel: Text;
   private stopNativeState = "default" as StateName;
   private stopLatched = false;
   private page: Page = "main";
@@ -139,10 +142,11 @@ export class MainMenuView {
     this.retain(this.draft.window.interactable.onTriggerStart.add(callbacks.onRecord));
     this.retain(this.draft.window.interactable.onTriggerEnd.add(() => callbacks.onRecordEnd(false)));
     this.retain(this.draft.window.interactable.onTriggerCanceled.add(() => callbacks.onRecordEnd(true)));
-    this.send = this.button(this.chat, COPY.send, COPY.send, -(HALF + 2) / 2, -0.196 * UNIT, HALF, ACTION, callbacks.onSend, SnapOS2Styles.Primary).button;
-    this.clear = this.button(this.chat, COPY.clear, COPY.clear, (HALF + 2) / 2, -0.196 * UNIT, HALF, ACTION, callbacks.onClear).button;
+    this.send = this.button(this.chat, COPY.send, COPY.send, (HALF + 2) / 2, -0.196 * UNIT, HALF, ACTION, callbacks.onSend, SnapOS2Styles.Primary).button;
+    this.clear = this.button(this.chat, COPY.clear, COPY.clear, -(HALF + 2) / 2, -0.196 * UNIT, HALF, ACTION, callbacks.onClear).button;
     this.status = this.text(this.bodies.get("main")!, "", 0, -0.251 * UNIT, CONTENT, 0.018 * UNIT, 13);
-    this.stop = this.button(this.root, "EmergencyStop", COPY.stop, 0, -0.298 * UNIT, CONTENT, ACTION, () => {}, SnapOS2Styles.Special).button;
+    const stop = this.button(this.root, "EmergencyStop", COPY.stop, 0, -0.298 * UNIT, CONTENT, ACTION, () => {}, SnapOS2Styles.Special);
+    this.stop = stop.button; this.stopLabel = stop.labelText;
     this.retain(this.stop.onTriggerDown.add(callbacks.onEmergencyStop));
     this.retain(this.stop.onStateChanged.add(state => { this.stopNativeState = state; }));
 
@@ -150,13 +154,13 @@ export class MainMenuView {
     this.localizationRoot = global.scene.createSceneObject("LocalizationCapability"); this.localizationRoot.setParent(this.bodies.get("sensors")!);
     this.lidarRoot = global.scene.createSceneObject("LidarCapability"); this.lidarRoot.setParent(this.bodies.get("sensors")!);
     this.speedRoot = global.scene.createSceneObject("MovementSpeedSetting"); this.speedRoot.setParent(this.bodies.get("sensors")!);
-    this.speedText = this.sectionHeading(this.speedRoot, "Movement speed", 2);
-    this.speedValue = this.text(this.speedRoot, "50%", CONTENT / 2 - 9, 2, 18, 3, 21, HorizontalAlignment.Right, COLOR_WHITE);
+    this.speedText = this.sectionHeading(this.speedRoot, "Movement speed", 3);
+    this.speedValue = this.text(this.speedRoot, "50%", CONTENT / 2 - 9, 3, 18, 3, 21, HorizontalAlignment.Right, COLOR_WHITE);
     const sliderRoot = global.scene.createSceneObject("MovementSpeedSlider"); sliderRoot.setParent(this.speedRoot);
     sliderRoot.getTransform().setLocalPosition(new vec3(0, -2, 1));
     this.speedSlider = sliderRoot.createComponent(Slider.getTypeName()) as Slider;
-    this.speedSlider.size = new vec3(CONTENT - 8, 2.25, 0.5);
-    this.speedSlider.knobSize = new vec2(2.4, 2.4);
+    this.speedSlider.size = new vec3(CONTENT - 8, 4.5, 0.5);
+    this.speedSlider.knobSize = new vec2(2.4, 4.8);
     this.retain(this.speedSlider.onValueChange.add(value => { if (!this.syncingSpeed) callbacks.onSpeed?.(0.05 + Math.max(0, Math.min(1, value)) * 0.95); }));
 
     this.realign = this.button(this.localizationRoot, COPY.relocalize, COPY.relocalize, 0, 0, CONTENT, ACTION, callbacks.onRealign);
@@ -215,7 +219,7 @@ export class MainMenuView {
       this.capabilityKey = caps;
       const rows: [string,number,number?][] = [];
       if(this.localizationRoot.enabled) rows.push(["localize",6.4]);
-      if(this.speedRoot.enabled) rows.push(["speed",8]);
+      if(this.speedRoot.enabled) rows.push(["speed",10]);
       if(this.lidarRoot.enabled) rows.push(["lidar",3,1],["tabs",6.4,1],["range",6.4],["points",6.4]);
       if(!rows.length) rows.push(["empty",3]);
       this.capabilityProfile = panelProfile(23,rows);
@@ -255,6 +259,8 @@ export class MainMenuView {
     this.realign.labelText.text = snap.hasTrackingOrigin ? COPY.relocalize : COPY.localizeRobot;
     this.setDebugModeToggle(snap.debugEnabled); this.diagnostics.setText(snap.debugText);
     this.stop.inactive = !snap.estopAvailable;
+    this.stopLabel.text = snap.resumeOperation ? "Resume operation" : COPY.stop;
+    setButtonStyle(this.stop, snap.resumeOperation ? SnapOS2Styles.Primary : SnapOS2Styles.Special);
     if (snap.estopPressed || this.stopLatched) {
       this.stop.visual.setState(snap.estopPressed ? "triggered" as StateName : this.stopNativeState);
     }
@@ -268,6 +274,16 @@ export class MainMenuView {
     this.bodies.get(this.page)!.enabled = this.heightController.height + 0.01 >= this.heightController.target;
   }
   setVisible(visible: boolean): void { this.visible = visible; this.heightController.setVisible(visible); }
+  presencePanel(): PresencePanel | null {
+    const frame = getFrameComponent(this.panel);
+    if (!this.visible || !this.panel.isEnabledInHierarchy || !frame || !isFrameInitialized(frame)) return null;
+    const transform = frame.transform, position = transform.getWorldPosition(), orientation = transform.getWorldRotation();
+    const scale = transform.getWorldScale(), contentScale = frame.content.getTransform().getLocalScale();
+    return { ...specsToClientTrackingPose({ position: [position.x, position.y, position.z],
+      orientation: [orientation.x, orientation.y, orientation.z, orientation.w] }),
+      width: Math.abs(90 * contentScale.x * scale.x) / 100,
+      height: Math.abs(this.heightController.height * contentScale.y * scale.y) / 100 };
+  }
   isDiagnosticsVisible(): boolean { return this.visible && this.page === "diagnostics"; }
   placed(): void { this.heightController.placed(); }
   showPage(page: Page): void {
@@ -312,7 +328,8 @@ export class MainMenuView {
   private messageField(parent: SceneObject, caption: string, y: number, bodyScrollable: boolean): ScrollableTextView {
     const block = global.scene.createSceneObject(`${caption}Block`); block.setParent(parent); block.getTransform().setLocalPosition(new vec3(0, y, 0));
     this.surface(block, 0, 0, CONTENT, 0.12 * UNIT);
-    this.text(block, caption, 0, 0.033 * UNIT, CONTENT - 5.6, 2, 15, HorizontalAlignment.Center);
+    this.text(block, caption, bodyScrollable ? 1.2 : 0, 0.033 * UNIT, CONTENT - 5.6, 2, 15, HorizontalAlignment.Center);
+    if (bodyScrollable) this.robotGlyph(block, "Agent heading icon", -4, 0.033 * UNIT, .5);
     const field = new ScrollableTextView(block, caption, CONTENT - 5.6, 0.057 * UNIT, -0.016 * UNIT, panelFontSize(20));
     this.messageBlocks.set(field, block);
     field.window.scrollingPaused = !bodyScrollable;
@@ -332,6 +349,8 @@ export class MainMenuView {
     const style = CONTROL_PANEL_SECTION;
     const heading = this.text(parent, value, style.left * UNIT + (style.width * UNIT - 2) / 2, y, style.width * UNIT, style.height * UNIT, style.fontDp, HorizontalAlignment.Left);
     heading.textFill.color = SECONDARY_TEXT;
+    const transform = heading.getSceneObject().getTransform(), position = transform.getLocalPosition();
+    transform.setLocalPosition(new vec3(position.x, position.y, style.depthM * UNIT));
     return heading;
   }
   private text(parent: SceneObject, value: string, x: number, y: number, width: number, height: number, size = 19, align = HorizontalAlignment.Center, color = SECONDARY_TEXT): Text {
@@ -354,13 +373,27 @@ export class MainMenuView {
     });
   }
   private pageTitle(parent: SceneObject, title: string, closeName: string, destination: Page): void {
-    this.text(parent, title, 0, HEADER, 56, 4, 28, HorizontalAlignment.Center, COLOR_WHITE);
+    const heading = this.text(parent, title, 0, HEADER, 56, 4, 28, HorizontalAlignment.Center, COLOR_WHITE);
+    heading.getSceneObject().getTransform().setLocalPosition(new vec3(0, HEADER, CONTROL_PANEL_SECTION.depthM * UNIT));
     this.icon(parent, closeName, "close", CLOSE_X, () => this.showPage(destination));
+  }
+  private robotGlyph(parent: SceneObject, name: string, x: number, y: number, scale = 1): void {
+    const mesh = new WorldMeshRenderer(parent, name);
+    mesh.object.getTransform().setLocalPosition(new vec3(x, y, CONTROL_PANEL_SECTION.depthM * UNIT));
+    mesh.object.getTransform().setLocalScale(vec3.one().uniformScale(scale));
+    const positions: number[] = [], indices: number[] = [];
+    for (const [x1,y1,x2,y2,width] of [[-1.8,-1.1,1.8,-1.1,.35],[-1.8,1.1,1.8,1.1,.35],[-1.8,-1.1,-1.8,1.1,.35],[1.8,-1.1,1.8,1.1,.35],[0,1.1,0,2,.35],[-.9,0,-.5,0,.5],[.5,0,.9,0,.5]]) {
+      const d = Math.hypot(x2-x1,y2-y1), nx = -(y2-y1)/d*width/2, ny = (x2-x1)/d*width/2, first = positions.length/3;
+      positions.push(x1+nx,y1+ny,0,x1-nx,y1-ny,0,x2+nx,y2+ny,0,x2-nx,y2-ny,0);
+      indices.push(first,first+1,first+2,first+2,first+1,first+3);
+    }
+    uiMaterialLayer(mesh.visual,14); mesh.triangles(positions,indices,[1,1,1,1]);
   }
   private icon(parent: SceneObject, name: string, kind: "gear" | "camera" | "robot" | "close", x: number, action: () => void): void {
     const button = this.button(parent, name, "", x, HEADER, 7.2, 7.2, action,
       parent === this.pages.get("main") ? SnapOS2Styles.Ghost : SnapOS2Styles.Secondary);
     button.labelText.getSceneObject().enabled = false;
+    if (kind === "robot") { this.robotGlyph(button.sceneObject, `${name}Icon`, 0, 0); return; }
     const mesh = new WorldMeshRenderer(button.sceneObject, `${name}Icon`);
     mesh.object.getTransform().setLocalPosition(new vec3(0, 0, 1));
     const positions: number[] = [], indices: number[] = [];
@@ -377,9 +410,6 @@ export class MainMenuView {
       ring(1, 0.6);
       for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4;
         line(Math.sin(a) * 1.1, Math.cos(a) * 1.1, Math.sin(a) * 1.7, Math.cos(a) * 1.7, 0.5); }
-    } else if (kind === "robot") {
-      line(-1.8,-1.1,1.8,-1.1);line(-1.8,1.1,1.8,1.1);line(-1.8,-1.1,-1.8,1.1);line(1.8,-1.1,1.8,1.1);
-      line(0,1.1,0,2);line(-.9,0,-.5,0,.5);line(.5,0,.9,0,.5);
     } else {
       line(-1.9, -1, 1.9, -1, 0.4); line(-1.9, -1, -1.9, 1, 0.4);
       line(1.9, -1, 1.9, 1, 0.4); line(-1.9, 1, 1.9, 1, 0.4);

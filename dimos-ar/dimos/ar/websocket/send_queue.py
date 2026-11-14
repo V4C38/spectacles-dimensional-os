@@ -23,7 +23,7 @@ CONTROL_RECORD_MAX_BYTES = 16_384
 CONTROL_BATCH_MAX_BYTES = 65_536
 OUTBOUND_SEND_TIMEOUT_S = 2.0
 COALESCE_FRAME_TYPES = frozenset(
-    {"pose", "state", "localization_result", "interaction_state", "manipulation_state"}
+    {"presence_state", "pose", "state", "localization_result", "interaction_state", "manipulation_state"}
 )
 _FRAME_TYPE_RE = re.compile(r'"type"\s*:\s*"([^"]+)"')
 
@@ -41,6 +41,7 @@ class ClientSendQueue:
         websocket: ws_server.ServerConnection,
         *,
         on_failure: Callable[[str], None] | None = None,
+        on_transport_failure: Callable[[str], None] | None = None,
         send_timeout_s: float = OUTBOUND_SEND_TIMEOUT_S,
         client_id: str | None = None,
     ) -> None:
@@ -48,6 +49,7 @@ class ClientSendQueue:
             raise ValueError("send_timeout_s must be finite and positive")
         self._websocket = websocket
         self._on_failure = on_failure
+        self._on_transport_failure = on_transport_failure
         self._send_timeout_s = send_timeout_s
         self.failure_reason: str | None = None
         self._queue: asyncio.Queue[tuple[int, str, float]] = asyncio.Queue(
@@ -114,16 +116,17 @@ class ClientSendQueue:
     def pending(self) -> bool:
         return not self._closed and (not self._queue.empty() or bool(self._coalesce_latest))
 
-    def _fail(self, reason: str) -> None:
+    def _fail(self, reason: str, *, transport: bool = False) -> None:
         if self.failure_reason is not None or self._closed:
             return
         self.failure_reason = reason
         self._closed = True
         self._work_available.set()
         logger.warning("WebSocket outbound connection failed", reason=reason)
-        if self._on_failure is not None:
+        handler = self._on_transport_failure if transport and self._on_transport_failure else self._on_failure
+        if handler is not None:
             try:
-                self._on_failure(reason)
+                handler(reason)
             except Exception:
                 logger.exception("WebSocket outbound failure handler failed")
 
@@ -190,7 +193,10 @@ class ClientSendQueue:
                 error=str(exc),
                 frame_type=peek_frame_type(text),
             )
-            self._fail("outbound send timeout" if isinstance(exc, TimeoutError) else "outbound send failed")
+            self._fail(
+                "outbound send timeout" if isinstance(exc, TimeoutError) else "outbound send failed",
+                transport=True,
+            )
 
     def _record_send(self, started: float, *, size: int = 0) -> None:
         # send() duration includes transport backpressure and event-loop stalls;

@@ -38,6 +38,7 @@ export interface DimOSWebXRClientDeps {
   clock: ClientClock;
   camera: WebXRCameraPort;
   recognition?: RecognitionPort | null;
+  recognitionFactory?: (session: ARModuleSession) => RecognitionPort | null;
   synthesis?: SynthesisPort | null;
 }
 
@@ -107,7 +108,7 @@ export class DimOSWebXRClient {
       }, () => this.stopFeedbackRemaining > 0);
     this.ui.manipulationDiagnostics = () => JSON.stringify({ capture: this.manipulation.interaction.captureEvents, advisory: this.manipulation.interaction.diagnostics() });
     this.speech = new AgentDraftSession({
-      recognition: deps.recognition ?? null, synthesis: deps.synthesis ?? null,
+      recognition: deps.recognitionFactory?.(this.session) ?? deps.recognition ?? null, synthesis: deps.synthesis ?? null,
       send: text => this.ui.sendAgentText(text), estop: () => this.emergencyStop(),
       isSelected: () => this.isRobotSelected(), select: () => this.setRobotSelected(true),
     });
@@ -195,7 +196,7 @@ export class DimOSWebXRClient {
     this.manipulation.tick(this.controlsEnabled() && view.hasTrackingOrigin);
     this.navigation.tick(now, visibleDeltaS);
     this.joystick.tick(now, this.controlsEnabled() ? joystick : null);
-    if (!this.controlsEnabled()) this.navigation.cancelDrag();
+    if (!this.navigationMarkerEnabled()) this.navigation.cancelDrag();
     const deltaS = this.lastTickAt === null ? 0 : Math.min(0.1, Math.max(0, now - this.lastTickAt));
     this.lastTickAt = now;
     this.applyView(deltaS);
@@ -212,7 +213,7 @@ export class DimOSWebXRClient {
 
   /** Direct marker drags stream goals; floor gestures preview first, then confirm. */
   holdNavigation(rayFrom: Vec3, rayDir: Vec3, planes: readonly FloorPlane[], fromMarker = true, sourceId = "default"): void {
-    if (!this.controlsEnabled() || !this.originStore.hasTrackingOrigin) {
+    if (!(fromMarker ? this.navigationMarkerEnabled() : this.controlsEnabled()) || !this.originStore.hasTrackingOrigin) {
       return;
     }
     const origin = this.originStore.T_odom_client;
@@ -232,7 +233,7 @@ export class DimOSWebXRClient {
   }
 
   releaseNavigation(rayFrom: Vec3, rayDir: Vec3, planes: readonly FloorPlane[], sourceId = "default"): void {
-    if (!this.controlsEnabled() || !this.originStore.hasTrackingOrigin) {
+    if (!this.navigationMarkerEnabled() || !this.originStore.hasTrackingOrigin) {
       return;
     }
     const hits = navigationSurfaceHits(rayFrom, rayDir, planes, this.robot.floorWorldY() ?? 0);
@@ -281,6 +282,16 @@ export class DimOSWebXRClient {
 
   cancelNavigation(): void {
     this.navigation.cancel(this.clock.now());
+  }
+
+  navigationMarkerEnabled(): boolean {
+    const view = this.session.view();
+    const shared = this.session.collaboration.snapshot();
+    return isManualControlEnabled(view, this.ui.setupCompleted,
+      this.ui.alignmentReview?.pending === true, this.ui.setupCelebrating, "manual") &&
+      view.hasTrackingOrigin && view.capabilities?.navigation.nav_goal.available === true &&
+      view.state?.safety?.stopped !== true &&
+      (this.ui.operatingMode === "manual" || shared.canTakeover === true || shared.takeoverPending === true);
   }
 
   controlsEnabled(): boolean {

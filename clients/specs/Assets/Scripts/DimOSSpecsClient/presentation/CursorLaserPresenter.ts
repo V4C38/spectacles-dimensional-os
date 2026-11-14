@@ -1,3 +1,5 @@
+import type { PresencePointer } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
+import { specsToClientTrackingPoint } from "../utilities/SpecsCoordinates";
 import { InteractionManager } from "SpectaclesInteractionKit.lspkg/Core/InteractionManager/InteractionManager";
 import { InteractorInputType, TargetingMode } from "SpectaclesInteractionKit.lspkg/Core/Interactor/Interactor";
 import { CursorControllerProvider } from "SpectaclesInteractionKit.lspkg/Providers/CursorControllerProvider/CursorControllerProvider";
@@ -108,7 +110,7 @@ export function readSikLaserPointers(): LaserPointer[] {
 
 /** One optical addon per SIK pointer; never writes to the interactor or cursor. */
 export class CursorLaserPresenter {
-  private readonly beams = new Map<number, { visual: LaserVisual }>();
+  private readonly beams = new Map<number, { visual: LaserVisual; frame?: LaserFrame | null }>();
   private disposed = false;
 
   constructor(private readonly parent: SceneObject, private readonly readPointers: () => readonly LaserPointer[],
@@ -127,6 +129,7 @@ export class CursorLaserPresenter {
       }
       if (!beam) continue;
       const frame = cursorLaserFrame(pointer);
+      beam.frame = frame;
       if (frame) beam.visual.apply(frame);
       else beam.visual.hide();
     }
@@ -135,8 +138,19 @@ export class CursorLaserPresenter {
     }
   }
 
+  presencePointers(): PresencePointer[] {
+    const pointers: PresencePointer[] = [];
+    for (const [id, { frame }] of this.beams) if (frame) {
+      const slot = id === InteractorInputType.LeftHand ? 0 : 1;
+      if (!pointers.some(p => p.id === slot)) pointers.push({ id: slot,
+        start: specsToClientTrackingPoint(frame.start), control: specsToClientTrackingPoint(frame.control),
+        end: specsToClientTrackingPoint(frame.end), opacity: frame.opacity, cursor: true });
+    }
+    return pointers;
+  }
+
   reset(): void {
-    for (const beam of this.beams.values()) beam.visual.hide();
+    for (const beam of this.beams.values()) { beam.frame = null; beam.visual.hide(); }
   }
 
   dispose(): void {

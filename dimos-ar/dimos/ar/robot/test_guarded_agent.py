@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from queue import Queue
 import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -14,8 +15,12 @@ native = pytest.importorskip("dimos.ar.robot.guarded_agent", exc_type=ImportErro
 def test_native_gate_checks_navigation_and_background_following() -> None:
     agent = object.__new__(native.ARGuardedMcpClient)
     agent._ar_gate = AgentTurnGate(threading.RLock())
-    agent._navigation = SimpleNamespace(get_state=Mock(return_value=native.NavigationState.IDLE))
-    agent._following = SimpleNamespace(ar_following_quiescent=Mock(return_value=True))
+    agent._message_queue = Queue()
+    agent._history = []
+    agent._navigation = SimpleNamespace(get_state=Mock(return_value=native.NavigationState.IDLE),
+                                       ar_navigation_agent_manual=Mock(return_value=True))
+    agent._following = SimpleNamespace(ar_following_quiescent=Mock(return_value=True),
+                                      ar_following_set_manual=Mock(return_value=True))
     assert agent.ar_agent_set_manual(False)
     agent._following.ar_following_quiescent.return_value = False
     assert not agent.ar_agent_set_manual(True)
@@ -145,6 +150,9 @@ def test_stop_retires_initial_detection_and_only_new_follow_invocation_resumes(m
         request.join(2)
     assert results == ["Following request was retired by Stop."]
     start.assert_not_called()
+    assert following.follow_person("person") == "Following is paused for manual control."
+    assert following.ar_following_set_manual(True, 0)
+    assert following.ar_following_set_manual(False, 0)
     assert following.follow_person("person") == "started"
     start.assert_called_once()
     sent = []
@@ -160,3 +168,234 @@ def test_start_subscribes_to_the_shared_stop_stream(monkeypatch) -> None:
     monkeypatch.setattr(native.PersonFollowSkillContainer, "start", lambda _self: None)
     following.start()
     following.stop_movement.subscribe.assert_called_once_with(following._on_ar_stop_movement)
+
+
+def agent_fixture():
+    agent = object.__new__(native.ARGuardedMcpClient)
+    agent._ar_gate = AgentTurnGate(threading.RLock())
+    agent._message_queue = Queue()
+    agent._history = []
+    agent._navigation = SimpleNamespace(
+        get_state=Mock(return_value=native.NavigationState.IDLE),
+        ar_navigation_agent_manual=Mock(return_value=True),
+    )
+    agent._following = SimpleNamespace(ar_following_quiescent=Mock(return_value=True),
+                                      ar_following_set_manual=Mock(return_value=True))
+    agent._mcp_request = Mock(return_value={"content": []})
+    assert agent.ar_agent_set_manual(False)
+    return agent
+
+
+def test_takeover_retires_a_running_llm_and_blocks_its_later_tools():
+    agent = agent_fixture()
+    entered, finish = threading.Event(), threading.Event()
+    retired = []
+
+    def turn():
+        entered.set()
+        assert finish.wait(2)
+        try:
+            agent._mcp_tool_call("navigate_with_text", {"query": "old goal"})
+        except RuntimeError:
+            retired.append(True)
+
+    worker = threading.Thread(target=lambda: agent._ar_gate.run_turn(turn))
+    worker.start()
+    assert entered.wait(2)
+    try:
+        agent._message_queue.put("old continuation")
+        assert agent.ar_agent_takeover()
+        assert agent._ar_gate.manual
+        assert agent._message_queue.empty()
+        assert not agent.ar_agent_set_manual(False)
+    finally:
+        finish.set()
+        worker.join(2)
+    assert retired == [True]
+    agent._mcp_request.assert_not_called()
+    assert agent.ar_agent_set_manual(False)
+    agent._mcp_tool_call("navigate_with_text", {"query": "fresh goal"})
+    agent._mcp_request.assert_called_once()
+
+
+def test_inflight_native_tool_keeps_takeover_uncertain_and_resume_closed():
+    agent = agent_fixture()
+    entered, finish = threading.Event(), threading.Event()
+    errors = []
+
+    def call(*_args, **_kwargs):
+        entered.set()
+        assert finish.wait(2)
+        return {"content": []}
+
+    agent._mcp_request.side_effect = call
+
+    def effect():
+        try:
+            agent._mcp_tool_call("follow_person", {"query": "old goal"})
+        except RuntimeError:
+            errors.append("retired")
+
+    worker = threading.Thread(target=effect)
+    worker.start()
+    assert entered.wait(2)
+    try:
+        assert not agent.ar_agent_takeover()
+        assert agent._ar_gate.manual
+        assert not agent.ar_agent_set_manual(False)
+    finally:
+        finish.set()
+        worker.join(2)
+    assert errors == ["retired"]
+    assert agent.ar_agent_set_manual(False)
+
+
+def test_retired_tool_notifications_and_lookout_continuations_never_replay():
+    agent = agent_fixture()
+    agent._mcp_tool_call("look_out_for", {"then": {"tool": "follow_person", "args": {}}})
+    request = agent._mcp_request.call_args.args[1]
+    continuation = request["arguments"]["then"]
+    token = request["_meta"]["progressToken"]
+    agent._history.append("old goal")
+    assert agent.ar_agent_takeover()
+    assert agent.ar_agent_set_manual(False)
+    assert agent._history == []
+    agent._mcp_request.reset_mock()
+    agent.dispatch_continuation(continuation, {})
+    agent._on_tool_stream_message({"method": "notifications/progress", "params": {
+        "progressToken": token, "message": "old following result",
+    }})
+    assert agent._message_queue.empty()
+    agent._mcp_request.assert_not_called()
+
+
+def test_following_manual_latch_rejects_new_work_until_explicit_agent_resume():
+    following = object.__new__(native.ARPersonFollowSkillContainer)
+    following._ar_worker_lock = threading.Lock()
+    following._ar_threads = set()
+    following._thread = None
+    following._should_stop = threading.Event()
+    following._ar_velocity = native._FollowingVelocityOutput(following)
+    assert following.ar_following_set_manual(True, 0)
+    assert following.follow_person("person") == "Following is paused for manual control."
+    assert not following._ar_velocity.resume(following._ar_velocity.generation)
+    assert following.ar_following_set_manual(False, 0)
+    assert following._ar_velocity.resume(following._ar_velocity.generation)
+
+
+def test_resume_failure_re_latches_both_native_lanes_after_partial_success():
+    agent = agent_fixture()
+    assert agent.ar_agent_takeover()
+
+    def following_mode(manual, _generation):
+        if not manual:
+            raise OSError("following RPC unavailable")
+        return True
+
+    agent._following.ar_following_set_manual.side_effect = following_mode
+    assert not agent.ar_agent_set_manual(False)
+    assert agent._ar_gate.manual
+    assert agent._navigation.ar_navigation_agent_manual.call_args.args[0] is True
+    assert agent._following.ar_following_set_manual.call_args.args[0] is True
+
+
+def test_takeover_during_resume_quiescence_never_opens_native_lanes():
+    agent = agent_fixture()
+    assert agent.ar_agent_takeover()
+    agent._navigation.ar_navigation_agent_manual.reset_mock()
+    agent._following.ar_following_set_manual.reset_mock()
+
+    def quiescence():
+        assert agent.ar_agent_takeover()
+        return native.NavigationState.IDLE
+
+    agent._navigation.get_state.side_effect = quiescence
+    assert not agent.ar_agent_set_manual(False)
+    assert agent._ar_gate.manual
+    assert all(call.args[0] is True for call in agent._navigation.ar_navigation_agent_manual.call_args_list)
+    assert all(call.args[0] is True for call in agent._following.ar_following_set_manual.call_args_list)
+
+
+def test_retired_tool_exception_does_not_kill_worker_or_discard_a_fresh_goal():
+    agent = agent_fixture()
+    entered, finish, retired, fresh = (threading.Event() for _ in range(4))
+    agent._stop_event = threading.Event()
+    agent._state_graph = SimpleNamespace()
+    agent.agent_idle = SimpleNamespace(publish=lambda _idle: retired.set())
+
+    def process(_graph, message):
+        if message == "old":
+            entered.set()
+            assert finish.wait(2)
+            raise RuntimeError("Agent action was retired by manual control")
+        fresh.set()
+        agent._stop_event.set()
+
+    agent._process_message = process
+    agent._message_queue.put("old")
+    worker = threading.Thread(target=agent._thread_loop)
+    worker.start()
+    assert entered.wait(2)
+    try:
+        assert agent.ar_agent_takeover()
+        finish.set()
+        assert retired.wait(2)
+        # Acquire the same turn lock to wait for the complete cleanup boundary.
+        with agent._ar_gate._turn_lock:
+            assert agent.ar_agent_set_manual(False)
+        agent._message_queue.put("fresh")
+        assert fresh.wait(2)
+    finally:
+        finish.set()
+        agent._stop_event.set()
+        worker.join(2)
+    assert not worker.is_alive()
+
+
+def test_delayed_follow_entry_cannot_adopt_a_post_stop_resume_generation(monkeypatch):
+    following = object.__new__(native.ARPersonFollowSkillContainer)
+    following._ar_worker_lock = threading.Lock()
+    following._ar_threads = set()
+    following._thread = None
+    following._should_stop = threading.Event()
+    following._ar_invocations = threading.local()
+    output = native._FollowingVelocityOutput(following)
+    entered, finish = threading.Event(), threading.Event()
+    first = True
+
+    class DelayedEntry:
+        @property
+        def generation(self):
+            nonlocal first
+            generation = output.generation
+            if first:
+                first = False
+                entered.set()
+                assert finish.wait(2)
+            return generation
+
+        @property
+        def manual(self):
+            return output.manual
+
+        def set_manual(self, manual, generation=None):
+            return output.set_manual(manual, generation)
+
+    following._ar_velocity = DelayedEntry()
+    start = Mock(return_value="started")
+    monkeypatch.setattr(native.PersonFollowSkillContainer, "follow_person", start)
+    results = []
+    worker = threading.Thread(target=lambda: results.append(following.follow_person("old person")))
+    worker.start()
+    assert entered.wait(2)
+    try:
+        assert following.ar_following_set_manual(True, 0)
+        assert following.ar_following_set_manual(False, 0)
+    finally:
+        finish.set()
+        worker.join(2)
+    assert results == ["Following request was retired by Stop."]
+    start.assert_not_called()
+    assert output.set_manual(True, 2)
+    assert not output.set_manual(False, 1)
+    assert output.manual

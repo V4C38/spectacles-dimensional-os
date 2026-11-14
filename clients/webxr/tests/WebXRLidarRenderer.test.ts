@@ -7,6 +7,7 @@ it("renders LiDAR before UI without writing depth that can occlude panels", () =
   expect(lidar.object.renderOrder).toBeLessThan(0);
   expect((lidar.object.material as THREE.PointsMaterial).depthWrite).toBe(false);
   expect(lidar.object.material.transparent).toBe(false);
+  expect((lidar.object.material as THREE.PointsMaterial).size).toBe(.024);
   expect(lidar.object.material.blending).toBe(THREE.CustomBlending);
   lidar.dispose();
 });
@@ -76,4 +77,14 @@ it.each(LIDAR_PRESENTATION_TRACE)("shared cloud contract with scale $scale", tra
   expect(geometry.getAttribute("color").getW(0)).toBeCloseTo(trace.expectedAlpha, 5);
   expect(geometry.getAttribute("position").getZ(0)).toBeCloseTo(-1);
   lidar.dispose();
+});
+
+
+it("scales the near and far screen-space point clamps by the same 1.5 factor", () => {
+  const lidar = new WebXRLidarRenderer();
+  try {
+    const shader = { vertexShader: "#include <logdepthbuf_vertex>", fragmentShader: "#include <color_fragment>", uniforms: {} };
+    lidar.object.material.onBeforeCompile(shader as never, {} as never);
+    expect(shader.vertexShader).toContain("clamp(gl_PointSize, 3.75, 12.0)");
+  } finally { lidar.dispose(); }
 });

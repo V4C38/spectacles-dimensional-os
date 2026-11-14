@@ -17,7 +17,7 @@ type Entry = { kind: Kind; parts: number; next: number; bytes: number; metadata:
   lastTime: number;
   started: number; updated: number; value?: RecordObject };
 type Wanted = { ref: BulkRef; kind: Kind; started: number; retryAt: number; attempts: number };
-export type BulkUploadResult = { id: number; status: "accepted" | "cancelled" | "rejected"; code?: string };
+export type BulkUploadResult = { id: number; kind?: "localization" | "speech"; status: "accepted" | "cancelled" | "rejected"; code?: string };
 const validatedAssets = new WeakSet<object>();
 const validatedArrays = new WeakMap<object, { names?: readonly string[]; lastTime: number }>();
 export function isValidatedBulkAsset(value: object): boolean { return validatedAssets.has(value); }
@@ -78,7 +78,7 @@ export class BulkTransfer {
   private pins = new Map<string, string>();
   private cacheBytes = 0;
   private uploadSerial = 0;
-  private upload: { id: number; data: Uint8Array; offset: number; started: number; admitted: boolean } | null = null;
+  private upload: { id: number; kind: "localization" | "speech"; data: Uint8Array; offset: number; started: number; admitted: boolean } | null = null;
   private lastUploadResult: BulkUploadResult | null = null;
   private download: { id: number; bytes: Uint8Array; offset: number; started: number } | null = null;
   private deadline = 0;
@@ -118,14 +118,26 @@ export class BulkTransfer {
     if (data.byteLength < 6 || data.byteLength > BULK_UPLOAD_BYTES || this.upload) throw new Error("Localization bulk upload unavailable");
     this.uploadSerial = (this.uploadSerial + 1) >>> 0;
     this.lastUploadResult = null;
-    this.upload = { id: this.uploadSerial, data, offset: 0, started: this.clock.now(), admitted: false };
+    this.upload = { id: this.uploadSerial, kind: "localization", data, offset: 0, started: this.clock.now(), admitted: false };
     this.send({ type: "bulk_upload_begin", kind: "localization", upload_id: this.upload.id, total_bytes: data.byteLength, capture_id: captureId });
   }
-  cancelUpload(): void {
+  uploadSpeech(data: Uint8Array, requestId: string, mimeType: string): void {
+    if (!this.port || !this.ready || this.upload) throw new Error("Audio upload unavailable");
+    if (data.byteLength < 6 || data.byteLength > 2097152) throw new Error("Recording exceeds the 2 MiB limit");
+    this.uploadSerial = (this.uploadSerial + 1) >>> 0;
+    this.lastUploadResult = null;
+    this.upload = { id: this.uploadSerial, kind: "speech", data, offset: 0, started: this.clock.now(), admitted: false };
+    this.send({ type: "bulk_upload_begin", kind: "speech", upload_id: this.upload.id, total_bytes: data.byteLength, request_id: requestId, mime_type: mimeType });
+  }
+  cancelSpeech(requestId: string): void {
+    this.cancelUpload("speech");
+    if (this.ready) this.send({ type: "speech_transcription_cancel", request_id: requestId });
+  }
+  cancelUpload(kind?: "localization" | "speech"): void {
     const upload = this.upload;
-    if (!upload) return;
+    if (!upload || kind !== undefined && upload.kind !== kind) return;
     this.upload = null;
-    this.lastUploadResult = { id: upload.id, status: "cancelled" };
+    this.lastUploadResult = { id: upload.id, kind: upload.kind, status: "cancelled" };
     this.send({ type: "bulk_upload_cancel", upload_id: upload.id });
     this.changed();
   }
@@ -133,9 +145,9 @@ export class BulkTransfer {
     const start = this.clock.now();
     if (this.port && !this.ready && start >= this.deadline) { this.fail("Bulk handshake timed out"); return; }
     if (this.upload && start - this.upload.started > 30) {
-      const id = this.upload.id;
+      const { id, kind } = this.upload;
       this.upload = null;
-      this.lastUploadResult = { id, status: "rejected", code: "upload_timeout" };
+      this.lastUploadResult = { id, kind, status: "rejected", code: "upload_timeout" };
       this.send({ type: "bulk_upload_cancel", upload_id: id }); this.changed();
     }
     if (this.download && start - this.download.started > 5) { this.fail("Bulk transfer timed out"); return; }
@@ -163,7 +175,8 @@ export class BulkTransfer {
     }
     this.counters.maxWorkMs = Math.max(this.counters.maxWorkMs, (this.clock.now() - start) * 1000);
   }
-  hydrate(input: RecordObject): { value: RecordObject; pending: boolean; deadline: number | null; unavailable: boolean } {
+  hydrate(input: RecordObject): { value: RecordObject; pending: boolean; deadline: number | null; unavailable: boolean; pendingRoutes: Readonly<{ preview?: boolean; active_goal?: boolean }> } {
+    const pendingRoutes: { preview?: boolean; active_goal?: boolean } = {};
     let pending = false, unavailable = false, deadline: number | null = null;
     const visit = (value: RecordObject, scope = "active_goal"): RecordObject => {
       const result = { ...value };
@@ -178,6 +191,7 @@ export class BulkTransfer {
           if (this.unavailable.has(id)) unavailable = true;
           else {
             pending = true;
+            if (kind === "route") pendingRoutes[scope === "preview" ? "preview" : "active_goal"] = true;
             deadline = Math.max(deadline ?? 0, (this.wanted.get(id)?.started ?? asset?.started ?? this.clock.now()) + BULK_ASSET_WAIT_S);
           }
           continue;
@@ -209,7 +223,7 @@ export class BulkTransfer {
       return result;
     };
     const value = visit(input, input.preview === true ? "preview" : "active_goal");
-    return { value, pending, deadline, unavailable };
+    return { value, pending, deadline, unavailable, pendingRoutes };
   }
   private enqueue(text: string): void {
     for (const line of text.split("\n").filter(line => line.trim())) {
@@ -247,7 +261,7 @@ export class BulkTransfer {
       const upload = this.upload;
       if (!upload || upload.id !== raw.upload_id) return;
       if (!["accepted", "cancelled", "rejected"].includes(String(raw.status))) throw new Error("Invalid upload result");
-      this.lastUploadResult = { id: upload.id, status: raw.status as BulkUploadResult["status"],
+      this.lastUploadResult = { id: upload.id, kind: upload.kind, status: raw.status as BulkUploadResult["status"],
         ...(typeof raw.code === "string" ? { code: raw.code.slice(0, 128) } : {}) };
       this.upload = null; this.changed(); return;
     }

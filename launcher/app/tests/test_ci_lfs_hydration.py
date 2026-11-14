@@ -40,9 +40,10 @@ def test_hydration_fetches_pointers_but_preserves_working_deletions(
     git(seed, "config", "user.name", "CI fixture")
     git(seed, "config", "user.email", "ci-fixture@example.invalid")
     git(seed, "lfs", "install", "--local")
-    git(seed, "lfs", "track", "*.bin")
+    git(seed, "lfs", "track", "*.bin", "*.lspkg")
     payloads = {
         "keep pointer.bin": b"first LFS payload",
+        "keep archive.lspkg": b"Core package payload",
         "keep\nnewline.bin": b"second LFS payload",
         "deleted pointer.bin": b"must not reappear",
     }
@@ -78,7 +79,7 @@ def test_hydration_fetches_pointers_but_preserves_working_deletions(
         + '\nROOT="$1"\nhydrate_existing_lfs "$2"\n',
         "ci-lfs-fixture",
         str(checkout),
-        "fixtures shaders/*.bin",
+        "fixtures shaders/*.bin,fixtures shaders/*.lspkg",
     ]
     for _ in range(2):
         subprocess.run(command, env=env, check=True, capture_output=True, text=True)

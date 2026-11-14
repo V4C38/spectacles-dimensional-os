@@ -93,7 +93,7 @@ export async function bootstrap(
           resume_token: "fixture-resume",
           odom_reference_id: "fixture-odom",
           localization: { providers: ["fiducial_marker"] },
-          type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
+          type: "hello", presence: true, protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
           client_id: "integration",
           time_sync: {
             ts_client: command.ts_client,

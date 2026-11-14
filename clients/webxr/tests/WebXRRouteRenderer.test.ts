@@ -49,3 +49,15 @@ it("uses a visible solid ribbon during execution and dashed previews", () => {
     expect(dashed(route).material.uniforms.uOpacity.value).toBe(.6);
   } finally { route.dispose(); }
 });
+
+
+it("keeps preview and executing routes visible through scene depth", () => {
+  const route = new WebXRRouteRenderer();
+  for (const mesh of [dashed(route), ribbon(route)]) {
+    expect(mesh.material.depthTest).toBe(false);
+    expect(mesh.material.depthWrite).toBe(false);
+    expect(mesh.userData.environmentDepth).not.toBe(true);
+  }
+  expect(route.object.userData.environmentDepth).not.toBe(true);
+  route.dispose();
+});

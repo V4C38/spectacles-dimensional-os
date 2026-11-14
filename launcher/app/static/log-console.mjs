@@ -86,10 +86,17 @@ export function logConsole({ logEl, logFilterLevel, logFilterSource, copyLogBtn 
             ? "warning"
             : "error";
       lastAr = AR_RE.test(plain);
-    } else if (AR_RE.test(plain)) {
-      lastAr = true;
+    } else {
+      if (!/^\s|^(Traceback|Caused by:)/.test(plain)) lastLevel = "info";
+      if (AR_RE.test(plain)) lastAr = true;
     }
-    return { level: lastLevel, ar: lastAr };
+    const error = /\b(error|failed|failure|unavailable|not found)\b/i.test(plain);
+    const connected = !error && !/\b(disconnected|not connected|connecting)\b/i.test(plain) &&
+      /\b(connected|connection established|CAN ready|bus ready)\b/i.test(plain);
+    if (error) lastLevel = "error";
+    else if (connected) lastLevel = "info";
+    return { level: lastLevel, ar: lastAr,
+      tone: error || lastLevel === "error" ? "error" : connected ? "success" : "normal" };
   }
 
   function lineVisible(entry) {
@@ -101,6 +108,7 @@ export function logConsole({ logEl, logFilterLevel, logFilterSource, copyLogBtn 
   function makeLogLineEl(entry) {
     const el = document.createElement("div");
     el.className = "log-line";
+    el.dataset.tone = entry.tone;
     el.innerHTML = ansiToHtml(entry.line);
     el.hidden = !lineVisible(entry);
     entry.el = el;

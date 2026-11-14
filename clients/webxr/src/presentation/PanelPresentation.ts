@@ -18,13 +18,13 @@ export function panelFooterY(height: number): number {
   return PANEL_TOP - height + PANEL_BOTTOM_PADDING + CONTROL_PANEL_CONTROLS.height / 2;
 }
 
-function runtimeProfile(startY: number, rows: readonly LayoutRow[]): PanelProfile {
+export function runtimeProfile(startY: number, rows: readonly LayoutRow[]): PanelProfile {
   return panelProfile(startY, rows, true, RUNTIME_FOOTER_GAP);
 }
 
 export const RUNTIME_LAYOUTS = {
   manual: runtimeProfile(0.146, [["guidance", 0.18], ["status", 0.018]]),
-  agent: runtimeProfile(0.146, [["reply", 0.12], ["draft", 0.12], ["actions", 0.064], ["status", 0.018, 0.01]]),
+  agent: runtimeProfile(0.146, [["draft", 0.12], ["actions", 0.064], ["reply", 0.12], ["status", 0.018, 0.01]]),
   settings: runtimeProfile(.23, [["robotActions",.064],["headset",.03],["debug",.064,.01],["diagnostics",.064],["sound",.064]]),
   sensors: runtimeProfile(0.112, [["range", 0.064], ["points", 0.064], ["statistics", 0.1, 0.03]]),
   diagnostics: runtimeProfile(0.23, [["logs", 0.26], ["statistics", .1]]),

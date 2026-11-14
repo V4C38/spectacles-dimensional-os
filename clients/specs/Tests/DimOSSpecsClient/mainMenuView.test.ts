@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 vi.mock("SpectaclesUIKit.lspkg/Scripts/Components/ScrollWindow/ScrollWindow", () => ({ ScrollWindow: class {} }));
 vi.mock("SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider", () => ({ Slider: class {} }));
-vi.mock("../mocks/UIKit.ts", () => ({ COLOR_WHITE: {}, setButtonSelected: vi.fn(), SnapOS2Styles: {} }));
+vi.mock("../mocks/UIKit.ts", () => ({ COLOR_WHITE: {}, setButtonSelected: vi.fn(), setButtonStyle: vi.fn(), SnapOS2Styles: {} }));
 import { MainMenuView } from "../../Assets/Scripts/DimOSSpecsClient/presentation/MainMenuView";
 
 function fixture() {
@@ -14,7 +14,7 @@ function fixture() {
     modeButtons: [{}, {}], setOperatingMode: vi.fn(), manual: {}, chat: {}, reply: field(), draft: field(), send: {}, clear: {},
     lidarButtons: [{}, {}, {}], sensorControls: [], rangeLabel: text(), range: text(), points: text(), sensorStatus: text(),
     realign: { labelText: text() }, setDebugModeToggle: vi.fn(), diagnostics: field(),
-    stop: { visual: { setState } }, stopNativeState: "hovered", stopLatched: false,
+    stopLabel: text(), stop: { visual: { setState } }, stopNativeState: "hovered", stopLatched: false,
   }) as MainMenuView;
   const snapshot: any = { robotName: "Go2", robotConnectionText: "Connected", robotSelected: false, activity: "Idle",
     robotSelectable: false, operatingMode: "manual", agentAvailable: true, speech: null, lidarAvailable: true, lidarMode: "off",
@@ -57,4 +57,16 @@ it("moves tab buttons and their hit targets as one layout row", () => {
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+
+it("switches the main Stop label and eligibility from canonical resume facts", () => {
+  const h = fixture(); h.snapshot.resumeOperation = true; h.snapshot.estopAvailable = false;
+  h.view.apply(h.snapshot);
+  expect((h.view as any).stopLabel.text).toBe("Resume operation");
+  expect((h.view as any).stop.inactive).toBe(true);
+  h.snapshot.estopAvailable = true; h.view.apply(h.snapshot);
+  expect((h.view as any).stop.inactive).toBe(false);
+  h.snapshot.resumeOperation = false; h.view.apply(h.snapshot);
+  expect((h.view as any).stopLabel.text).toBe("EMERGENCY STOP");
 });

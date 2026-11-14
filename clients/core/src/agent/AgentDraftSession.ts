@@ -36,6 +36,8 @@ export function classifyAgentResponseText(text: string): AgentResponseSeverity {
 }
 
 export interface RecognitionPort {
+  readonly finishTimeoutS?: number;
+  transcriptionStatus?(): "Preparing dictation…" | "Transcribing…";
   start(onText: (text: string, final: boolean) => void, onError: (reason: string) => void, onEnd: () => void, onStarted: () => void): void;
   stop(): void;
   finish?(): void;
@@ -45,7 +47,7 @@ export interface SynthesisPort {
   stop(): void;
 }
 export interface AgentDraftSnapshot {
-  status: "Off" | "Ready" | "Starting microphone…" | "Listening" | "Transcribing…" | "Thinking" | "Responding" | "Type a message";
+  status: "Off" | "Ready" | "Starting microphone…" | "Listening" | "Preparing dictation…" | "Transcribing…" | "Thinking" | "Responding" | "Type a message";
   prompt: string;
   response: string;
   severity: AgentResponseSeverity;
@@ -86,7 +88,7 @@ export class AgentDraftSession {
   snapshot(): Readonly<AgentDraftSnapshot> { return { ...this.snapshotValue, status: this.status() }; }
   private status(): AgentDraftSnapshot["status"] {
     if (!this.enabled) return "Off";
-    return this.flushing ? "Transcribing…" : this.recognizing ? "Listening" : this.starting ? "Starting microphone…" :
+    return this.flushing ? this.deps.recognition?.transcriptionStatus?.() ?? "Transcribing…" : this.recognizing ? "Listening" : this.starting ? "Starting microphone…" :
       this.speaking ? "Responding" : this.pendingResponse ? "Thinking" : this.snapshotValue.recognitionAvailable ? "Ready" : "Type a message";
   }
   private stopSynthesis(): void {
@@ -116,7 +118,7 @@ export class AgentDraftSession {
     if (!cancel && this.recognizing && this.deps.recognition?.finish) {
       this.recognizing = false;
       this.flushing = true;
-      this.finishUntil = this.now + 1.5;
+      this.finishUntil = this.now + (this.deps.recognition.finishTimeoutS ?? 1.5);
       try { this.deps.recognition.finish(); return; } catch { /* Keep the last interim draft. */ }
     }
     this.flushing = false;
@@ -197,7 +199,8 @@ export class AgentDraftSession {
     const fail = (reason: string) => {
       if (epoch !== this.epoch) return;
       this.snapshotValue.error = `Speech unavailable: ${reason}.`;
-      this.snapshotValue.recognitionAvailable = !["not-allowed", "service-not-allowed", "audio-capture", "language-not-supported"].includes(reason);
+      // Permissions and capture devices can change without reloading the app.
+      // Keep the next deliberate recording attempt available.
       this.endRecording(true);
     };
     try {

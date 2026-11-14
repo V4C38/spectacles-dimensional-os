@@ -96,6 +96,44 @@ async def test_initial_vps_success_never_requests_a_tag(mixed):
     assert result["map_alignment"]["tracking_reference_id"] == "tracking"
 
 
+@pytest.mark.parametrize("outcome", [None, RuntimeError("offline")])
+async def test_initial_robot_vps_uses_two_actual_queries_before_marker(mixed, outcome):
+    f = mixed
+    f.images.newest = lambda **kwargs: SimpleNamespace(
+        observation=_observation(f.timestamp), source_generation=0, travel_m=0
+    )
+    if isinstance(outcome, Exception):
+        f.vps.localize.side_effect = outcome
+    else:
+        f.vps.localize.return_value = outcome
+    await f.service._robot()
+    assert f.client.next_attempt == "vps"
+    assert f.client.initial_vps_failures == 1
+    await f.service._robot()
+    assert f.vps.localize.await_count == 2
+    assert f.client.next_attempt == "tag"
+    notice = [body for _, body in f.messages
+              if body.get("reason") == "vps_failed_using_marker"]
+    assert len(notice) == 1
+    assert notice[0]["odom_reference_id"] == "odom"
+    f.client.retry_at = 0
+    f.service._tick()
+    assert requests(f)[-1]["purpose"] == "robot"
+
+
+async def test_initial_headset_vps_failure_count_resets_with_tracking_reference(mixed):
+    f = mixed
+    f.service._commit_robot(LocalizedPose(Pose(), "map", .9), f.timestamp - 1, 0, 0, 0)
+    f.vps.localize.return_value = None
+    for attempt in range(2):
+        episode = f.service._request("client", f.client, "headset")
+        await f.service._headset("client", f.client, episode, _observation(f.timestamp))
+        assert f.client.next_attempt == ("vps" if attempt == 0 else "tag")
+    f.service.progress(LocalizationTracking("replacement", 0, True), "client", TimeSync(0, 0))
+    assert f.client.initial_vps_failures == 0
+    assert f.client.next_attempt == "vps"
+
+
 @pytest.mark.parametrize("outcome", [None, RuntimeError("offline"), QueryDeferredError(30)])
 async def test_failed_headset_vps_allows_tag_without_discarding_relative_alignment(mixed, outcome):
     f = mixed

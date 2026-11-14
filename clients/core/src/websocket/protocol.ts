@@ -1,6 +1,8 @@
 // Target sequence cumulatively acknowledges accepted pose/settings input; identical
 // content preserves revision. Reset clears the group draft only after authorized,
 // non-busy admission. These semantics require no extra wire fields (PROTOCOL.md).
+// interaction_request.takeover reuses acquire fields and awaits a stopped native
+// agent before granting a manual navigation lease; cancel_acquire retires it.
 import { utf8Bytes, validatedBulkArray } from "./BulkTransfer";
 import { decodeManipulation, decodeFollowingTail } from "../manipulation/ManipulationProtocol";
 import { type InteractionState, type InteractionResult, type InteractionAuthority, type InteractionTarget, type InteractionCredentials, CAPABILITY_NAMES, type Capabilities, type Capability, type CapturePolicy, type DistortionModel, type Intrinsics, type Lidar, type LidarSettings, type LocalizationObservation, type LocalizationObservations, type LocalizationObservationsRequest, type LocalizationResult, type MapAlignment, type MapContext, type LocalizationMapTransform, type LocalizationStatus, type NavGoal, type NavState, type Outbound, type Pose, type Quat, type RobotDescription, type State, type TimeSync, type Vec3, type YawPose, type Hello, type HelloRequest, type AgentMessage, type AgentSkill, type NavigationCapability } from "../ClientContracts";
@@ -37,10 +39,13 @@ export class TextFramer {
   }
 }
 
+import { decodePresenceState } from "../replication/PresenceController";
+
 export function encodeHelloRequest(request: Omit<HelloRequest, "type" | "protocol_version">): string {
   return encodeText({
     type: "hello_request",
     ...(request.resume_token ? { resume_token: request.resume_token } : {}),
+    ...(request.presence === undefined ? {} : { presence: request.presence }),
     protocol_version: 2,
     ts_client: finiteNumber(request.ts_client, "ts_client"),
   } satisfies HelloRequest);
@@ -56,6 +61,11 @@ export function encodeLocalizationStartRequest(): string {
 
 export function encodeEstopRequest(): string {
   return encodeText({ type: "estop_request" });
+}
+
+export function encodeResumeOperationRequest(epoch: string, stopId: string): string {
+  if (!epoch || !stopId) throw new Error("Resume requires the current epoch and stop identity");
+  return encodeText({ type: "resume_operation_request", epoch, stop_id: stopId });
 }
 
 export function encodeNavGoalRequest(request: {
@@ -200,6 +210,7 @@ export function decodeOutboundObject(data: Record<string, unknown>): Exclude<Out
   switch (msgType) {
     case "manipulation_state":
     case "manipulation_result": return decodeManipulation(data);
+    case "presence_state": return decodePresenceState(data);
     case "interaction_state": return decodeInteractionState(data);
     case "interaction_result": return decodeInteractionResult(data);
     case "hello":
@@ -221,6 +232,16 @@ export function decodeOutboundObject(data: Record<string, unknown>): Exclude<Out
       return decodePose(data);
     case "agent_message":
       return decodeAgentMessage(data);
+    case "speech_transcription_result": {
+      const status = requireString(data, "status");
+      if (status !== "completed" && status !== "rejected" && status !== "preparing" && status !== "transcribing") throw new Error("Invalid transcription status");
+      const request_id = requireString(data, "request_id");
+      if (!request_id.length || request_id.length > 128) throw new Error("Invalid transcription request id");
+      const text = data.text === undefined ? undefined : requireString(data, "text");
+      const message = data.message === undefined ? undefined : requireString(data, "message");
+      if ((text?.length ?? 0) > 2000 || (message?.length ?? 0) > 512 || status === "completed" && text === undefined) throw new Error("Invalid transcription result");
+      return { type: "speech_transcription_result", request_id, status, ...(text === undefined ? {} : { text }), ...(message === undefined ? {} : { message }) };
+    }
     case "agent_skill":
       return decodeAgentSkill(data);
     default:
@@ -475,6 +496,9 @@ function decodeHello(data: Record<string, unknown>): Hello {
   }
   return {
     type: "hello",
+    ...(data.presence === undefined ? {} : { presence: requireBoolean(data, "presence") }),
+    ...(data.speech_transcription === undefined ? {} : { speech_transcription: requireBoolean(data, "speech_transcription") }),
+    ...(data.speech_transcription_reason === undefined ? {} : { speech_transcription_reason: boundedString(data, "speech_transcription_reason", 512) }),
     ...(data.source === undefined ? {} : { source: decodeSource(asObject(data.source, "source")) }),
     localization: decodeLocalizationProviders(asObject(requireKey(data, "localization"), "localization")),
     protocol_version: 2,
@@ -580,6 +604,7 @@ function decodeState(data: Record<string, unknown>): State {
   }
   return {
     type: "state",
+    ...(data.safety === undefined ? {} : { safety: decodeSafety(asObject(data.safety, "safety")) }),
     ...(data.playback === undefined ? {} : { playback: decodePlayback(asObject(data.playback, "playback")) }),
     server: { connected_clients: connectedClients },
     ...(data.nav_preview_costmap_ts === undefined ? {} : { nav_preview_costmap_ts: finiteField(data, "nav_preview_costmap_ts") }),
@@ -589,6 +614,15 @@ function decodeState(data: Record<string, unknown>): State {
     nav: decodeNavState(asObject(requireKey(data, "nav"), "nav")),
     agent: decodeAgentState(asObject(requireKey(data, "agent"), "agent")),
   };
+}
+
+function decodeSafety(data: Record<string, unknown>): NonNullable<State["safety"]> {
+  const stopped = requireBoolean(data, "stopped");
+  const canResume = requireBoolean(data, "can_resume");
+  if (canResume && !stopped) throw new Error("Resume requires stopped operation");
+  const stopId = data.stop_id === undefined ? undefined : requireString(data, "stop_id");
+  if (stopped && !stopId) throw new Error("Stopped operation requires stop_id");
+  return { stopped, can_resume: canResume, ...(stopId ? { stop_id: stopId } : {}) };
 }
 
 function decodeAgentState(data: Record<string, unknown>): { idle: boolean } {
@@ -696,9 +730,9 @@ function decodeLocalizationObservationsRequest(
   };
 }
 
-function boundedString(data: Record<string, unknown>, key: string): string {
+function boundedString(data: Record<string, unknown>, key: string, maxLength = 128): string {
   const value = requireString(data, key);
-  if (!value.length || value.length > 128) throw new Error(`invalid ${key}`);
+  if (!value.length || value.length > maxLength) throw new Error(`invalid ${key}`);
   return value;
 }
 function decodeMapContext(data: Record<string, unknown>): MapContext {

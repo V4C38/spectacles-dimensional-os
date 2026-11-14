@@ -195,9 +195,8 @@ export class WristMenuController {
       if (this.source === side && !tracked) { this.pin(); continue; }
       if (changed && this.gates[side].isOpen && !this.visible) {
         this.visible = true; this.source = side;
-        const forward = this.deps.cameraObject?.getTransform().getWorldRotation().multiplyVec3(new vec3(0, 0, -1));
-        const length = forward ? Math.hypot(forward.x, forward.z) : 0;
-        this.summonOffset = forward && length > 0.001 ? new vec3(forward.x / length * 18, 0, forward.z / length * 18) : vec3.zero();
+        this.summonOffset = vec3.zero();
+        this.updateHandForward();
         this.placeAtPalm(); this.deps.onBeforeShow?.(); this.deps.onMenuShow();
       } else if (changed && !this.gates[side].isOpen && this.source === side) {
         this.source = null; this.visible = false; this.deps.onMenuHide(false);
@@ -206,9 +205,25 @@ export class WristMenuController {
     if (this.visible && this.source) this.placeAtPalm(dt);
   }
 
+  private updateHandForward(): void {
+    if (!this.source) return;
+    const hand = this.hands[this.source];
+    let forward: Point | null = null;
+    try {
+      if (hand.wrist?.position && hand.middleMidJoint?.position) forward = sub(hand.middleMidJoint.position, hand.wrist.position);
+    } catch { /* Retain the last valid offset during partial joint tracking. */ }
+    if (!forward || Math.hypot(forward.x, forward.z) < 0.001) {
+      if (this.summonOffset.length > 0.001) return;
+      forward = this.deps.cameraObject?.getTransform().getWorldRotation().multiplyVec3(new vec3(0, 0, -1)) ?? null;
+    }
+    const length = forward ? Math.hypot(forward.x, forward.z) : 0;
+    if (forward && length > 0.001) this.summonOffset = new vec3(forward.x / length * 33, 0, forward.z / length * 33);
+  }
+
   private placeAtPalm(dt?: number): void {
     if (!this.source) return;
     const hand = this.hands[this.source];
+    this.updateHandForward();
     const transform = this.deps.panel.getTransform();
     const camera = this.deps.cameraObject?.getTransform();
     const wrist = hand.wrist?.position;

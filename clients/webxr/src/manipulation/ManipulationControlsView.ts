@@ -37,6 +37,7 @@ export class ManipulationControlsView {
   readonly buttons = new Map<string, SurfaceButton>();
   private readonly menuHeight = new PanelHeightAnimation();
   private readonly speedLabel = new Text();
+  private readonly speedTitle = new Text();
   private readonly menuPlate: GlassSurface;
   private hoverUntil = 0;
   private hoverProgress = 0;
@@ -136,13 +137,17 @@ export class ManipulationControlsView {
     this.controls.add(this.speedSlider);
     this.speedLabel.font = UI_FONT_REGULAR;
     this.speedLabel.fontSize = 0.011;
-    this.speedLabel.anchorX = "center";
+    this.speedLabel.anchorX = "right";
     this.speedLabel.anchorY = "bottom";
     this.speedLabel.color = 0xaeaeb2;
     this.speedLabel.renderOrder = 66;
     this.speedLabel.raycast = () => {};
     this.speedSlider.add(this.speedLabel);
-    this.speedLabel.position.y = 0.012;
+    this.speedLabel.position.set(.07, .012, 0);
+    this.speedTitle.font = UI_FONT_REGULAR; this.speedTitle.fontSize = .011;
+    this.speedTitle.text = "Movement speed"; this.speedTitle.anchorX = "left"; this.speedTitle.anchorY = "bottom";
+    this.speedTitle.color = 0xaeaeb2; this.speedTitle.renderOrder = 66; this.speedTitle.raycast = () => {};
+    this.speedTitle.position.set(-.07, .012, 0); this.speedSlider.add(this.speedTitle); syncText(this.speedTitle);
     const eeAction = addButton("gripper", this.gripperMenu, "Open", "gripper", 0, 0, 0.095);
     eeAction.traverse(node => { node.userData.endEffectorAction = true; });
     this.baseMarker.add(this.controls);
@@ -180,7 +185,7 @@ export class ManipulationControlsView {
     const state = { stopped };
     this.controls.visible = true;
     this.speedSlider.setValue(input.speedScale);
-    const speedText = `Speed · ${Math.round(input.speedScale * 100)}%`;
+    const speedText = `${Math.round(input.speedScale * 100)}%`;
     if (this.speedLabel.text !== speedText) {
       this.speedLabel.text = speedText;
       syncText(this.speedLabel);
@@ -259,13 +264,13 @@ export class ManipulationControlsView {
     this.gripperMenu.scale.setScalar(Math.max(0.01, this.hoverProgress));
     this.gripperMenu.position
       .copy(handle.position)
-      .add(new THREE.Vector3(0, -0.05, 0));
+      .add(new THREE.Vector3(0, -0.07, 0));
     this.previewMenu.visible =
       selected && !dragging && !state.stopped && this.hoverProgress > 0.01;
     this.previewMenu.scale.setScalar(Math.max(0.01, this.hoverProgress));
     this.previewMenu.position
       .copy(handle.position)
-      .add(new THREE.Vector3(0, 0.05, 0));
+      .add(new THREE.Vector3(0, 0.07, 0));
   }
   faceViewer(position: THREE.Vector3): void {
     this.baseMarker.lookAt(position);

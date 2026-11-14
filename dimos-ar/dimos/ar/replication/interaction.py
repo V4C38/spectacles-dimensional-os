@@ -35,6 +35,7 @@ InteractionKind = Literal[
 InteractionMode = Literal["manual", "agent"]
 InteractionAction = Literal[
     "acquire",
+    "takeover",
     "renew",
     "update",
     "release",
@@ -143,6 +144,7 @@ class InteractionCoordinator:
         self._arm_native_busy = False
         self._arm_retired_motion: tuple[str, int] | None = None
         self._agent_busy = False
+        self._takeover: tuple[str, InteractionRequest] | None = None
         self.following_tail: dict[str, Any] | None = None
         self._tail_floor = 0
         self._clients: set[str] = set()
@@ -187,6 +189,7 @@ class InteractionCoordinator:
     def mode_change_available(self) -> bool:
         return not (
             self._authority is not None
+            or self._takeover is not None
             or self._agent_busy
             or self.motion_busy
             or self.following_tail is not None
@@ -200,6 +203,8 @@ class InteractionCoordinator:
 
     def disconnect(self, client_id: str) -> None:
         self._clients.discard(client_id)
+        if self._takeover is not None and self._takeover[0] == client_id:
+            self._takeover = None
         if self._authority is not None and self._authority.client_id == client_id:
             self._retire("disconnect")
         self._requests.pop(client_id, None)
@@ -235,6 +240,7 @@ class InteractionCoordinator:
         return retired
 
     def stop(self, reason: str = "stop") -> None:
+        self._takeover = None
         self._retire(reason)
         self.preview = None
         self.active_goal = None
@@ -243,6 +249,7 @@ class InteractionCoordinator:
         self._tail_floor = self._revision
 
     def reset(self) -> None:
+        self._takeover = None
         self._retire("reference_reset")
         self.epoch = uuid4().hex
         self._active_target_key = None
@@ -437,6 +444,10 @@ class InteractionCoordinator:
         self, request: ManipulationRequest, result: dict[str, Any]
     ) -> None:
         previous_busy = self.motion_busy
+        if request.payload.get("authority_epoch", self.epoch) != self.epoch:
+            self._pending_arm_motion.discard(request.request_id)
+            self._update_manipulation_busy(previous_busy)
+            return
         retired = self._arm_retired_motion
         revision = request.payload.get("authority_revision", -1)
         if (
@@ -497,6 +508,57 @@ class InteractionCoordinator:
         previous_busy = self.motion_busy
         self._arm_stop_pending = True
         self._update_manipulation_busy(previous_busy)
+
+    def reserve_manipulation_resume(self) -> int:
+        # Resume is a discrete native transition with a new admission even when
+        # the stop did not change a target or the robot-wide busy projection.
+        self._revision += 1
+        return self._revision
+
+    def takeover_pending(self, client_id: str, request_id: str) -> bool:
+        return bool(self._takeover is not None and self._takeover[0] == client_id
+                    and self._takeover[1].request_id == request_id)
+
+    def reserve_takeover(
+        self, client_id: str, request: InteractionRequest
+    ) -> InteractionResult | None:
+        """Reserve one preemptive navigation grab before any native effects."""
+        previous = self.preflight(client_id, request)
+        if previous is not None:
+            return previous
+        acquisition = request.acquisition_id or request.request_id
+        if acquisition in self._cancelled[client_id]:
+            return self._result(request, "stale", "acquisition_cancelled")
+        if request.kind != "live":
+            return self._result(request, "rejected", "invalid_kind")
+        if (self._mode != "agent" or self._authority is not None or self.motion_busy
+                or self.following_tail is not None or self._takeover is not None):
+            return self._result(request, "busy", "robot_busy")
+        self._takeover = (client_id, request)
+        return None
+
+    def complete_takeover(
+        self, client_id: str, request: InteractionRequest
+    ) -> InteractionResult:
+        reserved = self._takeover == (client_id, request)
+        self._takeover = None
+        # Native pause is an observed fact even if the gesture or connection
+        # retired. Pausing never implicitly resumes the previous agent goal.
+        self.confirm_native_manual()
+        if self.active_goal is not None or self.preview is not None:
+            self.active_goal = self.preview = None
+            self._revision += 1
+        previous = self.preflight(client_id, request)
+        if previous is not None:
+            return previous
+        if not reserved:
+            return self._result(request, "stale", "acquisition_retired")
+        result = self._acquire(client_id, request)
+        self._remember(self._requests[client_id], request.request_id, result)
+        return result
+
+    def retire_takeover(self) -> None:
+        self._takeover = None
 
     def set_agent_busy(self, busy: bool) -> None:
         self._agent_busy = busy
@@ -613,7 +675,7 @@ class InteractionCoordinator:
             return self._result(request, "stale", "acquisition_retired")
         if (
             self._mode != "manual"
-            or self._agent_busy
+            or self._takeover is not None
             or self.motion_busy
             or self._authority is not None
         ):
@@ -791,6 +853,7 @@ class InteractionCoordinator:
 ACTIONS = frozenset(
     {
         "acquire",
+        "takeover",
         "renew",
         "update",
         "release",

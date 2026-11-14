@@ -13,16 +13,18 @@ function fixture() {
     type: "interaction_state", epoch: "robot", revision: 0, mode: "manual", authority: null, preview: null, active_goal: null };
   const collaboration = new CollaborationController({ ready: () => true, clientId: () => "a", now: () => clock, send: s => sent.push(JSON.parse(s)) }); collaboration.apply({ ...state });
   const view: any = { connection: "ready", capabilities: { manipulation: { available: true } }, manipulation: { groups: [{ id: "arm", following: true, joint_names: ["j"] }], observations: { arm: { joints: { j: 0 }, measured_at: clock, pose: pose(0), gripper: 0 } } } };
-  const core = new ManipulationInteraction({ collaboration, view: () => view, sendText: s => sent.push(JSON.parse(s)), subscribeOutbound: cb => { listener = cb; return () => {}; } }, () => clock);
+  const core = new ManipulationInteraction({ collaboration, view: () => view,
+    requestResumeOperation: () => { if (view.state?.safety?.can_resume) sent.push({ type: "resume_operation_request", epoch: collaboration.raw()?.epoch, stop_id: view.state.safety.stop_id }); },
+    sendText: s => sent.push(JSON.parse(s)), subscribeOutbound: cb => { listener = cb; return () => {}; } }, () => clock);
   core.tick();
   const native = () => sent.filter(c => c.type === "manipulation_request");
-  function grant() {
+  function grant(leaseId = "lease") {
     const request = sent.filter(c => c.action === "acquire" && c.type === "interaction_request").at(-1);
     state.revision++;
-    state.authority = { client_id: "a", source_id: request.source_id, acquisition_id: request.acquisition_id, lease_id: "lease", kind: request.kind, group_id: request.group_id, held: true, expires_at: clock + 1, sequence: -1 };
+    state.authority = { client_id: "a", source_id: request.source_id, acquisition_id: request.acquisition_id, lease_id: leaseId, kind: request.kind, group_id: request.group_id, held: true, expires_at: clock + 1, sequence: -1 };
     state.targets = [{ ...pose(0), ...state.targets[0], ...(request.position ? { position: request.position, orientation: request.orientation, ...(request.gripper === undefined ? {} : { gripper: request.gripper }) } : {}), domain: "manipulation", group_id: "arm", speed_scale: state.targets[0]?.speed_scale ?? request.speed_scale ?? 0.2, revision: state.targets[0]?.revision ?? 1, phase: "draft", sample_ts: clock, sequence: -1 }];
     collaboration.apply({ ...state });
-    collaboration.accept({ type: "interaction_result", request_id: request.request_id, epoch: "robot", revision: state.revision, status: "accepted", code: "acquired", lease_id: "lease" });
+    collaboration.accept({ type: "interaction_result", request_id: request.request_id, epoch: "robot", revision: state.revision, status: "accepted", code: "acquired", lease_id: leaseId });
   }
   function ackTarget() {
     const update = sent.filter(c => c.action === "update" && c.type === "interaction_request").at(-1);
@@ -190,8 +192,9 @@ it("correlates server following feedback independently of authority message sequ
   expect(f.core.previewJoints).toEqual({ j: .25 });
 });
 
-it("retains reconnect input while requiring explicit Resume and a fresh lease", () => {
+it("retires a reconnected grab on explicit Stop and requires a new gesture after Resume", () => {
   const f = fixture(); f.core.begin(); f.grant(); f.tick();
+  const oldGrab = f.sent.find(command => command.type === "interaction_request" && command.action === "acquire");
   f.reply(f.native().at(-1), { status: "acquired", token: "old-native" });
   f.core.aim(pose(0.3)); f.tick();
   f.view.connection = "failed"; f.collaboration.reset(); f.core.tick();
@@ -200,14 +203,40 @@ it("retains reconnect input while requiring explicit Resume and a fresh lease", 
   f.state.authority = null;
   f.state.revision++; f.collaboration.apply({ ...f.state });
   f.view.connection = "ready"; f.view.manipulation.stopped = true;
+  f.view.state = { safety: { stopped: true, can_resume: true, stop_id: "stop" } };
   f.tick(); f.tick();
-  expect(f.core.dragging).toBe(true);
+  expect(f.core.dragging).toBe(false);
   expect(f.sent).toEqual([]);
   f.core.resume();
   expect(f.native()).toEqual([]);
+  expect(f.sent.at(-1)).toEqual({ type: "resume_operation_request", epoch: "robot", stop_id: "stop" });
+  f.view.manipulation.stopped = false;
+  f.view.state.safety = { stopped: false, can_resume: false };
+  f.tick(); f.tick();
+  expect(f.core.dragging).toBe(false);
+  expect(f.sent.some(command => command.type === "interaction_request" && command.action === "acquire")).toBe(false);
+  expect(f.core.begin()).toBe(true);
   expect(f.sent.at(-1)).toMatchObject({ type: "interaction_request", action: "acquire" });
-  f.grant(); f.tick();
-  expect(f.native().at(-1)).toMatchObject({ action: "resume", lease_id: "lease" });
+  expect(f.sent.at(-1).acquisition_id).not.toBe(oldGrab.acquisition_id);
+  f.grant("fresh-lease"); f.tick();
+  expect(f.native().at(-1)).toMatchObject({ action: "acquire", lease_id: "fresh-lease" });
+});
+
+it("retains an ordinary reconnect grab and reacquires fresh authority and native following", () => {
+  const f = fixture(); f.core.begin(); f.grant(); f.tick();
+  f.reply(f.native().at(-1), { status: "acquired", token: "old-native" });
+  f.core.aim(pose(.3)); f.tick();
+  f.view.connection = "failed"; f.collaboration.reset(); f.core.tick();
+  expect(f.core.dragging).toBe(true);
+  f.sent.length = 0;
+  f.state.authority = null;
+  f.state.revision++; f.collaboration.apply({ ...f.state });
+  f.view.connection = "ready"; f.view.manipulation.stopped = false;
+  f.tick();
+  expect(f.core.dragging).toBe(true);
+  expect(f.sent.at(-1)).toMatchObject({ type: "interaction_request", action: "acquire" });
+  f.grant("reconnected-lease"); f.tick();
+  expect(f.native().at(-1)).toMatchObject({ action: "acquire", lease_id: "reconnected-lease" });
 });
 
 it("keeps editing authority when a feedback gap releases only the native token", () => {

@@ -220,7 +220,7 @@ it("offers a read-only preview from the validated capture stream and retires it 
   f.source.stop(); expect(f.source.previewFrame()).toBeNull();
 });
 
-it("bounds stale-frame retries in the WebXR host without changing Specs capture policy", async () => {
+it("reopens after repeated stale frames and keeps the next fresh capture retryable", async () => {
   let now = 10;
   const f = cameraFixture(HMD_PROFILES.quest3, { now: () => now });
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -228,7 +228,7 @@ it("bounds stale-frame retries in the WebXR host without changing Specs capture 
     let complete!: (value: Awaited<ReturnType<typeof f.jpeg.encode>>) => void;
     f.jpeg.encode.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
     const { pending } = await readyCapture(f);
-    const rejected = expect(pending).rejects.toMatchObject({ retryable: attempt < 2 });
+    const rejected = expect(pending).rejects.toMatchObject({ retryable: true });
     f.emit(); now += 4;
     complete({ jpeg: new Uint8Array([255, 216]), width: 1280, height: 960 });
     await rejected;
@@ -236,6 +236,8 @@ it("bounds stale-frame retries in the WebXR host without changing Specs capture 
   f.source.samplePose([0, 0, 0], [0, 0, 0, 1], now);
   const fresh = await readyCapture(f); f.emit();
   await expect(fresh.pending).resolves.toHaveProperty("ts_capture", now);
+  expect(f.media.getUserMedia).toHaveBeenCalledTimes(4);
+  f.source.dispose();
 });
 
 it("recovers from denied permission without retaining a stream or poisoning the next capture", async () => {

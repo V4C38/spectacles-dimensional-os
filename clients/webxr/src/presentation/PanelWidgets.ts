@@ -86,7 +86,7 @@ export function setText(target: xb.TextView, value: string): void {
 }
 export function clip(text: string, max: number): string { return text.length > max ? `${text.slice(0, max - 1)}…` : text; }
 
-export function cameraIcon(parent: THREE.Object3D, x: number, y: number, surface: SurfaceButton): void {
+export function cameraIcon(parent: THREE.Object3D, x: number, y: number, surface: SurfaceButton): THREE.Group {
   const icon = new THREE.Group();
   icon.name = "Capabilities robot icon";
   const material = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthWrite: false, toneMapped: false });
@@ -107,6 +107,7 @@ export function cameraIcon(parent: THREE.Object3D, x: number, y: number, surface
   icon.traverse(child => { child.raycast = () => {}; child.renderOrder = 13; });
   icon.userData.followSurface = surface;
   place(parent, icon, x, y, DIMOS_AR_DESIGN.depth.text);
+  return icon;
 }
 
 export function gearIcon(parent: THREE.Object3D, x: number, y: number, surface: SurfaceButton): void {
@@ -157,7 +158,14 @@ export function messageField(parent: THREE.Object3D, caption: string, y: number,
   const height = DIMOS_AR_DESIGN.message.height;
   const field = button(block, "", 0, 0, CONTENT, height, () => {}, "field");
   if (bodyScrollable) field.mesh!.userData.interactionEnabled = false;
-  const heading = label(block, caption, LEFT + DIMOS_AR_DESIGN.message.padding + 0.2, DIMOS_AR_DESIGN.message.captionY, 0.4, DIMOS_AR_DESIGN.message.captionHeight, 15, C.muted, "left", "semibold");
+  const captionLeft = LEFT + DIMOS_AR_DESIGN.message.padding;
+  const iconInset = bodyScrollable ? .032 : 0;
+  const heading = label(block, caption, captionLeft + 0.2 + iconInset / 2, DIMOS_AR_DESIGN.message.captionY, 0.4 - iconInset, DIMOS_AR_DESIGN.message.captionHeight, 15, C.muted, "left", "semibold");
+  heading.name = `${caption} heading`;
+  if (bodyScrollable) {
+    const icon = cameraIcon(block, captionLeft + .012, DIMOS_AR_DESIGN.message.captionY, field);
+    icon.name = "Agent heading icon"; icon.scale.multiplyScalar(.5);
+  }
   heading.userData.followSurface = field;
   heading.position.z = DIMOS_AR_DESIGN.depth.text / HEIGHT; heading.renderOrder = 14;
   const content = scrollLabel(block, "", 0, DIMOS_AR_DESIGN.message.textY, CONTENT - DIMOS_AR_DESIGN.message.padding * 2, DIMOS_AR_DESIGN.message.textHeight, 20, C.ink, bodyScrollable);

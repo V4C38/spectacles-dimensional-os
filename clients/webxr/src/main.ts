@@ -133,7 +133,11 @@ async function boot(): Promise<void> {
       transport: new BrowserWebSocketTransport({ url }),
       clock: new BrowserClientClock(),
       camera,
-      recognition: browserRecognition(),
+      recognitionFactory: session => browserRecognition({
+        available: () => session.view().hello?.speech_transcription === true,
+        availabilityError: () => session.view().hello?.speech_transcription_reason ?? null,
+        transcribe: (data, mime, progress) => session.transcribeSpeech(data, mime, progress),
+      }),
       synthesis: browserSynthesis(),
     });
     info?.bind(client.session);

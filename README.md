@@ -133,6 +133,19 @@ Double-click [`Start Launcher.command`](launcher/Start%20Launcher.command), or r
 
 Agent mode needs an `OPENAI_API_KEY`.
 
+WebXR dictation uses the browser's speech API when available, with local Whisper
+as a fallback. The standard DimOS agent dependencies include its Whisper backend.
+For a minimal install, add only the speech dependencies in the selected DimOS
+environment from the repository root:
+
+```sh
+/path/to/dimos/.venv/bin/python3 -m pip install -e './dimos-ar[speech]'
+```
+
+The DimOS server also needs the `ffmpeg` executable. Reconnect after installation.
+The first recording can prepare the local model; dictation fills a draft and Send
+remains explicit.
+
 </details>
 
 <details>
@@ -263,7 +276,9 @@ A native Lens for Spectacles, built in Lens Studio. Hands pinch the panels and g
   <img src="assets/specs_golden_nav.png" alt="SPECS navigation goal in the room" width="48%" />
 </p>
 
-Open [`clients/specs/spectacles-dimensional-os.esproj`](clients/specs/spectacles-dimensional-os.esproj) in Lens Studio 5.15, send the Lens to the headset, and connect with the launcher PIN.
+Install **Git LFS** before cloning, then run `git lfs install` and `git lfs pull` in the checkout. The Lens packages are included in Git LFS; no local Core package rebuild is needed. Open [`clients/specs/spectacles-dimensional-os.esproj`](clients/specs/spectacles-dimensional-os.esproj) in **Lens Studio 5.15.4** and wait for the first package import and TypeScript compilation to finish. Lens Studio generates its ignored `Cache/` locally. Send the Lens to the headset and connect with the launcher PIN.
+
+If Lens Studio reports “Failed to perform file operation on folder” for `Cache/TypeScript`, see the [cache recovery instructions](clients/specs/tools/README.md#typescript-cache-folder-error).
 
 </details>
 

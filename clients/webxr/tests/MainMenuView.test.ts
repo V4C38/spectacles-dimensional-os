@@ -75,6 +75,10 @@ it("consumes UI selection, cancels drags on input loss, invalidates resets, and 
   const client = new DimOSWebXRClient({ camera: camera.source, clock: { now: () => 10 }, transport: new BrowserWebSocketTransport({ url: "wss://test/ar", socketFactory: () => { throw new Error("offline test"); } }) });
   const tick = vi.spyOn(client, "tick").mockImplementation(() => {});
   vi.spyOn(client, "controlsEnabled").mockReturnValue(true);
+  // This input-routing fixture has no ARModule handshake. Supply marker
+  // eligibility alongside ordinary controls; real session admission is covered
+  // by WebXRSession and the Agent takeover input regression.
+  vi.spyOn(client, "navigationMarkerEnabled").mockReturnValue(true);
   const hold = vi.spyOn(client, "holdNavigation").mockImplementation(() => {});
   const release = vi.spyOn(client, "releaseNavigation").mockImplementation(() => {});
   const invalidated = vi.spyOn(client, "invalidateTracking");
@@ -203,7 +207,7 @@ it("shows separate response and draft fields, moves robot controls into settings
   const snap = {
     setupCompleted: true, menuOpen: true, wizardStep: "connect", robotName: "Unitree Go2", robotSelected: false, robotSelectable: true,
     robotConnectionText: "Connected", connectionText: "Connected", connectionTone: "success", operatingMode: "manual", debugEnabled: false,
-    agentAvailable: true, lidarAvailable: true, estopAvailable: true, estopReason: null, activity: "Idle", hasTrackingOrigin: false, lidarMode: "off", debugText: "Connection: ready",
+    agentAvailable: true, lidarAvailable: true, manipulationAvailable: true, localizationAvailable: true, estopAvailable: true, estopReason: null, activity: "Idle", hasTrackingOrigin: false, lidarMode: "off", debugText: "Connection: ready",
     wizardTitle: "", wizardDescription: "", wizardCardTitle: "", wizardCardBody: "", nextLabel: "", localizationIssue: null, captureText: "", captureTone: "muted", backVisible: false, agentMessage: null, hudText: null, hudTone: null,
   } satisfies import("../src/presentation/WebXRUIPresenter").WebXRUISnapshot;
   view.apply(snap);
@@ -218,12 +222,30 @@ it("shows separate response and draft fields, moves robot controls into settings
   const speech = { status: "Ready", prompt: "go home", response: "Agent reply", severity: "ok", error: null, recognitionAvailable: true } satisfies import("@dimos-ar-client/agent/AgentDraftSession").AgentDraftSnapshot;
   view.apply({ ...snap, operatingMode: "agent" }, speech);
   const send = buttons.find(button => button.text === "Send to agent")!;
+  const clear = buttons.find(button => button.text === "Clear")!;
+  expect(send.position.x).toBeGreaterThan(clear.position.x);
+  const rows = (view as any).pageViews.runtime;
+  expect(rows.inputLabel.parent.position.y).toBeGreaterThan(send.position.y);
+  expect(send.position.y).toBeGreaterThan(rows.agent.parent.position.y);
+  const agentIcon = view.panel.getObjectByName("Agent heading icon")!;
+  const agentHeading = view.panel.getObjectByName("Agent heading") as THREE.Object3D & { width: number };
+  expect(agentIcon.position.x + .021 * agentIcon.scale.x).toBeLessThan(agentHeading.position.x - agentHeading.width / 2);
   expect((send as unknown as { enabled: boolean }).enabled).toBe(false);
   const dictation = buttons.find(button => button.name === "Agent dictation field")!;
   expect(view.isSpeechTarget(dictation.mesh!)).toBe(true);
   view.apply({ ...snap, operatingMode: "agent", robotSelected: true }, speech);
   expect((send as unknown as { enabled: boolean }).enabled).toBe(true);
   expect(robot.text).toContain("Selected");
+  const stop = rows.estop as SurfaceButton;
+  const surface = vi.spyOn(stop, "setSurface");
+  view.apply({ ...snap, resumeOperation: true, estopAvailable: false });
+  expect(stop.text).toBe("Resume operation"); expect(stop.enabled).toBe(false);
+  expect(surface).toHaveBeenCalledOnce();
+  view.apply({ ...snap, resumeOperation: true, estopAvailable: true });
+  expect(stop.enabled).toBe(true); expect(surface).toHaveBeenCalledOnce();
+  expect(view.isEmergencyTarget(stop.mesh)).toBe(false);
+  view.apply(snap); expect(stop.text).toBe("EMERGENCY STOP");
+  expect(view.isEmergencyTarget(stop.mesh)).toBe(true);
   const settings = buttons.find(button => button.name === "Global settings")!;
   settings.onTriggered(0); view.apply({ ...snap, operatingMode: "agent", robotSelected: true }); view.updateHover([], 0.28);
   const diagnostics = buttons.find(button => button.text === "Diagnostics")!;
@@ -494,4 +516,43 @@ it("gives every control one physical body without a competing front cap", () => 
     clock.mockRestore();
     view.dispose();
   }
+});
+
+it("routes main-menu Resume through the mini robot recovery action without another emergency stop", () => {
+  const camera = cameraFixture();
+  const client = new DimOSWebXRClient({ camera: camera.source, clock: { now: () => 10 }, transport: new BrowserWebSocketTransport({ url: "wss://test/ar", socketFactory: () => { throw new Error("offline test"); } }) });
+  const scene = new THREE.Scene();
+  const input = new xb.Input();
+  input.init({ scene, systemsGroup: new THREE.Group(), options: new xb.Options(), renderer: {
+    xr: { getController: () => new THREE.Group() },
+  } as unknown as THREE.WebGLRenderer });
+  const controller = new WebXRInputController(client, scene, { tracking: () => true, session: () => ({ visibilityState: "visible" }) as XRSession });
+  controller.init({ input });
+  const resume = vi.spyOn(client.session, "requestResumeOperation").mockImplementation(() => {});
+  const stop = vi.spyOn(client, "emergencyStop").mockImplementation(() => {});
+  const facts = client.session.view();
+  vi.spyOn(client.session, "view").mockReturnValue({ ...facts, state: { type: "state", server: { connected_clients: 1 }, lidar: { enabled: false, min_height_m: 0, max_height_m: 2, max_range_m: 5 }, nav: { state: "idle", outcome: null }, agent: { idle: true }, safety: { stopped: true, can_resume: true } } });
+  const snapshot = { ...client.ui.snapshot(), setupCompleted: true, menuOpen: true, estopAvailable: true, resumeOperation: true };
+  vi.spyOn(client.ui, "snapshot").mockReturnValue(snapshot);
+  const menu = controller.menu!;
+  menu.apply(snapshot);
+  let button!: SurfaceButton;
+  menu.panel.traverse(object => { if (object instanceof SurfaceButton && object.text === "Resume operation") button = object; });
+  const source = new THREE.Group(); source.userData.id = 42;
+  const internal = controller as any;
+  vi.spyOn(internal.interaction, "hit").mockReturnValue({ object: button.mesh, point: new THREE.Vector3() });
+  vi.spyOn(internal, "canInteract").mockReturnValue(true);
+  try {
+    controller.onSelectStart({ target: source });
+    button.onTriggered(42);
+    controller.onSelectEnd({ target: source });
+    expect(stop).not.toHaveBeenCalled();
+    expect(resume).toHaveBeenCalledOnce();
+    client.manipulation.action("resume");
+    expect(resume).toHaveBeenCalledTimes(2);
+    snapshot.resumeOperation = false;
+    menu.apply(snapshot);
+    expect(button.text).toBe("EMERGENCY STOP");
+    expect(menu.isEmergencyTarget(button.mesh)).toBe(true);
+  } finally { controller.dispose(); client.dispose(); }
 });

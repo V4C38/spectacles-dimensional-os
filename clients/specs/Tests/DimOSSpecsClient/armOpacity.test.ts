@@ -69,7 +69,10 @@ it("samples displacement on request, smoothly fades and stops writing settled un
 });
 
 vi.mock("SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider", () => ({ Slider: class {} }));
-vi.mock("../mocks/UIKit.ts", () => ({ setButtonStyle: vi.fn(), SnapOS2Styles: {} }));
+vi.mock("../mocks/UIKit.ts", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../mocks/UIKit")>(),
+  setButtonStyle: vi.fn(), SnapOS2Styles: {},
+}));
 
 import { ManipulationFramePresenter } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ArmPresentation";
 

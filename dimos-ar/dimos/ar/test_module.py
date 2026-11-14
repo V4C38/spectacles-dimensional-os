@@ -36,6 +36,7 @@ from dimos.ar.robot.profiles.profile import FiducialMarkerMount, RobotName, Robo
 from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 from dimos.ar.websocket.protocol import (
     LocalizationObservation,
+    ResumeOperationRequest,
     TimeSync,
     UserMessageRequest,
     encode_state,
@@ -474,6 +475,113 @@ def test_last_disconnect_runs_safety() -> None:
     module._on_client_disconnect(None, "c1")  # type: ignore[arg-type]
     assert called is True
     assert [msg.data for msg in published] == [True]
+    assert module._safety.snapshot() == {"stopped": False, "can_resume": False}
+
+
+def test_confirmed_disconnect_cancel_clears_old_motion_uncertainty_without_estop() -> None:
+    module = _module_with_policy([])
+    module._manipulation_service = Mock()
+    state = module._interaction_controller.state
+    state.begin_manipulation_motion("old-execute")
+    state.observe_manipulation_result(
+        ManipulationRequest("old-execute", "execute", "arm", {"authority_epoch": state.epoch}),
+        {"status": "uncertain"},
+    )
+    assert state.motion_busy
+    module._ws_server.connection_count = 0
+    module._on_client_disconnect(None, "last")
+    epoch, revision, request_id = module._manipulation_service.controlled_stop.call_args.args
+    assert state.motion_busy
+    module._on_manipulation_result(
+        ManipulationRequest(request_id, "cancel", "", {
+            "authority_epoch": epoch, "authority_revision": revision,
+        }),
+        {"status": "aborted"},
+    )
+    assert not state.motion_busy and not module._safety.stopped
+
+
+def test_navigation_resume_uses_canonical_stop_identity_and_never_replays_a_goal() -> None:
+    module = _module_with_policy([])
+    state = module._interaction_controller.state
+    state.connect("client")
+    state.set_active_goal({"type": "nav_goal", "pose": [1, 0, 0, 0], "path_poses": [], "ts": 1})
+    module._on_estop_request(SimpleNamespace(), None)
+    first = module._safety.snapshot()["stop_id"]
+    assert module._state_snapshot().safety["stopped"]
+    module._on_resume_operation_request(ResumeOperationRequest("old-source", first), "client")
+    assert module._safety.stopped
+    module._on_estop_request(SimpleNamespace(), None)
+    second = module._safety.snapshot()["stop_id"]
+    module._on_resume_operation_request(ResumeOperationRequest(state.epoch, first), "client")
+    assert module._safety.stopped
+    module._on_resume_operation_request(ResumeOperationRequest(state.epoch, second), "client")
+    assert not module._safety.stopped
+    assert state.active_goal is None and state.authority is None
+
+
+@pytest.mark.asyncio
+async def test_navigation_resume_waits_for_native_stop_acknowledgement() -> None:
+    from dimos.ar.navigation.control import NavigationControlService
+
+    module = _module_with_policy([])
+    entered, release = threading.Event(), threading.Event()
+
+    class Native:
+        def ar_navigation_recover(self, *_args):
+            entered.set()
+            assert release.wait(3)
+            return True
+
+    state = module._interaction_controller.state
+    service = NavigationControlService(
+        Native(), lambda: (state.epoch, state.revision), lambda _ts: None,
+        on_recovered=module._broadcast_state,
+    )
+    module._navigation_service = service
+    try:
+        module._on_estop_request(SimpleNamespace(), None)
+        identity = module._safety.snapshot()["stop_id"]
+        assert await asyncio.to_thread(entered.wait, 1)
+        assert service.stop_pending and not service.faulted
+        assert module._state_snapshot().safety["can_resume"] is False
+        module._on_resume_operation_request(ResumeOperationRequest(state.epoch, identity), "client")
+        assert module._safety.stopped
+        release.set()
+        await service._recovery
+        assert module._state_snapshot().safety["can_resume"] is True
+        module._on_resume_operation_request(ResumeOperationRequest(state.epoch, identity), "client")
+        assert not module._safety.stopped
+    finally:
+        release.set()
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_old_native_resume_completion_cannot_clear_a_newer_stop() -> None:
+    module = _module_with_policy([])
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def resume(*_args):
+        entered.set()
+        await release.wait()
+        return True
+
+    module._manipulation_service = Mock(resume_operation=resume)
+    state = module._interaction_controller.state
+    module._on_estop_request(SimpleNamespace(), None)
+    confirmed = {"available": True, "stopped": True, "stop_confirmed": True, "execution": "idle"}
+    module._on_manipulation_snapshot(confirmed)
+    first = module._safety.snapshot()["stop_id"]
+    module._on_resume_operation_request(ResumeOperationRequest(state.epoch, first), "client")
+    pending = module._resume_task
+    await entered.wait()
+    module._on_estop_request(SimpleNamespace(), None)
+    second = module._safety.snapshot()["stop_id"]
+    assert first != second
+    release.set()
+    await pending
+    assert module._safety.stopped and module._safety.snapshot()["stop_id"] == second
 
 
 def test_disconnect_does_not_stop_while_clients_remain() -> None:

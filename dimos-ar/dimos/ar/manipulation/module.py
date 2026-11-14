@@ -149,8 +149,10 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
         return self._runtime.snapshot(include_bulk=False)
 
     @rpc
-    def ar_manipulation_suspend(self, client_id: str, deadline: float) -> None:
-        self._runtime.suspend(client_id, deadline)
+    def ar_manipulation_suspend(
+        self, client_id: str, deadline: float, token: str | None = None
+    ) -> None:
+        self._runtime.suspend(client_id, deadline, token)
 
     @rpc
     def ar_manipulation_disconnect(self, client_id: str) -> None:
@@ -159,6 +161,10 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
     @rpc
     def ar_manipulation_stop(self, epoch: str | None = None, revision: int | None = None) -> None:
         self._runtime.emergency_stop(epoch=epoch, revision=revision)
+
+    @rpc
+    def ar_manipulation_controlled_stop(self, epoch: str, revision: int) -> dict[str, Any]:
+        return self._runtime.cancel(None, epoch=epoch, revision=revision)
 
     @rpc
     def ar_manipulation_revoke(

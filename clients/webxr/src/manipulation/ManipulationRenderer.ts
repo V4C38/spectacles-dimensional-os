@@ -38,13 +38,13 @@ export class EndEffectorHandleRenderer {
   readonly object = new THREE.Group();
   readonly collider: THREE.Mesh;
   readonly visual: THREE.Mesh;
-  constructor() {
+  constructor(visibleRadiusM = 0.018) {
     this.object.name = "EndEffectorHandle";
     this.collider = new THREE.Mesh(
-      new THREE.SphereGeometry(0.036, 20, 16),
+      new THREE.SphereGeometry(visibleRadiusM, 20, 16),
       indicatorMaterial(),
     );
-    this.visual = new THREE.Mesh(new THREE.SphereGeometry(0.012, 20, 16), this.collider.material);
+    this.visual = new THREE.Mesh(new THREE.SphereGeometry(visibleRadiusM, 20, 16), this.collider.material);
     this.visual.renderOrder = 50;
     this.visual.raycast = () => {};
     this.object.add(this.visual);
@@ -128,7 +128,7 @@ export class ManipulationRenderer {
     return points;
   }
   private readonly fillFade = new ArmMeshFade();
-  readonly measuredHandle = new EndEffectorHandleRenderer();
+  readonly measuredHandle = new EndEffectorHandleRenderer(0.012);
   get previewRequested(): boolean { return this.preview.previewRequested; }
   set previewRequested(value: boolean) {
     this.preview.setRequested(value);

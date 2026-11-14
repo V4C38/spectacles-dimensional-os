@@ -283,7 +283,7 @@ export function configureControlPanelFrame(frame: Frame, size: {width: number; h
   frame.roundedRectangle.renderMeshVisual.mainPass.depthTest = true;
   frame.roundedRectangle.renderMeshVisual.mainPass.depthWrite = true;
 }
-export function panelButtonLayer(result: IconButtonResult, occludeWorld = false): void {
+export function panelButtonLayer(result: IconButtonResult, occludeWorld = false, labelDepthScale = 1): void {
   result.button.renderOrder = 12;
   uiMaterialLayer((result.button.visual as RoundedRectangleVisual).renderMeshVisual, 12);
   if (occludeWorld) {
@@ -291,7 +291,14 @@ export function panelButtonLayer(result: IconButtonResult, occludeWorld = false)
     pass.depthTest = true; pass.depthWrite = true;
   }
   configurePanelText(result.labelText);
+  result.labelText.getSceneObject().getTransform().setLocalPosition(new vec3(0, 0, 2 * labelDepthScale));
   result.labelText.size = panelFontSize(CONTROL_PANEL_TYPE.buttonDp, false);
+}
+
+/** Face the viewer in yaw and pitch while keeping world up free from head roll. */
+export function uprightFacingRotation(position: vec3, camera: SceneObject): quat {
+  const toward = camera.getTransform().getWorldPosition().sub(position);
+  return toward.length > 0.001 ? quat.lookAt(toward.normalize(), vec3.up()) : quat.quatIdentity();
 }
 
 /** Thin policy adapter: Frame owns follow, damping, billboarding and grabbing. */

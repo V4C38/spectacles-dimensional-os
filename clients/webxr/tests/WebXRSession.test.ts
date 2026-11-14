@@ -165,7 +165,8 @@ describe("WebXR complete ARModule session", () => {
     expect(f.client.ui.snapshot().wizardTitle).toBe("Connect");
     const socket = f.connect();
     f.tick();
-    expect(socket.commands("lidar_settings_request").at(-1)?.enabled).toBe(false);
+    // Setup preserves the user's selected lidar mode.
+    expect(socket.commands("lidar_settings_request").at(-1)?.enabled).toBe(true);
     socket.receive(request);
     expect(f.camera.media.getUserMedia).not.toHaveBeenCalled();
     f.client.ui.nextSetup();

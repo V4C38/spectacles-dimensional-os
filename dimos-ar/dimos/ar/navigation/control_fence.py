@@ -21,6 +21,9 @@ class NavigationControlFence:
         self._goal_stamp: float | None = None
         self._expired = False
         self._needs_stop = False
+        self._agent_manual = False
+        self._agent_mode_generation = -1
+        self._agent_stop_ack_required = False
 
     def heartbeat(self, epoch: str, revision: int, deadline: float) -> bool:
         if (not isinstance(epoch, str) or not epoch
@@ -63,11 +66,11 @@ class NavigationControlFence:
 
     def current(self, generation: int) -> bool:
         with self._lock:
-            return generation == self._generation and self._clock() < self._deadline
+            return generation == self._generation and (self._epoch is None or self._clock() < self._deadline)
 
     def activate(self, generation: int) -> bool:
         with self._lock:
-            if generation != self._generation or self._clock() >= self._deadline:
+            if generation != self._generation or (self._epoch is not None and self._clock() >= self._deadline):
                 return False
             self._ready = True
             return True
@@ -75,6 +78,10 @@ class NavigationControlFence:
     def allowed(self) -> bool:
         with self._lock:
             return self._ready and (self._epoch is None or self._clock() < self._deadline)
+
+    def publish(self, callback: Callable[[bool], None]) -> None:
+        with self._lock:
+            callback(self._ready and (self._epoch is None or self._clock() < self._deadline))
 
     def expire(self) -> tuple[int, float | None] | None:
         with self._lock:
@@ -103,13 +110,31 @@ class NavigationControlFence:
             self._generation += 1
             self._ready = False
 
-    def admit_native_agent(self) -> bool:
+    def set_agent_manual(self, manual: bool, generation: int | None = None) -> bool:
         with self._lock:
-            if self._epoch is not None and self._clock() >= self._deadline:
+            if generation is not None:
+                if type(generation) is not int or generation < self._agent_mode_generation:
+                    return False
+                if not manual and self._agent_stop_ack_required:
+                    return False
+                self._agent_mode_generation = generation
+            elif not manual:
                 return False
+            self._agent_manual = manual
+            if manual:
+                self._agent_stop_ack_required = generation is None
+                self._generation += 1
+                self._ready = False
+                self._needs_stop = True
+            return True
+
+    def admit_native_agent(self) -> int | None:
+        with self._lock:
+            if self._agent_manual or (self._epoch is not None and self._clock() >= self._deadline):
+                return None
             self._generation += 1
             self._goal_stamp = None
             self._expired = False
             self._needs_stop = False
-            self._ready = True
-            return True
+            self._ready = False
+            return self._generation

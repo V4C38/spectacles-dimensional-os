@@ -25,6 +25,7 @@ export class SpecsCameraStream {
   private pendingResolvers: {
     resolve: (frame: SpecsCameraStreamFrame) => void;
     reject: (error: Error) => void;
+    deadline: number;
   }[] = [];
   private running = false;
   private startedAt = 0;
@@ -82,8 +83,17 @@ export class SpecsCameraStream {
   requestNextFrame(): Promise<SpecsCameraStreamFrame> {
     if (!this.running) return Promise.reject(new Error("SpecsCameraStream is not running"));
     return new Promise<SpecsCameraStreamFrame>((resolve, reject) => {
-      this.pendingResolvers.push({ resolve, reject });
+      this.pendingResolvers.push({ resolve, reject, deadline: getTime() + 3 });
     });
+  }
+
+  expirePendingFrames(): void {
+    const pending = this.pendingResolvers;
+    if (!pending.length) return;
+    const now = getTime();
+    this.pendingResolvers = pending.filter(waiter => waiter.deadline > now);
+    for (const waiter of pending) if (waiter.deadline <= now)
+      waiter.reject(new Error("Camera frame timed out; retrying capture"));
   }
 
   get deviceCamera(): DeviceCamera | null {

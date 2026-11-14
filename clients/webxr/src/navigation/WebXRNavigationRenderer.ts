@@ -397,7 +397,9 @@ export class WebXRRouteRenderer {
 
   constructor() {
     this.object.name = "WebXRRouteRenderer";
-    for (const root of [this.object, this.solid, this.dashed.object]) root.traverse(part => { part.userData.environmentDepth = true; });
+    // Route guidance stays visible through environment depth; UI retains its higher layer.
+    this.solid.material.depthTest = false;
+    this.dashed.object.material.depthTest = false;
     this.solid.name = "Executing route ribbon";
     this.solid.raycast = () => {};
     this.object.add(this.solid, this.dashed.object);

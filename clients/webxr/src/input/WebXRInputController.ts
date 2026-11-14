@@ -50,6 +50,7 @@ export interface WebXRInputPorts {
   realign(): void;
   cameraPreview(): CameraPreviewFrame | null;
   controlsEnabled(): boolean;
+  navigationMarkerEnabled?(): boolean;
   isRobotSelected(): boolean;
   toggleRobotSelection(): void;
   holdNavigation(from: Vec3, direction: Vec3, planes: readonly FloorPlane[], fromMarker?: boolean, sourceId?: string): void;
@@ -372,7 +373,10 @@ export class WebXRInputController {
       onDismissAlignment: () => client.ui.dismissAlignmentReview(),
       onLocalize: () => client.ui.restartLocalization(),
       onRealign: () => client.realign(),
-      onEstop: () => client.emergencyStop(),
+      onEstop: () => {
+        if (client.ui.snapshot().resumeOperation) client.manipulation.action("resume");
+        else client.emergencyStop();
+      },
       onAgentText: text => client.speech.submitTyped(text),
       onDraft: text => client.speech.setDraft(text),
       onSound: () => this.sound.toggle(), soundEnabled: () => this.sound.enabled,
@@ -400,11 +404,11 @@ export class WebXRInputController {
     this.mainMenu?.updateCameraPreview(this.client.cameraPreview(), deltaS);
     this.navigationFloor.visible = this.client.controlsEnabled() && this.client.session.view().capabilities?.navigation.available === true && this.client.robot.floorWorldY() !== null;
     this.navigationFloor.position.y = this.client.robot.floorWorldY() ?? 0;
-    if (!this.client.controlsEnabled()) {
+    if (!this.markerControlsEnabled()) {
       this.gestures.cancelNavigation();
       this.client.navigation.cancelDrag();
-      this.client.joystick.loseInput();
     }
+    if (!this.client.controlsEnabled()) this.client.joystick.loseInput();
     this.detectedSurfaces = this.readDetectedSurfaces(frame, reference);
     this.client.ui.surfaceCount = this.detectedSurfaces.length;
     if (this.gestures.manipulationHold && !this.client.manipulation.interaction.dragging && !this.client.manipulation.renderer.pinned) this.clearInput("mode-change");
@@ -529,10 +533,16 @@ export class WebXRInputController {
     }
     if (this.client.robot.ownsTarget(object) && this.client.navigation.interaction.ownsDraft(this.navigationSourceId(controller))) return false;
     if (this.client.robot.ownsTarget(object)) return this.client.ui.snapshot().robotSelectable;
-    if (!this.client.controlsEnabled() || !this.client.originStore.hasTrackingOrigin) return false;
+    if (!this.client.originStore.hasTrackingOrigin) return false;
+    if (isDescendant(object, this.client.navigation.marker.object)) return this.markerControlsEnabled() && object.userData.rayDisabled !== true;
+    if (!this.client.controlsEnabled()) return false;
     if (object === this.navigationFloor) return this.client.isRobotSelected() && point.distanceTo(controller.getWorldPosition(new THREE.Vector3())) <= FLOOR_AIM_RANGE_M;
     if (this.client.manipulation.owns(object)) return object.userData.interactionEnabled !== false;
     return isDescendant(object, this.client.navigation.marker.object) && object.userData.rayDisabled !== true;
+  }
+
+  private markerControlsEnabled(): boolean {
+    return this.client.navigationMarkerEnabled?.() ?? this.client.controlsEnabled();
   }
 
   onSelectStart(event: xb.SelectEvent): void {
@@ -617,8 +627,9 @@ export class WebXRInputController {
       this.gestures.begin({ kind: "ui", source: event.target });
       return;
     }
-    if (!this.client.controlsEnabled() || !hit || hit.object === this.placementBlocker) return;
+    if (!hit || hit.object === this.placementBlocker) return;
     const fromMarker = isDescendant(hit.object, this.client.navigation.marker.object);
+    if (!(fromMarker ? this.markerControlsEnabled() : this.client.controlsEnabled())) return;
     if (!fromMarker && (hit.object !== this.navigationFloor || !this.client.isRobotSelected())) return;
     this.gestures.begin({ kind: "navigation", source: event.target, fromMarker });
     const smoothed = this.gestureRay(event.target);
@@ -661,7 +672,7 @@ export class WebXRInputController {
     if (this.gestures.owner && this.gestures.owner !== event.target) return;
     if (this.gestures.panelGrip || (this.gestures.panelHold && this.gestures.panelHold !== event.target) ||
         (this.gestures.worldHold && this.gestures.worldHold !== event.target)) return;
-    if (this.gestures.worldHold === event.target && !this.gestures.uiGrab && this.client.controlsEnabled()) {
+    if (this.gestures.worldHold === event.target && !this.gestures.uiGrab && this.markerControlsEnabled()) {
       const ray = this.gestureRay(event.target);
       this.client.releaseNavigation(ray.origin, ray.direction, this.navigationFloorPlanes(), this.navigationSourceId(event.target));
       this.sound.play("confirm");

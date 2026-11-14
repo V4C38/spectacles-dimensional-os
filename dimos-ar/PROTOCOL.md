@@ -248,6 +248,7 @@ indicators, exclude them from grabs, and retain Emergency Stop.
 |---|---|---|
 | `snapshot` | None | Return current state. |
 | `acquire` | `epoch`, `kind`, `source_id`, `acquisition_id`; optional pose and `group_id` | First accepted acquisition owns the robot. |
+| `takeover` | Same fields as `acquire`, `kind: "live"` | Reserve a marker grab in Agent mode; fence the interrupted turn and stop native motion before atomically switching to Manual and granting the lease. |
 | `renew` | `epoch`, `lease_id` | Extend the current lease. |
 | `update` | `epoch`, `lease_id`, increasing `sequence`, pose; optional speed/gripper | Accept an exact intended target. |
 | `release` | Same credentials, increasing sequence and final pose | Atomically retain final pose and release live authority; live navigation submits its final goal. |
@@ -255,6 +256,14 @@ indicators, exclude them from grabs, and retain Emergency Stop.
 | `cancel` | `epoch`, `lease_id` | Retire this interaction without confirming its draft. |
 | `cancel_acquire` | `epoch`, `acquisition_id` | Cancel pending acquisition; a late grant cannot restore it. |
 | `mode` | `epoch`, `mode` (`manual` or `agent`) | Change shared robot mode only while no interaction/agent turn owns it. |
+
+A takeover cannot replace another human lease or bypass an operation stop or
+uncertain native motion. Only one transition is admitted at once. Cancellation,
+disconnect, source reset, or a newer stop retires the pending acquisition; a late
+native acknowledgement may confirm Manual mode but cannot grant that retired
+interaction. The previous agent goal and queued continuations stay retired.
+Agent mode requires an explicit later `mode: "agent"` request after obsolete
+native work has drained. An unavailable Agent capability rejects Agent selection.
 
 Before navigation commands, acquire a matching interaction kind. For example,
 use `live` for a direct navigation goal (`navigation_planning` for selected preview,
@@ -354,16 +363,29 @@ turn, not the most recent headset pose. Shared AR markers are replayed to late j
 
 A fresh connection receives a new identity and current shared state. Hello always
 returns a `resume_token`; send it only to the same backend when reconnecting.
-For strictly less than one second after socket loss, a valid token can recover
+For strictly less than two seconds after socket loss, a valid token can recover
 the same logical client. Expiry, server restart, invalid tokens or a tracking
 reference change require fresh admission; old editing leases cannot be reused
 outside that bounded window. Bulk pairing always receives fresh credentials.
 Explicit Stop, stale native feedback and hardware faults bypass recovery.
-Recovery may continue only the last validated native target; missing input and
-discrete motion commands are never replayed. It never clears motor Stop.
+An authenticated resume may replace its prior socket before close detection
+completes. Retryable send failures retain the same recovery window; invalid input
+and control queue overload retire the logical session immediately. Old socket
+cleanup cannot detach the replacement connection. Successful resumed handshakes
+rotate the resume token; a delayed claim bearing the predecessor token cannot
+replace the successor. A failed hello send leaves the prior token valid until
+the original recovery deadline.
+Suspension immediately retires native following and holds motion; the cached
+target is never replayed during recovery. The server reserves editing authority
+and the client retains its visual grab. Fresh feedback and a fresh native token
+are required before subsequent input can move the arm. Discrete motion commands
+are never replayed. Recovery never clears motor Stop.
 A held gesture may reacquire a retired native token only while its shared lease
 remains current. Observer loss cannot stop another client's interaction;
-last-client loss retains stop handling. No feature-negotiation flags are required.
+last-client loss cancels motion through controlled Stop without adding an
+Emergency Stop latch. Native feedback freshness and the control heartbeat keep
+their independent 0.5-second safety limits; retaining a visual model for two
+seconds never authorizes motion using stale observations.
 
 ## Handshake
 
@@ -455,6 +477,8 @@ connection, and replies with `hello`.
 | `capabilities.navigation.nav_goal` | `{ available, reason, preview }` | Can send `nav_goal_request`. All fields are required; boolean `preview` advertises advisory planning. |
 | `capabilities.navigation.nav_joystick` | `{ available, reason }` | Can send `nav_joystick_request`. Always present. |
 | `localization.providers` | `("fiducial_marker" \| "vps")[]` | Required metadata with provider inventory in canonical order: fiducial marker, then VPS. An explicit empty array means unavailable; missing metadata is invalid. |
+| `speech_transcription` | boolean (optional) | Server accepts browser audio for draft-only local dictation. Missing means unsupported. Agent capability is still required. |
+| `speech_transcription_reason` | string (optional) | At most 512 characters. Actionable installation reason when local dictation is unavailable. Clients can still use native browser recognition. |
 
 `navigation.available` is true when any nested input is available. Clients that
 need a specific input check that nested key; Specs point-and-click checks
@@ -766,8 +790,9 @@ The preference deadline belongs to the whole episode; losing LOS or repeating
 waiting progress does not renew it. Explicit mixed-mode re-localization uses the
 same gate as automatic correction.
 
-Without an accepted alignment, setup tries VPS first. A failed robot or headset
-VPS attempt, unavailable runtime robot-camera data, or cloud admission wait allows
+Without an accepted alignment, setup tries VPS first. Two unsuccessful actual robot
+or headset VPS queries allow a marker attempt. Unavailable runtime camera/pose data,
+capture failure, or cloud admission wait allows an immediate
 a three-frame tag fallback even without an existing map anchor. That tag result is
 an ordinary `localization_result` in odometry, without `map_alignment` or
 `map_transform`; it must not be represented as a VPS registration. With no client
@@ -820,6 +845,11 @@ updates both independent alignments.
 Capture-related status includes `episode_id` and, after submission, its server-clock
 capture `ts`; optional nonnegative `retry_after_s` describes an admission wait.
 Clients ignore stale capture status and retire matching submission deadlines.
+`reason:"vps_failed_using_marker"` without an episode ID announces the marker
+fallback in the current context. Clients briefly show “VPS could not localize.
+Look at the robot marker.” Initial query failures reset with the tracking reference
+or an accepted alignment. Transient capture/processing failures retry automatically;
+a healthy camera can remain open between attempts and closes when setup is left.
 Robot-only status can arrive without a capture identity. Failure displays the
 2.5-second yellow triangle/`!` notification “Tracking Inaccurate”; corresponding
 success clears it. Gate waiting and query deferral do not warn. Emergency-stop
@@ -1092,13 +1122,37 @@ With a hold:
 
 Emergency stop — halts motion immediately. There is no payload.
 
-Mobile navigation has no stop latch to release; it resumes when a new authorized
-`nav_goal_request` is issued. Manipulation retains a stopped latch and requires
-the explicit Resume operation described below, after native stop confirmation
-and with valid authority.
+All robot types publish canonical `state.safety` facts:
+`{stopped: boolean, can_resume: boolean, stop_id?: string}`. A stopped operation
+includes an opaque `stop_id`; every explicit Stop creates a new identity.
+Capabilities alone do not imply that operation is stopped or safe to resume.
+Both main menus and the arm menu use these facts for Resume operation.
+
+### `resume_operation_request`
+
+```json
+{
+  "type": "resume_operation_request",
+  "epoch": "current-interaction-epoch",
+  "stop_id": "current-stop-identity"
+}
+```
+
+Resume requires the current interaction epoch and stop identity, no editing
+owner or pending mode transition, and `can_resume: true`. Manipulation additionally
+requires fresh native feedback, confirmed stop and recovered protection. The
+server keeps Resume unavailable while native reset is pending; a delayed result
+cannot release a newer Stop. Mobile navigation releases its AR admission latch.
+Resume never replays a draft, prior goal, following token or execution; a new
+authorized action is required. Clients with no safety facts must not infer
+Resume eligibility.
 
 ARModule also stops the robot on its own when the last client disconnects, so
-losing the headset cannot leave the robot walking.
+losing the headset cannot leave the robot walking. This ordinary controlled Stop
+does not create the explicit Emergency Stop latch. Observer disconnects cannot
+cancel another owner's manipulation, and late owner retirement is generation
+fenced. A failure to confirm controlled cancellation retains the native stopped
+or uncertain guard.
 
 The repository's Go2 blueprints use `ARReplanningAStarPlanner`, a subclass of
 the installed native planner. Its private DimOS `ar_navigation_status` topic
@@ -1244,6 +1298,36 @@ Client command (`*_request`). ARModule publishes the string on DimOS
 `human_input: Out[str]` when `hello.capabilities.agent` is available and the
 stream is wired. Last-command-wins; conversation is process-global.
 
+### Passive multiplayer presence
+
+Optional `presence: true` in `hello_request` opts in; `hello.presence: true`
+confirms support. Missing flags mean disabled. Presence never acquires interaction
+leases and is independent of robot capabilities. Only opted-in sockets receive it.
+
+`client_presence` carries `map_code`, `odom_reference_id`, `pointers` (at most two),
+and `panel` (null when closed). Each pointer has a stable `id` (0 left, 1 right or
+editor pointer), `start`, `control`, `end` (quadratic beam points in odom metres),
+`opacity` in [0,1], and a `cursor` visibility boolean. The optional panel contains
+`position`, scalar-last nonzero `orientation`, `width`, and `height` in metres.
+It describes the runtime main-menu background only, with no UI contents or events.
+All numbers must be finite; positions are bounded to ±1e6 m and panel dimensions
+to [0.001,10] m. Context identifiers are nonempty strings of at most 128 characters.
+The server binds identity to the sending connection and rejects mismatched context.
+
+`presence_state` carries the same context and a complete `clients` array (at most
+16). Each entry contains server-assigned `client_id`, `age_s` (server receive age),
+`pointers`, and `panel`. The recipient's own entry is omitted. Missing entries and
+missing pointer slots mean hidden. Disconnect/replacement retires cues immediately;
+a resumed transport must publish new cues. Cues expire after 2 s without refresh.
+
+Send at most 5 Hz, round spatial measurements to millimetres, suppress unchanged
+updates, refresh visible stationary cues at 1 Hz, and send one clear on hiding.
+Receivers interpolate over 200 ms without extrapolating, and use source age rather
+than aggregate refresh time for expiry. Server ingress and snapshot rates are
+capped at 5 Hz; additional recipient traffic is capped at 16 KiB/s. Complete
+snapshots coalesce latest-wins and may update more slowly under congestion.
+Remote cues are passive and never participate in input targeting.
+
 ### `client_pose`
 
 Wearer camera-optical pose in `odom`. Telemetry, not a request. Latest-wins
@@ -1285,6 +1369,7 @@ stale returns `No client pose`.
 | `lidar_settings_request` | `agent_message` |
 | `user_message_request` | `agent_skill` |
 | `client_pose` | `localization_context` |
+| `client_presence` (optional) | `presence_state` (optional) |
 | `localization_tracking` | `localization_map_transform` |
 | `localization_capture_progress` | `localization_status` |
 
@@ -1298,6 +1383,37 @@ exception: `localization_observations_request`.
 agent (gated on `hello.capabilities.agent`). `agent_message` is assistant text
 only. `agent_skill` is a tool invocation, not a chat turn. On the DimOS side
 the inbound string is published as `human_input: Out[str]`.
+
+**Browser dictation.** When `hello.speech_transcription` is true and agent capability
+is available, a browser can upload a recording on its authenticated bulk socket:
+`{type:"bulk_upload_begin",kind:"speech",upload_id,total_bytes,request_id,mime_type}`.
+The existing `bulk_upload_ready`, ARB2 chunks and `bulk_upload_result` framing applies.
+`request_id` is 1–128 characters; a recording is 6 bytes–2 MiB, at most 30 seconds.
+Allowed MIME containers are `audio/webm`, `audio/ogg`, `audio/mp4`, and `audio/wav`,
+with optional codec parameters. One upload slot is shared with localization: audio
+waits for an existing upload and cancelling localization cannot cancel audio.
+The server permits one pending recording per client and at most four across clients;
+the native transcriber admits only one operation and keeps admission after cancellation
+until that work actually finishes. It uses installed DimOS audio decoding and local
+Whisper. First use can prepare/download the configured model under normal DimOS behavior;
+preparation has a 180-second allowance and warm transcription has 45 seconds.
+Control remains responsive during both operations.
+
+The server advertises and admits local dictation only when `ffmpeg`, its declared
+Python decoder dependencies, and either `faster-whisper` or `openai-whisper` are
+installed. The focused `dimos-ar[speech]` extra supplies faster-whisper without
+requiring the full DimOS web or agent extras. Missing prerequisites are described
+by `hello.speech_transcription_reason`; probing availability never loads a model.
+
+Correlated control replies use
+`{type:"speech_transcription_result",request_id,status,text?,message?}`. `status` is
+`preparing`, `transcribing`, `completed`, or `rejected`; only `completed` contains
+the transcript (`text`, at most 2000 characters). `message` is an optional error
+description, at most 512 characters. `{type:"speech_transcription_cancel",request_id}`
+on bulk retires the matching waiter; upload cancellation still uses its upload ID.
+Clients discard replies after cancellation, disconnection or replacement recording.
+Dictation only edits the wearer draft: it never publishes `human_input` or issues
+an agent goal until the wearer explicitly presses Send.
 
 Paired requests: `hello_request` → `hello`, `state_request` → `state`,
 `localization_observations_request` → `localization_observations` →
@@ -1546,7 +1662,7 @@ or m/s) and `gripper_target` (accepted normalized command, or null) accompany ra
 joint feedback. `gripper` remains measured opening: an object can prevent full
 closure without failing a successful command. Clients publish no hardware targets
 when feedback exceeds 500 ms. They retain the grab, draft, current model and paused
-Preview for up to one second of feedback or connection loss; the local target can
+Preview for up to two seconds of feedback or connection loss; the local target can
 continue following the hand. Recovery invalidates checked plans and following
 leases. Reconnection never clears motor Stop or resumes it automatically.
 

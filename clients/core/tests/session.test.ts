@@ -49,7 +49,7 @@ function handshake(
   session.onTransportText(`${JSON.stringify(hello)}\n${JSON.stringify(STATE)}\n`); session.tick();
   expect(session.view().connection).toBe("ready");
   expect(transport.texts).toHaveLength(1);
-  expect(JSON.parse(transport.texts[0])).toEqual({ type: "hello_request", protocol_version: 2, ts_client: clock.nowS });
+  expect(JSON.parse(transport.texts[0])).toEqual({ type: "hello_request", protocol_version: 2, presence: true, ts_client: clock.nowS });
   return hello;
 }
 
@@ -63,6 +63,18 @@ function pythonLidar(ts: number, points: [number, number, number][]): Uint8Array
 }
 
 describe("session handshake", () => {
+  it("sends Resume only for the current canonical stop and source epoch", () => {
+    const { session, transport } = makeSession(); handshake(session, transport);
+    session.onTransportText(JSON.stringify({ type: "interaction_state", epoch: "source", revision: 1,
+      mode: "manual", authority: null, target: null, targets: [], preview: null, active_goal: null,
+      following_tail: null, motion_busy: false }) + "\n");
+    session.onTransportText(JSON.stringify({ ...STATE, safety: { stopped: true, can_resume: true, stop_id: "stop-a" } }) + "\n"); session.tick();
+    session.requestResumeOperation();
+    expect(JSON.parse(transport.texts.at(-1)!)).toEqual({ type: "resume_operation_request", epoch: "source", stop_id: "stop-a" });
+    session.onTransportText(JSON.stringify({ ...STATE, safety: { stopped: true, can_resume: false, stop_id: "stop-b" } }) + "\n"); session.tick();
+    const count = transport.texts.length; session.requestResumeOperation();
+    expect(transport.texts).toHaveLength(count);
+  });
   it.each([undefined, 1, 3])("rejects incompatible hello version %s with an actionable error", version => {
     const { session } = makeSession();
     session.start(); session.onTransportOpen();
@@ -611,6 +623,17 @@ describe("deferred asset state ordering", () => {
     groups: [{ id: "arm", joint_names: Object.keys(ARM_FIXTURE.joints), base_frame: "base", tip_frame: "gripper_tip", has_gripper: true, following: true }],
     observations: { arm: { joints: ARM_FIXTURE.joints, measured_at: ts, pose: ARM_FIXTURE.pose, gripper: 0 } },
     execution: "idle", stopped: false });
+
+  it("retains the measured model while unavailable snapshots update native safety facts", () => {
+    const { session, transport } = makeSession(); handshake(session, transport);
+    wire(session, state(100)); session.tick();
+    const model = session.view().manipulation?.model;
+    wire(session, { type: "manipulation_state", available: false, stopped: true,
+      stop_confirmed: false, protection: { state: "fault", effective_speed_scale: 0, resumable: false }, message: "Motor fault" }); session.tick();
+    expect(session.view().manipulation?.model).toBe(model);
+    expect(session.view().manipulation).toMatchObject({ available: false, stopped: true,
+      stop_confirmed: false, protection: { state: "fault" } });
+  });
   const finishPlan = (transport: FakeTransport) => {
     transport.bulk.receive({ type: "bulk_record", ...planRef, kind: "trajectory", part: 0, parts: 2,
       data: { metadata: { plan_id: "old-plan", group_id: "arm", target_revision: 1, joint_names: Object.keys(ARM_FIXTURE.joints), duration: 2 } } });

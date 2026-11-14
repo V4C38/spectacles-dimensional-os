@@ -156,3 +156,32 @@ it("restores SDK hooks after initialization fails and keeps teardown idempotent"
   expect(client.loseInput).toHaveBeenCalledOnce();
   expect(geometry).toHaveBeenCalledOnce();
 });
+
+it("admits an Agent-mode marker takeover while keeping floor placement and arm controls disabled", () => {
+  const f = fixture(), client = f.client as any;
+  const source = new THREE.Group(); source.userData.id = 1;
+  const marker = new THREE.Group(), sphere = new THREE.Mesh(); marker.add(sphere);
+  client.controlsEnabled = () => false;
+  client.navigationMarkerEnabled = () => true;
+  client.originStore = { hasTrackingOrigin: true };
+  client.navigation = { marker: { object: marker }, interaction: { ownsDraft: () => false }, clearAim: vi.fn() };
+  client.robot = { ownsTarget: () => false, floorWorldY: () => 0 };
+  client.ui = { setupCompleted: true, snapshot: () => ({ robotSelectable: true }) };
+  client.manipulation.owns = () => false;
+  client.isRobotSelected = () => true;
+  client.holdNavigation = vi.fn();
+  f.internal.mainMenu = { ownsTarget: () => false, isEmergencyTarget: () => false, endManipulation() {}, dispose() {}, panel: new THREE.Group() };
+  f.internal.interaction.capture = vi.fn(); f.internal.interaction.direct.capture = vi.fn();
+  f.internal.interaction.hit.mockReturnValue({ object: sphere, point: new THREE.Vector3(0,0,-1) });
+  f.internal.gestureRay = () => ({ origin: [0,0,0], direction: [0,0,-1] });
+  f.internal.navigationFloorPlanes = () => [];
+  expect(f.internal.canInteract(source, sphere, new THREE.Vector3(0,0,-1))).toBe(true);
+  expect(f.internal.canInteract(source, f.controller.floor, new THREE.Vector3(0,0,-1))).toBe(false);
+  expect(f.internal.canInteract(source, new THREE.Mesh(), new THREE.Vector3(0,0,-1))).toBe(false);
+  f.controller.onSelectStart({ target: source });
+  expect(f.controller.gestures.worldHold).toBe(source);
+  expect(client.holdNavigation).toHaveBeenCalledWith([0,0,0], [0,0,-1], [], true, expect.any(String));
+  client.navigationMarkerEnabled = () => false;
+  expect(f.internal.canInteract(source, sphere, new THREE.Vector3(0,0,-1))).toBe(false);
+  f.controller.dispose();
+});

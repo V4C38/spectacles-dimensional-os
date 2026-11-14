@@ -3,6 +3,8 @@
 Interaction target sequence acknowledges cumulative accepted input, even when
 pose/settings content and its revision are unchanged. Reset clears its group draft
 only after ownership and busy admission; it introduces no additional wire fields.
+The explicit interaction takeover action reuses acquisition fields and grants
+manual navigation authority only after native agent work has been fenced/stopped.
 """
 
 from __future__ import annotations
@@ -22,13 +24,14 @@ from dimos.ar.localization.types import (
 )
 from dimos.ar.manipulation.protocol import ManipulationRequest, decode_request
 from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavJoystickRequest, NavState
-from dimos.ar.numeric import finite_number
+from dimos.ar.numeric import finite_number, required_identifier
 from dimos.ar.replication.interaction import (
     InteractionRequest,
     decode_interaction_request,
     identifier,
     sequence,
 )
+from dimos.ar.replication.presence import ClientPresence, decode_cues
 from dimos.ar.robot.capabilities import (
     NAVIGATION_INPUT_NAMES,
     Capability,
@@ -124,11 +127,18 @@ def _finite_quat(data: dict[str, Any], key: str) -> tuple[float, float, float, f
 class HelloRequest:
     ts_client: float
     resume_token: str | None = None
+    presence: bool = False
 
 
 @dataclass(frozen=True)
 class EstopRequest:
     pass
+
+
+@dataclass(frozen=True)
+class ResumeOperationRequest:
+    epoch: str
+    stop_id: str
 
 
 @dataclass(frozen=True)
@@ -192,6 +202,7 @@ Inbound = (
     | NavGoalRequest
     | NavJoystickRequest
     | EstopRequest
+    | ResumeOperationRequest
     | LidarSettingsRequest
     | StateRequest
     | LocalizationStartRequest
@@ -199,6 +210,7 @@ Inbound = (
     | LocalizationCaptureProgress
     | UserMessageRequest
     | ClientPose
+    | ClientPresence
 )
 
 
@@ -215,7 +227,10 @@ def decode_hello_request(text: str) -> HelloRequest:
     token = data.get("resume_token")
     if token is not None and (not isinstance(token, str) or len(token) != 64):
         raise ValueError("invalid resume token")
-    return HelloRequest(_finite_float(data, "ts_client"), token)
+    presence = data.get("presence", False)
+    if type(presence) is not bool:
+        raise ValueError("invalid presence negotiation")
+    return HelloRequest(_finite_float(data, "ts_client"), token, presence)
 
 
 def decode_inbound(text: str) -> Inbound:
@@ -283,6 +298,12 @@ def decode_inbound(text: str) -> Inbound:
     if msg_type == "estop_request":
         return EstopRequest()
 
+    if msg_type == "resume_operation_request":
+        return ResumeOperationRequest(
+            epoch=required_identifier(data.get("epoch"), "epoch"),
+            stop_id=required_identifier(data.get("stop_id"), "stop_id"),
+        )
+
     if msg_type == "lidar_settings_request":
         enabled = _require_type(data, "enabled", bool)
         min_height_m = _finite_float(data, "min_height_m")
@@ -347,6 +368,9 @@ def decode_inbound(text: str) -> Inbound:
                 f"user_message_request.text exceeds {HUMAN_INPUT_MAX_CHARS} characters"
             )
         return UserMessageRequest(text=stripped)
+
+    if msg_type == "client_presence":
+        return ClientPresence(decode_cues(data))
 
     if msg_type == "client_pose":
         return ClientPose(
@@ -562,6 +586,9 @@ class Hello:
     bulk_token: str
     bulk_epoch: str
     resume_token: str
+    presence: bool = False
+    speech_transcription: bool = False
+    speech_transcription_reason: str | None = None
     nav_goal_preview: bool = False
     server_info: dict[str, str] | None = None
     source: dict[str, Any] | None = None
@@ -593,6 +620,10 @@ def encode_hello(hello: Hello) -> str:
             "bulk_epoch": hello.bulk_epoch,
             "client_id": hello.client_id,
             "resume_token": hello.resume_token,
+            "presence": hello.presence,
+            "speech_transcription": hello.speech_transcription,
+            **({"speech_transcription_reason": hello.speech_transcription_reason}
+               if hello.speech_transcription_reason is not None else {}),
             **({"source": hello.source} if hello.source else {}),
             "localization": hello.localization,
             "odom_reference_id": hello.odom_reference_id,
@@ -680,12 +711,14 @@ class StateSnapshot:
     agent: AgentState
     nav_preview_costmap_ts: float | None = None
     playback: dict[str, Any] | None = None
+    safety: dict[str, Any] | None = None
 
 
 def encode_state(snapshot: StateSnapshot) -> str:
     return encode_text(
         {
             "type": "state",
+            **({"safety": snapshot.safety} if snapshot.safety is not None else {}),
             **({"playback": snapshot.playback} if snapshot.playback else {}),
             **(
                 {"nav_preview_costmap_ts": snapshot.nav_preview_costmap_ts}

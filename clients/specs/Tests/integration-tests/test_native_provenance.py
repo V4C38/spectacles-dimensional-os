@@ -106,3 +106,30 @@ class NativeProvenanceTests(unittest.TestCase):
             marker.write_text(json.dumps(value))
             (workspace / "Assets/Unexpected.ts").write_text("unrecorded change")
             self.assertFalse(provenance.matches(provenance.begin(source, workspace, source)))
+
+    def test_production_review_requires_exact_restoration_and_rejects_unrecorded_edits(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            (source / "Assets/Scripts").mkdir(parents=True)
+            scene = source / "Assets/Scene.scene"
+            scene.write_text("authored scene")
+            script = source / "Assets/Scripts/Main.ts"
+            script.write_text("production")
+            (source / "project.esproj").write_text("project")
+            marker = source / ".specs-review.json"
+            marker.write_text(json.dumps({"kind": "dimos-specs-production-review",
+                                          "productionFiles": provenance.project_files(source)}))
+            value = provenance.begin(source, source, source)
+            self.assertTrue(provenance.matches(value))
+            provenance.before_scene_overlay(value)
+            scene.write_text("temporary editor scenario")
+            provenance.record_scene_overlay(value)
+            self.assertFalse(provenance.matches(value))
+            provenance.before_scene_overlay(value)
+            scene.write_text("authored scene")
+            provenance.record_scene_overlay(value)
+            marker.unlink()
+            self.assertTrue(provenance.matches(value))
+            script.write_text("unexpected edit")
+            provenance.before_scene_overlay(value)
+            self.assertFalse(provenance.matches(value))

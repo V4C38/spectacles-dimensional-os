@@ -1113,7 +1113,6 @@ import { launcherPresentation } from "./presentation.mjs";
           hardware.discoveredRobots[configuration.replayRobot] = detail.devices;
           renderSourceOptions();
         }
-        if (detail?.suggest_simulated) { $("robotSource").value = "simulated"; syncSource(); }
         $("discoveryStatus").textContent = detail?.message || String(detail || res.statusText);
         appendLog(`Start error: ${detail?.message || detail || res.statusText}`);
         startBtn.disabled = false;

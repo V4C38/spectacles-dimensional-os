@@ -192,3 +192,39 @@ test("hardware owner serializes CAN setup admission and publishes readiness once
   assert.deepEqual(progress, ["checking", "ready"]);
   assert.equal(hardware.canStatus.ready, true);
 });
+
+test("hardware requests call the injected fetch without an object receiver", async () => {
+  const { HardwareDiscovery } = await import("../static/source-selection.mjs");
+  const calls = [], progress = [], discoveries = [];
+  const hardware = new HardwareDiscovery(async function (path, options) {
+    // Browser fetch rejects a HardwareDiscovery receiver with Illegal invocation.
+    assert.equal(this, undefined);
+    calls.push([path, options]);
+    return response({ ready: true, devices: [] });
+  });
+  const options = { enabled: true, scope: () => "arm/can0", interface: "can0", changed() {} };
+  await hardware.refreshCan(options);
+  assert.equal(hardware.canStatus.ready, true);
+  await hardware.setupCan({ ...options, progress: value => progress.push(value.phase) });
+  assert.deepEqual(progress, ["checking", "ready"]);
+  await hardware.refreshPlanner(options);
+  assert.equal(hardware.plannerStatus.ready, true);
+  await hardware.discover({ ...options, robot: "openyam", auto: () => false,
+    progress() {}, received: value => discoveries.push(value) });
+  assert.equal(discoveries.length, 1);
+  assert.deepEqual(calls, [
+    ["/api/can/status?interface=can0", undefined],
+    ["/api/can/setup?interface=can0", { method: "POST" }],
+    ["/api/planner/status", undefined],
+    ["/api/discovery?robot=openyam", undefined],
+  ]);
+});
+
+
+test("saved simulation never becomes the next launcher default", async () => {
+  const { LauncherPreferences } = await import("../static/persistence.mjs");
+  const preferences = new LauncherPreferences();
+  preferences.hydrate({ go2_source: "simulated", openyam_source: "simulated" });
+  assert.equal(preferences.values.go2_source, "auto");
+  assert.equal(preferences.values.openyam_source, "auto");
+});

@@ -16,7 +16,7 @@ export type PoseSample = {
 };
 
 export class SpecsCameraSource implements CameraTrackingSource, CameraCaptureSource {
-  private readonly stream: Pick<SpecsCameraStream, "start" | "stop" | "requestNextFrame" | "deviceCamera">;
+  private readonly stream: Pick<SpecsCameraStream, "start" | "stop" | "requestNextFrame" | "deviceCamera"> & Partial<Pick<SpecsCameraStream, "expirePendingFrames">>;
   private readonly cameraObject: SceneObject;
   private readonly poseHistory = new CapturePoseHistory(POSE_BUFFER_CAPACITY, { maxNearestAgeS: STALE_POSE_S, maxBracketAgeS: Infinity });
   private generation = 0;
@@ -25,7 +25,7 @@ export class SpecsCameraSource implements CameraTrackingSource, CameraCaptureSou
   diagnostics() { return { ...this.metrics }; }
   private readonly pending = new Set<(error: Error) => void>();
 
-  constructor(deps: { stream: Pick<SpecsCameraStream, "start" | "stop" | "requestNextFrame" | "deviceCamera">; cameraObject: SceneObject }) {
+  constructor(deps: { stream: Pick<SpecsCameraStream, "start" | "stop" | "requestNextFrame" | "deviceCamera"> & Partial<Pick<SpecsCameraStream, "expirePendingFrames">>; cameraObject: SceneObject }) {
     if (!deps.cameraObject) {
       throw new Error("cameraObject is required");
     }
@@ -34,6 +34,7 @@ export class SpecsCameraSource implements CameraTrackingSource, CameraCaptureSou
   }
 
   samplePose(): void {
+    this.stream.expirePendingFrames?.();
     const transform = this.cameraObject.getTransform();
     const position = transform.getWorldPosition();
     const rotation = transform.getWorldRotation();

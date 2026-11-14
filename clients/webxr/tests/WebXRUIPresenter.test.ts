@@ -185,3 +185,18 @@ it("derives celebration without serializing diagnostics and only formats diagnos
   expect(snapshot.readDebugText!()).toContain("arm details");
   expect(diagnostics).toHaveBeenCalledOnce();
 });
+
+
+it("uses canonical Stop confirmation to resume every robot without replaying an E-stop", () => {
+  const current = view();
+  const session = { view: () => current, sendText: vi.fn(), requestState: vi.fn(), requestEstop: vi.fn(), requestResumeOperation: vi.fn() };
+  const ui = new WebXRUIPresenter(session as never, { view: () => ({ phase: "idle" }) } as never);
+  ui.estop(); expect(session.requestEstop).toHaveBeenCalledOnce();
+  current.state!.safety = { stopped: true, can_resume: false };
+  expect(ui.snapshot().resumeOperation).toBe(true); expect(ui.snapshot().estopAvailable).toBe(false);
+  ui.estop(); expect(session.requestResumeOperation).not.toHaveBeenCalled();
+  current.state!.safety.can_resume = true;
+  expect(ui.snapshot().estopAvailable).toBe(true);
+  ui.estop(); expect(session.requestResumeOperation).toHaveBeenCalledOnce();
+  expect(session.requestEstop).toHaveBeenCalledOnce();
+});

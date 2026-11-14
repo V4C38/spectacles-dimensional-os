@@ -53,6 +53,8 @@ class InteractionPorts:
     send: Callable[[str, str], None]
     broadcast: Callable[[str], None]
     prepare_outbound: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+    operation_stopped: Callable[[], bool] = lambda: False
+    retire_navigation: Callable[[], object] = lambda: None
 
 
 class InteractionController:
@@ -60,8 +62,10 @@ class InteractionController:
         self._ports = ports
         self._state = InteractionCoordinator()
         self._mode_task: asyncio.Task[None] | None = None
+        self._agent_stop_task: asyncio.Task[None] | None = None
         self._native_mode_rpc: NativeRPC | None = None
         self._native_mode_uncertain = False
+        self._agent_stop_requested = False
         self._poll_task: asyncio.Task[None] | None = None
         self._sent_revision = -1
         self._native_sequences: dict[str, int] = {}
@@ -73,7 +77,7 @@ class InteractionController:
 
     @property
     def mode_task(self) -> asyncio.Task[None] | None:
-        return self._mode_task
+        return self._mode_task or self._agent_stop_task
 
     @property
     def native_mode_uncertain(self) -> bool:
@@ -83,11 +87,66 @@ class InteractionController:
     def agent_input_available(self) -> bool:
         return (
             not self._closed
-            and self._mode_task is None
+            and not self._ports.operation_stopped()
+            and self.mode_task is None
             and not self._native_mode_uncertain
             and self._state.mode == "agent"
             and self._state.authority is None
         )
+
+    def stop_agent(self) -> None:
+        """Retire agent work on Stop without implicitly resuming it later."""
+        if self._closed or not self._ports.capabilities().supports(CapabilityName.AGENT):
+            return
+        self._agent_stop_requested = True
+        self._native_mode_uncertain = True
+        self._state.confirm_native_manual()
+        if self._ports.agent_control() is not None and self._agent_stop_task is None:
+            self._agent_stop_task = asyncio.create_task(self._stop_native_agent())
+
+    async def _stop_native_agent(self) -> None:
+        reported = False
+        try:
+            control = self._ports.agent_control()
+            assert control is not None
+            if self._native_mode_rpc is None:
+                self._native_mode_rpc = NativeRPC(control)
+            while self._agent_stop_requested and not self._closed:
+                await self._native_mode_rpc.wait_idle("ar_agent_takeover")
+                try:
+                    # Dispatch Stop immediately, independently of an obsolete
+                    # mode RPC. A timeout never releases that actual RPC's slot.
+                    accepted = await self._native_mode_rpc.call("ar_agent_takeover", timeout=2)
+                    if accepted:
+                        await self._native_mode_rpc.wait_idle("ar_agent_set_manual")
+                        if self._mode_task is not None:
+                            await asyncio.sleep(0.01)
+                            continue
+                        # A late resume may have completed after the first Stop.
+                        # Confirm the final pause after every old effect drained.
+                        accepted = await self._native_mode_rpc.call("ar_agent_takeover", timeout=2)
+                except Exception:
+                    accepted = False
+                    if not reported:
+                        logger.exception("Native agent stop could not be confirmed")
+                        reported = True
+                if accepted:
+                    self._agent_stop_requested = False
+                    self._native_mode_uncertain = False
+                    self._state.confirm_native_manual()
+                    self.broadcast(force=True)
+                    return
+                await asyncio.sleep(0.1)
+        finally:
+            self._agent_stop_task = None
+            self._state.set_agent_busy(not self._ports.agent_idle())
+            self._ports.broadcast_state()
+
+    def _finish_mode_task(self) -> None:
+        self._mode_task = None
+        if (self._agent_stop_requested and not self._closed and self._agent_stop_task is None
+                and self._ports.agent_control() is not None):
+            self._agent_stop_task = asyncio.create_task(self._stop_native_agent())
 
     def last_native_sequence(self, lease_id: str) -> int:
         return self._native_sequences.get(lease_id, -1)
@@ -98,7 +157,7 @@ class InteractionController:
 
     async def close(self) -> None:
         self._closed = True
-        tasks = [task for task in (self._mode_task, self._poll_task) if task is not None]
+        tasks = [task for task in (self._mode_task, self._agent_stop_task, self._poll_task) if task is not None]
         for task in tasks:
             task.cancel()
         try:
@@ -110,6 +169,7 @@ class InteractionController:
             finally:
                 self._native_mode_rpc = None
                 self._mode_task = None
+                self._agent_stop_task = None
                 self._poll_task = None
 
     async def _poll_interaction(self) -> None:
@@ -147,9 +207,33 @@ class InteractionController:
     def handle_request(self, request: InteractionRequest, client_id: str) -> None:
         if self._closed:
             return
+        if self._ports.operation_stopped() and request.action in {"acquire", "takeover", "confirm", "mode"}:
+            self._interaction_reply(request, client_id, "rejected", "operation_stopped")
+            return
         manipulation = self._ports.manipulation()
         self._state.poll()
         self.drain_retirements()
+        if request.action == "takeover":
+            if self._state.takeover_pending(client_id, request.request_id):
+                return
+            if (not self._ports.capabilities().supports(CapabilityName.AGENT)
+                    or not self._ports.capabilities().supports_navigation(NAV_GOAL)
+                    or self._ports.mapping_restart_required()):
+                self._interaction_reply(request, client_id, "rejected", "navigation_unavailable")
+                return
+            if self.mode_task is not None or self._native_mode_uncertain:
+                self._interaction_reply(request, client_id, "busy", "robot_busy")
+                return
+            previous = self._state.reserve_takeover(client_id, request)
+            if previous is not None:
+                self._ports.send(client_id, encode_text(previous.wire()))
+                return
+            if self._ports.agent_control() is None:
+                self._state.retire_takeover()
+                self._interaction_reply(request, client_id, "rejected", "native_quiescence_unavailable")
+                return
+            self._mode_task = asyncio.create_task(self._takeover_native_agent(request, client_id))
+            return
         if request.action == "mode":
             previous = self._state.preflight(client_id, request)
             if previous is not None:
@@ -160,7 +244,7 @@ class InteractionController:
             and (request.mode != self._state.mode or self._native_mode_uncertain)
             and self._ports.capabilities().supports(CapabilityName.AGENT)
         ):
-            if self._mode_task is not None or not self._state.mode_change_available:
+            if self.mode_task is not None or not self._state.mode_change_available:
                 self._interaction_reply(request, client_id, "busy", "robot_busy")
                 return
             if self._ports.agent_control() is None:
@@ -172,7 +256,7 @@ class InteractionController:
             self._mode_task = asyncio.create_task(self._change_native_mode(request, client_id))
             return
         if request.action == "acquire" and (
-            self._mode_task is not None or self._native_mode_uncertain
+            self.mode_task is not None or self._native_mode_uncertain
         ):
             self._interaction_reply(request, client_id, "busy", "robot_busy")
             return
@@ -307,6 +391,44 @@ class InteractionController:
             ),
         )
 
+    async def _takeover_native_agent(self, request: InteractionRequest, client_id: str) -> None:
+        try:
+            control = self._ports.agent_control()
+            assert control is not None
+            if self._native_mode_rpc is None:
+                self._native_mode_rpc = NativeRPC(control)
+            accepted = await self._native_mode_rpc.call("ar_agent_takeover", timeout=2)
+            if not accepted:
+                self._native_mode_uncertain = True
+                self._interaction_reply(request, client_id, "busy", "native_motion_active")
+                return
+            if self._agent_stop_task is None:
+                self._native_mode_uncertain = False
+                self._agent_stop_requested = False
+            self._ports.retire_navigation()
+            # Retire old native terminal/path facts before publishing the new
+            # lease, so canceled agent telemetry cannot terminate the grab.
+            self._ports.broadcast_state()
+            if self._ports.operation_stopped():
+                self._state.retire_takeover()
+                self._state.confirm_native_manual()
+                self._interaction_reply(request, client_id, "rejected", "operation_stopped")
+            else:
+                result = self._state.complete_takeover(client_id, request)
+                self._ports.send(client_id, encode_text(result.wire()))
+            self.broadcast(force=True)
+            self._ports.broadcast_state()
+        except TimeoutError:
+            self._native_mode_uncertain = True
+            self._interaction_reply(request, client_id, "rejected", "native_mode_timeout")
+        except Exception:
+            self._native_mode_uncertain = True
+            logger.exception("Native agent takeover failed")
+            self._interaction_reply(request, client_id, "rejected", "native_mode_failed")
+        finally:
+            self._state.retire_takeover()
+            self._finish_mode_task()
+
     async def _change_native_mode(self, request: InteractionRequest, client_id: str) -> None:
         try:
             control = self._ports.agent_control()
@@ -318,14 +440,21 @@ class InteractionController:
                 request.mode == "manual",
                 timeout=2,
             )
-            if accepted and request.mode == "agent" and request.epoch != self._state.epoch:
+            if accepted and request.mode == "agent" and (
+                request.epoch != self._state.epoch or self._ports.operation_stopped()
+                or self._agent_stop_requested
+            ):
                 # A source reset invalidates a pending resume. Confirm a native
                 # pause before publishing manual; unknown outcomes stay fenced.
-                paused = await self._native_mode_rpc.call("ar_agent_set_manual", True, timeout=2)
+                paused = await self._native_mode_rpc.call("ar_agent_takeover", timeout=2)
                 if paused:
+                    if self._agent_stop_task is None:
+                        self._agent_stop_requested = False
                     self._state.confirm_native_manual()
-                self._native_mode_uncertain = not paused
-                self._interaction_reply(request, client_id, "stale", "epoch_changed")
+                self._native_mode_uncertain = not paused or self._agent_stop_requested
+                self._interaction_reply(request, client_id, "stale",
+                                        "epoch_changed" if request.epoch != self._state.epoch
+                                        else "operation_stopped")
                 self.broadcast(force=True)
                 return
             self._state.set_agent_busy(not self._ports.agent_idle())
@@ -352,12 +481,12 @@ class InteractionController:
             self._interaction_reply(request, client_id, "rejected", "native_mode_failed")
         finally:
             self._state.set_agent_busy(not self._ports.agent_idle())
-            self._mode_task = None
+            self._finish_mode_task()
 
     def authorize_native(
         self, client_id: str, msg: NavGoalRequest | NavJoystickRequest, kind: InteractionKind
     ) -> bool:
-        if self._closed:
+        if self._closed or self._ports.operation_stopped():
             return False
         allowed = self._state.authorized(client_id, msg.epoch, msg.lease_id, kind=kind)
         self.drain_retirements()
@@ -376,6 +505,7 @@ class InteractionController:
     ) -> None:
         if (
             self._closed
+            or self._ports.operation_stopped()
             or not self._ports.capabilities().supports_navigation(NAV_GOAL)
             or self._ports.mapping_restart_required()
         ):
@@ -441,8 +571,10 @@ class InteractionController:
         self._state.poll()
         self.drain_retirements()
         admitted: ManipulationRequest | dict[str, Any]
-        if request.action != "cancel" and (
-            self._mode_task is not None or self._native_mode_uncertain
+        if request.action not in {"cancel", "resume", "release"} and (
+            self.mode_task is not None
+            or self._native_mode_uncertain
+            or self._ports.operation_stopped()
         ):
             admitted = {"status": "rejected", "code": "busy"}
         else:
