@@ -760,7 +760,13 @@ function decodeLocalizationStatus(data: Record<string, unknown>): LocalizationSt
   if (status !== "succeeded" && status !== "failed" && status !== "deferred") throw new Error("invalid localization status");
   const retry = data.retry_after_s === undefined ? undefined : finiteField(data, "retry_after_s");
   if (retry !== undefined && retry < 0) throw new Error("invalid retry delay");
-  return { type: "localization_status", ...decodeMapContext(data), scope, status,
+  const context = data.map_code === undefined
+    ? { odom_reference_id: boundedString(data, "odom_reference_id") }
+    : decodeMapContext(data);
+  if (data.map_code === undefined && (scope !== "robot" || status !== "deferred" ||
+      !["robot_pose_unavailable", "robot_pose_available"].includes(String(data.reason)) ||
+      data.episode_id !== undefined)) throw new Error("Localization status requires map context");
+  return { type: "localization_status", ...context, scope, status,
     ...(retry === undefined ? {} : { retry_after_s: retry }),
     reason: requireString(data, "reason"),
     ...(data.episode_id === undefined ? {} : { episode_id: boundedString(data, "episode_id") }),
@@ -1058,4 +1064,10 @@ function decodeInteractionTarget(a: Record<string, unknown>): InteractionTarget 
     domain: domain as InteractionTarget["domain"],
     ...(a.group_id === undefined ? {} : { group_id: requireString(a, "group_id") }),
     ...(speed === undefined ? {} : { speed_scale: speed }), ...(gripper === undefined ? {} : { gripper }) };
+}
+
+/** Cancels only the identified manual navigation goal; never latches E-stop. */
+export function encodeNavigationCancelRequest(requestId: string, epoch: string, goalTs: number): string {
+  if (!requestId || !epoch || !Number.isFinite(goalTs)) throw new Error("Invalid navigation cancellation identity");
+  return encodeText({ type: "interaction_request", action: "cancel_navigation", request_id: requestId, epoch, goal_ts: goalTs });
 }

@@ -5,7 +5,7 @@ import type { ManipulationState } from "../manipulation/ManipulationTypes";
 import { CollaborationController } from "../replication/CollaborationController";
 import { type InteractionState, AR_MODULE_CLIENT_CONFIG, type ClientClock, type WebSocketTransport, type ReadonlyFacts, type Capabilities, type CapabilityName, type Hello, type Lidar, type LocalizationObservation, type LocalizationResult, type NavGoal, type NavState, type NavigationInputName, type Outbound, type Pose, type State } from "../ClientContracts";
 import type { ClientTrackingOrigin, ClientTrackingOriginStore } from "../localization/ClientTracking";
-import {
+import { encodeNavigationCancelRequest,
   TextFramer,
   ProtocolDecodeError,
   encodeClientError,
@@ -242,6 +242,7 @@ export class ARModuleSession {
   private agentMessageRevision = 0;
   private lastError: string | null = null;
   private localizationNoticeUntil = 0;
+  private localizationTelemetryUnavailable = false;
   private readonly decodeReports = new Map<string, { at: number; suppressed: number }>();
   private manipulationError: string | null = null;
   private helloDeadline: number | null = null;
@@ -314,6 +315,8 @@ export class ARModuleSession {
   diagnostics() { return { control: this.control.diagnostics(), bulk: this.bulk.diagnostics() }; }
 
   tick(): void {
+    const pendingCancel = this.pendingNavigationCancellation;
+    if (pendingCancel && this.clock.now() >= pendingCancel.deadline) pendingCancel.reject(new Error("Navigation cancellation timed out"));
     const frameStart = this.clock.now();
     this.control.pump(frameStart, .002);
     this.bulk.tick();
@@ -472,6 +475,39 @@ export class ARModuleSession {
     speech.reject(new Error(reason));
   }
 
+  private navigationCancellationSerial = 0;
+  private pendingNavigationCancellation: { deadline: number; reject: (error: Error) => void } | null = null;
+
+  requestNavigationCancellation(): Promise<void> {
+    requireNavigation(this, "nav_goal");
+    const epoch = this.collaboration.raw()?.epoch;
+    const goal = this.collaboration.navigation().active_goal ?? this.view().nav_goal;
+    if (!epoch || !goal) return Promise.reject(new Error("No current navigation goal to cancel"));
+    if (this.pendingNavigationCancellation) return Promise.reject(new Error("Navigation cancellation pending"));
+    const requestId = `navigation-cancel-${++this.navigationCancellationSerial}`;
+    return new Promise<void>((resolve, reject) => {
+      let unview = () => {};
+      const cleanup = () => { unresult(); unview(); this.pendingNavigationCancellation = null; };
+      const failed = (error: Error) => {
+        cleanup(); this.lastError = error.message; reject(error); this.emitView();
+      };
+      const unresult = this.subscribeOutbound(message => {
+        if (message.type !== "interaction_result" || message.request_id !== requestId) return;
+        if (message.status !== "accepted" || message.epoch !== epoch) {
+          failed(new Error(`Navigation cancellation rejected: ${message.code}`));
+        } else { cleanup(); resolve(); }
+      });
+      unview = this.subscribeView(view => {
+        if (view.connection !== "ready" || this.collaboration.raw()?.epoch !== epoch) {
+          failed(new Error("Navigation cancellation reference changed"));
+        }
+      });
+      this.pendingNavigationCancellation = { deadline: this.clock.now() + 5, reject: failed };
+      try { this.sendText(encodeNavigationCancelRequest(requestId, epoch, goal.ts)); }
+      catch (error) { failed(new Error(errorMessage(error))); }
+    });
+  }
+
   requestEstop(): void {
     requireCapability(this, "estop");
     this.assetReplies.invalidate("manipulation_state");
@@ -509,8 +545,10 @@ export class ARModuleSession {
       capabilities: this.hello?.capabilities ?? null,
       nav: this.state?.nav ?? null,
       agentMessage: this.agentMessage,
-      localizationNotice: this.clock.now() < this.localizationNoticeUntil
-        ? "VPS could not localize. Look at the robot marker." : null,
+      localizationNotice: this.localizationTelemetryUnavailable
+        ? "Robot telemetry unavailable. Waiting to localize."
+        : this.clock.now() < this.localizationNoticeUntil
+          ? "VPS could not localize. Look at the robot marker." : null,
       agentMessageRevision: this.agentMessageRevision,
       lastError: this.lastError,
     };
@@ -651,7 +689,7 @@ export class ARModuleSession {
         break;
       case "localization_context":
         if (message.odom_reference_id !== this.hello?.odom_reference_id) return;
-        if (message.reset) this.localizationNoticeUntil = 0;
+        if (message.reset) { this.localizationNoticeUntil = 0; this.localizationTelemetryUnavailable = false; }
         this.clientTrackingOriginStore.setMapContext(message, message.reset);
         if (!this.clientTrackingOriginStore.hasTrackingOrigin) this.alignmentRequired = true;
         break;
@@ -660,13 +698,20 @@ export class ARModuleSession {
         this.clientTrackingOriginStore.applyMapTransform(message);
         break;
       case "localization_status":
-        if (!this.clientTrackingOriginStore.acceptsContext(message)) return;
+        if (message.odom_reference_id !== this.hello?.odom_reference_id) return;
+        if (message.map_code === undefined) {
+          if (this.hello?.localization?.providers.includes("vps") || this.clientTrackingOriginStore.mapContext !== null) return;
+        } else if (!this.clientTrackingOriginStore.acceptsContext({
+          map_code: message.map_code, odom_reference_id: message.odom_reference_id,
+        })) return;
         if (message.episode_id !== undefined) {
           if (message.episode_id !== this.captureEpisodeId) return;
           if (message.ts !== undefined && !this.localizationSubmission.accept(message.ts, this.clock.now())) return;
           this.cancelLocalizationSubmission();
           this.captureEpisodeId = null;
         }
+        if (message.reason === "robot_pose_unavailable") this.localizationTelemetryUnavailable = true;
+        if (message.reason === "robot_pose_available") this.localizationTelemetryUnavailable = false;
         if (message.reason === "vps_failed_using_marker") this.localizationNoticeUntil = this.clock.now() + 5;
         break;
       case "localization_result":
@@ -674,6 +719,7 @@ export class ARModuleSession {
         try {
           this.clientTrackingOriginStore.setFromLocalizationResult(message);
           this.alignmentRequired = false;
+          this.localizationTelemetryUnavailable = false;
           this.localizationNoticeUntil = 0;
         } catch (error) {
           this.fail(errorMessage(error));
@@ -773,6 +819,7 @@ export class ARModuleSession {
   private clearConnectionFacts(preserveInteraction = false): void {
     this.cancelSpeechTranscription("Disconnected while transcribing");
     this.localizationNoticeUntil = 0;
+    this.localizationTelemetryUnavailable = false;
     this.control.clear();
     this.presence.reset();
     this.captureId = null;

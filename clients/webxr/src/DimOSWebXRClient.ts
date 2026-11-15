@@ -133,6 +133,9 @@ export class DimOSWebXRClient {
     this.unsubscribeView = this.session.subscribeView((view) => {
       const prev = this.lastView;
       this.lastView = view;
+      if (view.lastError !== prev?.lastError && view.lastError?.startsWith("Navigation cancellation")) {
+        this.notifications.show({ text: view.lastError, tone: "warning", glyph: "warning", priority: 70 });
+      }
       if (view.connection !== prev?.connection || view.lastError !== prev?.lastError) {
         reportDiagnostic("connection", { phase: view.connection, error: view.lastError });
       }
@@ -270,9 +273,8 @@ export class DimOSWebXRClient {
     this.manipulation.suspend();
     if (this.session.view().capabilities?.estop.available !== true) return;
     try {
-      if (this.navigation.interaction.snapshot().goalActive) {
-        if (!this.navigation.interaction.cancel(this.clock.now())) throw new Error("Stop request could not be sent");
-      } else this.session.requestEstop();
+      this.navigation.cancelDrag();
+      this.session.requestEstop();
       this.stopFeedbackRemaining = 0.35;
       this.notifications.show({ text: "Emergency stop requested", tone: "danger", glyph: "stop", priority: 100 });
     } catch {

@@ -231,11 +231,14 @@ export function runGoldenCase(scenario: ReviewScenario, id: string): void {
       break;
     case "navigation_cancelled": {
       scenario.goal = [scenario.goal[0] + 0.4, scenario.goal[1], scenario.goal[2]];
-      const before = scenario.count("estop_request");
+      const before = scenario.count("interaction_request", row => row.action === "cancel_navigation");
+      const stops = scenario.count("estop_request");
       scenario.startGoal();
       scenario.after(1.1, () => {
         scenario.press(root.navigationController.marker.cancelButton);
-        scenario.check(id, scenario.count("estop_request") === before + 1 && root.navigationController.flash() === "cancelled", id);
+        scenario.later(0.1, () => scenario.count("interaction_request", row => row.action === "cancel_navigation") === before + 1 &&
+          scenario.count("estop_request") === stops && root.navigationController.flash() === "cancelled" &&
+          root.session.collaboration.navigation().active_goal === null && root.session.view().state?.safety?.stopped !== true, id);
         scenario.input!.active = false;
       });
       break;

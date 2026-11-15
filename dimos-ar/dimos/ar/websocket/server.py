@@ -1058,6 +1058,8 @@ class WebSocketServer:
                 self._on_nav_goal_request(inbound, websocket, client_id)
             return
         if isinstance(inbound, EstopRequest):
+            logger.info("explicit emergency stop requested", client_id=client_id,
+                        remote=str(websocket.remote_address))
             if self._on_estop_request is not None:
                 self._on_estop_request(inbound, websocket)
             return

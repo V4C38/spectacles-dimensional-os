@@ -162,6 +162,11 @@ export class GoldenArmPeer {
     this.publish();
   }
 
+  resumeOperation(): void {
+    this.stopped = false; this.execution = "idle"; this.followingToken = null;
+    this.publish(); this.shared();
+  }
+
   stop(emergency: boolean): void {
     this.move = null; this.tail = null; this.followingToken = null; this.checked = null;
     this.execution = "idle"; this.operation = null; this.stopped ||= emergency;

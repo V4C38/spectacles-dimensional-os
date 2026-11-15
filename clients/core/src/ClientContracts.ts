@@ -156,8 +156,10 @@ export interface LocalizationContext extends MapContext {
   type: "localization_context";
   reset?: boolean;
 }
-export interface LocalizationStatus extends MapContext {
+export interface LocalizationStatus {
   type: "localization_status";
+  odom_reference_id: string;
+  map_code?: string;
   scope: "robot" | "headset";
   status: "succeeded" | "failed" | "deferred";
   reason: string;

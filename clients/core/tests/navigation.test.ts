@@ -154,3 +154,41 @@ describe("requestNavJoystick", () => {
     expect(transport.texts).toHaveLength(1);
   });
 });
+
+
+function cancellationFixture() {
+  const f = makeSession(); handshake(f.session, f.clock); grant(f.session, f.transport);
+  const base = f.session.collaboration.raw()!;
+  const goal = { type: "nav_goal", ts: 42, pose: [1, 2, 0, 0], path_poses: [] };
+  f.session.onTransportText(JSON.stringify({ ...base, revision: base.revision + 1, authority: null, active_goal: goal }) + "\n");
+  return { ...f, base };
+}
+
+it("cancels a navigation goal only after its authoritative reply, without sending E-stop", async () => {
+  const f = cancellationFixture();
+  let accepted = false;
+  const pending = f.session.requestNavigationCancellation().then(() => { accepted = true; });
+  const request = JSON.parse(f.transport.texts.at(-1)!);
+  expect(request).toMatchObject({ type: "interaction_request", action: "cancel_navigation", epoch: "epoch", goal_ts: 42 });
+  expect(accepted).toBe(false);
+  f.session.onTransportText(JSON.stringify({ type: "interaction_result", request_id: request.request_id, epoch: "epoch", revision: 3, status: "accepted", code: "navigation_cancelled" }) + "\n");
+  await pending;
+  expect(accepted).toBe(true);
+  expect(f.transport.texts.some(text => JSON.parse(text).type === "estop_request")).toBe(false);
+  f.session.stop();
+});
+
+it.each(["timeout", "epoch", "rejection", "disconnect"])("bounds navigation cancellation on %s", async kind => {
+  const f = cancellationFixture();
+  const pending = f.session.requestNavigationCancellation();
+  const assertion = expect(pending).rejects.toThrow(/Navigation cancellation/);
+  const request = JSON.parse(f.transport.texts.at(-1)!);
+  if (kind === "timeout") { f.clock.nowS += 6; f.session.tick(); }
+  else if (kind === "epoch") f.session.onTransportText(JSON.stringify({ ...f.base, epoch: "new-source", revision: 0 }) + "\n");
+  else if (kind === "disconnect") f.session.stop();
+  else f.session.onTransportText(JSON.stringify({ type: "interaction_result", request_id: request.request_id, epoch: "new-source", revision: 0, status: "stale", code: "epoch_changed" }) + "\n");
+  await assertion;
+  // Late acknowledgement cannot turn the failed request into acceptance.
+  if (kind !== "disconnect") f.session.onTransportText(JSON.stringify({ type: "interaction_result", request_id: request.request_id, epoch: "epoch", revision: 5, status: "accepted", code: "navigation_cancelled" }) + "\n");
+  f.session.stop();
+});

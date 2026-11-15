@@ -1756,3 +1756,31 @@ plans remain tracked until completion or timeout but never block advisory IK or
 authorize Execute. Native timeout quarantine remains in effect until actual work
 returns. Advisory evaluation uses the configured solver iteration budget in its
 separate worker, preserving collision checks and exact Plan/Execute validation.
+
+### Marker-only localization telemetry
+
+In fiducial-only mode, `localization_status` may omit `map_code` only for robot-scoped,
+`deferred` status reasons `robot_pose_unavailable` and `robot_pose_available`, without
+an `episode_id`. These statuses must carry the current `odom_reference_id`. Clients
+reject source mismatches and must not accept mapless statuses in VPS mode. Missing
+robot telemetry pauses capture requests and displays “Robot telemetry unavailable.
+Waiting to localize.” Valid telemetry automatically resumes pending captures.
+Unavailable camera/pose data and cloud admission waits are not unsuccessful VPS
+queries and must not announce that VPS failed. Initial setup still tries two actual
+unsuccessful VPS queries before tag fallback, then alternates tag and VPS attempts.
+
+
+### Cancel a navigation goal without E-stop
+
+Send `interaction_request` with `action:"cancel_navigation"`, unique `request_id`,
+current `epoch`, and finite `goal_ts` matching the active navigation goal's `ts`.
+A connected client may cancel that manual goal without holding its movement lease.
+The ordinary `interaction_result` acknowledges acceptance or rejection; clients
+must not display successful cancellation before acceptance. A stale epoch or goal
+cannot cancel a replacement goal. Repeated request IDs return the cached result
+without repeating native effects. Manipulation ownership and agent mode reject this
+operation. Accepted cancellation retires navigation authority, previews and the
+active goal, stops native navigation through its guarded recovery service, and
+broadcasts the resulting state. Native admission stays closed until stop recovery
+is confirmed. It does not latch E-stop or modify manipulation state. Dedicated
+`estop_request` remains a global latched stop, including when a goal is active.

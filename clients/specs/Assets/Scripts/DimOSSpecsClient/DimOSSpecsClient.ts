@@ -377,6 +377,9 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       const prevView = this.lastSessionView;
       this.lastSessionView = view;
       this.uiPresenter.onSessionView(view, prevView);
+      if (view.lastError !== prevView?.lastError && view.lastError?.startsWith("Navigation cancellation")) {
+        this.notifications?.show({ text: view.lastError, tone: "warning", glyph: "warning", priority: 70 });
+      }
       if (view.connection !== "ready" && !this.manipulation?.core.interaction.retainingFeedback) {
         this.selection.clear();
         this.speechController?.reset();
@@ -393,10 +396,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     if (this.session?.view().capabilities?.estop.available !== true) return;
     try {
       this.navigationInput?.reset(); this.speechController?.endRecording(true);
-      if (this.navigationController?.interaction.snapshot().goalActive) {
-        if (!this.navigationController.cancel()) throw new Error("Stop request could not be sent");
-      }
-      else this.session.requestEstop();
+      this.session.requestEstop();
       this.notifications?.show({ text: "Emergency stop requested", tone: "danger", glyph: "stop", priority: 100 });
     } catch { this.notifications?.show({ text: "Stop request failed", tone: "danger", glyph: "stop", priority: 100 }); }
   }

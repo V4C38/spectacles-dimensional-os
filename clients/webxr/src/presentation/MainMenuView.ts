@@ -203,6 +203,7 @@ export class MainMenuView {
     title.visible = false;
     const description = label(this.wizardBody, "", 0, 0.135, CONTENT, 0.03, 20, C.muted, "center");
     const cardTitle = label(this.wizardBody, "Ready when you are", 0, 0, CONTENT, 0.04, 23, C.ink, "center", "semibold");
+    cardTitle.textLineHeight = 1.2;
     const cardBody = scrollLabel(this.wizardBody, "", 0, 0, CONTENT, 0.115, 18, C.muted);
     const back = button(this.wizardFooter, COPY.back, -THIRD_WIDTH - GAP, -0.298, THIRD_WIDTH, ACTION_HEIGHT, handlers.onBack);
     const retry = button(this.wizardFooter, "Retry", 0, -0.298, THIRD_WIDTH, ACTION_HEIGHT, () => this.lastStep === "localization" ? handlers.onLocalize() : handlers.onRetry());
@@ -537,10 +538,12 @@ export class MainMenuView {
   private layoutWizard(profile: PanelProfile, capture: boolean): void {
     const rows = profile.rows;
     layoutText(this.pageViews.setup.description, 0, rows.intro ?? rows.provider, CONTENT, 0.03, 20);
-    layoutText(this.pageViews.setup.cardTitle, capture ? 0.19 : 0, capture ? rows.camera + 0.06 : rows.status,
-      capture ? 0.39 : CONTENT, profile === SETUP_LAYOUTS.error ? 0.065 : 0.04, 23);
-    layoutText(this.pageViews.setup.cardBody, capture ? 0.19 : 0, capture ? rows.camera - 0.025 : rows.details,
-      capture ? 0.36 : CONTENT, capture || profile === SETUP_LAYOUTS.connected ? 0.115 : profile === SETUP_LAYOUTS.entry ? 0.04 : 0.1, 18);
+    // Two status lines and guidance share the camera's right-hand column.
+    // Keep the text's physical font size while allocating its complete line box.
+    layoutText(this.pageViews.setup.cardTitle, capture ? 0.19 : 0, capture ? rows.camera + 0.065 : rows.status,
+      capture ? 0.39 : CONTENT, capture || profile === SETUP_LAYOUTS.message ? 0.09 : profile === SETUP_LAYOUTS.error ? 0.065 : 0.04, 23);
+    layoutText(this.pageViews.setup.cardBody, capture ? 0.19 : 0, capture ? rows.camera - 0.06 : rows.details,
+      capture ? 0.36 : CONTENT, profile === SETUP_LAYOUTS.connected ? 0.115 : profile === SETUP_LAYOUTS.entry ? 0.04 : 0.1, 18);
     this.preview.position.y = (rows.camera ?? 0) / HEIGHT;
     this.pageViews.setup.previewLabel.position.y = (rows.previewLabel ?? 0) / HEIGHT;
     this.preview.visible = this.pageViews.setup.previewLabel.visible = capture;

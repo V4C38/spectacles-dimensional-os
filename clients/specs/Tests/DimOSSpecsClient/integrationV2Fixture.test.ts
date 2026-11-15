@@ -38,3 +38,27 @@ it("publishes canonical plan metadata and trajectory over the native v2 bulk pee
   expect(parts[0].data.metadata).toMatchObject({ plan_id: "checked", group_id: "arm", target_revision: 7 });
   expect(parts.flatMap(part => part.data.points ?? [])).toEqual(plan.trajectory);
 });
+
+it("cancels only the matching navigation goal without requiring a held lease", () => {
+  const controls: any[] = [];
+  const peer = new IntegrationV2Fixture(value => controls.push(JSON.parse(JSON.stringify(value))), "native-test", () => 1);
+  let cancellations = 0; peer.onNavigationCancel = () => cancellations++;
+  const goal = { type: "nav_goal", pose: [1, 2, 0, 0], path_poses: [], ts: 7 };
+  peer.setGoal(goal);
+  const cancel = (epoch: string, goal_ts: number) => peer.command({ type: "interaction_request", action: "cancel_navigation",
+    request_id: `cancel-${epoch}-${goal_ts}`, epoch, goal_ts });
+  cancel("old", 7);
+  expect(controls.at(-1)).toMatchObject({ type: "interaction_result", status: "stale", code: "epoch_changed" });
+  cancel("native-fixture", 6);
+  expect(controls.at(-1)).toMatchObject({ status: "stale", code: "goal_changed" });
+  expect(cancellations).toBe(0);
+  cancel("native-fixture", 7);
+  expect(cancellations).toBe(1);
+  expect(controls.at(-1)).toMatchObject({ type: "interaction_result", status: "accepted", code: "navigation_cancelled" });
+  expect(controls.findLast(row => row.type === "interaction_state")).toMatchObject({ active_goal: null, authority: null, motion_busy: false });
+  expect(controls.every(row => row.type !== "estop_request")).toBe(true);
+  peer.setGoal({ ...goal, ts: 8 });
+  cancel("native-fixture", 7);
+  expect(cancellations).toBe(1);
+  expect(controls.findLast(row => row.type === "interaction_state").active_goal.ts).toBe(8);
+});

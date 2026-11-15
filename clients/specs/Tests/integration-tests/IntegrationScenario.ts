@@ -117,6 +117,7 @@ export class ReviewScenario extends BaseScriptComponent {
       if (this.autoLocalize) this.after(0.1, () => this.acceptLocalization());
     };
     this.peer.onGoal = target => this.navigationGoal(target, false);
+    this.peer.onNavigationCancel = () => this.state("idle", null);
     this.cameraPosition = root.cameraObject.getTransform().getWorldPosition();
     this.cameraRotation = root.cameraObject.getTransform().getWorldRotation();
     this.tracking = root.cameraObject.getComponent("Component.DeviceTracking") as DeviceTracking | null;

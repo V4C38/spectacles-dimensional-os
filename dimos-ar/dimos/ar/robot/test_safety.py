@@ -91,3 +91,13 @@ def test_arm_resume_requires_current_confirmed_feedback_and_recovered_protection
     assert safety.begin_resume(identity)
     assert safety.finish_resume(identity, succeeded=False) is False
     assert safety.stopped and safety.snapshot()["can_resume"]
+
+
+def test_fresh_navigation_safety_starts_unlatched() -> None:
+    safety, calls = _safety()
+    assert safety.snapshot() == {"stopped": False, "can_resume": False}
+    assert calls == []
+    safety.controlled_stop()
+    assert not safety.stopped
+    safety.on_last_disconnect()
+    assert not safety.stopped

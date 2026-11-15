@@ -218,7 +218,7 @@ test("comparable hand golden path", async ({ page }, info) => {
       await clickArm(page, "estop");
       await expect.poll(() => appValue(page, "app.client.session.view().manipulation?.stopped")).toBe(true);
       await clickArm(page, "estop");
-      await expect.poll(() => armCommands("resume").length).toBeGreaterThan(0);
+      await expect.poll(() => runtime.commands.filter(command => command.type === "resume_operation_request").length).toBeGreaterThan(0);
     }, async () => await appValue(page, "app.client.session.view().manipulation?.stopped === false") &&
       await armValue("interaction.snapshot().canManipulate"));
     expect(armCommands("execute")).toHaveLength(1);

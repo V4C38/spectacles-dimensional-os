@@ -40,6 +40,7 @@ export async function bootstrap(
   let lidarSettings = {
     enabled: false, min_height_m: 0.1, max_height_m: 1.5, max_range_m: 5,
   };
+  let safetyStopped = false;
   let navigation = { state: "idle", outcome: null as string | null };
   const state = (nav?: string, outcome: string | null = null) => {
     if (nav !== undefined) navigation = { state: nav, outcome };
@@ -49,6 +50,7 @@ export async function bootstrap(
       lidar: { ...lidarSettings },
       nav: { ...navigation },
       agent: { idle: true },
+      safety: { stopped: safetyStopped, can_resume: safetyStopped, ...(safetyStopped ? { stop_id: "fixture-stop" } : {}) },
     });
   };
   const send = (value: object) => {
@@ -132,6 +134,7 @@ export async function bootstrap(
       if (command.type === "interaction_request") {
         const result = peer.accept(command, arm?.interactionFacts().motion_busy ?? false);
         arm?.interaction(command, result);
+        if (command.action === "cancel_navigation" && result.status === "accepted") state("idle");
         const released = result.released;
         if (released) {
           if (released.target?.domain === "navigation" && released.kind !== "joystick") {
@@ -182,7 +185,12 @@ export async function bootstrap(
         else { peer.activeGoal = frame; interactionState(); }
         if (!command.preview) state("following_path");
       }
+      if (command.type === "resume_operation_request" && command.epoch === peer.epoch && command.stop_id === "fixture-stop") {
+        arm?.resumeOperation();
+        safetyStopped = false; state(); interactionState();
+      }
       if (command.type === "estop_request") {
+        safetyStopped = true;
         arm?.stop(true);
         peer.authority = null; peer.preview = peer.previewAim = null; peer.activeGoal = null;
         state("idle"); interactionState();

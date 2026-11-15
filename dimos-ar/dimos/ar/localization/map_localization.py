@@ -144,8 +144,10 @@ class MapClient:
     relative_alignment: RelativeAlignment | None = None
     next_attempt: Literal["vps", "tag"] = "vps"
     initial_vps_failures: int = 0
+    waiting_for_pose: bool = False
 
     def reset_reference(self) -> None:
+        self.waiting_for_pose = False
         self.alignment = None
         self.episode = None
         self.pending_alignment = None
@@ -232,9 +234,11 @@ class MapLocalization:
         timeout_s: float,
         clock: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
+        allow_latest_robot_pose: bool = False,
     ) -> None:
         self._clock = clock
         self._wall_clock = wall_clock
+        self._allow_latest_robot_pose = allow_latest_robot_pose
         self._odometry = odometry
         self._transforms = transforms
         self._robot_images = robot_images
@@ -490,6 +494,29 @@ class MapLocalization:
         active = [(key, value) for key, value in self._clients.items() if self._active(value)]
         if not active:
             return
+        # Missing live odometry makes both map anchoring and robot-mounted tags
+        # unusable. Do not keep collecting headset pixels against a dead stream.
+        if self._odometry.history.at_server_ts(
+            self._wall_clock(), fallback_to_latest=self._allow_latest_robot_pose
+        ) is None:
+            for key, client in active:
+                if not client.waiting_for_pose:
+                    client.waiting_for_pose = True
+                    self._emit(key, {"type": "localization_status", **self._context(),
+                        "scope": "robot", "status": "deferred",
+                        "reason": "robot_pose_unavailable"})
+                    logger.warning("localization waiting for robot telemetry", client_id=key,
+                        source_generation=self._odometry.generation,
+                        **self._odometry.history.capture_diagnostics(
+                            self._wall_clock(), now=self._wall_clock()))
+            return
+        for key, client in active:
+            if client.waiting_for_pose:
+                client.waiting_for_pose = False
+                self._emit(key, {"type": "localization_status", **self._context(),
+                    "scope": "robot", "status": "deferred", "reason": "robot_pose_available"})
+                logger.info("localization robot telemetry recovered", client_id=key,
+                    source_generation=self._odometry.generation)
         # A failed initial VPS attempt can always try a tag, even before a map
         # anchor exists. Relative alignments prefer tags for subsequent fixes.
         tag = next(
@@ -583,6 +610,9 @@ class MapLocalization:
         }
         if purpose == "robot":
             payload["wait_timeout_s"] = self._preference
+        logger.info("localization provider capture requested", client_id=client_id,
+            provider="tag" if purpose == "robot" else "vps", episode_id=episode.id,
+            source_generation=self._odometry.generation)
         self._emit(client_id, payload)
         return episode
 
@@ -613,7 +643,8 @@ class MapLocalization:
                 self._emit(key, {
                     "type": "localization_status", **self._context(),
                     "scope": "headset", "status": "deferred",
-                    "reason": "vps_failed_using_marker", "retry_after_s": 2.0,
+                    "reason": "vps_failed_using_marker" if query_failed
+                    else "marker_fallback_available", "retry_after_s": 2.0,
                 })
 
     def _tag_unavailable(self, key: str) -> None:
@@ -723,11 +754,20 @@ class MapLocalization:
     async def _query(self, observation: Observation) -> LocalizedPose | None:
         token = self._admission.capture_ts.set(observation.ts_server)
         try:
-            return await self._vps.localize([observation])
+            logger.info("localization VPS query started", capture_ts_server=observation.ts_server,
+                source_generation=self._odometry.generation)
+            result = await self._vps.localize([observation])
+            logger.info("localization VPS query completed", capture_ts_server=observation.ts_server,
+                localized=result is not None, source_generation=self._odometry.generation)
+            return result
         finally:
             self._admission.capture_ts.reset(token)
 
     def _launch_robot(self) -> None:
+        if self._odometry.history.at_server_ts(
+            self._wall_clock(), fallback_to_latest=self._allow_latest_robot_pose
+        ) is None:
+            return
         if not self._robot_due():
             return
         if any(
@@ -891,7 +931,9 @@ class MapLocalization:
             ):
                 return
             newest = max(observations, key=lambda item: item.ts_server)
-            pose = self._odometry.history.at_server_ts(newest.ts_server)
+            pose = self._odometry.history.at_server_ts(
+                newest.ts_server, fallback_to_latest=self._allow_latest_robot_pose
+            )
             if alignment is None and client.alignment is None and self._active(client):
                 if localized is not None and pose is not None:
                     # A marker yields T_odom_client directly; it needs neither a

@@ -104,3 +104,8 @@ export class JoystickNavigationController {
     this.session.collaboration.release(undefined, ["joystick"]);
   }
 }
+
+/** Cancel only the current goal; the session owns bounded reply handling. */
+export function requestNavCancel(session: Pick<ARModuleSession, "requestNavigationCancellation">): Promise<void> {
+  return session.requestNavigationCancellation();
+}

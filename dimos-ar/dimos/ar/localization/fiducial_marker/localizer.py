@@ -4,6 +4,7 @@ from collections.abc import Sequence
 import copy
 from dataclasses import dataclass
 import math
+import time
 from typing import TYPE_CHECKING
 
 import cv2
@@ -204,6 +205,10 @@ class FiducialMarkerLocalizer(SnapshotLocalizer):
 
         if robot is None:
             misses.append("missing_robot_pose")
+            logger.warning(
+                "fiducial capture has no matching robot pose",
+                **self._pose_buffer.capture_diagnostics(observation.ts_server, now=time.time()),
+            )
             return None
 
         camera_matrix, dist_coeffs = _intrinsics_to_cv(observation.intrinsics)

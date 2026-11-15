@@ -835,3 +835,15 @@ def encode_lidar_binary(
     )
     body = b"".join(struct.pack("<3f", *point) for point in points)
     return header + body
+
+# interaction_request.cancel_navigation is decoded by replication.interaction;
+# epoch and goal_ts fence cancellation to the current manual navigation goal.
+
+
+def encode_localization_pose_status(odom_reference_id: str, *, available: bool) -> str:
+    """Marker-only telemetry status is bound to the source, without a VPS map."""
+    return encode_text({
+        "type": "localization_status", "odom_reference_id": odom_reference_id,
+        "scope": "robot", "status": "deferred",
+        "reason": "robot_pose_available" if available else "robot_pose_unavailable",
+    })

@@ -37,7 +37,7 @@ export const SETUP_LAYOUTS = {
   error: panelProfile(0.145, [["intro", 0.03], ["status", 0.065], ["details", 0.1]]),
   connected: panelProfile(0.145, [["intro", 0.03], ["status", 0.04], ["details", 0.115]]),
   capture: panelProfile(0.145, [["provider", 0.03], ["camera", 0.22], ["previewLabel", 0.022, 0.012]]),
-  message: panelProfile(0.145, [["provider", 0.03], ["status", 0.04], ["details", 0.1]]),
+  message: panelProfile(0.145, [["provider", 0.03], ["status", 0.09], ["details", 0.1]]),
   success: panelProfile(0.23, [["glyph", 0.188], ["title", 0.05], ["detail", 0.04]], false),
 } as const;
 

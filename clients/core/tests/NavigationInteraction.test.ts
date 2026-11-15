@@ -385,3 +385,35 @@ it("retains the last complete route through a new local submission and an origin
   f.core.applyView(f.view, { ...f.origin, position: [0.1,0,0], ts: 2 }, null, 2.3);
   expect(f.core.activePath()).toBe(path);
 });
+
+
+it("awaits cancellation acceptance and preserves the active goal on rejection", async () => {
+  const f = fixture();
+  f.view.nav = { state: "following_path", outcome: null };
+  f.view.nav_goal = { type: "nav_goal", ts: 1, pose: [2,0,0,0], path_poses: [] };
+  f.core.applyView(f.view, f.origin, null, 1);
+  let reject!: (error: Error) => void;
+  f.commands.cancel.mockImplementation(() => new Promise<void>((_, fail) => { reject = fail; }) as never);
+  expect(f.core.cancel(2)).toBe(true);
+  expect(f.core.flash()).toBeNull();
+  reject(new Error("goal_changed")); await Promise.resolve();
+  expect(f.core.flash()).toBeNull();
+  expect(f.core.snapshot().goalActive).toBe(true);
+  expect(f.core.snapshot().activeGoal.cancelVisible).toBe(true);
+});
+
+it("fences a delayed cancellation result from a replacement navigation goal", async () => {
+  const f = fixture();
+  f.view.nav = { state: "following_path", outcome: null };
+  f.view.nav_goal = { type: "nav_goal", ts: 1, pose: [2,0,0,0], path_poses: [] };
+  f.core.applyView(f.view, f.origin, null, 1);
+  let accept!: () => void;
+  f.commands.cancel.mockImplementation(() => new Promise<void>(resolve => { accept = resolve; }) as never);
+  f.core.cancel(2);
+  f.view.nav_goal = { type: "nav_goal", ts: 3, pose: [3,0,0,0], path_poses: [] };
+  f.core.applyView(f.view, f.origin, null, 3);
+  accept(); await Promise.resolve();
+  expect(f.core.flash()).toBeNull();
+  expect(f.core.snapshot().goalActive).toBe(true);
+  expect(f.core.snapshot().activeGoal.cancelVisible).toBe(true);
+});

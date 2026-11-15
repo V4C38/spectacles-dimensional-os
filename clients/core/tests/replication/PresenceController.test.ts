@@ -53,3 +53,16 @@ it("strictly decodes optional cues and rejects malformed arrays, dimensions, qua
   bad.push({ ...f.state(), clients: [{ ...f.state().clients[0], panel: { ...cues().panel, orientation: [0,0,0,0] } }] });
   for (const state of bad) expect(() => decodePresenceState(state)).toThrow();
 });
+
+// Runtime server messages carry fields beyond the structural MapContext type.
+it("keeps the outbound presence discriminator after adopting a decoded server context", () => {
+  const f = fixture();
+  const decoded = decodeOutbound(JSON.stringify({ type: "localization_context", ...context, reset: true }));
+  if (decoded.type !== "localization_context") throw new Error("Expected localization context");
+  f.origins.setMapContext(decoded);
+  expect(f.origins.mapContext).toEqual(context);
+  f.core.publish(() => cues());
+  expect(JSON.parse(f.sent[0])).toMatchObject({ type: "client_presence", ...context });
+  expect(JSON.parse(f.sent[0]).pointers[0].end).toEqual([11, 0, 0]);
+  expect(JSON.parse(f.sent[0])).not.toHaveProperty("reset");
+});

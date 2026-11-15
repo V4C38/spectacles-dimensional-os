@@ -37,6 +37,17 @@ export class InteractionPeer {
         this.preview = this.previewAim = null;
         acquired = true;
       }
+    } else if (command.action === "cancel_navigation") {
+      if (command.epoch !== this.epoch || this.activeGoal?.ts !== command.goal_ts) {
+        status = "stale"; code = "goal_changed";
+      } else if (this.mode !== "manual" || busy || String(this.authority?.kind).startsWith("manipulation_")) {
+        status = "busy"; code = "robot_busy";
+      } else {
+        code = "navigation_cancelled";
+        this.activeGoal = this.preview = this.previewAim = null;
+        this.authority = null;
+        if (this.target?.domain === "navigation") this.target = null;
+      }
     } else if (command.action === "mode") {
       if (this.authority) { status = "busy"; code = "robot_busy"; }
       else this.mode = command.mode;

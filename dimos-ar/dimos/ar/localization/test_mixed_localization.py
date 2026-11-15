@@ -304,3 +304,73 @@ async def test_collecting_headset_keeps_turn_then_robot_and_other_client_both_pr
                        "client", TimeSync(0, 0))
     assert f.service._clients["client"].alignment is None
     assert f.messages[-1][1].get("reset") is True
+
+
+async def test_missing_live_pose_defers_capture_once_and_recovers(mixed):
+    f = mixed
+    f.client.next_attempt = "tag"
+    f.odometry.history.clear()
+    for _ in range(3):
+        f.service._tick()
+    assert requests(f) == []
+    assert f.client.initial_vps_failures == 0
+    notices = [body for _, body in f.messages if body.get("reason") == "robot_pose_unavailable"]
+    assert len(notices) == 1
+    f.vps.localize.assert_not_awaited()
+    now = time.time()
+    f.odometry.history.push(PoseStamped(ts=now, position=[0, 0, 0]), ts_server=now)
+    f.service._tick()
+    assert requests(f)[-1]["purpose"] == "robot"
+    assert any(body.get("reason") == "robot_pose_available" for _, body in f.messages)
+
+
+async def test_expired_tag_cannot_launch_cloud_without_live_pose(mixed):
+    f = mixed
+    episode = f.service._request("client", f.client, "robot")
+    episode.deadline = time.monotonic() - 1
+    f.odometry.history.clear()
+    f.service._tick()
+    assert f.service._cloud_task is None
+    f.service._tag_unavailable("client")
+    assert f.service._cloud_task is None
+    f.vps.localize.assert_not_awaited()
+
+
+async def test_missing_camera_fallback_does_not_claim_vps_query_failed(mixed):
+    f = mixed
+    await f.service._robot()
+    f.vps.localize.assert_not_awaited()
+    reasons = [body.get("reason") for _, body in f.messages]
+    assert "marker_fallback_available" in reasons
+    assert "vps_failed_using_marker" not in reasons
+    assert f.client.initial_vps_failures == 0
+
+
+async def test_two_initial_queries_then_tag_and_vps_alternate(mixed):
+    f = mixed
+    f.vps.localize.return_value = None
+    f.marker.localize = lambda observations: None
+    f.images.newest = lambda **kwargs: SimpleNamespace(
+        observation=_observation(f.timestamp), source_generation=0, travel_m=0)
+    await f.service._robot()
+    await f.service._robot()
+    assert f.client.next_attempt == "tag"
+    f.client.retry_at = 0
+    f.service._tick()
+    await f.service._tag("client", f.client, f.client.episode, (_observation(f.timestamp),))
+    assert f.service._cloud_task is not None
+    await f.service._cloud_task
+    assert f.vps.localize.await_count == 3
+    assert f.client.next_attempt == "tag"
+    f.client.retry_at = 0
+    f.service._tick()
+    assert requests(f)[-1]["purpose"] == "robot"
+
+
+async def test_known_replay_can_scan_after_its_final_pose(mixed):
+    f = mixed
+    f.service._wall_clock = lambda: f.timestamp + 100
+    f.service._allow_latest_robot_pose = True
+    f.client.next_attempt = "tag"
+    f.service._tick()
+    assert requests(f)[-1]["purpose"] == "robot"

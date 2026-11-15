@@ -498,3 +498,39 @@ def test_accepted_execution_stays_busy_across_another_result_until_native_termin
     assert owner.motion_busy
     owner.observe_manipulation_snapshot({"available": True, "execution": "completed"})
     assert not owner.motion_busy
+
+
+def test_navigation_cancellation_is_goal_fenced_and_does_not_require_ownership(fixture):
+    owner, _ = fixture
+    acquire(owner, "a", kind="navigation_planning")
+    owner.set_active_goal({"ts": 42.0, "pose": [1, 2, 0, 0]})
+    stale = InteractionRequest("old-goal", "cancel_navigation", owner.epoch, goal_ts=41)
+    assert owner.handle("b", stale).code == "goal_changed"
+    assert owner.active_goal is not None and owner.authority is not None
+    packet = InteractionRequest("cancel-goal", "cancel_navigation", owner.epoch, goal_ts=42)
+    assert owner.handle("b", packet).code == "navigation_cancelled"
+    assert owner.active_goal is None and owner.authority is None
+    assert owner.mode == "manual" and not owner.motion_busy
+    assert acquire(owner, "b", identity="next-goal").status == "accepted"
+    owner.set_active_goal({"ts": 43.0, "pose": [2, 3, 0, 0]})
+    assert owner.handle("b", packet).status == "accepted"  # Idempotent reply only.
+    assert owner.active_goal["ts"] == 43.0
+    assert owner.handle("c", InteractionRequest("old-epoch", "cancel_navigation", "retired", goal_ts=43)).code == "epoch_changed"
+    assert owner.active_goal["ts"] == 43.0
+
+
+@pytest.mark.parametrize("missing", ["epoch", "goal_ts"])
+def test_navigation_cancellation_requires_explicit_fencing(missing):
+    packet = {"request_id": "cancel", "action": "cancel_navigation", "epoch": "source", "goal_ts": 1}
+    packet.pop(missing)
+    with pytest.raises(ValueError):
+        decode_interaction_request(packet)
+
+
+def test_navigation_cancellation_preserves_manipulation_authority(fixture):
+    owner, _ = fixture
+    acquire(owner, kind="manipulation_planning", group_id="arm")
+    owner.set_active_goal({"ts": 1.0})
+    packet = InteractionRequest("cancel", "cancel_navigation", owner.epoch, goal_ts=1)
+    assert owner.handle("b", packet).status == "busy"
+    assert owner.authority.kind == "manipulation_planning"

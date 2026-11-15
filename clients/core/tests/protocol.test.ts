@@ -765,3 +765,14 @@ it("requires authority credentials on every navigation command", () => {
 it("rejects standalone navigation publications", () => {
   expect(() => decodeOutbound(JSON.stringify({ type: "nav_goal", ts: 1, path_poses: [] }))).toThrow(/Unknown outbound/);
 });
+
+
+it("limits mapless localization status to source-bound robot telemetry deferral", () => {
+  const status = { type: "localization_status", odom_reference_id: "odom", scope: "robot",
+    status: "deferred", reason: "robot_pose_unavailable" };
+  expect(decodeOutbound(JSON.stringify(status))).toEqual(status);
+  for (const changes of [{ odom_reference_id: "" }, { scope: "headset" },
+    { status: "failed" }, { reason: "headset_localization_failed" }, { episode_id: "episode" }]) {
+    expect(() => decodeOutbound(JSON.stringify({ ...status, ...changes }))).toThrow();
+  }
+});

@@ -26,7 +26,7 @@ export class RobotSelection {
   }
 }
 
-export type RobotActivityState = "Idle" | "Following Path" | "Thinking" | "Responding" | "Listening";
+export type RobotActivityState = "Stopped" | "Idle" | "Following Path" | "Thinking" | "Responding" | "Listening";
 
 export type RobotMarkerApplyInput =
   | { mode: "hidden" }
@@ -71,6 +71,7 @@ export function deriveRobotMarkerApplyInput(input: {
 }
 
 export function getRobotActivityState(view: ARModuleSessionState, voice?: { ttsPlaying: boolean; asrRunning: boolean }): RobotActivityState {
+  if (view.state?.safety?.stopped === true) return "Stopped";
   if (view.nav !== null && view.nav.state === "following_path") {
     return "Following Path";
   }

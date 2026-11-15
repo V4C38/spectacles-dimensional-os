@@ -130,6 +130,21 @@ class PoseBuffer:
             "odom_gap_max_ms": round(gaps[-1] * 1000, 2),
         }
 
+    def capture_diagnostics(self, timestamp: float, *, now: float) -> dict[str, int | float | None]:
+        """Bounded metadata for a failed lookup; never serialize pose history."""
+        with self._lock:
+            first = self._samples[0].ts_server if self._samples else None
+            latest = self._latest.ts_server if self._latest is not None else None
+            count = len(self._samples)
+        return {
+            "capture_ts_server": timestamp,
+            "history_count": count,
+            "history_first_ts": first,
+            "history_latest_ts": latest,
+            "latest_pose_age_s": None if latest is None else round(now - latest, 3),
+            "capture_to_latest_s": None if latest is None else round(timestamp - latest, 3),
+        }
+
     def at_image_ts(self, timestamp: float) -> PoseSample | None:
         """Pair moving-camera pixels with a strict, at-most-200ms pose bracket."""
         with self._lock:

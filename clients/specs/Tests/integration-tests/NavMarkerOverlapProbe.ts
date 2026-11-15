@@ -63,6 +63,9 @@ export class ReviewScenario extends BaseScriptComponent {
     tracking.enabled = false;
     camera.setWorldRotation(rotation.multiply(quat.angleAxis(-20 * Math.PI / 180, vec3.right())));
     this.peer = new IntegrationV2Fixture(value => root.session.onTransportText(JSON.stringify(value) + "\n"), "native-overlap", () => getTime());
+    this.peer.onNavigationCancel = () => this.wire({ type: "state", server: { connected_clients: 1 },
+      lidar: { enabled: false, min_height_m: -10, max_height_m: 10, max_range_m: 5 },
+      nav: { state: "idle", outcome: null }, agent: { idle: true } });
     this.peer.onGoal = target => { this.pendingGoal = target; };
     root.transport.createSibling = () => this.peer;
     root.transport.connect = () => {}; root.transport.close = () => {};
@@ -235,9 +238,11 @@ export class ReviewScenario extends BaseScriptComponent {
     } else if (this.phase === 8) {
       const button = root.navigationController.marker.cancelButton;
       this.check("native-cancel-remains-ray-target", this.selected?.interactable === button.interactable);
-      const before = this.sent.filter(row => row.type === "estop_request").length;
+      const before = this.sent.filter(row => row.type === "interaction_request" && row.action === "cancel_navigation").length;
+      const stops = this.sent.filter(row => row.type === "estop_request").length;
       input.press(button);
-      this.check("native-cancel-press-once", this.sent.filter(row => row.type === "estop_request").length === before + 1);
+      this.check("native-cancel-press-once", this.sent.filter(row => row.type === "interaction_request" && row.action === "cancel_navigation").length === before + 1);
+      this.check("native-cancel-does-not-estop", this.sent.filter(row => row.type === "estop_request").length === stops && root.session.view().state?.safety?.stopped !== true);
       this.scene("native-overlap-result", false);
     } else {
       input.restore(); this.emit({ type: "complete", passed: !this.failed }); this.enabled = false;

@@ -50,7 +50,7 @@ export const NAV_FEEDBACK_ANIMATION_S = NAV_FEEDBACK_TIMING.traceS + NAV_FEEDBAC
 export const FLASH_DURATION_S = NAV_FEEDBACK_ANIMATION_S + NAV_FEEDBACK_TIMING.holdS;
 export const GOAL_SEND_INTERVAL_S = 0.35;
 export const GOAL_SEND_MIN_DISTANCE_M = 0.2;
-export type NavigationCommands = { sendGoal: (pose: NavigationPose) => void; cancel: () => void };
+export type NavigationCommands = { sendGoal: (pose: NavigationPose) => void; cancel: () => void | Promise<void> };
 
 /** Owns execution facts and terminal feedback. Placement drafts never modify this state. */
 export class NavigationGoalLifecycle {
@@ -77,6 +77,8 @@ export class NavigationGoalLifecycle {
   private flash: NavFlash | null = null;
   private elapsed = 0;
   private feedbackId = 0;
+  private cancelPending = false;
+  private cancelGeneration = 0;
   private confirmationId = 0;
   constructor(private readonly commands: NavigationCommands) {}
 
@@ -92,6 +94,8 @@ export class NavigationGoalLifecycle {
     const freshGoal = this.isFreshGoal(frame, view);
     const newAcceptedGoal = freshGoal && (frame.ts > this.newestTs || !sameYawPose(frame.pose, this.routeGoal));
     if (newAcceptedGoal) {
+      this.cancelPending = false;
+      this.cancelGeneration++;
       this.postAcceptanceIdle = false;
       this.sharedCancellation = false;
     }
@@ -178,10 +182,24 @@ export class NavigationGoalLifecycle {
   }
 
   cancel(): boolean {
-    if (!this.active || this.view?.capabilities?.estop.available !== true) return false;
-    try { this.commands.cancel(); } catch { return false; }
+    if (this.cancelPending || !this.active || this.view?.capabilities?.navigation.nav_goal.available !== true) return false;
+    try {
+      const pending = this.commands.cancel();
+      if (pending) {
+        this.cancelPending = true;
+        const timestamp = this.newestTs;
+        const generation = ++this.cancelGeneration;
+        pending.then(() => {
+          if (generation !== this.cancelGeneration) return;
+          this.cancelPending = false;
+          if (timestamp === this.newestTs && !this.resolved) this.finish("cancelled");
+        }, () => {
+          if (generation === this.cancelGeneration) this.cancelPending = false;
+        });
+      } else this.finish("cancelled");
+    } catch { return false; }
     this.sharedCancellation = false;
-    this.finish("cancelled"); return true;
+    return true;
   }
 
   tick(deltaS: number): void {
@@ -194,12 +212,14 @@ export class NavigationGoalLifecycle {
   snapshot() {
     return { pose: this.pose && clone(this.pose), active: this.active, followingPath: this.active && !this.awaitingFreshFacts && this.view?.nav?.state === "following_path",
       confirmationId: this.confirmationId,
-      cancelVisible: this.active && this.view?.capabilities?.estop.available === true,
+      cancelVisible: !this.cancelPending && this.active && this.view?.capabilities?.navigation.nav_goal.available === true,
       flash: this.flash, feedbackId: this.feedbackId, feedbackProgress: Math.min(1, this.elapsed / NAV_FEEDBACK_ANIMATION_S),
       attachedToRobot: !this.active && !this.flash, path: this.route };
   }
 
   reset(): void {
+    this.cancelPending = false;
+    this.cancelGeneration++;
     this.origin = null;
     this.pose = null;
     this.phase = "idle";
@@ -576,7 +596,7 @@ export class NavigationInteraction {
       this.collaboration.cancel(["live", "navigation_planning"]);
     this.direct = null;
   }
-  cancel(_now: number): boolean { this.cancelDrag(); return this.goals.cancel(); }
+  cancel(_now: number): boolean { const sent = this.goals.cancel(); this.cancelDrag(); return sent; }
   cancelDrag(): void { this.collaboration.cancel(["live", "navigation_planning"]); this.placement.clear(); this.previews.clear(); this.direct = null; }
   reset(): void { this.cancelDrag(); this.goals.reset(); this.origin = null; this.floor = null; this.armed = this.selected = false; }
   dispose(): void { this.reset(); this.previews.reset(); }

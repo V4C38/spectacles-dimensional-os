@@ -136,3 +136,32 @@ async def test_normal_stop_waits_for_ack_without_publishing_a_navigation_fault()
     finally:
         release.set()
         await service.close()
+
+
+@pytest.mark.asyncio
+async def test_new_goals_wait_until_navigation_cancellation_is_confirmed():
+    entered, release = threading.Event(), threading.Event()
+    runtime = Mock()
+
+    def recover(*_args):
+        entered.set()
+        assert release.wait(2)
+        return True
+
+    runtime.ar_navigation_recover.side_effect = recover
+    runtime.ar_navigation_goal.return_value = True
+    service = NavigationControlService(runtime, lambda: ("epoch", 1), Mock())
+    try:
+        service.cancel()
+        assert await asyncio.to_thread(entered.wait, 1)
+        assert service.stop_pending
+        assert not service.submit(PoseStamped(ts=2), "epoch", 1)
+        runtime.ar_navigation_goal.assert_not_called()
+        release.set()
+        await asyncio.wait_for(service._recovery, 1)
+        assert service.submit(PoseStamped(ts=3), "epoch", 1)
+        await service._worker
+        runtime.ar_navigation_goal.assert_called_once()
+    finally:
+        release.set()
+        await service.close()

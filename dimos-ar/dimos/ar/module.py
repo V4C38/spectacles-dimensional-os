@@ -87,6 +87,7 @@ from dimos.ar.websocket.protocol import (
     TimeSync,
     UserMessageRequest,
     encode_localization_observations_request,
+    encode_localization_pose_status,
     encode_localization_result,
     encode_pose,
     encode_state,
@@ -233,6 +234,7 @@ class ARModule(Module):  # type: ignore[misc]
     _state_publisher: RobotStatePublisher
     _nav_goal_coordinator: NavGoalCoordinator
     _policy: LocalizationPolicy
+    _waiting_for_localization_pose: set[str]
     _coordinator: LocalizationCoordinator
     _robot_observations: RobotObservationBuffer
     _profile: RobotProfile
@@ -277,6 +279,7 @@ class ARModule(Module):  # type: ignore[misc]
             self._pairing_log_at = 0.0
             self._pairing_rejected = 0
             self._pairing_accepted = 0
+            self._waiting_for_localization_pose = set()
             self._map_localization: MapLocalization | None = None
             self._replay_mode = (
                 self._recording_source
@@ -403,6 +406,7 @@ class ARModule(Module):  # type: ignore[misc]
                     marker_preference_s=self.config.localization.marker_preference_s,
                     headset_travel_threshold_m=self.config.localization.headset_travel_threshold_m,
                     timeout_s=self.config.localization.episode_timeout_s,
+                    allow_latest_robot_pose=self._replay_mode,
                 )
             self._localization_runner = LocalizationRunner(
                 coordinator=self._coordinator,
@@ -611,6 +615,35 @@ class ARModule(Module):  # type: ignore[misc]
         spec = self._policy.capture_spec
         if spec is None:
             return
+        waiting = self._waiting_for_localization_pose
+        available = self._odometry.history.at_server_ts(
+            time.time(), fallback_to_latest=self._replay_mode
+        ) is not None
+        if not available:
+            if client_id not in waiting:
+                waiting.add(client_id)
+                self._ws_server.schedule_send_to_client(
+                    client_id,
+                    encode_localization_pose_status(self._odometry.reference_id, available=False),
+                )
+                logger.warning(
+                    "marker localization waiting for robot telemetry",
+                    client_id=client_id,
+                    source_generation=self._odometry.generation,
+                    **self._odometry.history.capture_diagnostics(time.time(), now=time.time()),
+                )
+            self._policy.retry_failed_episode(client_id, backoff_s=2.0)
+            return
+        if client_id in waiting:
+            waiting.remove(client_id)
+            self._ws_server.schedule_send_to_client(
+                client_id,
+                encode_localization_pose_status(self._odometry.reference_id, available=True),
+            )
+            logger.info(
+                "marker localization robot telemetry recovered", client_id=client_id,
+                source_generation=self._odometry.generation,
+            )
         logger.info(
             "localization capture requested",
             client_id=client_id,
@@ -684,6 +717,7 @@ class ARModule(Module):  # type: ignore[misc]
             self._manipulation_service.suspend(client_id, deadline)
 
     def _on_client_disconnect(self, _websocket: ws_server.ServerConnection, client_id: str) -> None:
+        self._waiting_for_localization_pose.discard(client_id)
         self._previews.cancel(client_id)
         self._interaction_controller.state.disconnect(client_id)
         self._lidar_subscriptions.pop(client_id, None)
@@ -755,6 +789,8 @@ class ARModule(Module):  # type: ignore[misc]
     def _submit_navigation_goal(self, msg: NavGoalRequest) -> bool:
         service = self._navigation_service
         if service is None or self._safety.stopped or getattr(self, "_requires_mapping_restart", False):
+            return False
+        if isinstance(service, NavigationControlService) and (service.stop_pending or service.faulted):
             return False
         goal = self._nav_goal_coordinator.submit_goal(msg)
         self._broadcast_state()
@@ -947,6 +983,9 @@ class ARModule(Module):  # type: ignore[misc]
             self, "_requires_mapping_restart", False
         ) or self._safety.stopped:
             return
+        service = self._navigation_service
+        if isinstance(service, NavigationControlService) and (service.stop_pending or service.faulted):
+            return
         if not self._native_authorized(_client_id, msg, "joystick"):
             return
         if self.tele_cmd_vel.transport is None:
@@ -1103,6 +1142,7 @@ class ARModule(Module):  # type: ignore[misc]
         if self._map_localization is not None:
             self._map_localization.reset()
         self._policy.reset_source()
+        self._waiting_for_localization_pose.clear()
         self._cancel_tele_cmd_vel()
         self._safety.on_estop_request()
         self._ws_server.schedule_disconnect_all("robot odometry reset; restart mapping")

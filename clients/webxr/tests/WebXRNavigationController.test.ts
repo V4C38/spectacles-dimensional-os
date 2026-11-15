@@ -66,7 +66,7 @@ describe("WebXRNavigationController", () => {
       collaboration: immediateAuthority().collaboration,
       view: () => view(),
       sendText,
-      requestEstop: vi.fn(),
+      requestEstop: vi.fn(), requestNavigationCancellation: vi.fn(),
     };
     const navigation = new WebXRNavigationController(session as never);
     const origin = {
@@ -108,7 +108,7 @@ describe("WebXRNavigationController", () => {
           },
         }),
       sendText: vi.fn(),
-      requestEstop: vi.fn(),
+      requestEstop: vi.fn(), requestNavigationCancellation: vi.fn(),
     };
     const navigation = new WebXRNavigationController(session as never);
     navigation.applyView(session.view(), null, null, 0);
@@ -124,7 +124,7 @@ describe("WebXRNavigationController", () => {
       collaboration: immediateAuthority().collaboration,
       view: () => view(),
       sendText,
-      requestEstop: vi.fn(),
+      requestEstop: vi.fn(), requestNavigationCancellation: vi.fn(),
     };
     const navigation = new WebXRNavigationController(session as never);
     const origin = {
@@ -153,7 +153,7 @@ describe("WebXRNavigationController", () => {
     const sendText = vi.fn();
     const commits = vi.fn();
     const authority = immediateAuthority({ onCommit: commits });
-    const navigation = new WebXRNavigationController({ collaboration: authority.collaboration, view: () => view(), sendText, requestEstop: vi.fn() } as never);
+    const navigation = new WebXRNavigationController({ collaboration: authority.collaboration, view: () => view(), sendText, requestEstop: vi.fn(), requestNavigationCancellation: vi.fn() } as never);
     const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
     navigation.applyView(view(), origin, { position: [0, 0, 0], orientation: [0, 0, 0, 1] }, 1);
     navigation.setSelected(true);
@@ -178,7 +178,7 @@ describe("WebXRNavigationController", () => {
 
   it("smooths the dragged heading so it turns over several centimetres of travel", () => {
     const sendText = vi.fn();
-    const navigation = new WebXRNavigationController({ collaboration: immediateAuthority().collaboration, view: () => view(), sendText, requestEstop: vi.fn() } as never);
+    const navigation = new WebXRNavigationController({ collaboration: immediateAuthority().collaboration, view: () => view(), sendText, requestEstop: vi.fn(), requestNavigationCancellation: vi.fn() } as never);
     const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
     navigation.applyView(view(), origin, { position: [0, 0, 0], orientation: [0, 0, 0, 1] }, 1);
     const floorHit = (x: number) => [{ position: [x, 0, -0.5] as [number, number, number], normal: [0, 1, 0] as [number, number, number] }];
@@ -208,7 +208,7 @@ function fixture(previewSupported = false) {
   const sendText = vi.fn();
   const commits = vi.fn();
   const authority = immediateAuthority({ onCommit: commits });
-  const navigation = new WebXRNavigationController({ collaboration: authority.collaboration, view: () => current, sendText, requestEstop: vi.fn() } as never);
+  const navigation = new WebXRNavigationController({ collaboration: authority.collaboration, view: () => current, sendText, requestEstop: vi.fn(), requestNavigationCancellation: vi.fn() } as never);
   const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
   const floor = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number] };
   navigation.applyView(current, origin, floor, 0);

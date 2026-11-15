@@ -185,3 +185,20 @@ it("colors the connected setup heading green and resets it for other states", ()
   f.apply({ setupCompleted: false, connectComplete: true, wizardStep: "localization" });
   expect(f.textView(f.snap.wizardCardTitle).fontColor).toBe("#ffffff");
 });
+
+
+it.each([true, false])("allocates complete two-line localization status space (preview=%s)", capture => {
+  const f = harness();
+  const message = "VPS could not localize. Look at the robot marker.";
+  f.apply({ setupCompleted: false, wizardStep: "localization", localizationKind: capture ? "marker" : "unavailable",
+    wizardCardTitle: message, wizardCardBody: "Keep the marker visible" }); f.settle();
+  const title = f.textView(message), body = f.textView("Keep the marker visible");
+  const physicalHeight = title.rangeY * title.scale.y * 0.76;
+  const physicalFont = title.fontSize! * title.scale.y * 0.76;
+  expect(physicalHeight).toBeCloseTo(0.09);
+  expect(physicalFont).toBeCloseTo(xb.TextView.dpToMeters(23 * 1.35));
+  expect(physicalHeight).toBeGreaterThan(physicalFont * 1.2 * 2 + 0.01);
+  const bottom = title.position.y - title.rangeY * title.scale.y / 2;
+  const bodyTop = body.position.y + body.rangeY * body.scale.y / 2;
+  expect(bottom - bodyTop).toBeGreaterThan(0.015 / 0.76);
+});

@@ -16,6 +16,7 @@ export class IntegrationV2Fixture implements BindableWebSocketTransport {
   private interaction: Value = this.empty();
   onUpload: (bytes: Uint8Array) => void = () => {};
   onGoal: (pose: Value) => void = () => {};
+  onNavigationCancel: () => void = () => {};
   onFollowingRelease: (target: Value) => Value | null = () => null;
   onTakeover: () => void = () => {};
 
@@ -99,6 +100,18 @@ export class IntegrationV2Fixture implements BindableWebSocketTransport {
       request_id: request.request_id, epoch: state.epoch, revision: state.revision,
       status, code, ...(state.authority ? { lease_id: state.authority.lease_id } : {}) });
     if (action === "snapshot") { this.publish(); result(); return true; }
+    if (action === "cancel_navigation") {
+      if (request.epoch !== state.epoch) { result("stale", "epoch_changed"); return true; }
+      if (state.mode !== "manual" || state.motion_busy || state.authority?.kind?.startsWith("manipulation_")) {
+        result("busy", "robot_busy"); return true;
+      }
+      if (!state.active_goal || state.active_goal.ts !== request.goal_ts) { result("stale", "goal_changed"); return true; }
+      state.authority = null; state.preview = null; this.previewAim = null;
+      state.active_goal = null;
+      state.targets = state.targets.filter((target: Value) => target.domain !== "navigation");
+      if (state.target?.domain === "navigation") state.target = state.targets[state.targets.length - 1] ?? null;
+      this.bump(); this.onNavigationCancel(); result("accepted", "navigation_cancelled"); return true;
+    }
     if (action === "mode") {
       state.mode = request.mode; state.authority = null; state.preview = null; this.previewAim = null;
       this.clearDraft();

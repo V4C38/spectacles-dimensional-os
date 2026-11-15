@@ -50,7 +50,7 @@ only its own assertions on exit, including failures; a crashed owner releases th
 too. Source-audit, editor-launch and offline compilation commands also guard their
 execution. No screen-saver/password preferences are changed.
 
-For queued LS work, follow [AGENTS.md](../../../AGENTS.md#lens-studio-queued-work-and-automatic-screen-locking):
+For queued LS work, follow [AGENTS.md](../../../clients/specs/AGENTS.md#lens-studio-queued-work-and-automatic-screen-locking):
 start a unique `ls_awake.py` lease as soon as LS work is requested, retain it during
 preparation, and stop it in final cleanup after the last LS action. Detached leases
 expire after four hours by default or on owner exit. Replace an expiring lease
@@ -200,7 +200,7 @@ budget tests cannot establish headset thermal, memory or stereo behavior.
 
 ## Native execution policy
 
-[AGENTS.md](../../../AGENTS.md#lens-studio-integration-test-focus-limit) owns the focus-restoration budget, abort/resume rules, editor-only harness requirements and production handoff checks. Follow that policy for every run. The runner persists one focus budget across recorder processes and suites through `FocusPolicy.swift`. It disables the disposable harness on exit and gates success on restored production source with Auto Run false, matching compiler bytes and matching source/workspace manifests. Never deploy a disposable test copy.
+[AGENTS.md](../../../clients/specs/AGENTS.md#lens-studio-integration-test-focus-limit) owns the focus-restoration budget, abort/resume rules, editor-only harness requirements and production handoff checks. Follow that policy for every run. The runner persists one focus budget across recorder processes and suites through `FocusPolicy.swift`. It disables the disposable harness on exit and gates success on restored production source with Auto Run false, matching compiler bytes and matching source/workspace manifests. Never deploy a disposable test copy.
 
 ## Specs arm rendering
 

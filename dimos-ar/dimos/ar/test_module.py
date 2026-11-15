@@ -245,6 +245,8 @@ def test_hello_localization_unavailable_without_providers() -> None:
 
 def test_hello_prompts_observations_request() -> None:
     module = _module_with_policy(["fiducial_marker"])
+    now = time.time()
+    module._odometry.history.push(PoseStamped(ts=now, position=[0, 0, 0]), ts_server=now)
     module._on_client_connect(None, "c1")  # type: ignore[arg-type]
     assert module._ws_server.sent  # type: ignore[union-attr]
     client_id, text = module._ws_server.sent[0]  # type: ignore[union-attr]
@@ -1320,3 +1322,43 @@ async def test_new_clients_keep_hardware_capability_and_observe_fault_recovery()
         assert json.loads(module._ws_server.broadcasts[-1])["nav"]["state"] == "idle"
     finally:
         await service.close()
+
+
+def test_marker_only_capture_waits_for_live_telemetry_then_resumes() -> None:
+    module = _module_with_policy(["fiducial_marker"])
+    module._on_client_connect(None, "client")
+    messages = [json.loads(text) for _, text in module._ws_server.sent]
+    assert not any(message["type"] == "localization_observations_request" for message in messages)
+    assert any(message.get("reason") == "robot_pose_unavailable" for message in messages)
+    assert all("map_code" not in message for message in messages if message["type"] == "localization_status")
+    now = time.time()
+    module._odometry.history.push(PoseStamped(ts=now, position=[0, 0, 0]), ts_server=now)
+    module._send_observations_request("client")
+    messages = [json.loads(text) for _, text in module._ws_server.sent]
+    assert any(message.get("reason") == "robot_pose_available" for message in messages)
+    assert messages[-1]["type"] == "localization_observations_request"
+
+
+@pytest.mark.parametrize("blocked", ["pending", "faulted"])
+def test_navigation_recovery_blocks_both_goal_state_and_joystick_motion(blocked):
+    from dimos.ar.navigation.control import NavigationControlService
+
+    module = _module_with_policy([])
+    service = NavigationControlService(Mock(), lambda: ("epoch", 1), Mock())
+    service._stop_pending = blocked == "pending"
+    service._fault = blocked == "faulted"
+    module._navigation_service = service
+    module._nav_goal_coordinator = Mock()
+    module._broadcast_state = Mock()
+    module._tele_cmd_vel_publisher = Mock()
+    module.tele_cmd_vel = SimpleNamespace(transport=object(), publish=Mock())
+    command = _authorized_request(module, NavJoystickRequest(
+        linear=(0.4, 0.0, 0.0), angular=(0.0, 0.0, 0.0)
+    ), "c1")
+    module._on_nav_joystick_request(command, None, "c1")
+    module._tele_cmd_vel_publisher.handle.assert_not_called()
+    module.tele_cmd_vel.publish.assert_not_called()
+    assert not module._submit_navigation_goal(NavGoalRequest((1, 2, 0), (0, 0, 0, 1)))
+    module._nav_goal_coordinator.submit_goal.assert_not_called()
+    module._broadcast_state.assert_not_called()
+    assert module._interaction_controller.state.active_goal is None

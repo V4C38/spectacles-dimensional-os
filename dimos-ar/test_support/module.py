@@ -73,6 +73,7 @@ def _module_with_policy(
     module._pairing_log_at = 0.0
     module._pairing_rejected = 0
     module._pairing_accepted = 0
+    module._waiting_for_localization_pose = set()
     module._odometry = RobotOdometry(factor=profile.odom_scale_correction_factor)
     module._policy = LocalizationPolicy(providers, travel=module._odometry.travel)
     module._replay_mode = False

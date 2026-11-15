@@ -92,7 +92,7 @@ contract remains the evidence for installed DimOS planning/control.
 
 ## Native execution policy
 
-[AGENTS.md](../../AGENTS.md#lens-studio-integration-test-focus-limit) owns focus,
+[AGENTS.md](../../clients/specs/AGENTS.md#lens-studio-integration-test-focus-limit) owns focus,
 Auto Run, disposable-project and source-restoration rules. Every non-`--keep-open`
 native run, including focused probes, must pass the source handoff audit.
 
@@ -112,3 +112,24 @@ holds long enough for complete SIK gestures. Repeated panel/settings tours are
 covered by unit tests and native regressions where declared, not counted as golden coverage.
 The catalog limits WebXR applicability to these walkthroughs; Specs also runs the
 declared native regressions.
+
+## Review evidence
+
+The complete functional gate has no numeric test cutoff. Both client integration
+runners produce the canonical golden-path video by default and retain failure
+artifacts. Supplemental edited videos/reports are opt-in (`INTEGRATION_EXTRA_MEDIA=1`
+for WebXR, native `--extra-media`); this never skips functional tests.
+
+All generated test/review evidence defaults to the gitignored repository-root
+`Review Data/`: browser/native runs under `webxr/` and `specs/`, unit reports under
+`unit/`, coverage under `coverage/`, native compilation under `native-compile/`,
+and official mock contracts under `mock-manipulation/`. Disposable native review
+projects belong in `specs-work/`. Preserve explicit output overrides and quote paths
+containing spaces. Source fixtures, build products and dependency caches keep their
+own directories. Retain failed or incomplete run evidence during automatic cleanup.
+
+Publish the latest verified golden videos at `Review Data/webxr_golden-path.mp4`
+and `Review Data/specs_golden-path.mp4`. Replace each atomically after its complete
+run passes, including source handoff for Specs. A complete `--suite golden` native
+run can publish; failed, incomplete, focused-probe and `--keep-open` runs cannot.
+Keep only one published top-level golden video per client.

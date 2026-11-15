@@ -311,3 +311,18 @@ it("picks the root sphere independently of the robot body", () => {
     expect(ray.intersectObject(robot.markerCollider)).toHaveLength(0);
   } finally { robot.dispose(); }
 });
+
+it("presents Stopped on the navigation robot while shared E-stop is latched", () => {
+  const robot = new WebXRRobotPresenter();
+  const current = view({ nav: { state: "following_path", outcome: null },
+    state: { type: "state", server: { connected_clients: 2 },
+      lidar: { enabled: false, min_height_m: 0, max_height_m: 1, max_range_m: 1 },
+      nav: { state: "following_path", outcome: null }, agent: { idle: false },
+      safety: { stopped: true, can_resume: true, stop_id: "stop" } } });
+  robot.apply(current, null, true, [0, 1, -2]);
+  expect(robot.object.userData.activity).toBe("Stopped");
+  current.state!.safety!.stopped = false;
+  robot.apply(current, null, true, [0, 1, -2]);
+  expect(robot.object.userData.activity).toBe("Following Path");
+  robot.dispose();
+});

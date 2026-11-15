@@ -706,3 +706,30 @@ async def test_closed_controller_rejects_inflight_preview_and_new_agent_input():
     owner.stop()
     owner.confirm_native_mode("agent")
     assert not controller.agent_input_available
+
+
+def test_navigation_marker_cancel_stops_only_navigation_without_latching_safety():
+    module = _module_with_policy([])
+    state = module._interaction_controller.state
+    for client in ("owner", "other"):
+        state.connect(client)
+    state.handle("owner", InteractionRequest(
+        "grab", "acquire", state.epoch, kind="navigation_planning", source_id="hand"
+    ))
+    state.set_active_goal({"type": "nav_goal", "ts": 42.0,
+                           "pose": [1, 2, 0, 0], "path_poses": []})
+    module._navigation_service.cancel = Mock()
+    request = InteractionRequest("cancel", "cancel_navigation", state.epoch, goal_ts=42)
+    module._on_interaction_request(request, "other")
+    assert not module._safety.stopped
+    assert state.active_goal is None and state.authority is None
+    module._navigation_service.cancel.assert_called_once()
+    reply = json.loads(module._ws_server.interaction_sent[-1][1])
+    assert reply["status"] == "accepted" and reply["code"] == "navigation_cancelled"
+    module._on_interaction_request(request, "other")
+    module._navigation_service.cancel.assert_called_once()
+    module._on_interaction_request(InteractionRequest(
+        "next", "acquire", state.epoch, kind="navigation_planning", source_id="hand"
+    ), "other")
+    reply = json.loads(module._ws_server.interaction_sent[-1][1])
+    assert reply["status"] == "accepted"

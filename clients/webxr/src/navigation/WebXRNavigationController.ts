@@ -5,7 +5,7 @@ import type { ARModuleSession, ARModuleSessionState } from "@dimos-ar-client/web
 import type { Quat, Vec3, YawPose } from "@dimos-ar-client/ClientContracts";
 import { NavigationInteraction, NavigationPreviewCoordinator, deriveNavigationPresentation } from "@dimos-ar-client/navigation/NavigationInteraction";
 
-import { requestNavGoal } from "@dimos-ar-client/navigation/NavigationCommands";
+import { requestNavGoal, requestNavCancel } from "@dimos-ar-client/navigation/NavigationCommands";
 import { clientTrackingToWebxrPose, clientTrackingToWebxrPoint, webxrHeadingToClientTrackingPose, webxrToClientTrackingPoint } from "../utilities/WebXRCoordinates";
 import { WebXRNavGoalView, type NavFlash } from "./WebXRNavigationRenderer";
 import { FLOOR_AIM_RANGE_M, RAY_LENGTH_M, solveMeshPlacement, type MeshHit } from "../input/WebXRInteraction";
@@ -24,7 +24,7 @@ export class WebXRNavigationController {
   readonly interaction: NavigationInteraction;
 
   constructor(session: ARModuleSession) {
-    this.interaction = new NavigationInteraction({ sendGoal: pose => requestNavGoal(session, pose), cancel: () => session.requestEstop() }, new NavigationPreviewCoordinator(session), undefined, session.collaboration);
+    this.interaction = new NavigationInteraction({ sendGoal: pose => requestNavGoal(session, pose), cancel: () => requestNavCancel(session) }, new NavigationPreviewCoordinator(session), undefined, session.collaboration);
   }
 
   applyView(view: ARModuleSessionState, origin: ClientTrackingOrigin | null, robotFloor: { position: Vec3; orientation: Quat } | null, now: number): void {

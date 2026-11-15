@@ -133,3 +133,26 @@ it("publishes corrected agent camera poses at the shared cadence only while trac
   fails = false; available = false; publisher.tick(); ready = false; available = true; publisher.tick();
   ready = true; origins.clear(); publisher.tick(); expect(sent).toHaveLength(1);
 });
+
+
+it("accepts marker-only telemetry notices only for the current robot source", () => {
+  const clock = new FakeClock(), transport = new FakeTransport();
+  const session = new ARModuleSession({ clock, transport, clientTrackingOriginStore: new ClientTrackingOriginStore() });
+  const receive = (message: object) => session.onTransportText(JSON.stringify(message) + "\n");
+  session.start(); session.onTransportOpen(); receive(helloAt(0));
+  const status = { type: "localization_status", odom_reference_id: "fixture-odom", scope: "robot",
+    status: "deferred", reason: "robot_pose_unavailable" };
+  receive({ ...status, odom_reference_id: "old" });
+  expect(session.view().localizationNotice).toBeNull();
+  receive(status);
+  expect(session.view().localizationNotice).toBe("Robot telemetry unavailable. Waiting to localize.");
+  receive({ ...status, reason: "robot_pose_available" });
+  expect(session.view().localizationNotice).toBeNull();
+});
+
+it("does not let mapless telemetry notices bypass map context matching", () => {
+  const f = ready();
+  f.receive({ type: "localization_status", odom_reference_id: "fixture-odom", scope: "robot",
+    status: "deferred", reason: "robot_pose_unavailable" });
+  expect(f.session.view().localizationNotice).toBeNull();
+});

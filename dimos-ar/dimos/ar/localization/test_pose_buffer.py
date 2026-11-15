@@ -97,3 +97,17 @@ def test_bracket_interpolation_preserves_baseline_acceptance_beyond_nearest_gap(
     buffer.push(_pose(11, 2), ts_server=21)
     assert buffer.at_server_ts(20.5).position[0] == pytest.approx(1)
     assert buffer.at_server_ts(21.2) is None
+
+
+def test_capture_diagnostics_reports_bounds_without_copying_history():
+    buffer = PoseBuffer()
+    assert buffer.capture_diagnostics(10, now=12) == {
+        "capture_ts_server": 10, "history_count": 0, "history_first_ts": None,
+        "history_latest_ts": None, "latest_pose_age_s": None, "capture_to_latest_s": None,
+    }
+    buffer.push(_pose(8), ts_server=8)
+    buffer.push(_pose(9), ts_server=9)
+    assert buffer.capture_diagnostics(10, now=12) == {
+        "capture_ts_server": 10, "history_count": 2, "history_first_ts": 8,
+        "history_latest_ts": 9, "latest_pose_age_s": 3, "capture_to_latest_s": 1,
+    }

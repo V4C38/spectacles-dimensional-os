@@ -26,7 +26,7 @@ export class PresenceController {
     if (!context) return;
     const cues = active && origin ? transformCues(read(), p => clientTrackingToOdomPoint(p, origin),
       p => clientTrackingToOdomPose(p, origin)) : EMPTY;
-    const text = JSON.stringify({ type: "client_presence", ...context, ...roundCues(cues) }) + "\n";
+    const text = JSON.stringify({ type: "client_presence", map_code: context.map_code, odom_reference_id: context.odom_reference_id, ...roundCues(cues) }) + "\n";
     if (text === this.sent && (cues.pointers.length === 0 && !cues.panel || now - this.sentAt < 1)) return;
     this.port.send(text); this.sent = text; this.sentAt = now;
   }

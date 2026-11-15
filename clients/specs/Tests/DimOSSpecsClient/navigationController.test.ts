@@ -225,7 +225,7 @@ it("does not place an attached marker at world zero while the robot floor is sti
 it("reports transport failure from navigation cancellation", () => {
   let view: any;
   const controller = new SpecsNavigationController({
-    session: { collaboration: immediateAuthority({ now: () => getTime() }).collaboration, view: () => view, requestEstop() { throw new Error("WebSocket is not open"); } } as any,
+    session: { collaboration: immediateAuthority({ now: () => getTime() }).collaboration, view: () => view, requestNavigationCancellation() { throw new Error("WebSocket is not open"); } } as any,
     deviceTracking: { worldOptions: {} } as any,
     robotPresenter: {} as any, cameraObject: { getTransform: () => ({ getWorldPosition: () => new vec3(0, 100, 0) }) } as any, parent: {} as any, navGoalMarkerPrefab: {} as any,
   });

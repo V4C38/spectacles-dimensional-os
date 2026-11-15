@@ -63,6 +63,7 @@ class EmergencyStopController:
         if stop_id != self._stop_id or self.snapshot()["can_resume"] is not True:
             return False
         self._resuming = True
+        logger.info("operation resume started", stop_id=stop_id)
         return True
 
     def finish_resume(self, stop_id: str, *, succeeded: bool) -> bool:
@@ -72,6 +73,7 @@ class EmergencyStopController:
         if succeeded:
             self._requested = self._native_stopped = self._native_resumable = False
             self._stop_id = None
+        logger.info("operation resume completed", stop_id=stop_id, succeeded=succeeded)
         return succeeded
 
     def on_estop_request(self) -> bool:

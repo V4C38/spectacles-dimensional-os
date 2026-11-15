@@ -82,6 +82,7 @@ describe("activity survives pose presentation", () => {
     ["Responding", true, true, true],
     ["Thinking", true, false, false],
     ["Idle", false, false, true],
+    ["Stopped", true, true, false],
   ] as const)("preserves %s through localized and deferred fallback updates", (label, asrRunning, ttsPlaying, idle) => {
     const presenter = new RobotPresenter();
     const text = { text: "", textFill: { color: null } };
@@ -102,7 +103,7 @@ describe("activity survives pose presentation", () => {
     });
     const view = {
       connection: "ready", hello: { robot: GO2 },
-      nav: null, state: { agent: { idle } },
+      nav: null, state: { agent: { idle }, safety: { stopped: label === "Stopped", can_resume: true } },
     } as unknown as ARModuleSessionState;
     const debugEnabled = false;
     const ctx = { mainUi: motionRoot as unknown as SceneObject, debugEnabled };

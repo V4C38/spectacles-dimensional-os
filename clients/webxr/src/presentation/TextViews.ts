@@ -7,6 +7,7 @@ import { registerRayTarget } from "../input/WebXRInteraction";
 
 /** Authored text proportions stay consistent when the panel is resized. */
 export class SurfaceText extends xb.TextView {
+  textLineHeight: number | "normal" = "normal";
   private disposed = false;
   override dispose(): void { this.disposed = true; super.dispose(); }
   override updateLayout(): void {
@@ -24,10 +25,11 @@ export class SurfaceText extends xb.TextView {
     if (this.disposed) return;
     super.createTextSDF();
     if (!this.textObj) return;
-    const text = this.textObj as THREE.Mesh & { clipRect: number[]; overflowWrap: string };
+    const text = this.textObj as THREE.Mesh & { clipRect: number[]; overflowWrap: string; lineHeight: number | "normal" };
     const offset = this.anchorX === "left" ? -this.rangeX / 2 : this.anchorX === "right" ? this.rangeX / 2 : 0;
     text.clipRect = [-this.rangeX / 2 - offset, -this.rangeY / 2, this.rangeX / 2 - offset, this.rangeY / 2];
     text.overflowWrap = "break-word";
+    text.lineHeight = this.textLineHeight;
   }
 
   color(color: string): void {

@@ -197,7 +197,7 @@ class InteractionController:
                 )
             if authority.kind == "joystick":
                 self._ports.cancel_joystick()
-            elif authority.kind == "live" and reason not in {"released", "confirmed"}:
+            elif authority.kind == "live" and reason not in {"released", "confirmed", "navigation_cancelled"}:
                 self._ports.cancel_joystick()
                 self._ports.stop_navigation()
                 self._state.set_active_goal(None)
@@ -213,6 +213,22 @@ class InteractionController:
         manipulation = self._ports.manipulation()
         self._state.poll()
         self.drain_retirements()
+        if request.action == "cancel_navigation":
+            previous = self._state.preflight(client_id, request)
+            if previous is not None:
+                self._ports.send(client_id, encode_text(previous.wire()))
+                return
+            result = self._state.handle(client_id, request)
+            if result.status == "accepted":
+                self.drain_retirements()
+                self._ports.stop_navigation()
+                self._ports.retire_navigation()
+                self.broadcast(force=True)
+                self._ports.broadcast_state()
+                logger.info("navigation cancelled", client_id=client_id,
+                            goal_ts=request.goal_ts, epoch=request.epoch)
+            self._ports.send(client_id, encode_text(result.wire()))
+            return
         if request.action == "takeover":
             if self._state.takeover_pending(client_id, request.request_id):
                 return

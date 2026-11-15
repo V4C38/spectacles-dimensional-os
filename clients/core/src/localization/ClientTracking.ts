@@ -30,7 +30,7 @@ export class ClientTrackingOriginStore {
   setMapContext(context: ReadonlyFacts<MapContext>, reset = false): void {
     if (reset || (this.context !== null && !this.acceptsContext(context)) ||
         (this.alignment !== null && (this.alignment.map_code !== context.map_code || this.alignment.odom_reference_id !== context.odom_reference_id))) this.clear();
-    this.context = { ...context };
+    this.context = { map_code: context.map_code, odom_reference_id: context.odom_reference_id };
   }
   applyMapTransform(transform: ReadonlyFacts<LocalizationMapTransform>): void {
     if (!this.acceptsContext(transform) || (this.transform !== null && transform.revision <= this.transform.revision)) return;

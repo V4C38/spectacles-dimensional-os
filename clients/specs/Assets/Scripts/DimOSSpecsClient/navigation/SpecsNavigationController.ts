@@ -1,6 +1,6 @@
 import type { ReadonlyFacts } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 import type { ClientTrackingOrigin as MutableClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
-import { requestNavGoal } from "DimOSARClient.lspkg/Scripts/DimOSARClient/navigation/NavigationCommands";
+import { requestNavGoal, requestNavCancel } from "DimOSARClient.lspkg/Scripts/DimOSARClient/navigation/NavigationCommands";
 import { type NavFlash, deriveNavigationPresentation, NavigationInteraction, type Placement, NavigationPreviewCoordinator } from "DimOSARClient.lspkg/Scripts/DimOSARClient/navigation/NavigationInteraction";
 
 
@@ -41,7 +41,7 @@ export class SpecsNavigationController {
   }) {
     deps.deviceTracking.worldOptions.enableWorldMeshesTracking = false;
     this.interaction = new NavigationInteraction({ sendGoal: pose => requestNavGoal(deps.session, pose),
-      cancel: () => deps.session.requestEstop() }, new NavigationPreviewCoordinator(deps.session), 1 / 0.08, deps.session.collaboration);
+      cancel: () => requestNavCancel(deps.session) }, new NavigationPreviewCoordinator(deps.session), 1 / 0.08, deps.session.collaboration);
   }
 
   isArmed(): boolean {

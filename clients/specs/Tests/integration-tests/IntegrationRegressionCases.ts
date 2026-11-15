@@ -78,7 +78,8 @@ export function runRegressionCase(scenario: ReviewScenario, id: string): void {
       const before = scenario.sent.length;
       scenario.after(0.5, () => { scenario.press(menu.modeButtons[1]); scenario.press(menu.stop); scenario.press(menu.lidarButtons[2]); });
       scenario.later(0.9, () => ui.getOperatingMode() === "manual" && menu.modeButtons[1].inactive && menu.stop.inactive &&
-        !scenario.sent.slice(before).some(row => ["nav_goal_request", "estop_request", "user_message_request", "lidar_settings_request"].includes(row.type)));
+        !scenario.sent.slice(before).some(row => ["nav_goal_request", "estop_request", "user_message_request", "lidar_settings_request"].includes(row.type) ||
+          row.type === "interaction_request" && row.action === "cancel_navigation"));
       break;
     }
     case "localization_providers": {

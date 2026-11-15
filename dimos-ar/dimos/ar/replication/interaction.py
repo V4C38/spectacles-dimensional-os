@@ -42,6 +42,7 @@ InteractionAction = Literal[
     "confirm",
     "cancel",
     "cancel_acquire",
+    "cancel_navigation",
     "snapshot",
     "mode",
 ]
@@ -63,6 +64,7 @@ class InteractionRequest:
     group_id: str | None = None
     speed_scale: float | None = None
     gripper: float | None = None
+    goal_ts: float | None = None
 
 
 @dataclass(frozen=True)
@@ -633,6 +635,8 @@ class InteractionCoordinator:
         cache = self._requests[client_id]
         if request.action == "snapshot":
             result = self._result(request, "accepted", "snapshot")
+        elif request.action == "cancel_navigation":
+            result = self._cancel_navigation(request)
         elif request.action == "cancel_acquire":
             acquisition = request.acquisition_id or request.request_id
             self._remember(self._cancelled[client_id], acquisition, None)
@@ -653,6 +657,21 @@ class InteractionCoordinator:
             result = self._owned(request, commit)
         self._remember(cache, request.request_id, result)
         return result
+
+    def _cancel_navigation(self, request: InteractionRequest) -> InteractionResult:
+        if self._mode != "manual" or self._takeover is not None or self.motion_busy:
+            return self._result(request, "busy", "robot_busy")
+        if self._authority is not None and self._authority.kind.startswith("manipulation_"):
+            return self._result(request, "busy", "robot_busy")
+        if self.active_goal is None or self.active_goal.get("ts") != request.goal_ts:
+            return self._result(request, "stale", "goal_changed")
+        self._retire("navigation_cancelled")
+        self._targets.pop(("navigation", None), None)
+        if self._active_target_key == ("navigation", None):
+            self._active_target_key = None
+        self.preview = self.active_goal = None
+        self._revision += 1
+        return self._result(request, "accepted", "navigation_cancelled")
 
     def _change_mode(self, request: InteractionRequest) -> InteractionResult:
         if request.mode not in ("manual", "agent"):
@@ -860,6 +879,7 @@ ACTIONS = frozenset(
         "confirm",
         "cancel",
         "cancel_acquire",
+        "cancel_navigation",
         "snapshot",
         "mode",
     }
@@ -915,9 +935,13 @@ def decode_interaction_request(data: dict[str, Any]) -> InteractionRequest:
             lower = 0.0 if field == "gripper" else 0.000001
             if not lower <= value <= 1:
                 raise ValueError(f"invalid {field}")
+    if action == "cancel_navigation":
+        identifier(data, "epoch", required=True)
+        finite_number(data.get("goal_ts"), "goal_ts")
     return InteractionRequest(
         request_id=request_id,
         action=cast("InteractionAction", action),
+        goal_ts=finite_number(data["goal_ts"], "goal_ts") if "goal_ts" in data else None,
         epoch=identifier(data, "epoch"),
         acquisition_id=identifier(data, "acquisition_id"),
         lease_id=identifier(data, "lease_id"),
