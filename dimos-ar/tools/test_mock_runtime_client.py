@@ -82,13 +82,14 @@ async def test_stream_target_updates_use_shared_authority_and_increasing_sequenc
     client = helper.MockRuntimeClient(socket)
     client.simulated = True
     client.shared = {"epoch": "epoch"}
+    client.shared_frame_id = "shared-map"
     client.lease = "lease"
     pose = {"position": [0, 0, 1], "orientation": [0, 0, 0, 1]}
     first = await client.update_target(pose, speed_scale=0.25)
     second = await client.update_target(pose, speed_scale=0.5)
     sent = [json.loads(call.args[0]) for call in socket.send.call_args_list]
     assert second > first
-    assert sent[0] == {"type": "interaction_request", "request_id": f"target-{first}",
+    assert sent[0] == {"type": "interaction_request", "shared_frame_id": "shared-map", "request_id": f"target-{first}",
                        "action": "update", "epoch": "epoch", "lease_id": "lease",
                        "sequence": first, **pose, "speed_scale": 0.25}
 
@@ -113,7 +114,7 @@ async def test_control_reader_preserves_batched_frames_and_updates_feedback_with
 @pytest.mark.asyncio
 @pytest.mark.parametrize("simulated", [False, None])
 async def test_context_rejects_physical_runtime_before_any_motion(monkeypatch, simulated):
-    hello = {"type": "hello", "protocol_version": 2, "capabilities": {
+    hello = {"type": "hello", "protocol_version": 2, "shared_frame_id": "shared-map", "capabilities": {
         "manipulation": {"available": True}}, "bulk_url": "/bulk", "client_id": "client",
         "bulk_token": "token", "time_sync": {"ts_server": 1}}
     control_frames = [{"type": "interaction_state", "epoch": "epoch"},
@@ -161,3 +162,13 @@ async def test_acquire_waits_for_authoritative_completion_after_native_result():
     client.shared = {"epoch": "epoch", "motion_busy": False}
     await acquire
     client.request.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_spatial_requests_use_the_current_shared_frame():
+    socket = SimpleNamespace(send=AsyncMock())
+    client = helper.MockRuntimeClient(socket)
+    client.shared_frame_id = "vps-frame"
+    client.pending.put_nowait({"request_id": "official-mock-1", "status": "accepted"})
+    await client.request("interaction_request", "acquire", position=[1, 2, 3])
+    assert json.loads(socket.send.call_args.args[0])["shared_frame_id"] == "vps-frame"

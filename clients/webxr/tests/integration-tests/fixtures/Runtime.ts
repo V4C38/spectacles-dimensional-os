@@ -35,6 +35,7 @@ export async function bootstrap(
     JSON.parse(readFileSync(new URL("./OpenYAM.json", import.meta.url), "utf8")), peer, value => send(value)) : null;
   const interactionState = () => send(peer.snapshot(arm?.interactionFacts()));
   page.once("close", () => arm?.dispose());
+  let trackingReferenceId = "";
   let captureTs = 0;
   let acceptedCaptureTs = 0;
   let lidarSettings = {
@@ -88,6 +89,7 @@ export async function bootstrap(
       }
       const command = JSON.parse(raw);
       commands.push(command);
+      if (command.type === "localization_tracking") trackingReferenceId = command.tracking_reference_id;
       const available = { available: true, reason: null };
       if (command.type === "hello_request") {
         arm?.anchor(command.ts_client);
@@ -95,7 +97,7 @@ export async function bootstrap(
           resume_token: "fixture-resume",
           odom_reference_id: "fixture-odom",
           localization: { providers: ["fiducial_marker"] },
-          type: "hello", presence: true, protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
+          type: "hello", shared_frame_id: "fixture-map", presence: true, protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
           client_id: "integration",
           time_sync: {
             ts_client: command.ts_client,
@@ -106,7 +108,7 @@ export async function bootstrap(
             dimos_version: "0.4.0",
             armodule_version: "0.2.0",
           },
-          robot: { odom_scale_correction_factor: 1, ...shared.fixtures.robot, ...(armIdentity ? { display_name: "OpenYAM" } : {}) },
+          robot: { ...shared.fixtures.robot, ...(armIdentity ? { display_name: "OpenYAM" } : {}) },
           capabilities: {
             manipulation: options.manipulation ? available : { available: false, reason: "No arm" },
             object_detection: { available: false, reason: "No detector" },
@@ -305,7 +307,7 @@ export async function bootstrap(
       type: "localization_result",
       position,
       orientation: [0, 0, 0, 1],
-      confidence: 1,
+      alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: trackingReferenceId, confidence: 1,
       ts: captureTs,
     });
   };

@@ -3,7 +3,7 @@ import { ARM_VISUAL_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/mani
 import { NAV_FEEDBACK_ANIMATION_S, NAV_FEEDBACK_TIMING, type NavFlash } from "DimOSARClient.lspkg/Scripts/DimOSARClient/navigation/NavigationInteraction";
 import { FLOOR_MARKER_STYLE, NAVIGATION_COLORS, NAVIGATION_OUTCOME_STYLE, NAVIGATION_PREVIEW_ARROW_STYLE, WORLD_DASH_STYLE, circleStrokeSegments, navigationCancelReveal, ROUTE_STYLE } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/WorldPresentation";
 import { AdaptiveStrokeRenderer, WorldMeshRenderer, circleMesh, strokeMesh2D, type WorldColor } from "../presentation/WorldMeshRenderer";
-import { type ClientTrackingOrigin as MutableClientTrackingOrigin, odomToClientTrackingYawPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import { type ClientTrackingOrigin as MutableClientTrackingOrigin, mapToClientTrackingYawPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 
 import { prepareRoutePath, routeRibbon } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/RoutePathGeometry";
 
@@ -185,7 +185,7 @@ export class NavigationRouteRenderer {
     }
     this.lastPath = path; this.lastOrigin = input.origin; this.lastParameters = parameters; this.lastSolid = solid;
     const converted = path.map(p => {
-      const s = clientTrackingToSpecsYawPose(odomToClientTrackingYawPose(p, input.origin!));
+      const s = clientTrackingToSpecsYawPose(mapToClientTrackingYawPose(p, input.origin!));
       return [s[0] / 100, s[1] / 100, s[2] / 100] as [number, number, number];
     });
     const circle = (c?: RouteCircle) => c && ({ center: c.center.map(v => v / 100) as [number, number, number], radius: c.radius / 100 });

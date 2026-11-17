@@ -138,3 +138,22 @@ def test_profile_settings_preserve_policy_and_unrelated_config(tmp_path):
         "providers": [{"type": "vps", "map_code": "new"}],
         "travel_threshold_m": 5,
     }
+
+
+def test_saved_lidar_map_is_go2_only_and_rejected_before_persistence(tmp_path):
+    profiles = RobotProfiles(tmp_path / "profiles.json")
+    go2 = profiles.all()[0]
+    profiles.update(go2["id"], settings={"native_map_file": "office"})
+    assert profiles.snapshot(go2["id"], "unitree_go2_ar")["localization"]["native_map_file"] == "office"
+    arm = profiles.create("openyam")
+    with pytest.raises(ValueError, match="only by Unitree Go2"):
+        profiles.update(arm["id"], settings={"native_map_file": "office"})
+    assert profiles.get(arm["id"]) == arm
+    # Reject manually edited persisted profiles at launch as well.
+    stored = profiles.all()
+    next(p for p in stored if p["id"] == arm["id"])["armodule"]["localization"]["native_map_file"] = "office"
+    profiles.path.write_text(json.dumps(stored))
+    with pytest.raises(ValueError, match="only by Unitree Go2"):
+        profiles.snapshot(arm["id"], "openyam_ar_planner")
+    profiles.update(arm["id"], settings={"native_map_file": None})
+    assert profiles.snapshot(arm["id"], "openyam_ar_planner")["localization"]["native_map_file"] is None

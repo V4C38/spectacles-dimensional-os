@@ -1,10 +1,13 @@
 import type { ClientClock, Hello, Lidar, Outbound } from "../ClientContracts";
 import type { BulkTransfer } from "./BulkTransfer";
 import { decodeOutboundObject } from "./protocol";
+import { composePose } from "../localization/ClientTracking";
+import type { ManipulationPose } from "../manipulation/ManipulationTypes";
 
 
 type Value = Record<string, unknown>;
-type Pending = { value: Value; deadline: number; stream: string | null; generation: number; connection: number };
+type Pending = { value: Value; deadline: number; stream: string | null; generation: number; connection: number;
+  rebase?: ManipulationPose; spatialRetired?: boolean };
 
 /** Correlation outlives hydration work, but never a newer stream or connection. */
 export class DeferredAssetReplies {
@@ -19,6 +22,14 @@ export class DeferredAssetReplies {
 
   markDirty(): void { this.dirty = true; }
   reset(): void { this.connection++; this.generations.clear(); this.pending.clear(); this.dirty = false; }
+  /** Native request-correlated trajectories survive a shared-frame transition. */
+  discardSpatial(rebase?: ManipulationPose): void {
+    for (const [key, reply] of this.pending) {
+      if (reply.value.type !== "manipulation_result") this.pending.delete(key);
+      else if (rebase) reply.rebase = reply.rebase ? composePose(rebase, reply.rebase) : rebase;
+      else reply.spatialRetired = true;
+    }
+  }
   drop(key: string): void { this.pending.delete(key); }
   deadline(requestId: string): number | null {
     return this.pending.get(requestId)?.deadline ?? [...this.pending.values()].find(reply =>
@@ -28,12 +39,12 @@ export class DeferredAssetReplies {
     this.generations.set(stream, (this.generations.get(stream) ?? 0) + 1);
     for (const [key, reply] of this.pending) if (reply.stream === stream) this.pending.delete(key);
   }
-  defer(value: Value, deadline: number | null): void {
+  defer(value: Value, deadline: number | null, spatialRetired = false): void {
     const key = String(value.request_id ?? value.preview_id ?? value.type);
     const stream = value.type === "manipulation_state" || value.type === "interaction_state" ? value.type : null;
     if (!this.pending.has(key) && this.pending.size >= 64) throw new Error("Asset correlation budget exceeded");
     this.pending.set(key, { value, deadline: deadline ?? this.clock.now() + 120,
-      stream, generation: stream ? this.generations.get(stream) ?? 0 : 0, connection: this.connection });
+      stream, generation: stream ? this.generations.get(stream) ?? 0 : 0, connection: this.connection, spatialRetired });
     this.dirty = true;
   }
   tick(start: number): void {
@@ -50,7 +61,12 @@ export class DeferredAssetReplies {
             reply.deadline = hydrated.deadline ?? reply.deadline;
             this.pending.set(key, reply); continue;
           }
-          const message = decodeOutboundObject(hydrated.value);
+          const value = { ...hydrated.value };
+          if (reply.value.type === "manipulation_result") for (const field of ["pose", "sample_pose"]) {
+            if (reply.spatialRetired) delete value[field];
+            else if (reply.rebase && value[field]) value[field] = composePose(reply.rebase, value[field] as ManipulationPose);
+          }
+          const message = decodeOutboundObject(value);
           if (message.type !== "hello" && this.current(reply)) this.apply(message);
         } catch (error) { this.pending.delete(key); this.report(error); }
       }

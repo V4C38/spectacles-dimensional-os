@@ -6,7 +6,7 @@ import struct
 
 import pytest
 
-from dimos.ar.localization.types import CapturePolicy, Intrinsics, LocalizationResult
+from dimos.ar.localization.types import CapturePolicy, Intrinsics
 from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavJoystickRequest, NavState
 from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, Capability, CapabilityName
 from dimos.ar.robot.profiles.profile import RobotDescription
@@ -37,7 +37,6 @@ from dimos.ar.websocket.protocol import (
     encode_hello,
     encode_lidar_binary,
     encode_localization_observations_request,
-    encode_localization_result,
     encode_pose,
     encode_state,
     encode_text,
@@ -87,6 +86,7 @@ def _sample_hello(client_id: str = "abc123") -> Hello:
         navigation_inputs=_sample_navigation_inputs(),
         localization={"providers": []},
         odom_reference_id="test-odom",
+        shared_frame_id="test-shared",
         bulk_url="/bulk", bulk_token="b" * 64, bulk_epoch="bulk-epoch",
         resume_token="r" * 64,
     )
@@ -196,7 +196,7 @@ def test_nested_navigation_payload_shape() -> None:
     payload = _parse_json_line(
         encode_text(navigation_payload(
             NavGoalFrame(
-                pose=(1.0, 2.0, 0.0, 0.7854),
+                shared_frame_id="test-shared",                pose=(1.0, 2.0, 0.0, 0.7854),
                 path_poses=[(0.0, 0.0, 0.0, 0.0), (1.0, 2.0, 0.0, 0.7854)],
                 ts=5.0,
             )
@@ -209,7 +209,7 @@ def test_nested_navigation_payload_shape() -> None:
     clear_payload = _parse_json_line(
         encode_text(navigation_payload(
             NavGoalFrame(
-                pose=None,
+                shared_frame_id="test-shared",                pose=None,
                 path_poses=[],
                 ts=6.0,
             )
@@ -278,23 +278,6 @@ def test_encode_localization_observations_request_requires_timeout_for_preferred
             capture_policy=CapturePolicy.ROBOT_LOS_PREFERRED,
             observation_count=3,
         )
-
-
-def test_encode_localization_result() -> None:
-    msg = _parse_json_line(
-        encode_localization_result(
-            LocalizationResult(
-                position=(1.0, 2.0, 3.0),
-                orientation=(0.0, 0.0, 0.0, 1.0),
-                confidence=0.8,
-                ts_server=100.0,
-            )
-        )
-    )
-    assert msg["type"] == "localization_result"
-    assert msg["position"] == [1.0, 2.0, 3.0]
-    assert msg["confidence"] == 0.8
-    assert msg["ts"] == 100.0
 
 
 def test_decode_nav_goal_request_requires_orientation() -> None:
@@ -578,7 +561,7 @@ def test_nav_preview_request_defaults_and_roundtrip(preview: bool | None) -> Non
     request = decode_inbound(json.dumps(body))
     assert isinstance(request, NavGoalRequest)
     assert request.preview is (preview is True)
-    frame = NavGoalFrame(pose=None, path_poses=[], ts=1, preview=request.preview)
+    frame = NavGoalFrame(shared_frame_id="test-shared", pose=None, path_poses=[], ts=1, preview=request.preview)
     response = json.loads(encode_text(navigation_payload(frame)))
     assert response.get("preview", False) is request.preview
     assert "pose" not in response
@@ -629,7 +612,7 @@ def test_preview_identity_roundtrip() -> None:
     )
     assert isinstance(request, NavGoalRequest)
     assert request.preview_id == "aim"
-    frame = NavGoalFrame(pose=None, path_poses=[], ts=1, preview=True, preview_id="aim")
+    frame = NavGoalFrame(shared_frame_id="test-shared", pose=None, path_poses=[], ts=1, preview=True, preview_id="aim")
     assert json.loads(encode_text(navigation_payload(frame)))["preview_id"] == "aim"
 
 
@@ -665,13 +648,10 @@ def test_localization_rejects_nonfinite_capture_timestamp() -> None:
         decode_localization_observations(bytes(frame))
 
 
-def test_hello_always_advertises_odometry_heuristic() -> None:
-    from dataclasses import replace
-
-    hello = _sample_hello()
-    assert json.loads(encode_hello(hello))["robot"]["odom_scale_correction_factor"] == 1.0
-    corrected = replace(hello, robot=replace(hello.robot, odom_scale_correction_factor=1.25))
-    assert json.loads(encode_hello(corrected))["robot"]["odom_scale_correction_factor"] == 1.25
+def test_hello_advertises_metric_shared_frame() -> None:
+    payload = json.loads(encode_hello(_sample_hello()))
+    assert payload["shared_frame_id"] == "test-shared"
+    assert "odom_scale_correction_factor" not in payload["robot"]
 
 
 def test_hello_carries_optional_odometry_reference() -> None:

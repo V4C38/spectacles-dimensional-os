@@ -7,9 +7,6 @@ from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, CapabilityName
 from dimos.ar.robot.profiles.profile import FiducialMarkerMount, RobotProfile
 from dimos.robot.unitree.go2.dds.extrinsics import BASE_TO_CAMERA
 
-# Observed Go2 dead-reckoning bias: an empirical AR XY heuristic, not a sensor calibration.
-ODOM_SCALE_CORRECTION_FACTOR = 1.25
-
 _FIDUCIAL_DICTIONARY = "DICT_APRILTAG_36h11"
 _FIDUCIAL_BLACK_SIZE_M = 0.056
 _DEFAULT_FIDUCIAL_MARKER_ID = 0
@@ -28,7 +25,6 @@ UNITREE_GO2_PROFILE = RobotProfile(
     body_bounds_m=(0.70, 0.50, 0.55),
     footprint_m=(0.70, 0.50),
     base_height_m=0.33,
-    odom_scale_correction_factor=ODOM_SCALE_CORRECTION_FACTOR,
     fiducial_dictionary=_FIDUCIAL_DICTIONARY,
     fiducial_marker_mounts=(
         FiducialMarkerMount(

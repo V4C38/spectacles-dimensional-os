@@ -103,6 +103,7 @@ import { launcherPresentation } from "./presentation.mjs";
   const vpsPanel = $("vpsPanel");
   const vpsVendor = $("vpsVendor");
   const mapCode = $("mapCode");
+  const nativeMapFile = $("nativeMapFile");
   const multisetClientId = $("multisetClientId");
   const multisetClientSecret = $("multisetClientSecret");
   const revealMultiset = $("revealMultiset");
@@ -146,6 +147,8 @@ import { launcherPresentation } from "./presentation.mjs";
     if (!spec) return;
     blueprintInfo.textContent = spec.description || "";
     const manipulation = spec.manipulation;
+    $("nativeMapField").classList.toggle("hidden", manipulation);
+    nativeMapFile.disabled = configIsLocked() || manipulation;
 
 
     const rememberedSource = preferences.values[`${configuration.replayRobot}_source`] || "auto";
@@ -334,6 +337,7 @@ import { launcherPresentation } from "./presentation.mjs";
       vps: vpsEnabled.checked,
       vps_vendor: vpsVendor.value || "multiset",
       map_code: mapCode.value.trim() || null,
+      native_map_file: manipulationSelected() ? null : nativeMapFile.value.trim() || null,
       mounts: editor.mounts,
       dimos_log_level: logLevel.value || configuration.defaultLogLevel,
     };
@@ -373,6 +377,7 @@ import { launcherPresentation } from "./presentation.mjs";
     fiducialEnabled.checked = Boolean(data.fiducial_marker);
     vpsEnabled.checked = Boolean(data.vps);
     vpsVendor.value = data.vps_vendor || "multiset";
+    if (document.activeElement !== nativeMapFile) nativeMapFile.value = data.native_map_file || "";
     if (document.activeElement !== mapCode) {
       mapCode.value = data.map_code || "";
     }
@@ -414,6 +419,7 @@ import { launcherPresentation } from "./presentation.mjs";
     vpsEnabled.disabled = locked;
     vpsVendor.disabled = locked;
     mapCode.disabled = locked;
+    nativeMapFile.disabled = locked || manipulationSelected();
     multisetClientId.disabled = locked;
     multisetClientSecret.disabled = locked;
     revealMultiset.disabled = locked;
@@ -943,11 +949,11 @@ import { launcherPresentation } from "./presentation.mjs";
     syncConfigCards();
     schedulePersist();
   });
-  [vpsVendor, mapCode, multisetClientId, multisetClientSecret, logLevel].forEach((el) => {
+  [vpsVendor, mapCode, nativeMapFile, multisetClientId, multisetClientSecret, logLevel].forEach((el) => {
     el.addEventListener("change", schedulePersist);
     el.addEventListener("blur", schedulePersist);
   });
-  [mapCode, multisetClientId, multisetClientSecret].forEach((el) => {
+  [mapCode, nativeMapFile, multisetClientId, multisetClientSecret].forEach((el) => {
     el.addEventListener("input", syncConfigCards);
   });
   logLevel.addEventListener("change", syncConfigCards);
@@ -1211,6 +1217,7 @@ import { launcherPresentation } from "./presentation.mjs";
     fiducialEnabled.checked = settings.fiducial_marker;
     vpsEnabled.checked = settings.vps;
     mapCode.value = settings.map_code || "";
+    nativeMapFile.value = settings.native_map_file || "";
     editor.mounts = settings.mounts.map(cloneMount);
     Object.entries(policyInputs).forEach(([key, input]) => {
       input.value = String(settings[key] ?? policyDefaults[key]);

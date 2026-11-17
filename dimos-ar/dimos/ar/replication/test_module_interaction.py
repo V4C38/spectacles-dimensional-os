@@ -9,11 +9,11 @@ import pytest
 
 from dimos.ar.manipulation.protocol import ManipulationRequest
 from dimos.ar.replication.interaction import InteractionRequest
-from test_support.module import _module_with_policy
+from test_support.module import _module_with_localization
 
 
 def arm_module():
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     module._manipulation_service = Mock()
     module._interaction_controller.state.connect("owner")
     result = module._interaction_controller.state.handle(
@@ -197,7 +197,7 @@ def test_source_reset_stops_old_epoch_even_without_editing_owner():
 
 @pytest.mark.asyncio
 async def test_manual_mode_requires_positive_native_quiescence():
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     module._interaction_controller.state.connect("owner")
     module._interaction_controller.state.handle(
         "owner", InteractionRequest("agent", "mode", module._interaction_controller.state.epoch, mode="agent")
@@ -214,7 +214,7 @@ async def test_manual_mode_requires_positive_native_quiescence():
 
 @pytest.mark.asyncio
 async def test_native_agent_resume_refusal_restores_manual_mode():
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     module._interaction_controller.state.connect("owner")
     module._agent_control = SimpleNamespace(ar_agent_set_manual=lambda _manual: False)
     module._on_interaction_request(
@@ -364,7 +364,7 @@ def test_released_target_motion_reserves_revision_after_revoke(action):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("epoch", [None, "retired-source"])
 async def test_stale_manual_mode_never_reaches_native(epoch):
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     module._interaction_controller.state.connect("owner")
     module._interaction_controller.state.confirm_native_mode("agent")
     native = Mock(return_value=True)
@@ -384,7 +384,7 @@ async def test_stale_manual_mode_never_reaches_native(epoch):
 @pytest.mark.parametrize("retirement", ["disconnect", "source"])
 @pytest.mark.parametrize("mode", ["manual", "agent"])
 async def test_native_mode_acknowledgement_survives_requester_retirement(retirement, mode):
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     module._interaction_controller.state.connect("owner")
     module._interaction_controller.state.confirm_native_mode("agent" if mode == "manual" else "manual")
     module._agent_control = SimpleNamespace()
@@ -429,7 +429,7 @@ async def test_native_mode_acknowledgement_survives_requester_retirement(retirem
 
 @pytest.mark.asyncio
 async def test_completed_mode_request_replays_without_native_side_effect():
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     module._interaction_controller.state.connect("owner")
     module._agent_control = SimpleNamespace()
     calls = []
@@ -453,7 +453,7 @@ async def test_completed_mode_request_replays_without_native_side_effect():
 
 @pytest.mark.asyncio
 async def test_refused_agent_resume_does_not_cache_optimistic_success():
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     module._interaction_controller.state.connect("owner")
     module._agent_control = SimpleNamespace()
     outcomes = iter([False, True])
@@ -478,7 +478,7 @@ async def test_refused_agent_resume_does_not_cache_optimistic_success():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("pause_outcome", [False, TimeoutError()])
 async def test_retired_source_resume_stays_fenced_until_pause_is_confirmed(pause_outcome):
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     module._interaction_controller.state.connect("owner")
     module._agent_control = SimpleNamespace()
     entered, release = asyncio.Event(), asyncio.Event()
@@ -510,7 +510,7 @@ async def test_retired_source_resume_stays_fenced_until_pause_is_confirmed(pause
 
 @pytest.mark.asyncio
 async def test_retired_manual_requester_never_reaches_native():
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     module._interaction_controller.state.confirm_native_mode("agent")
     module._agent_control = SimpleNamespace(ar_agent_set_manual=Mock(return_value=True))
     module._on_interaction_request(
@@ -524,7 +524,7 @@ async def test_retired_manual_requester_never_reaches_native():
 
 @pytest.mark.asyncio
 async def test_positive_agent_acknowledgement_is_cached_even_if_a_turn_starts():
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     module._interaction_controller.state.connect("owner")
     module._agent_control = SimpleNamespace()
     calls = []
@@ -548,7 +548,7 @@ async def test_positive_agent_acknowledgement_is_cached_even_if_a_turn_starts():
 
 @pytest.mark.asyncio
 async def test_unknown_agent_resume_does_not_cache_success_or_clear_uncertainty():
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     module._interaction_controller.state.connect("owner")
     module._agent_control = SimpleNamespace()
     outcomes = iter([TimeoutError(), False, True])
@@ -589,7 +589,7 @@ async def test_unknown_agent_resume_does_not_cache_success_or_clear_uncertainty(
 
 @pytest.mark.asyncio
 async def test_compensating_pause_keeps_motion_admission_busy_during_idle_notification():
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     module._interaction_controller.state.connect("owner")
     module._agent_control = SimpleNamespace()
     resumed, release_resume = asyncio.Event(), asyncio.Event()
@@ -628,7 +628,7 @@ async def test_compensating_pause_keeps_motion_admission_busy_during_idle_notifi
 
 @pytest.mark.asyncio
 async def test_controller_close_drains_owned_tasks_and_prevents_restart():
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     controller = module._interaction_controller
     controller.state.connect("owner")
     entered = asyncio.Event()
@@ -670,7 +670,7 @@ async def test_closed_controller_rejects_inflight_preview_and_new_agent_input():
 
     from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest
 
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     controller = module._interaction_controller
     owner = controller.state
     owner.connect("owner")
@@ -696,7 +696,7 @@ async def test_closed_controller_rejects_inflight_preview_and_new_agent_input():
 
     module._ws_server.prepare_outbound_async = prepare
     task = asyncio.create_task(controller.observe_preview(
-        "owner", request, NavGoalFrame(pose=(1.0, 0.0, 0.0, 0.0), path_poses=(), ts=1.0)
+        "owner", request, NavGoalFrame(pose=(1.0, 0.0, 0.0, 0.0), path_poses=(), ts=1.0, shared_frame_id="session:test")
     ))
     await asyncio.wait_for(entered.wait(), 1)
     await controller.close()
@@ -709,7 +709,7 @@ async def test_closed_controller_rejects_inflight_preview_and_new_agent_input():
 
 
 def test_navigation_marker_cancel_stops_only_navigation_without_latching_safety():
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     state = module._interaction_controller.state
     for client in ("owner", "other"):
         state.connect(client)
@@ -733,3 +733,52 @@ def test_navigation_marker_cancel_stops_only_navigation_without_latching_safety(
     ), "other")
     reply = json.loads(module._ws_server.interaction_sent[-1][1])
     assert reply["status"] == "accepted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rebase", [False, True])
+async def test_rebase_during_preview_asset_preparation_discards_old_geometry(rebase):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    import numpy as np
+
+    from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest
+    from dimos.ar.replication.controller import InteractionController
+    from dimos.ar.replication.interaction import InteractionRequest
+
+    entered, finish = asyncio.Event(), asyncio.Event()
+
+    async def prepare(body):
+        entered.set()
+        await finish.wait()
+        return body
+
+    ports = SimpleNamespace(prepare_outbound=prepare, previews=lambda: Mock())
+    controller = InteractionController(ports)
+    owner = controller.state
+    owner.connect("a")
+    acquired = owner.handle("a", InteractionRequest("grab", "acquire", owner.epoch,
+                            acquisition_id="grab", kind="navigation_planning"))
+    owner.handle("a", InteractionRequest("update", "update", owner.epoch,
+                 lease_id=acquired.lease_id, sequence=1, position=(1., 2., 0.),
+                 orientation=(0., 0., 0., 1.)))
+    request = NavGoalRequest(position=(1., 2., 0.), orientation=(0., 0., 0., 1.),
+                 preview=True, epoch=owner.epoch, lease_id=acquired.lease_id,
+                 sequence=2, target_revision=owner.target.revision)
+    frame = NavGoalFrame(pose=(1., 2., 0., 0.), path_poses=[(1., 2., 0., 0.)],
+                         ts=1., shared_frame_id="session:test", preview=True)
+    task = asyncio.create_task(controller.observe_preview("a", request, frame))
+    await entered.wait()
+    epoch, authority = owner.epoch, owner.authority
+    matrix = np.eye(4)
+    matrix[0, 3] = 10
+    if rebase:
+        controller.rebase_shared_frame(matrix, shared_frame_id="vps:office")
+    else:
+        controller.frame_changed()
+    finish.set()
+    await task
+    assert owner.preview is None
+    assert owner.epoch == epoch and owner.authority == authority

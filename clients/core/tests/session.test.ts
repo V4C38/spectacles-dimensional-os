@@ -1,4 +1,4 @@
-import { FakeClock, FakeTransport, helloAt, stateFrame, navigationSnapshot } from "./support/SessionFixture";
+import { createTrackingOriginStore, LOCALIZATION_REFERENCE, FakeClock, FakeTransport, helloAt, stateFrame, navigationSnapshot } from "./support/SessionFixture";
 import { ARM_FIXTURE } from "./support/IntegrationArmFixture";
 import { describe, expect, it } from "vitest";
 import { ClientTrackingOriginStore } from "../src/localization/ClientTracking";
@@ -17,7 +17,7 @@ function makeSession(): {
 } {
   const transport = new FakeTransport();
   const clock = new FakeClock();
-  const originStore = new ClientTrackingOriginStore();
+  const originStore = createTrackingOriginStore();
   const session = new ARModuleSession({
     transport,
     clock,
@@ -65,7 +65,7 @@ function pythonLidar(ts: number, points: [number, number, number][]): Uint8Array
 describe("session handshake", () => {
   it("sends Resume only for the current canonical stop and source epoch", () => {
     const { session, transport } = makeSession(); handshake(session, transport);
-    session.onTransportText(JSON.stringify({ type: "interaction_state", epoch: "source", revision: 1,
+    session.onTransportText(JSON.stringify({ type: "interaction_state", shared_frame_id: "fixture-map", epoch: "source", revision: 1,
       mode: "manual", authority: null, target: null, targets: [], preview: null, active_goal: null,
       following_tail: null, motion_busy: false }) + "\n");
     session.onTransportText(JSON.stringify({ ...STATE, safety: { stopped: true, can_resume: true, stop_id: "stop-a" } }) + "\n"); session.tick();
@@ -151,7 +151,7 @@ describe("session facts and tracking origin", () => {
       targets: [],
       motion_busy: false,
       following_tail: null,
-      type: "interaction_state", epoch: "robot", revision: 1, mode: "manual", authority: null, target: null,
+      type: "interaction_state", shared_frame_id: "fixture-map", epoch: "robot", revision: 1, mode: "manual", authority: null, target: null,
       active_goal: { type: "nav_goal", pose: [2,0,0,0], path_poses: [], ts: 1 },
       preview: { type: "nav_goal", preview: true, pose: [2,0,0,0], path_poses: [[0,0,0,0],[2,0,0,0]], ts: 1 } };
     session.onTransportText(JSON.stringify(interaction) + "\n"); session.tick();
@@ -170,7 +170,7 @@ describe("session facts and tracking origin", () => {
 
     session.onTransportText(
       JSON.stringify({
-        type: "pose",
+        type: "pose", shared_frame_id: "fixture-map",
         position: [1, 0, 0],
         orientation: [0, 0, 0, 1],
         ts: 2,
@@ -187,7 +187,7 @@ describe("session facts and tracking origin", () => {
     submitForResult(session, 5);
     session.onTransportText(
       JSON.stringify({
-        type: "localization_result",
+        type: "localization_result", ...LOCALIZATION_REFERENCE,
         position: [0, 0, 0],
         orientation: [0, 0, 0, 1],
         confidence: 0.9,
@@ -199,7 +199,7 @@ describe("session facts and tracking origin", () => {
     expect(session.view().nav_goal?.path_poses).toEqual([]);
     expect(session.view().lidar?.ts).toBe(4);
     expect(session.view().hasTrackingOrigin).toBe(true);
-    expect(originStore.T_odom_client?.confidence).toBe(0.9);
+    expect(originStore.T_map_tracking?.confidence).toBe(0.9);
     expect(outbound).toEqual(["pose", "interaction_state", "localization_observations_request", "lidar", "localization_result"]);
     expect(views[views.length - 1]).toBe("ready");
     session.sendText('{"type":"state_request"}\n');
@@ -248,14 +248,14 @@ describe("session facts and tracking origin", () => {
     const session = new ARModuleSession({
       transport,
       clock,
-      clientTrackingOriginStore: new FailingClientTrackingOriginStore(),
+      clientTrackingOriginStore: (() => { const store = new FailingClientTrackingOriginStore(); store.beginTrackingReference(LOCALIZATION_REFERENCE.tracking_reference_id); return store; })(),
       config: { helloTimeoutS: 1, reconnectDelayS: 0.5 },
     });
     handshake(session, transport, clock);
     submitForResult(session, 1);
     session.onTransportText(
       JSON.stringify({
-        type: "localization_result",
+        type: "localization_result", ...LOCALIZATION_REFERENCE,
         position: [0, 0, 0],
         orientation: [0, 0, 0, 1],
         confidence: 1,
@@ -274,7 +274,7 @@ describe("session facts and tracking origin", () => {
     submitForResult(session, 1);
     session.onTransportText(
       JSON.stringify({
-        type: "localization_result",
+        type: "localization_result", ...LOCALIZATION_REFERENCE,
         position: [1, 0, 0],
         orientation: [0, 0, 0, 1],
         confidence: 0.4,
@@ -284,15 +284,15 @@ describe("session facts and tracking origin", () => {
     submitForResult(session, 2);
     session.onTransportText(
       JSON.stringify({
-        type: "localization_result",
+        type: "localization_result", ...LOCALIZATION_REFERENCE,
         position: [2, 0, 0],
         orientation: [0, 0, 0, 1],
         confidence: 0.8,
         ts: 2,
       }) + "\n",
     ); session.tick();
-    expect(originStore.T_odom_client?.position).toEqual([2, 0, 0]);
-    expect(originStore.T_odom_client?.ts).toBe(2);
+    expect(originStore.T_map_tracking?.position).toEqual([2, 0, 0]);
+    expect(originStore.T_map_tracking?.ts).toBe(2);
   });
 
   it("notifies localization_observations_request subscribers without storing episode state", () => {
@@ -320,7 +320,7 @@ describe("disconnect and reconnect", () => {
     submitForResult(session, 1);
     session.onTransportText(
       JSON.stringify({
-        type: "localization_result",
+        type: "localization_result", ...LOCALIZATION_REFERENCE,
         position: [0, 0, 0],
         orientation: [0, 0, 0, 1],
         confidence: 1,
@@ -333,7 +333,7 @@ describe("disconnect and reconnect", () => {
     expect(session.view().connection).toBe("failed");
     expect(session.view().hello).not.toBeNull();
     expect(session.view().hasTrackingOrigin).toBe(false);
-    expect(originStore.T_odom_client).toBeNull();
+    expect(originStore.T_map_tracking).toBeNull();
 
     clock.nowS = 0.5;
     session.tick();
@@ -408,7 +408,7 @@ describe("session control", () => {
     expect(session.view().state?.agent.idle).toBe(false);
     session.onTransportText(
       JSON.stringify({
-        type: "agent_skill",
+        type: "agent_skill", shared_frame_id: "fixture-map",
         name: "ar_place_marker",
         args: { id: "kitchen", x: 1, y: 0, z: 0 },
       }) + "\n",
@@ -427,7 +427,7 @@ describe("session config", () => {
     const session = new ARModuleSession({
       transport,
       clock,
-      clientTrackingOriginStore: new ClientTrackingOriginStore(),
+      clientTrackingOriginStore: createTrackingOriginStore(),
     });
     session.start();
     session.onTransportOpen();
@@ -446,7 +446,7 @@ describe("session config", () => {
         new ARModuleSession({
           transport: new FakeTransport(),
           clock: new FakeClock(),
-          clientTrackingOriginStore: new ClientTrackingOriginStore(),
+          clientTrackingOriginStore: createTrackingOriginStore(),
           config: { helloTimeoutS: 0, reconnectDelayS: 1 },
         }),
     ).toThrow(/helloTimeoutS/);
@@ -455,7 +455,7 @@ describe("session config", () => {
         new ARModuleSession({
           transport: new FakeTransport(),
           clock: new FakeClock(),
-          clientTrackingOriginStore: new ClientTrackingOriginStore(),
+          clientTrackingOriginStore: createTrackingOriginStore(),
           config: { helloTimeoutS: 1, reconnectDelayS: Number.NaN },
         }),
     ).toThrow(/reconnectDelayS/);
@@ -479,7 +479,7 @@ for (const reference of ["room-a", "room-b", undefined]) {
     const { session, clock, originStore } = makeSession();
     session.start(); session.onTransportOpen();
     session.onTransportText(JSON.stringify({ ...helloAt(0), odom_reference_id: "room-a" }) + "\n"); session.tick();
-    originStore.setFromLocalizationResult({ type: "localization_result", position: [2, 3, 1], orientation: [0, 0, 0, 1], confidence: 1, ts: 100 });
+    originStore.setFromLocalizationResult({ type: "localization_result", ...LOCALIZATION_REFERENCE, odom_reference_id: "room-a", position: [2, 3, 1], orientation: [0, 0, 0, 1], confidence: 1, ts: 100 });
     session.onTransportClose();
     expect(session.view().hasTrackingOrigin).toBe(false);
     expect(session.view().hasRetainedTrackingOrigin).toBe(true);
@@ -512,7 +512,7 @@ describe("bulk isolation and capture replacement", () => {
     const ref = { epoch: "fixture-epoch", id: "route:preview", revision: "slow" };
     session.onTransportText(JSON.stringify(navigationSnapshot(session.view().interaction ?? null, { type: "nav_goal", preview: true, preview_id: "slow-preview", pose: [1, 0, 0, 0], ts: 100, route_ref: ref })) + "\n"); session.tick();
     transport.bulk.receive({ type: "bulk_record", ...ref, kind: "route", part: 0, parts: 2,
-      data: { metadata: { ts: 100, pose: [1, 0, 0, 0] } } });
+      data: { metadata: { shared_frame_id: "fixture-map", ts: 100, pose: [1, 0, 0, 0] } } });
     session.tick();
     clock.nowS += 6;
     session.tick();
@@ -565,7 +565,7 @@ describe("bulk isolation and capture replacement", () => {
       targets: [],
       motion_busy: false,
       following_tail: null,
-      type: "interaction_state", epoch: "robot", revision: 1, mode: "manual",
+      type: "interaction_state", shared_frame_id: "fixture-map", epoch: "robot", revision: 1, mode: "manual",
       authority: null, target: null, preview: null, active_goal: { ...goal, path_poses: [] } }) + "\n"); session.tick();
     session.onTransportText(JSON.stringify(navigationSnapshot(session.view().interaction ?? null, goal)) + "\n"); session.tick();
     expect(session.view().nav_goal).toMatchObject({ pose: [3, 0, 0, 0], path_poses: [] });
@@ -609,16 +609,16 @@ describe("deferred asset state ordering", () => {
   const interaction = (revision: number, epoch = "robot") => ({
     motion_busy: false,
     following_tail: null,
-    type: "interaction_state", epoch, revision,
+    type: "interaction_state", shared_frame_id: "fixture-map", epoch, revision,
     mode: "manual", authority: null, target: null, targets: [], preview: null, active_goal: null });
   const wire = (session: ARModuleSession, value: object) => session.onTransportText(JSON.stringify(value) + "\n");
   const finishRoute = (transport: FakeTransport) => {
     transport.bulk.receive({ type: "bulk_record", ...routeRef, kind: "route", part: 0, parts: 2,
-      data: { metadata: { pose: [1, 0, 0, 0], ts: 1 } } });
+      data: { metadata: { shared_frame_id: "fixture-map", pose: [1, 0, 0, 0], ts: 1 } } });
     transport.bulk.receive({ type: "bulk_record", ...routeRef, kind: "route", part: 1, parts: 2,
       data: { points: [[0, 0, 0, 0], [1, 0, 0, 0]] } });
   };
-  const state = (ts: number) => ({ type: "manipulation_state", available: true, ts,
+  const state = (ts: number) => ({ type: "manipulation_state", shared_frame_id: "fixture-map", available: true, ts,
     model: ARM_FIXTURE.model, root_pose: { position: [0, 0, 0], orientation: [0, 0, 0, 1] },
     groups: [{ id: "arm", joint_names: Object.keys(ARM_FIXTURE.joints), base_frame: "base", tip_frame: "gripper_tip", has_gripper: true, following: true }],
     observations: { arm: { joints: ARM_FIXTURE.joints, measured_at: ts, pose: ARM_FIXTURE.pose, gripper: 0 } },
@@ -628,7 +628,7 @@ describe("deferred asset state ordering", () => {
     const { session, transport } = makeSession(); handshake(session, transport);
     wire(session, state(100)); session.tick();
     const model = session.view().manipulation?.model;
-    wire(session, { type: "manipulation_state", available: false, stopped: true,
+    wire(session, { type: "manipulation_state", shared_frame_id: "fixture-map", available: false, stopped: true,
       stop_confirmed: false, protection: { state: "fault", effective_speed_scale: 0, resumable: false }, message: "Motor fault" }); session.tick();
     expect(session.view().manipulation?.model).toBe(model);
     expect(session.view().manipulation).toMatchObject({ available: false, stopped: true,
@@ -783,7 +783,7 @@ it("exposes navigation facts through the canonical interaction snapshot", () => 
     targets: [],
     motion_busy: false,
     following_tail: null,
-    type: "interaction_state", epoch: "robot", revision: 1, mode: "manual",
+    type: "interaction_state", shared_frame_id: "fixture-map", epoch: "robot", revision: 1, mode: "manual",
     authority: null, target: null, active_goal: null, preview: null };
   session.onTransportText(JSON.stringify(interaction) + "\n"); session.tick();
   const active = { type: "nav_goal", pose: [2, 0, 0, 0], path_poses: [[0, 0, 0, 0], [2, 0, 0, 0]], ts: 1 };
@@ -823,7 +823,7 @@ it("leaves control facts queued when a tick uses its decode budget", () => {
     if (message.type === "state") clock.nowS += .003;
   });
   session.onTransportText(JSON.stringify({ ...STATE, server: { connected_clients: 9 } }) + "\n" +
-    JSON.stringify({ type: "pose", position: [1, 2, 3], orientation: [0, 0, 0, 1], ts: 1 }) + "\n");
+    JSON.stringify({ type: "pose", shared_frame_id: "fixture-map", position: [1, 2, 3], orientation: [0, 0, 0, 1], ts: 1 }) + "\n");
   session.tick();
   expect(session.view().state?.server.connected_clients).toBe(9);
   expect(session.view().pose).toBeNull();

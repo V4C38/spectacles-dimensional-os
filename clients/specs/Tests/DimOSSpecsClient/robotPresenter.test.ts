@@ -10,7 +10,6 @@ import type { RobotDescription, Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSAR
 import type { ARModuleSessionState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/websocket/ARModuleSession";
 
 const GO2: RobotDescription = {
-  odom_scale_correction_factor: 1,
   display_name: "Unitree Go2",
   body_bounds_m: [0.7, 0.5, 0.55],
   footprint_m: [0.7, 0.5],
@@ -112,7 +111,7 @@ describe("activity survives pose presentation", () => {
       presenter.apply({
         mode: "localizedOdom", robot: GO2, view,
         pose: { position: [i, 0, 0], orientation: [0, 0, 0, 1] },
-        origin: { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 },
+        origin: { position: [0, 0, 0], orientation: [0, 0, 0, 1], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 },
       }, ctx);
       expect(text.text).toBe(label);
       expect(worldVisuals.labels.mock.calls.at(-1)?.[1]).toBe(label);

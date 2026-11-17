@@ -75,7 +75,7 @@ export function evaluateCalibration(
   let maxHeading = 0;
   for (const observation of observations) {
     if (!observation.expectedOrigin || !observation.solvedOrigin) {
-      reasons.push("calibration observation is missing T_odom_client");
+      reasons.push("calibration observation is missing T_map_tracking");
       continue;
     }
     const err = Math.hypot(
@@ -93,7 +93,7 @@ export function evaluateCalibration(
   }
   if (maxOrigin > profile.acceptance.maxOriginErrorM) {
     reasons.push(
-      `T_odom_client error ${maxOrigin.toFixed(3)}m exceeds ${profile.acceptance.maxOriginErrorM}m`,
+      `T_map_tracking error ${maxOrigin.toFixed(3)}m exceeds ${profile.acceptance.maxOriginErrorM}m`,
     );
   }
 

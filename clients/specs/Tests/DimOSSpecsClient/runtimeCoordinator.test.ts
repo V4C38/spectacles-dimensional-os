@@ -8,7 +8,7 @@ function fixture() {
   const action = (name: string) => vi.fn(() => { events.push(name); });
   let suspended = false;
   const view = { connection: "ready", hasTrackingOrigin: false, capabilities: null };
-  const originStore = { T_odom_client: null as object | null };
+  const originStore = { T_map_tracking: null as object | null };
   const room = action("room");
   const dt = vi.fn(() => 0.5);
   Object.assign(globalThis, { getDeltaTime: dt });
@@ -64,7 +64,7 @@ it("refreshes room presentation only after invalidation or origin change", () =>
   expect(f.room).toHaveBeenCalledOnce();
   f.coordinator.invalidateRoom(); f.coordinator.tick();
   expect(f.room).toHaveBeenCalledTimes(2);
-  f.originStore.T_odom_client = { position: [0, 0, 0], orientation: [0, 0, 0, 1] };
+  f.originStore.T_map_tracking = { position: [0, 0, 0], orientation: [0, 0, 0, 1] };
   f.coordinator.tick();
   expect(f.room).toHaveBeenCalledTimes(3);
   expect(f.deps.annotations.recompose).toHaveBeenCalledOnce();

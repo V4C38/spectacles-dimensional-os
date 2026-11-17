@@ -12,6 +12,7 @@ import pytest
 from dimos.ar import timing_diagnostics
 from dimos.ar.robot.state_publisher import RobotStatePublisher
 from dimos.ar.sensors.lidar_settings import LidarSettings
+from dimos.ar.spatial import FrameSnapshot
 from dimos.ar.websocket.protocol import LIDAR_FOURCC
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
@@ -24,7 +25,7 @@ class _RecordingBroadcast:
     def schedule_broadcast_text(self, text: str) -> None:
         self.text_payloads.append(text)
 
-    def schedule_broadcast_binary(self, data: bytes) -> None:
+    def schedule_broadcast_binary(self, data: bytes, *, shared_frame_id: str = "") -> None:
         self.binary_payloads.append(data)
 
 
@@ -150,17 +151,16 @@ def _pose(x: float = 4.0, y: float = 8.0, z: float = 0.33) -> PoseStamped:
 
 
 def _publisher(sink: _RecordingBroadcast, **kwargs: object) -> RobotStatePublisher:
-    kwargs.setdefault("odom_scale_correction_factor", 1.25)
+    kwargs.setdefault("frames", lambda: FrameSnapshot.initial("test"))
     kwargs.setdefault("robot_position", lambda: (4.0, 8.0, 0.33))
     return RobotStatePublisher(sink, **kwargs)  # type: ignore[arg-type]
 
 
-def test_publish_odom_applies_odom_correction() -> None:
+def test_publish_odom_preserves_native_metres() -> None:
     sink = _RecordingBroadcast()
     publisher = _publisher(
         sink,
         pose_max_hz=0.0,
-        odom_scale_correction_factor=1.25,
     )
 
     _publish_odom(publisher, _pose())
@@ -168,7 +168,7 @@ def test_publish_odom_applies_odom_correction() -> None:
     assert len(sink.text_payloads) == 1
     payload = json.loads(sink.text_payloads[0])
     assert payload["type"] == "pose"
-    assert payload["position"] == pytest.approx([5.0, 10.0, 0.33])
+    assert payload["position"] == pytest.approx([4.0, 8.0, 0.33])
     assert payload["ts"] == 12.5
 
 
@@ -194,14 +194,13 @@ def test_publish_lidar_disabled_skips_binary() -> None:
     assert sink.binary_payloads == []
 
 
-def test_publish_lidar_filters_native_range_then_corrects_wire_coordinates() -> None:
+def test_publish_lidar_filters_native_range_and_preserves_metric_points() -> None:
     sink = _RecordingBroadcast()
     publisher = _publisher(
         sink,
         lidar_max_hz=0.0,
         lidar_target_points=1,
         robot_position=lambda: (8.0, 0.0, 0.33),
-        odom_scale_correction_factor=1.25,
     )
     lidar = LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=15.0)
     points = np.array([[8.2, 0.0, 0.5], [10.2, 0.0, 0.5]], dtype=np.float32)
@@ -216,7 +215,7 @@ def test_publish_lidar_filters_native_range_then_corrects_wire_coordinates() -> 
     assert ts == pytest.approx(2.0)
     assert count == 1
     x, y, z = struct.unpack_from("<3f", payload, 16)
-    assert (x, y, z) == pytest.approx((10.25, 0.0, 0.5))
+    assert (x, y, z) == pytest.approx((8.2, 0.0, 0.5))
 
 
 def test_publish_lidar_skips_until_odom_is_known() -> None:
@@ -249,7 +248,7 @@ def test_publish_lidar_range_is_around_robot_not_origin() -> None:
     _fourcc, _ts, count = struct.unpack_from("<IdI", payload, 0)
     assert count == 1
     x, y, z = struct.unpack_from("<3f", payload, 16)
-    assert (x, y, z) == pytest.approx((13.125, 0.0, 0.5))
+    assert (x, y, z) == pytest.approx((10.5, 0.0, 0.5))
 
 
 def test_publish_lidar_uses_passed_settings_per_call() -> None:
@@ -285,11 +284,11 @@ def test_repeated_voxel_geometry_is_independent_of_robot_movement() -> None:
         _publish_odom(publisher, _pose(x=robot_x, y=0))
         publisher.publish_lidar(_FakePointCloud2(points, ts=2), lidar=lidar)
     assert sink.binary_payloads[0] == sink.binary_payloads[1]
-    assert struct.unpack_from("<3f", sink.binary_payloads[0], 16) == (6.25, 0, 0.5)
+    assert struct.unpack_from("<3f", sink.binary_payloads[0], 16) == (5.0, 0, 0.5)
     assert np.array_equal(points, [[5.0, 0, 0.5]])
 
 
-def test_range_filter_stays_in_native_metres_when_display_is_scaled() -> None:
+def test_range_filter_preserves_native_metric_distances() -> None:
     sink = _RecordingBroadcast()
     publisher = _publisher(
         sink,
@@ -304,10 +303,10 @@ def test_range_filter_stays_in_native_metres_when_display_is_scaled() -> None:
         _FakePointCloud2(np.array([[4.4, 0, 0.5], [4.6, 0, 0.5]], dtype=np.float32)), lidar=lidar
     )
     assert struct.unpack_from("<IdI", sink.binary_payloads[0], 0)[2] == 1
-    assert struct.unpack_from("<3f", sink.binary_payloads[0], 16) == pytest.approx([5.5, 0, 0.5])
+    assert struct.unpack_from("<3f", sink.binary_payloads[0], 16) == pytest.approx([4.4, 0, 0.5])
 
 
-def test_native_navigation_and_lidar_share_one_corrected_wire_frame() -> None:
+def test_native_navigation_and_lidar_share_one_metric_wire_frame() -> None:
     import time
 
     from dimos.ar.navigation.control import NavGoalCoordinator
@@ -322,8 +321,8 @@ def test_native_navigation_and_lidar_share_one_corrected_wire_frame() -> None:
         lidar_target_points=10,
         robot_position=lambda: (4.0, 0.0, 0.33),
     )
-    navigation = NavGoalCoordinator(odom_scale_correction_factor=1.25)
-    wire_goal = NavGoalRequest((5.25, -2.625, 0), (0, 0, 0, 1))
+    navigation = NavGoalCoordinator(frames=lambda: FrameSnapshot.initial("test"))
+    wire_goal = NavGoalRequest((4.2, -2.1, 0), (0, 0, 0, 1))
     native_goal = navigation.submit_goal(wire_goal)
     assert (native_goal.x, native_goal.y) == pytest.approx((4.2, -2.1))
     native_body = _pose(x=4, y=-2)
@@ -334,13 +333,13 @@ def test_native_navigation_and_lidar_share_one_corrected_wire_frame() -> None:
     cloud_xy = struct.unpack_from("<3f", sink.binary_payloads[0], 16)[:2]
     assert cloud_xy == pytest.approx(route.pose[:2])
     assert route.pose[:2] == pytest.approx(wire_goal.position[:2])
-    assert json.loads(sink.text_payloads[0])["position"] == [5, -2.5, 0.33]
+    assert json.loads(sink.text_payloads[0])["position"] == [4, -2, 0.33]
 
 
 def test_lidar_subscriptions_are_isolated_and_downsample_once(monkeypatch):
     sink = _RecordingBroadcast()
     targeted = []
-    sink.schedule_send_binary_to_client = lambda client, data: targeted.append((client, data))
+    sink.schedule_send_binary_to_client = lambda client, data, **_kwargs: targeted.append((client, data))
     preferences = {
         "near": LidarSettings(True, 0.1, 1.5, 1.0),
         "far": LidarSettings(True, 0.1, 1.5, 5.0),
@@ -364,10 +363,48 @@ def test_lidar_subscriptions_are_isolated_and_downsample_once(monkeypatch):
 
 def _publish_odom(publisher, pose):
     from dimos.ar.robot.odometry import PoseSample
-    from dimos.ar.robot.odometry_correction import correct_odom_pose
-    corrected = correct_odom_pose(pose, factor=publisher._odom_scale_correction_factor)
     publisher.publish_odom(PoseSample(
-        position=(corrected.x, corrected.y, corrected.z),
-        orientation=tuple(getattr(corrected.orientation, a) for a in "xyzw"),
+        position=(pose.x, pose.y, pose.z),
+        orientation=tuple(getattr(pose.orientation, a) for a in "xyzw"),
         ts_odom=pose.ts, ts_server=pose.ts, frame_id=pose.frame_id,
     ))
+
+
+def test_nonidentity_shared_frame_projects_pose_and_cloud_without_scaling_ranges():
+    from dataclasses import replace
+
+    from dimos.ar.robot.odometry import PoseSample
+    from dimos.ar.spatial import FrameSnapshot, frozen_matrix
+
+    sink = _RecordingBroadcast()
+    transform = frozen_matrix(np.array([[0., -1., 0., 10.], [1., 0., 0., 20.],
+                                        [0., 0., 1., 0.], [0., 0., 0., 1.]]))
+    frame = replace(FrameSnapshot.initial("test"), T_map_odom=transform)
+    publisher = _publisher(sink, frames=lambda: frame, robot_position=lambda: (1., 2., 0.))
+    publisher.publish_odom(PoseSample((1., 2., 0.), (0., 0., 0., 1.), 1., 1., "odom"))
+    pose = json.loads(sink.text_payloads[-1])
+    assert pose["position"] == [8., 21., 0.]
+    assert pose["shared_frame_id"] == frame.shared_frame_id
+    cloud = _FakePointCloud2(np.array([[1., 2., 0.5], [2., 2., 0.5]], dtype=np.float32))
+    publisher.publish_lidar(cloud, lidar=LidarSettings(True, 0.1, 1.5, 5))
+    payload = sink.binary_payloads[-1]
+    points = np.frombuffer(payload, dtype="<f4", offset=16).reshape(-1, 3)
+    assert points.tolist() == [[8., 21., 0.5], [8., 22., 0.5]]
+    assert np.linalg.norm(points[1] - points[0]) == pytest.approx(1.)
+
+
+def test_lidar_projection_completed_after_frame_revision_change_is_discarded():
+    from dataclasses import replace
+
+    from dimos.ar.spatial import FrameSnapshot
+
+    sink = _RecordingBroadcast()
+    frames = [FrameSnapshot.initial("test")]
+    publisher = _publisher(sink, frames=lambda: frames[0])
+    cloud = _FakePointCloud2(np.array([[4., 8., 0.5]], dtype=np.float32))
+    def downsample(*, voxel_size):
+        frames[0] = replace(frames[0], revision=1)
+        return cloud
+    cloud.voxel_downsample = downsample
+    publisher.publish_lidar(cloud, lidar=LidarSettings(True, 0.1, 1.5, 5))
+    assert sink.binary_payloads == []

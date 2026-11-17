@@ -53,8 +53,6 @@ export interface RobotDescription {
   body_bounds_m: Vec3;
   footprint_m: [number, number];
   base_height_m: number;
-  /** Fixed native-odom to AR XY heuristic. */
-  odom_scale_correction_factor: number;
 }
 
 export interface ServerInfo {
@@ -78,6 +76,7 @@ export interface Hello {
   bulk_epoch: string;
   /** Stable for the server odometry reference, including across socket reconnects. */
   odom_reference_id: string;
+  shared_frame_id: string;
   server_info?: ServerInfo;
   type: "hello";
   client_id: string;
@@ -131,34 +130,21 @@ export interface AgentSkill {
   args: Record<string, unknown>;
 }
 
-export interface MapContext {
-  map_code: string;
+export interface SharedFrameContext {
+  shared_frame_id: string;
   odom_reference_id: string;
 }
-export interface MapAlignment extends MapContext {
-  id: string;
-  tracking_reference_id: string;
-  travel_m: number;
-  position: Vec3;
-  orientation: Quat;
-  confidence: number;
-  ts: number;
-}
-export interface LocalizationMapTransform extends MapContext {
-  type: "localization_map_transform";
-  revision: number;
-  position: Vec3;
-  orientation: Quat;
-  confidence: number;
-  ts: number;
-}
-export interface LocalizationContext extends MapContext {
+export interface LocalizationContext extends SharedFrameContext {
   type: "localization_context";
+  revision: number;
+  map_code?: string;
   reset?: boolean;
+  rebase?: { previous_shared_frame_id: string; position: Vec3; orientation: Quat };
 }
 export interface LocalizationStatus {
   type: "localization_status";
   odom_reference_id: string;
+  shared_frame_id: string;
   map_code?: string;
   scope: "robot" | "headset";
   status: "succeeded" | "failed" | "deferred";
@@ -188,8 +174,10 @@ export type LocalizationObservationsRequest = CaptureEpisodeIdentity & (
     });
 
 export interface LocalizationResult {
-  map_alignment?: MapAlignment;
-  map_transform?: LocalizationMapTransform;
+  alignment_id: string;
+  shared_frame_id: string;
+  odom_reference_id: string;
+  tracking_reference_id: string;
   type: "localization_result";
   position: Vec3;
   orientation: Quat;
@@ -235,8 +223,8 @@ export interface PresencePanel {
   height: number;
 }
 export interface PresenceCues { pointers: PresencePointer[]; panel: PresencePanel | null; }
-export interface ClientPresence extends PresenceCues, MapContext { type: "client_presence"; }
-export interface PresenceState extends MapContext {
+export interface ClientPresence extends PresenceCues, SharedFrameContext { type: "client_presence"; }
+export interface PresenceState extends SharedFrameContext {
   type: "presence_state";
   clients: (PresenceCues & { client_id: string; age_s: number })[];
 }
@@ -251,7 +239,6 @@ export type Outbound =
   | LocalizationObservationsRequest
   | LocalizationResult
   | LocalizationContext
-  | LocalizationMapTransform
   | LocalizationStatus
   | Pose
   | Lidar

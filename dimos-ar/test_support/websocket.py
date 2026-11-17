@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import json
 import socket
 import struct
@@ -48,6 +49,7 @@ def _sample_hello(_client_id: str) -> HelloBody:
             ),
         },
         odom_reference_id="test-odom",
+        shared_frame_id="test-shared",
         localization={"providers": []},
         navigation_inputs={
             NAV_GOAL: Capability(available=True, reason=None),
@@ -175,10 +177,16 @@ class ServerHarness:
                 self._admitted[client_id] = websocket
                 self._admission.notify_all()
 
+        def hello(client_id):
+            value = _sample_hello(client_id)
+            supplier = handlers.get("presence_context")
+            context = supplier() if supplier is not None else None
+            return replace(value, shared_frame_id=context["shared_frame_id"]) if context else value
+
         self._server = WebSocketServer(
             port=self.port,
             loop=self.loop,
-            hello_supplier=_sample_hello,
+            hello_supplier=hello,
             on_nav_goal_request=self._on_nav_goal_request,
             on_localization_start_request=self._on_localization_start_request,
             on_disconnect=self._on_disconnect,

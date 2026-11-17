@@ -7,6 +7,27 @@ import pytest
 from dimos_config import dimos_config_path, write_runtime_config
 
 
+@pytest.mark.parametrize("map_file", ["office", "/maps/saved.pc2.lcm", None])
+def test_saved_map_setting_reaches_native_module_without_replacing_native_options(
+    tmp_path, monkeypatch, map_file
+):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    source = dimos_config_path()
+    source.parent.mkdir(parents=True)
+    original = {"go2relocalization": {"map_file": "old", "relocalize_once": False}}
+    source.write_text(json.dumps(original))
+    target = write_runtime_config({"localization": {"native_map_file": map_file}})
+    try:
+        actual = json.loads(target.read_text())
+        assert actual["go2relocalization"] == {
+            "map_file": map_file, "relocalize_once": False,
+        }
+        assert actual["armodule"]["localization"]["native_map_file"] == map_file
+        assert json.loads(source.read_text()) == original
+    finally:
+        target.unlink()
+
+
 def test_runtime_snapshot_replaces_ar_settings_and_preserves_native_config(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     source = dimos_config_path()

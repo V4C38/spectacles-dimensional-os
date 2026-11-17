@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { type ClientTrackingOrigin, odomToClientTrackingPoint } from "@dimos-ar-client/localization/ClientTracking";
+import { type ClientTrackingOrigin, mapToClientTrackingPoint } from "@dimos-ar-client/localization/ClientTracking";
 
 import type { ReadonlyFacts, Quat, Vec3 } from "@dimos-ar-client/ClientContracts";
 import { LidarFrameSampler } from "@dimos-ar-client/sensors/LidarRendering";
@@ -33,7 +33,6 @@ export interface LidarRenderInput {
   bounds?: Readonly<Vec3>;
   pointLimit?: number;
   obstacleRangeM?: number;
-  odomScaleCorrectionFactor?: number;
 }
 
 export class WebXRLidarRenderer {
@@ -44,7 +43,7 @@ export class WebXRLidarRenderer {
   private readonly positions = new THREE.BufferAttribute(new Float32Array(MAX_LIDAR_POINTS * 3), 3).setUsage(THREE.DynamicDrawUsage);
   private readonly colors = new THREE.BufferAttribute(new Float32Array(MAX_LIDAR_POINTS * 4), 4).setUsage(THREE.DynamicDrawUsage);
   private readonly sampler = new LidarFrameSampler<ReadonlyFacts<ClientTrackingOrigin>>(
-    (point, origin) => clientTrackingToWebxrPoint(odomToClientTrackingPoint(point, origin)),
+    (point, origin) => clientTrackingToWebxrPoint(mapToClientTrackingPoint(point, origin)),
     { maximum: MAX_LIDAR_POINTS, minimum: 0, default: MAX_LIDAR_POINTS });
   private readonly color = new THREE.Color();
 

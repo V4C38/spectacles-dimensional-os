@@ -309,27 +309,36 @@ return {{ path: {json.dumps(str(destination))}, width: pixmap.width, height: pix
 """
 
 
+# A native PNG timeout is a runtime capability finding for this review process.
+# Keep capturing through the supported JPEG tool without repeating that timeout.
+_prefer_jpeg_capture = False
+
+
 async def capture(mcp: LensMcp, output: Path, name: str) -> Path:
+    global _prefer_jpeg_capture
     stem = re.sub(r"[^A-Za-z0-9._-]", "-", name).removesuffix(".png").removesuffix(".jpg")
     path = output / f"{stem}.png"
     path.parent.mkdir(exist_ok=True)
-    try:
-        await mcp.editor(screenshot_code(path))
-        if not path.is_file() or path.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
-            raise ReviewError("Native Preview did not save a PNG")
-        return path
-    except ReviewError as error:
-        print(f"Native PNG unavailable ({error}); using Preview JPEG", flush=True)
-        fallback = mcp.artifacts / "mcp" / "screenshots"
-        fallback.mkdir(parents=True, exist_ok=True)
-        before = set(fallback.iterdir())
-        await mcp.call("CapturePanelScreenshotTool", {"pluginId": PREVIEW_ID, "maxDimension": 1600})
-        images = [file for file in fallback.iterdir() if file not in before and file.suffix == ".jpg"]
-        if not images:
-            raise ReviewError("Preview screenshot returned no image") from error
-        jpeg = path.with_suffix(".jpg")
-        images[0].rename(jpeg)
-        return jpeg
+    if not _prefer_jpeg_capture:
+        try:
+            await mcp.editor(screenshot_code(path))
+            if not path.is_file() or path.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
+                raise ReviewError("Native Preview did not save a PNG")
+            return path
+        except ReviewError as error:
+            if "timed out" in str(error).lower():
+                _prefer_jpeg_capture = True
+            print(f"Native PNG unavailable ({error}); using Preview JPEG", flush=True)
+    fallback = mcp.artifacts / "mcp" / "screenshots"
+    fallback.mkdir(parents=True, exist_ok=True)
+    before = set(fallback.iterdir())
+    await mcp.call("CapturePanelScreenshotTool", {"pluginId": PREVIEW_ID, "maxDimension": 1600})
+    images = [file for file in fallback.iterdir() if file not in before and file.suffix == ".jpg"]
+    if not images:
+        raise ReviewError("Preview screenshot returned no image")
+    jpeg = path.with_suffix(".jpg")
+    images[0].rename(jpeg)
+    return jpeg
 
 
 async def compile_project(mcp: LensMcp, output: Path, workspace: Path, timeout: float = 600) -> None:

@@ -33,7 +33,7 @@ export class PairedBulk implements BindableWebSocketTransport {
   }
   receive(value: object) { this.handlers.onTransportText(JSON.stringify(value) + "\n"); }
   lidar(data: Uint8Array) {
-    this.receive({ type: "bulk_binary_begin", kind: "lidar", epoch: "fixture-epoch", id: 1, total_bytes: data.length });
+    this.receive({ type: "bulk_binary_begin", kind: "lidar", epoch: "fixture-epoch", shared_frame_id: "fixture-map", id: 1, total_bytes: data.length });
     for (const packet of fixtureBinaryPackets(data)) this.handlers.onTransportBinary(packet);
   }
 }

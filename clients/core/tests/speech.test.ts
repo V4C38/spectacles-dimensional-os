@@ -1,11 +1,10 @@
+import { createTrackingOriginStore, FakeClock, FakeTransport, helloAt } from "./support/SessionFixture";
 import { expect, it, vi } from "vitest";
 import { ARModuleSession } from "../src/websocket/ARModuleSession";
-import { ClientTrackingOriginStore } from "../src/localization/ClientTracking";
-import { FakeClock, FakeTransport, helloAt } from "./support/SessionFixture";
 
 function fixture() {
   const transport = new FakeTransport(), clock = new FakeClock();
-  const session = new ARModuleSession({ transport, clock, clientTrackingOriginStore: new ClientTrackingOriginStore() });
+  const session = new ARModuleSession({ transport, clock, clientTrackingOriginStore: createTrackingOriginStore() });
   const frames = vi.spyOn(transport.bulk, "sendText");
   session.start(); session.onTransportOpen();
   session.onTransportText(JSON.stringify({ ...helloAt(0, { agent: { available: true, reason: null } }), speech_transcription: true }) + "\n");

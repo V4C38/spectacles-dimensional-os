@@ -49,14 +49,14 @@ function fakePrefab(instances: FakeRoot[]): ObjectPrefab {
 const ORIGIN_A: ClientTrackingOrigin = {
   position: [1, 0, 0],
   orientation: [0, 0, 0, 1],
-  confidence: 1,
+  alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1,
   ts: 1,
 };
 
 const ORIGIN_B: ClientTrackingOrigin = {
   position: [0, 0, 0],
   orientation: [0, 0, 0, 1],
-  confidence: 1,
+  alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1,
   ts: 2,
 };
 
@@ -113,4 +113,20 @@ it("uploads marker geometry only while entrance opacity changes", () => {
   triangles.mockClear();
   for (let frame = 0; frame < 60; frame++) presenter.update(vec3.zero(), 1 / 60);
   expect(triangles).not.toHaveBeenCalled(); expect(title.text).toBe("Kitchen");
+});
+
+it("preserves the physical annotation position through rotated map adoption", () => {
+  const instances: FakeRoot[] = [];
+  const presenter = new ARMarkerPresenter({ parent: {} as SceneObject, markerPrefab: fakePrefab(instances) });
+  const origin = { ...ORIGIN_A, position: [0, 0, 0] as [number, number, number] };
+  presenter.apply(parsePlaceArMarkerArgs({ id: "dock", x: 2, y: 1, z: .4 }), origin);
+  const before = instances[0].worldPosition;
+  const transform = { position: [4, -3, .2] as [number, number, number],
+    orientation: [0, 0, Math.SQRT1_2, Math.SQRT1_2] as [number, number, number, number] };
+  presenter.rebase(transform);
+  presenter.recompose({ ...origin, ...transform, shared_frame_id: "vps" });
+  const after = instances[0].worldPosition;
+  expect(after.x).toBeCloseTo(before.x);
+  expect(after.y).toBeCloseTo(before.y);
+  expect(after.z).toBeCloseTo(before.z);
 });

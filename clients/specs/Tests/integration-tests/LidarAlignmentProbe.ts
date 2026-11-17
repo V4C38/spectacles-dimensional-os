@@ -57,7 +57,7 @@ export class ReviewScenario extends BaseScriptComponent {
       }
       new WorldMeshRenderer(this.getSceneObject(), `Reference_${depth}cm`).triangles(positions, indices, [1, 0, 0, 1]);
     }
-    this.cloud.apply({ points, origin: { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 } });
+    this.cloud.apply({ points, origin: { position: [0, 0, 0], orientation: [0, 0, 0, 1], alignment_id: "probe", shared_frame_id: "probe", odom_reference_id: "probe", tracking_reference_id: "probe", confidence: 1, ts: 0 } });
     this.emit({ type: "result", name: "native-alignment-fixture-initialized", passed: true });
   }
   private tick(): void {

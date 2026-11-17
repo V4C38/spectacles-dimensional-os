@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { MarkerCorrectionTrail } from "../src/presentation/WorldPresentation";
 import type { ClientTrackingOrigin } from "../src/localization/ClientTracking";
 
-const origin: ClientTrackingOrigin = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
+const origin: ClientTrackingOrigin = { shared_frame_id: "map", odom_reference_id: "odom", tracking_reference_id: "a", alignment_id: "alignment", position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
 const correction: ClientTrackingOrigin = { ...origin, position: [1, 0, 0] };
 
 it("starts only on a changed alignment and catches a moving destination in half a second", () => {
@@ -45,10 +45,8 @@ it("clears the copy when hidden and treats the next alignment as the first", () 
   expect(trail.update(origin, [0, 0, 0], 3)).toBeNull();
 });
 
-it("does not trail across map or tracking reference changes", () => {
+it("does not trail across physical tracking reference changes", () => {
   const trail = new MarkerCorrectionTrail();
-  const aligned = { ...origin, mapAlignment: { map_code: "map", odom_reference_id: "odom", tracking_reference_id: "a",
-    position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 } } as ClientTrackingOrigin;
-  trail.update(aligned, [0, 0, 0], 0);
-  expect(trail.update({ ...correction, mapAlignment: { ...aligned.mapAlignment!, tracking_reference_id: "b" } }, [2, 0, 0], 1)).toBeNull();
+  trail.update(origin, [0, 0, 0], 0);
+  expect(trail.update({ ...correction, tracking_reference_id: "b" }, [2, 0, 0], 1)).toBeNull();
 });

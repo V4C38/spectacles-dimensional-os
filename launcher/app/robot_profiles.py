@@ -99,9 +99,9 @@ class RobotProfiles:
             if name is not None:
                 profile["name"] = self._name(name)
             if settings is not None:
-                profile["armodule"] = merge_armodule_settings(
-                    profile["armodule"], settings
-                )
+                config = merge_armodule_settings(profile["armodule"], settings)
+                self._validate_native_map(profile["robot"], config)
+                profile["armodule"] = config
             self._save(profiles)
             return copy.deepcopy(profile)
 
@@ -115,10 +115,16 @@ class RobotProfiles:
         profile = self.get(profile_id)
         if blueprint_definition(blueprint).robot != profile["robot"]:
             raise ValueError("robot profile is incompatible with blueprint")
+        self._validate_native_map(profile["robot"], profile["armodule"])
         return {
             **copy.deepcopy(profile["armodule"]),
             "robot_display_name": profile["name"],
         }
+
+    @staticmethod
+    def _validate_native_map(robot: str, config: dict[str, Any]) -> None:
+        if robot != "unitree_go2" and (config.get("localization") or {}).get("native_map_file"):
+            raise ValueError("Saved LiDAR maps are supported only by Unitree Go2")
 
     @staticmethod
     def _next_name(stem: str, profiles: list[dict[str, Any]]) -> str:

@@ -135,11 +135,11 @@ class BulkAssetStore:
         plan = body.get("plan")
         if isinstance(plan, dict) and "trajectory" in plan:
             identity = str(plan["plan_id"])
-            body["plan_ref"] = self.put("trajectory", identity, identity, plan, pin_slot="plan")
+            body["plan_ref"] = self.put("trajectory", identity, hashlib.sha256(dumps(plan).encode()).hexdigest(), plan, pin_slot="plan")
             del body["plan"]
         if body.get("type") == "manipulation_result" and "trajectory" in body:
             identity = str(body["plan_id"])
-            body["plan_ref"] = self.put("trajectory", identity, identity, payload, pin_slot="plan")
+            body["plan_ref"] = self.put("trajectory", identity, hashlib.sha256(dumps(payload).encode()).hexdigest(), payload, pin_slot="plan")
             del body["trajectory"]
         if "path_poses" in body:
             route = body
@@ -227,7 +227,7 @@ class BulkPeer:
         self._local = TokenBucket(BULK_BYTES_PER_SECOND, MAX_BULK_RECORD_BYTES)
         self._assets: OrderedDict[tuple[str, str], BulkAsset] = OrderedDict()
         self._latest: OrderedDict[tuple[str, str], str] = OrderedDict()
-        self._lidar: bytes | None = None
+        self._lidar: tuple[str, bytes] | None = None
         self._serial = 0
         self._wake = asyncio.Event()
         self._current = False
@@ -255,9 +255,9 @@ class BulkPeer:
             self._assets.popitem(last=False)
         self._wake.set()
 
-    def lidar(self, data: bytes) -> None:
+    def lidar(self, data: bytes, *, shared_frame_id: str = "") -> None:
         if len(data) <= MAX_BULK_RECORD_BYTES:
-            self._lidar = data
+            self._lidar = (shared_frame_id, data)
             self._wake.set()
 
     async def consume(self, size: int) -> None:
@@ -299,10 +299,11 @@ class BulkPeer:
                             break
                         await self._send(record)
                 elif self._lidar is not None:
-                    payload, self._lidar = self._lidar, None
+                    (shared_frame_id, payload), self._lidar = self._lidar, None
                     self._serial = (self._serial + 1) % 2**32
                     await self._send(dumps({"type": "bulk_binary_begin", "kind": "lidar",
                                            "epoch": self.epoch, "id": self._serial,
+                                           "shared_frame_id": shared_frame_id,
                                            "total_bytes": len(payload)}) + "\n")
                     for chunk in binary_chunks(self._serial, payload):
                         await self._send(chunk)

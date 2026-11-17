@@ -1,5 +1,5 @@
 import type { ReadonlyFacts } from "@dimos-ar-client/ClientContracts";
-import { sameTrackingReference, type ClientTrackingOrigin as MutableClientTrackingOrigin, clientTrackingToOdomPose } from "@dimos-ar-client/localization/ClientTracking";
+import { sameTrackingReference, type ClientTrackingOrigin as MutableClientTrackingOrigin, clientTrackingToMapPose } from "@dimos-ar-client/localization/ClientTracking";
 import { ARM_PANEL_STYLE } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 import { updatePanelGesture, type PanelGesture } from "../presentation/PanelInteraction";
 import * as THREE from "three";
@@ -83,7 +83,7 @@ export class WebXRManipulationController {
     const origin = this.origin() ?? (this.interaction.retainingFeedback ? this.lastOrigin : null);
     if (!origin) { this.end(); return; }
     const pose = this.gesture.hold(webxrToClientTrackingPose({ position, orientation }), this.now());
-    if (pose) this.interaction.aim(clientTrackingToOdomPose(pose, origin));
+    if (pose) this.interaction.aim(clientTrackingToMapPose(pose, origin));
   }
 
   end(): void {
@@ -105,7 +105,7 @@ export class WebXRManipulationController {
     const retained = supported && this.interaction.retainingFeedback;
     const origin = this.origin() ?? (retained ? this.lastOrigin : null);
     if (!supported || (!enabled && !retained) || !sameTrackingReference(origin, this.lastOrigin)) { this.end(); this.core.suspend(); }
-    if (origin && this.lastOrigin && origin !== this.lastOrigin && sameTrackingReference(origin, this.lastOrigin)) this.gesture.rebase(this.lastOrigin, origin);
+    if (origin && this.lastOrigin && origin !== this.lastOrigin && origin.shared_frame_id === this.lastOrigin.shared_frame_id && sameTrackingReference(origin, this.lastOrigin)) this.gesture.rebase(this.lastOrigin, origin);
     this.lastOrigin = origin;
     this.core.tick(supported && enabled && !!origin && this.interaction.available);
     this.renderer.controlsView.localizationAvailable = this.session.view().capabilities?.localization.available === true;

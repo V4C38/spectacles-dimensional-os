@@ -23,6 +23,8 @@ finalizer extracts its stills after capture finishes. The 18 regression/platform
 separately and export native Preview PNGs after their assertions. Brief outcome
 animations use frames from the continuous recording.
 
+Native still capture prefers PNG. If the editor-code PNG request times out, the review uses the supported Preview JPEG tool for the rest of that process. Assertions, source checks, and evidence retention still run.
+
 Results default to `Review Data/specs/<runId>/`:
 
 - `golden-path.mp4`: readable 1280×900, 30 fps, 75–105 second continuous walkthrough, produced by default.
@@ -185,11 +187,11 @@ reference brackets at 1/2/3 metres, then moves the camera laterally. Its
 `LIDAR_ALIGNMENT` logs contain raw odometry, composed world centres and native screen
 projections for comparison with captured frames. The fixture initialization result
 is not an automatic GPU/stereo alignment assertion. In the real lens, Debug enables
-bounded `LiDAR alignment` samples every 30 seconds, including the advertised XY
-scale factor and corrected/native planar distances. At factor 1.25, 1.2 native
-metres becomes 1.5 displayed metres; this is a shared server heuristic, not
-evidence of a Specs-only rendering defect. Do not add fixed offsets or undo
-the shared odometry scale factor without a measured failing transform boundary.
+bounded `LiDAR alignment` samples every 30 seconds. Shared-map points and physical
+ranges use metres; no XY scale multiplier is applied. Use the known-distance
+brackets and measured travel to distinguish localization error from rendering
+error. Do not compensate for a failed transform boundary with fixed offsets or
+by scaling map geometry.
 
 For a 20-minute device soak, record `Capture diagnostics` with the camera gate open
 and closed, LiDAR on/off, and after repeated localization misses. During closed-gate

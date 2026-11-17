@@ -38,12 +38,15 @@ class MockRuntimeClient:
         self.state = None
         self.safety = None
         self.simulated = False
+        self.shared_frame_id = None
 
     async def read_control(self):
         async for message in self.socket:
             for line in message.splitlines():
                 frame = json.loads(line)
                 self.frames.append((time.monotonic(), frame))
+                if frame["type"] == "localization_context":
+                    self.shared_frame_id = frame["shared_frame_id"]
                 if frame["type"] == "interaction_state":
                     self.shared = frame
                 elif frame["type"] == "manipulation_state":
@@ -71,6 +74,10 @@ class MockRuntimeClient:
     async def request(self, message_type, action, **payload):
         self.sequence += 1
         request_id = f"official-mock-{self.sequence}"
+        if "position" in payload or "orientation" in payload:
+            if self.shared_frame_id is None:
+                raise RuntimeError("Spatial diagnostics require the current shared frame")
+            payload = {"shared_frame_id": self.shared_frame_id, **payload}
         await self.socket.send(json.dumps({
             "type": message_type, "request_id": request_id, "action": action, **payload,
         }))
@@ -123,7 +130,10 @@ class MockRuntimeClient:
         self.require_simulated()
         self.sequence += 1
         sequence = self.sequence
-        body = {"type": "interaction_request", "request_id": f"target-{sequence}",
+        if self.shared_frame_id is None:
+            raise RuntimeError("Spatial diagnostics require the current shared frame")
+        body = {"type": "interaction_request", "shared_frame_id": self.shared_frame_id,
+                "request_id": f"target-{sequence}",
                 "action": "update", "epoch": self.shared["epoch"], "lease_id": self.lease,
                 "sequence": sequence, **pose, "speed_scale": speed_scale}
         await self.socket.send(json.dumps(body))
@@ -192,6 +202,7 @@ async def mock_runtime(url):
         hello = json.loads(await socket.recv())
         if hello.get("protocol_version") != 2 or not hello.get("capabilities", {}).get("manipulation", {}).get("available"):
             raise RuntimeError("Runtime does not support protocol-v2 manipulation")
+        client.shared_frame_id = hello["shared_frame_id"]
         bulk_url = urljoin(url, hello["bulk_url"])
         require_local_url(bulk_url)
         async with websockets.connect(bulk_url) as bulk:

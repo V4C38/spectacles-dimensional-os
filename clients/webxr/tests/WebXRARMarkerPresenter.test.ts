@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { expect, it } from "vitest";
 import { WebXRARMarkerPresenter } from "../src/presentation/WebXRARMarkerPresenter";
 
-const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
+const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 };
 it("keeps only a sphere at the exact annotation location and a glass label, and updates titles on upsert", () => {
   const presenter = new WebXRARMarkerPresenter();
   presenter.apply({ id: "dock", x: 2, y: 0, z: 0, title: "Docking point" }, origin);
@@ -23,5 +23,18 @@ it("keeps only a sphere at the exact annotation location and a glass label, and 
   expect((object.getObjectByName("World marker title") as unknown as { text: string }).text).toBe("New destination");
   expect(object.position.z).toBe(-3);
   presenter.remove("dock"); expect(presenter.object.children).toHaveLength(0);
+  presenter.dispose();
+});
+
+it("keeps an annotation physically fixed when the shared map adopts rotated VPS coordinates", () => {
+  const presenter = new WebXRARMarkerPresenter();
+  presenter.apply({ id: "dock", x: 2, y: 1, z: .4, title: "Dock" }, origin);
+  const object = presenter.object.children[0];
+  const before = object.position.toArray();
+  const rebase = { position: [4, -3, .2] as [number, number, number],
+    orientation: [0, 0, Math.SQRT1_2, Math.SQRT1_2] as [number, number, number, number] };
+  presenter.rebase(rebase);
+  presenter.recompose({ ...origin, ...rebase, shared_frame_id: "vps" });
+  object.position.toArray().forEach((value, index) => expect(value).toBeCloseTo(before[index]));
   presenter.dispose();
 });

@@ -16,8 +16,7 @@
         0.7,
         0.5
       ],
-      "base_height_m": 0.33,
-      "odom_scale_correction_factor": 1
+      "base_height_m": 0.33
     },
     "transcript": "Go forward to the requested location.",
     "response": "I will go forward to the requested location.",

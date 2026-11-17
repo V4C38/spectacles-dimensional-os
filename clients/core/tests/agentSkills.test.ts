@@ -54,7 +54,7 @@ describe("parseRemoveArMarkerArgs", () => {
 });
 
 describe("composePlaceArMarker", () => {
-  it("composes the odom point through T_odom_client", () => {
+  it("composes the odom point through T_map_tracking", () => {
     const composed = composePlaceArMarker(
       parsePlaceArMarkerArgs({ id: "kitchen", x: 2, y: 0, z: 0 }),
       ORIGIN,

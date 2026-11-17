@@ -37,9 +37,9 @@ function rejectObservationMutations(
     // @ts-expect-error joint previews cannot mutate an owned draft
     manipulation.previewJoints.shoulder = 1;
   }
-  if (origins.T_odom_client) {
+  if (origins.T_map_tracking) {
     // @ts-expect-error retained alignment origin tuples are readonly
-    origins.T_odom_client.position[0] = 1;
+    origins.T_map_tracking.position[0] = 1;
   }
 }
 void rejectObservationMutations;

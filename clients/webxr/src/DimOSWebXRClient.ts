@@ -1,7 +1,7 @@
 import { isSelectionEligible, isManualControlEnabled } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 import type { ReadonlyFacts } from "@dimos-ar-client/ClientContracts";
 import { clientTrackingToWebxrPoint } from "./utilities/WebXRCoordinates";
-import { ClientTrackingOriginStore, type ClientTrackingOrigin as MutableClientTrackingOrigin, rotateVecByQuat } from "@dimos-ar-client/localization/ClientTracking";
+import { ClientTrackingOriginStore, composePose, type ClientTrackingOrigin as MutableClientTrackingOrigin, rotateVecByQuat } from "@dimos-ar-client/localization/ClientTracking";
 import { WebXRManipulationController } from "./manipulation/WebXRManipulationController";
 import { AlignmentWarning, alignmentDistance } from "@dimos-ar-client/presentation/NotificationCenter";
 import { ClientPosePublisher } from "@dimos-ar-client/agent/AgentTransport";
@@ -117,7 +117,7 @@ export class DimOSWebXRClient {
     this.route = new WebXRRouteRenderer();
     this.previewRoute = new WebXRRouteRenderer();
     this.markers = new WebXRARMarkerPresenter();
-    this.manipulation = new WebXRManipulationController(this.session, () => this.originStore.T_odom_client, () => this.clock.now());
+    this.manipulation = new WebXRManipulationController(this.session, () => this.originStore.T_map_tracking, () => this.clock.now());
     this.navigation = new WebXRNavigationController(this.session);
     this.joystick = new WebXRJoystickController(this.session);
     this.unsubscribeSelection = this.selection.subscribe(selected => {
@@ -154,6 +154,14 @@ export class DimOSWebXRClient {
     });
     this.unsubscribeOutbound = this.session.subscribeOutbound((message) => {
       this.alignmentWarning.observe(message);
+      if (message.type === "localization_context" && message.rebase) {
+        this.markers.rebase(message.rebase);
+        const baseline = this.localizationBaseline;
+        if (baseline?.origin.shared_frame_id === message.rebase.previous_shared_frame_id) {
+          this.localizationBaseline = { ...baseline, origin: { ...baseline.origin,
+            ...composePose(message.rebase, baseline.origin), shared_frame_id: message.shared_frame_id } };
+        }
+      }
       if (message.type === "localization_result") {
         reportDiagnostic("localization-result", { confidence: message.confidence, origin: this.originStore.hasTrackingOrigin });
       }
@@ -162,7 +170,7 @@ export class DimOSWebXRClient {
       }
       try {
         if (message.name === "ar_place_marker") {
-          const origin = this.originStore.T_odom_client;
+          const origin = this.originStore.T_map_tracking;
           if (!origin) {
             return;
           }
@@ -219,7 +227,7 @@ export class DimOSWebXRClient {
     if (!(fromMarker ? this.navigationMarkerEnabled() : this.controlsEnabled()) || !this.originStore.hasTrackingOrigin) {
       return;
     }
-    const origin = this.originStore.T_odom_client;
+    const origin = this.originStore.T_map_tracking;
     if (!origin) {
       return;
     }
@@ -326,7 +334,7 @@ export class DimOSWebXRClient {
 
   recoverUnknownTrackingReset(): void {
     this.suspend();
-    this.episode.reset();
+    this.episode.resetTrackingReference();
     this.session.restartPreservingTrackingOrigin();
   }
 
@@ -337,7 +345,7 @@ export class DimOSWebXRClient {
     this.session.stop();
     this.lastCamera = null;
     this.originStore.clear();
-    this.episode.reset();
+    this.episode.resetTrackingReference();
     this.navigation.reset();
     this.markers.object.visible = false;
     this.lidar.hide();
@@ -365,10 +373,9 @@ export class DimOSWebXRClient {
 
   /** Runtime correction preserves a usable map reference; recovery reopens setup. */
   realign(): void {
-    const origin = this.originStore.T_odom_client, hello = this.session.view().hello;
+    const origin = this.originStore.T_map_tracking, hello = this.session.view().hello;
     if (this.ui.setupCompleted && !this.ui.alignmentReview?.pending &&
-        this.session.view().connection === "ready" && this.session.view().hasTrackingOrigin &&
-        this.originStore.mapAlignment) {
+        this.session.view().connection === "ready" && this.session.view().hasTrackingOrigin) {
       this.episode.requestCorrection();
       this.ui.menuOpen = false;
       return;
@@ -413,7 +420,7 @@ export class DimOSWebXRClient {
           (baseline.reference ? hello?.odom_reference_id === baseline.reference : hello === baseline.hello)) this.originStore.restore(baseline.origin);
       this.localizationBaseline = null;
     }
-    const origin = this.originStore.T_odom_client;
+    const origin = this.originStore.T_map_tracking;
     const now = this.clock.now();
     this.robot.apply(view, origin, this.ui.setupCompleted, this.unlocalizedFallback());
     this.syncSelectionEligibility();
@@ -438,7 +445,6 @@ export class DimOSWebXRClient {
       bounds: view.hello?.robot.body_bounds_m,
       pointLimit: this.ui.lidarPreferences.pointLimit,
       obstacleRangeM: this.ui.lidarPreferences.obstacleRangeM,
-      odomScaleCorrectionFactor: view.hello?.robot.odom_scale_correction_factor ?? 1,
     });
     this.navigation.setSelected(this.selection.isSelected());
     this.navigation.applyView(view, origin, this.robot.floorPose(), now);

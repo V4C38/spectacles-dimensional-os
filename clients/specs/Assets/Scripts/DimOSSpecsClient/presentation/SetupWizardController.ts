@@ -1,3 +1,5 @@
+import { composePose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import type { LocalizationContext } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 import type { ReadonlyFacts } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 import { availableCapabilityLabels, localizationGuidance, localizationKind, localizationProviderLabel, localizationCaptureStatus, deriveSessionLinkPhase, NO_ROBOT_CONNECTED_LABEL, sessionLinkStatus, type SessionLinkPhase, type StatusText } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
 import { SetupFlow } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/SetupFlow";
@@ -98,8 +100,16 @@ export class SetupWizardController {
 
   public invalidateBaseline(): void { this.baseline = null; }
 
+  public rebaseBaseline(context: ReadonlyFacts<LocalizationContext>): void {
+    const baseline = this.baseline, rebase = context.rebase;
+    if (baseline && rebase && baseline.origin.shared_frame_id === rebase.previous_shared_frame_id) {
+      this.baseline = { ...baseline, origin: { ...baseline.origin,
+        ...composePose(rebase, baseline.origin), shared_frame_id: context.shared_frame_id } };
+    }
+  }
+
   private retainBaseline(): void {
-    const origin = this.deps.clientTrackingOriginStore.T_odom_client;
+    const origin = this.deps.clientTrackingOriginStore.T_map_tracking;
     this.baseline = origin && !this.flow.alignmentReview?.pending
       ? { origin, hello: this.deps.session.view().hello } : null;
   }

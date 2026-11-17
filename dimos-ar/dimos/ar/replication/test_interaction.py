@@ -534,3 +534,24 @@ def test_navigation_cancellation_preserves_manipulation_authority(fixture):
     packet = InteractionRequest("cancel", "cancel_navigation", owner.epoch, goal_ts=1)
     assert owner.handle("b", packet).status == "busy"
     assert owner.authority.kind == "manipulation_planning"
+
+
+def test_shared_frame_rebase_preserves_lease_and_native_goal_identity(fixture):
+    import numpy as np
+
+    owner, _ = fixture
+    acquire(owner, kind="navigation_planning")
+    request(owner, "update")
+    authority, epoch, target_revision = owner.authority, owner.epoch, owner.target.revision
+    owner.set_active_goal({"pose": [1, 0, 0, 0], "path_poses": [[1, 0, 0, 0]], "ts": 42})
+    owner.preview = {"pose": [1, 2, 0, 0]}
+    matrix = np.array([[0., -1., 0., 10.], [1., 0., 0., 20.],
+                       [0., 0., 1., 0.], [0., 0., 0., 1.]])
+    owner.rebase_shared_frame(matrix, shared_frame_id="vps:office")
+    assert owner.epoch == epoch and owner.authority == authority
+    assert owner.target.revision == target_revision
+    assert owner.target.position == pytest.approx((8, 21, 0))
+    assert owner.target.orientation == pytest.approx((0, 0, 2 ** -0.5, 2 ** -0.5))
+    assert owner.preview is None
+    assert owner.active_goal["ts"] == 42
+    assert owner.active_goal["pose"][:3] == pytest.approx([10, 21, 0])

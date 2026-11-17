@@ -1,6 +1,6 @@
-import { FakeClock, FakeTransport, helloAt, stateFrame } from "./support/SessionFixture";
+import { createTrackingOriginStore, LOCALIZATION_REFERENCE, FakeClock, FakeTransport, helloAt, stateFrame } from "./support/SessionFixture";
 import { describe, expect, it } from "vitest";
-import { ClientTrackingOriginStore, odomToClientTrackingPoint, odomToClientTrackingPose, odomToClientTrackingYawPose, clientTrackingToOdomPoint, clientTrackingToOdomPose, passesGeometricGate } from "../src/localization/ClientTracking";
+import { ClientTrackingOriginStore, mapToClientTrackingPoint, mapToClientTrackingPose, mapToClientTrackingYawPose, clientTrackingToMapPoint, clientTrackingToMapPose, passesGeometricGate } from "../src/localization/ClientTracking";
 
 import { LocalizationCaptureEpisode, type LocalizationCaptureConfig } from "../src/localization/LocalizationCaptureEpisode";
 
@@ -15,8 +15,8 @@ function T(
   position: Vec3,
   orientation: Quat = IDENTITY_Q,
 ): ReturnType<ClientTrackingOriginStore["setFromLocalizationResult"]> {
-  return new ClientTrackingOriginStore().setFromLocalizationResult({
-    type: "localization_result",
+  return createTrackingOriginStore().setFromLocalizationResult({
+    type: "localization_result", ...LOCALIZATION_REFERENCE,
     position,
     orientation,
     confidence: 1,
@@ -40,10 +40,10 @@ function expectQuat(actual: Quat, expected: Quat): void {
 
 describe("client tracking origin", () => {
   it("rejects a non-finite ClientTrackingOrigin", () => {
-    const originStore = new ClientTrackingOriginStore();
+    const originStore = createTrackingOriginStore();
     expect(() =>
       originStore.setFromLocalizationResult({
-        type: "localization_result",
+        type: "localization_result", ...LOCALIZATION_REFERENCE,
         position: [1, Number.NaN, 0],
         orientation: IDENTITY_Q,
         confidence: 0.5,
@@ -52,7 +52,7 @@ describe("client tracking origin", () => {
     ).toThrow(/finite/);
     expect(() =>
       originStore.setFromLocalizationResult({
-        type: "localization_result",
+        type: "localization_result", ...LOCALIZATION_REFERENCE,
         position: [0, 0, 0],
         orientation: [0, 0, 0, 0],
         confidence: 0.5,
@@ -65,12 +65,12 @@ describe("client tracking origin", () => {
 describe("client tracking transforms", () => {
   it("is a no-op in odom when ClientTrackingOrigin is the identity", () => {
     const origin = T([0, 0, 0]);
-    expectVec3(odomToClientTrackingPoint([1, 2, 3], origin), [1, 2, 3]);
+    expectVec3(mapToClientTrackingPoint([1, 2, 3], origin), [1, 2, 3]);
   });
 
   it("subtracts ClientTrackingOrigin", () => {
     const origin = T([1, 0, 0]);
-    expectVec3(odomToClientTrackingPoint([2, 0, 0], origin), [1, 0, 0]);
+    expectVec3(mapToClientTrackingPoint([2, 0, 0], origin), [1, 0, 0]);
   });
 
   it("round-trips pose, point, and yaw pose through ClientTrackingOrigin", () => {
@@ -78,16 +78,16 @@ describe("client tracking transforms", () => {
     const yawAboutZ: Quat = [0, 0, Math.sin(half), Math.cos(half)];
     const origin = T([1, 2, 0], yawAboutZ);
     const pose = { position: [3, 4, 5] as Vec3, orientation: yawAboutZ };
-    const tracking = odomToClientTrackingPose(pose, origin);
-    const back = clientTrackingToOdomPose(tracking, origin);
+    const tracking = mapToClientTrackingPose(pose, origin);
+    const back = clientTrackingToMapPose(tracking, origin);
     expectVec3(back.position, pose.position);
     expectQuat(back.orientation, pose.orientation);
 
-    expectVec3(clientTrackingToOdomPoint(odomToClientTrackingPoint([3, 4, 5], origin), origin), [3, 4, 5]);
+    expectVec3(clientTrackingToMapPoint(mapToClientTrackingPoint([3, 4, 5], origin), origin), [3, 4, 5]);
 
     const yawPose: YawPose = [3, 4, 0, Math.PI / 2];
-    const trackedYaw = odomToClientTrackingYawPose(yawPose, origin);
-    const yawBack = clientTrackingToOdomPose({ position: [trackedYaw[0], trackedYaw[1], trackedYaw[2]],
+    const trackedYaw = mapToClientTrackingYawPose(yawPose, origin);
+    const yawBack = clientTrackingToMapPose({ position: [trackedYaw[0], trackedYaw[1], trackedYaw[2]],
       orientation: [0, 0, Math.sin(trackedYaw[3] / 2), Math.cos(trackedYaw[3] / 2)] }, origin);
     expectVec3(yawBack.position, [3, 4, 0]);
     expectQuat(yawBack.orientation, yawAboutZ);
@@ -95,23 +95,23 @@ describe("client tracking transforms", () => {
 
   it("does not let callers invent a second composition: yaw is T inverse then yaw", () => {
     const origin = T([0, 0, 0], [0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)]);
-    const tracked = odomToClientTrackingYawPose([1, 0, 0, Math.PI / 2], origin);
+    const tracked = mapToClientTrackingYawPose([1, 0, 0, Math.PI / 2], origin);
     expectVec3([tracked[0], tracked[1], tracked[2]], [0, -1, 0]);
     expect(tracked[3]).toBeCloseTo(0, 6);
   });
 
   it("rejects non-finite compose inputs", () => {
     const origin = T([0, 0, 0]);
-    expect(() => odomToClientTrackingPoint([1, Number.NaN, 0], origin)).toThrow(/finite/);
+    expect(() => mapToClientTrackingPoint([1, Number.NaN, 0], origin)).toThrow(/finite/);
     expect(() =>
-      odomToClientTrackingPose({ position: [1, 0, 0], orientation: [0, 0, 0, 0] }, origin),
+      mapToClientTrackingPose({ position: [1, 0, 0], orientation: [0, 0, 0, 0] }, origin),
     ).toThrow(/non-zero/);
   });
 
   it("rejects yaw poses whose transformed forward direction is vertical", () => {
     const halfPitch = Math.PI / 4;
     const origin = T([0, 0, 0], [0, Math.sin(halfPitch), 0, Math.cos(halfPitch)]);
-    expect(() => odomToClientTrackingYawPose([0, 0, 0, 0], origin)).toThrow(/degenerate yaw geometry/);
+    expect(() => mapToClientTrackingYawPose([0, 0, 0, 0], origin)).toThrow(/degenerate yaw geometry/);
   });
 });
 
@@ -252,7 +252,7 @@ function makeController(initiallyPaused = false, runtimeCapture?: { retryDelaysS
 } {
   const transport = new FakeTransport();
   const clock = new FakeClock();
-  const originStore = new ClientTrackingOriginStore();
+  const originStore = createTrackingOriginStore();
   const tracking = new FakeTracking();
   const capture = new FakeCapture();
   const session = new ARModuleSession({
@@ -275,6 +275,7 @@ function makeController(initiallyPaused = false, runtimeCapture?: { retryDelaysS
   });
   sessionTransports.set(session, transport);
   sessionOrigins.set(session, originStore);
+  controller.tick();
   return { controller, session, transport, clock, originStore, tracking, capture };
 }
 
@@ -285,7 +286,7 @@ function deliverRequest(session: ARModuleSession, request: LocalizationObservati
 function deliverPose(session: ARModuleSession, position: Vec3): void {
   session.onTransportText(
     JSON.stringify({
-      type: "pose",
+      type: "pose", shared_frame_id: "fixture-map",
       position,
       orientation: IDENTITY_Q,
       ts: 1,
@@ -294,9 +295,14 @@ function deliverPose(session: ARModuleSession, position: Vec3): void {
   session.tick();
 }
 
+function referenceFor(session: ARModuleSession) {
+  const reports = sessionTransports.get(session)!.texts.map(text => JSON.parse(text));
+  return { ...LOCALIZATION_REFERENCE, tracking_reference_id: reports.filter(value => value.type === "localization_tracking").at(-1)?.tracking_reference_id ?? LOCALIZATION_REFERENCE.tracking_reference_id };
+}
+
 function seedOrigin(session: ARModuleSession, position: Vec3 = [0, 0, 0]): void {
   // These gate tests start with an accepted origin from a previous capture.
-  sessionOrigins.get(session)!.setFromLocalizationResult({ type: "localization_result",
+  sessionOrigins.get(session)!.setFromLocalizationResult({ type: "localization_result", ...referenceFor(session),
     position, orientation: IDENTITY_Q, confidence: 1, ts: 0 });
 }
 
@@ -305,7 +311,7 @@ function deliverResult(session: ARModuleSession, position: Vec3 = [0, 0, 0]): vo
   const observations = decodeLocalizationObservations(binary).observations;
   const sync = session.view().hello!.time_sync;
   const ts = Math.max(...observations.map(observation => observation.ts_capture)) + sync.ts_server - sync.ts_client;
-  session.onTransportText(JSON.stringify({ type: "localization_result", position,
+  session.onTransportText(JSON.stringify({ type: "localization_result", ...referenceFor(session), position,
     orientation: IDENTITY_Q, confidence: 1, ts }) + "\n");
 }
 
@@ -321,7 +327,7 @@ function setOriginLookingAtRobot(session: ARModuleSession): void {
 it("keeps one mixed-mode gate deadline when LOS loss discards a partial batch", async () => {
   const f = makeController();
   setOriginLookingAtRobot(f.session);
-  f.originStore.setMapContext({ map_code: "office", odom_reference_id: "odom" });
+  f.originStore.setSharedFrameContext({ type: "localization_context", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", revision: 0 });
   deliverPose(f.session, [0, 0, -1]);
   deliverRequest(f.session, { type: "localization_observations_request", capture_id: "tag",
     episode_id: "episode", purpose: "robot", capture_policy: "robot_los_preferred",
@@ -346,7 +352,7 @@ it("keeps one mixed-mode gate deadline when LOS loss discards a partial batch", 
 it("enforces the mixed-mode gate during deliberate re-localization", () => {
   const f = makeController();
   setOriginLookingAtRobot(f.session);
-  f.originStore.setMapContext({ map_code: "office", odom_reference_id: "odom" });
+  f.originStore.setSharedFrameContext({ type: "localization_context", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", revision: 0 });
   deliverPose(f.session, [0, 0, -1]);
   f.controller.requestCorrection();
   deliverRequest(f.session, { type: "localization_observations_request", capture_id: "tag",
@@ -476,7 +482,7 @@ describe("localization capture", () => {
     expect(controller.view().phase).toBe("awaiting_result");
   });
 
-  it("waits for distance and look-at when it has T_odom_client under robot_los_required", async () => {
+  it("waits for distance and look-at when it has T_map_tracking under robot_los_required", async () => {
     const { controller, session, capture } = makeController();
     setOriginLookingAtRobot(session);
     deliverPose(session, [4, 0, 0]);
@@ -491,7 +497,7 @@ describe("localization capture", () => {
     expect(controller.view().phase).toBe("awaiting_result");
   });
 
-  it("gates in the tracking frame when T_odom_client is not the identity", async () => {
+  it("gates in the tracking frame when T_map_tracking is not the identity", async () => {
     const { controller, session, capture } = makeController();
     seedOrigin(session, [10, 0, 0]);
     deliverPose(session, [10, 0, 1]);
@@ -502,7 +508,7 @@ describe("localization capture", () => {
     expect(capture.calls).toBe(1);
   });
 
-  it("does not wait when it has T_odom_client under any_angle", async () => {
+  it("does not wait when it has T_map_tracking under any_angle", async () => {
     const { controller, session, capture } = makeController();
     setOriginLookingAtRobot(session);
     deliverPose(session, [4, 0, 0]);
@@ -582,7 +588,7 @@ describe("localization capture", () => {
     expect(session.view().hasTrackingOrigin).toBe(true);
   });
 
-  it("fails after resultTimeoutS with no localization_result, then retries while missing T_odom_client", async () => {
+  it("fails after resultTimeoutS with no localization_result, then retries while missing T_map_tracking", async () => {
     const { controller, session, capture, clock, transport } = makeController();
     deliverRequest(session, { result_timeout_s: 15, type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: "robot_los_required", observation_count: 1 });
     controller.tick();
@@ -654,7 +660,7 @@ describe("localization capture", () => {
     }
     expect(controller.view().phase).toBe("awaiting_result");
     deliverResult(session, [0.12, -0.05, 0]);
-    expect(originStore.T_odom_client?.position).toEqual([0.12, -0.05, 0]);
+    expect(originStore.T_map_tracking?.position).toEqual([0.12, -0.05, 0]);
     expect(controller.view().phase).toBe("idle");
     expect(capture.started).toBe(false);
   });
@@ -687,7 +693,7 @@ describe("localization capture", () => {
     expect(startRequestCount(transport)).toBe(1);
   });
 
-  it("requestStart can ask again after a failure once it has T_odom_client", async () => {
+  it("requestStart can ask again after a failure once it has T_map_tracking", async () => {
     const { controller, session, clock, transport } = makeController();
     setOriginLookingAtRobot(session);
     deliverRequest(session, { result_timeout_s: 15, type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: "any_angle", observation_count: 1 });
@@ -824,7 +830,7 @@ describe("localization capture", () => {
     expect(controller.view()).toMatchObject({ phase: "failed", lastError: "result timeout" });
   });
 
-  it("robot_los_required with T_odom_client but no pose stays waiting_for_geometric_gate", () => {
+  it("robot_los_required with T_map_tracking but no pose stays waiting_for_geometric_gate", () => {
     const { controller, session, capture } = makeController();
     seedOrigin(session);
     deliverRequest(session, { result_timeout_s: 15, type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: "robot_los_required", observation_count: 1 });
@@ -976,12 +982,12 @@ it("does not let a previous batch replace the origin or finish its replacement",
   const first = decodeLocalizationObservations(f.transport.binaries.at(-1)!).observations[0];
   deliverRequest(f.session, request); f.controller.tick(); await settleCapture();
   const sync = f.session.view().hello!.time_sync;
-  f.session.onTransportText(JSON.stringify({ type: "localization_result", position: [9, 9, 0], orientation: IDENTITY_Q,
+  f.session.onTransportText(JSON.stringify({ type: "localization_result", ...referenceFor(f.session), position: [9, 9, 0], orientation: IDENTITY_Q,
     confidence: 1, ts: first.ts_capture + sync.ts_server - sync.ts_client }) + "\n");
   expect(f.originStore.hasTrackingOrigin).toBe(false);
   expect(f.controller.view().phase).toBe("awaiting_result");
   deliverResult(f.session, [1, 0, 0]);
-  expect(f.originStore.T_odom_client?.position).toEqual([1, 0, 0]);
+  expect(f.originStore.T_map_tracking?.position).toEqual([1, 0, 0]);
   expect(f.controller.view().phase).toBe("idle");
 });
 
@@ -1008,12 +1014,12 @@ it("honors a host's explicit exhausted retry budget without changing ordinary ca
 
 it("keeps a healthy camera across failed server episodes and stops on leaving setup", async () => {
   const f = makeController();
-  const context = { map_code: "office", odom_reference_id: "fixture-odom" };
+  const context = { shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", revision: 0 };
   f.session.onTransportText(JSON.stringify({ type: "localization_context", ...context, reset: true }) + "\n");
   const request = { result_timeout_s: 15, type: "localization_observations_request", purpose: "headset",
     capture_id: "first", episode_id: "first", capture_policy: "any_angle", observation_count: 1 } as const;
   deliverRequest(f.session, request); f.controller.tick(); await settleCapture();
-  f.session.onTransportText(JSON.stringify({ type: "localization_status", ...context, scope: "headset",
+  f.session.onTransportText(JSON.stringify({ type: "localization_status", shared_frame_id: "fixture-map", ...context, scope: "headset",
     episode_id: "first", status: "failed", reason: "headset_localization_failed" }) + "\n");
   expect(f.controller.view().phase).toBe("idle");
   expect(f.capture.stopCount).toBe(0);
@@ -1034,7 +1040,7 @@ it("suspends camera hardware while preserving an already submitted localization 
   f.controller.suspend(); f.controller.suspend();
   expect(f.capture.stopCount).toBe(1);
   f.clock.nowS = 1; deliverResult(f.session, [3, 2, 1]);
-  expect(f.originStore.T_odom_client?.position).toEqual([3, 2, 1]);
+  expect(f.originStore.T_map_tracking?.position).toEqual([3, 2, 1]);
   f.controller.resume(); f.controller.resume(); f.controller.tick();
   expect(f.capture.calls).toBe(1); expect(f.controller.view().phase).toBe("idle");
 });
@@ -1077,7 +1083,7 @@ it("keeps the original result deadline during suspension and retries only after 
 
 it("releases the runtime camera between bounded batches and backs off repeated misses", async () => {
   const f = makeController(false, { retryDelaysS: [2, 5, 10, 30], stopWhileAwaitingResult: true });
-  f.originStore.restore(T([0, 0, 0])); deliverPose(f.session, [0, 0, 1]);
+  seedOrigin(f.session); deliverPose(f.session, [0, 0, 1]);
   const request: LocalizationObservationsRequest = { result_timeout_s: 15, type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: "robot_los_required", observation_count: 1 };
   deliverRequest(f.session, request); f.controller.tick(); await settleCapture();
   expect(f.controller.view().phase).toBe("awaiting_result"); expect(f.capture.started).toBe(false);
@@ -1095,7 +1101,7 @@ it("releases the runtime camera between bounded batches and backs off repeated m
 
 it("rechecks runtime geometry after cooldown without warming the camera outside the gate", async () => {
   const f = makeController(false, { retryDelaysS: [2], stopWhileAwaitingResult: true });
-  f.originStore.restore(T([0, 0, 0])); deliverPose(f.session, [0, 0, 1]);
+  seedOrigin(f.session); deliverPose(f.session, [0, 0, 1]);
   const request: LocalizationObservationsRequest = { result_timeout_s: 15, type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: "robot_los_required", observation_count: 1 };
   deliverRequest(f.session, request); f.controller.tick(); await settleCapture();
   deliverRequest(f.session, request); deliverPose(f.session, [10, 0, 0]);
@@ -1108,7 +1114,7 @@ it("rechecks runtime geometry after cooldown without warming the camera outside 
 
 it("does no capture work throughout a twenty-minute closed-gate runtime interval", () => {
   const f = makeController(false, { retryDelaysS: [2, 5, 10, 30], stopWhileAwaitingResult: true });
-  f.originStore.restore(T([0, 0, 0])); deliverPose(f.session, [10, 0, 0]);
+  seedOrigin(f.session); deliverPose(f.session, [10, 0, 0]);
   deliverRequest(f.session, { result_timeout_s: 15, type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: "robot_los_required", observation_count: 3 });
   for (let seconds = 0; seconds < 1200; seconds++) { f.clock.nowS += 1; f.controller.tick(); }
   expect(f.capture.calls).toBe(0); expect(f.capture.startCount).toBe(0);
@@ -1117,7 +1123,7 @@ it("does no capture work throughout a twenty-minute closed-gate runtime interval
 
 it("keeps the request gate deadline through suspension but grants a replacement request its own window", () => {
   const f = makeController(); setOriginLookingAtRobot(f.session);
-  f.originStore.setMapContext({ map_code: "office", odom_reference_id: "fixture-odom" });
+  f.originStore.setSharedFrameContext({ type: "localization_context", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", revision: 0 });
   deliverPose(f.session, [0, 0, -1]);
   const request: LocalizationObservationsRequest = { type: "localization_observations_request", capture_id: "old",
     episode_id: "old", purpose: "robot", capture_policy: "robot_los_preferred", observation_count: 3,
@@ -1132,7 +1138,7 @@ it("keeps the request gate deadline through suspension but grants a replacement 
 
 it("preserves runtime retry cooldown across visibility suspension", async () => {
   const f = makeController(false, { retryDelaysS: [5], stopWhileAwaitingResult: true });
-  f.originStore.restore(T([0, 0, 0]));
+  seedOrigin(f.session);
   deliverPose(f.session, [0, 0, 1]);
   const request: LocalizationObservationsRequest = { result_timeout_s: 15,
     type: "localization_observations_request", capture_id: "fixture-capture",
@@ -1189,4 +1195,27 @@ it("does not keep waiting on a submission retired outside the capture episode", 
   f.session.cancelLocalizationSubmission();
   f.controller.tick();
   expect(f.controller.view()).toMatchObject({ phase: "failed", lastError: "result timeout" });
+});
+
+it("preserves physical tracking and a retained baseline through UI setup reset, but retires both on actual tracking reset", () => {
+  const f = makeController();
+  const latestReference = () => f.transport.texts.map(text => JSON.parse(text))
+    .filter(value => value.type === "localization_tracking").at(-1)?.tracking_reference_id;
+  f.controller.requestStart();
+  const reference = latestReference();
+  expect(reference).toBeTruthy();
+  f.originStore.setFromLocalizationResult({ type: "localization_result", ...LOCALIZATION_REFERENCE,
+    tracking_reference_id: reference, position: [1, 2, 3], orientation: IDENTITY_Q, confidence: 1, ts: 100 });
+  const baseline = f.originStore.T_map_tracking!;
+  f.originStore.clear(); f.controller.reset();
+  f.controller.requestStart();
+  expect(latestReference()).toBe(reference);
+  f.originStore.restore(baseline);
+  expect(f.originStore.T_map_tracking).toEqual(baseline);
+  f.controller.resetTrackingReference();
+  f.originStore.restore(baseline);
+  expect(f.originStore.hasTrackingOrigin).toBe(false);
+  f.controller.requestStart();
+  expect(latestReference()).not.toBe(reference);
+  f.controller.dispose();
 });

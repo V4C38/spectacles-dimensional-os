@@ -1,5 +1,5 @@
 import type { ReadonlyFacts } from "../ClientContracts";
-import { odomToClientTrackingPoint, type ClientTrackingOrigin } from "../localization/ClientTracking";
+import { composePose, type ReadonlyPose, mapToClientTrackingPoint, type ClientTrackingOrigin } from "../localization/ClientTracking";
 
 import type { Vec3 } from "../ClientContracts";
 
@@ -41,7 +41,7 @@ export function composePlaceArMarker(
   origin: ReadonlyFacts<ClientTrackingOrigin>,
 ): ComposedPlaceArMarker {
   return {
-    position: odomToClientTrackingPoint([args.x, args.y, args.z], origin),
+    position: mapToClientTrackingPoint([args.x, args.y, args.z], origin),
     title: args.title,
   };
 }
@@ -75,4 +75,10 @@ function requireTitle(value: unknown, field: string): string {
     throw new Error(`${field} must be a string`);
   }
   return value;
+}
+
+/** Move a retained world marker when the shared map root changes. */
+export function rebasePlaceArMarker(args: ReadonlyFacts<PlaceArMarkerArgs>, rebase: ReadonlyPose): PlaceArMarkerArgs {
+  const pose = composePose(rebase, { position: [args.x, args.y, args.z], orientation: [0, 0, 0, 1] });
+  return { ...args, x: pose.position[0], y: pose.position[1], z: pose.position[2] };
 }

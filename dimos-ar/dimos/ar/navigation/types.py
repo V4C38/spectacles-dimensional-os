@@ -34,6 +34,7 @@ class NavGoalFrame:
     pose: tuple[float, float, float, float] | None
     path_poses: list[tuple[float, float, float, float]]
     ts: float
+    shared_frame_id: str
     preview: bool = False
     preview_id: str | None = None
 

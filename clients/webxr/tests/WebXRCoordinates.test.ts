@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rotateVecByQuat, clientTrackingToOdomPose } from "@dimos-ar-client/localization/ClientTracking";
+import { rotateVecByQuat, clientTrackingToMapPose } from "@dimos-ar-client/localization/ClientTracking";
 import { webxrOpticalToClientTrackingPose, webxrToClientTrackingPoint, webxrToClientTrackingPose, webxrHeadingToClientTrackingPose, clientTrackingToWebxrPose } from "../src/utilities/WebXRCoordinates";
 
 describe("WebXRCoordinates", () => {
@@ -69,7 +69,7 @@ it.each([
   const local = webxrHeadingToClientTrackingPose({ position: [2, 0, -3], orientation: heading });
   const forward = rotateVecByQuat(local.orientation, [1, 0, 0]);
   expect(forward[0]).toBeCloseTo(fx); expect(forward[1]).toBeCloseTo(fy);
-  const odom = clientTrackingToOdomPose(local, { position: [10, 20, 0], orientation: [0, 0, Math.SQRT1_2, Math.SQRT1_2], confidence: 1, ts: 0 });
+  const odom = clientTrackingToMapPose(local, { position: [10, 20, 0], orientation: [0, 0, Math.SQRT1_2, Math.SQRT1_2], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 });
   expect(odom.position[0]).toBeCloseTo(12); expect(odom.position[1]).toBeCloseTo(23);
   const global = rotateVecByQuat(odom.orientation, [1, 0, 0]);
   expect(global[0]).toBeCloseTo(-fy); expect(global[1]).toBeCloseTo(fx);

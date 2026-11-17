@@ -1,4 +1,4 @@
-import { clientTrackingToOdomPoint } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import { clientTrackingToMapPoint } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 import { expect, it, vi } from "vitest";
 import { PointCloudRenderer, composeLidarPoint } from "../../Assets/Scripts/DimOSSpecsClient/sensors/PointCloudRenderer";
 
@@ -12,7 +12,7 @@ function harness() {
     builder, getSceneObject: () => ({ getTransform: () => transform }) });
   return { renderer, vertices, builder, transform };
 }
-const origin: any = { position: [1, -2, .4], orientation: [0, 0, Math.SQRT1_2, Math.SQRT1_2], confidence: 1, ts: 1 };
+const origin: any = { position: [1, -2, .4], orientation: [0, 0, Math.SQRT1_2, Math.SQRT1_2], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 1 };
 
 it("composes points exactly once and keeps an authored ancestor out of world geometry", () => {
   const h = harness(), point: any = [2, -2, 1];
@@ -23,17 +23,13 @@ it("composes points exactly once and keeps an authored ancestor out of world geo
   expect(h.vertices[0].slice(0, 3)).toEqual(composeLidarPoint(point, origin));
 });
 
-it("does not rebuild a stable cloud and applies native odometry scale to clearance", () => {
-  const h = harness(), points: any = [[.9375, 0, 0]];
+it("does not rebuild a stable cloud and measures clearance in metres", () => {
+  const h = harness(), points: any = [[.65, 0, 0]];
   const input: any = { points, origin, mode: "obstacles", robot: [0, 0, 0], orientation: [0, 0, 0, 1],
-    bounds: [.7, .5, .55], obstacleRangeM: .6, odomScaleCorrectionFactor: 1.25 };
+    bounds: [.7, .5, .55], obstacleRangeM: .6 };
   h.renderer.apply(input); h.renderer.apply(input);
   expect(h.builder.updateMesh).toHaveBeenCalledOnce();
-  const t = (.9375 / 1.25 - .35) / .6;
-  expect(h.vertices[0][6]).toBeCloseTo(1 - t * t * (3 - 2 * t));
-  h.renderer.apply({ ...input, odomScaleCorrectionFactor: 1 });
-  expect(h.builder.updateMesh).toHaveBeenCalledTimes(2);
-  expect(h.vertices[1][6]).toBeLessThan(h.vertices[0][6]);
+  expect(h.vertices[0][6]).toBeCloseTo(.5);
 });
 
 it("keeps full-cloud geometry and colors stable when only robot XY or heading changes", () => {
@@ -51,9 +47,9 @@ it("keeps full-cloud geometry and colors stable when only robot XY or heading ch
 it("preserves measured 1/2/3 metre distances through translated and rotated localization origins", () => {
   for (const yaw of [0, 0.7, Math.PI / 2]) {
     const origin = { position: [4, -2, .33] as [number, number, number],
-      orientation: [0, 0, Math.sin(yaw / 2), Math.cos(yaw / 2)] as [number, number, number, number], confidence: 1, ts: 0 };
+      orientation: [0, 0, Math.sin(yaw / 2), Math.cos(yaw / 2)] as [number, number, number, number], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 };
     for (const depth of [1, 2, 3]) {
-      const point = clientTrackingToOdomPoint([depth, .2, .4], origin);
+      const point = clientTrackingToMapPoint([depth, .2, .4], origin);
       const world = composeLidarPoint(point, origin);
       expect(world[0]).toBeCloseTo(-20, 8); expect(world[1]).toBeCloseTo(40, 8); expect(world[2]).toBeCloseTo(-depth * 100, 8);
     }
@@ -61,34 +57,22 @@ it("preserves measured 1/2/3 metre distances through translated and rotated loca
 });
 it("reports the actual native parent transform and projected sample without changing the cloud", () => {
   const h = harness(); h.renderer.apply({ points: [[1, 0, 0], [2, 0, 0], [3, 0, 0]],
-    origin: { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 } });
+    origin: { position: [0, 0, 0], orientation: [0, 0, 0, 1], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 } });
   Object.assign(h.transform, { getWorldTransform: () => ({ multiplyPoint: (point: vec3) => point.add(new vec3(30, 0, 0)) }) });
   const camera = { worldSpaceToScreenSpace: (point: vec3) => ({ x: point.x / 100, y: point.z / 100 }) } as Camera;
   const before = h.vertices.length;
   const diagnostic = h.renderer.spatialDiagnostics(camera) as any;
-  expect(diagnostic.samples[0]).toMatchObject({ odom: [1, 0, 0], worldCm: [0, 0, -100], renderedWorldCm: [30, 0, -100], screen: [.3, -1] });
+  expect(diagnostic.samples[0]).toMatchObject({ map: [1, 0, 0], worldCm: [0, 0, -100], renderedWorldCm: [30, 0, -100], screen: [.3, -1] });
   expect(diagnostic.samples).toHaveLength(3); expect(h.vertices).toHaveLength(before);
 });
 
-it("distinguishes existing server XY scale from native range without silently rescaling vertices", () => {
+it("reports metric map range without rescaling vertices", () => {
   const h = harness();
-  h.renderer.apply({ points: [[1.5, 0, 0]], robot: [0, 0, 0], odomScaleCorrectionFactor: 1.25,
-    origin: { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 } });
+  h.renderer.apply({ points: [[1.5, 0, 0]], robot: [0, 0, 0],
+    origin: { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 } as any });
   Object.assign(h.transform, { getWorldTransform: () => ({ multiplyPoint: (point: vec3) => point }) });
   const camera = { worldSpaceToScreenSpace: () => ({ x: .5, y: .5 }) } as unknown as Camera;
   const diagnostic = h.renderer.spatialDiagnostics(camera) as any;
-  expect(diagnostic.samples[0]).toMatchObject({ correctedPlanarDistanceM: 1.5, nativePlanarDistanceM: 1.2 });
-  expect(diagnostic.odomScaleCorrectionFactor).toBe(1.25);
+  expect(diagnostic.samples[0].planarDistanceM).toBe(1.5);
   expect(h.vertices[0].slice(0, 3)).toEqual([0, 0, -150]);
-});
-
-import { LIDAR_PRESENTATION_TRACE, LIDAR_TRACE_POINT } from "../../../core/tests/support/LidarPresentationTrace";
-it.each(LIDAR_PRESENTATION_TRACE)("shared cloud contract with scale $scale", trace => {
-  const h = harness();
-  h.renderer.apply({ points: [LIDAR_TRACE_POINT],
-    origin: { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 },
-    mode: "obstacles", robot: [0, 0, 0.33], orientation: [0, 0, 0, 1], bounds: [1, 0.4, 0.5],
-    obstacleRangeM: 0.6, odomScaleCorrectionFactor: trace.scale });
-  expect(h.vertices[0][6]).toBeCloseTo(trace.expectedAlpha, 5);
-  expect(h.vertices[0][2] / 100).toBeCloseTo(-1);
 });

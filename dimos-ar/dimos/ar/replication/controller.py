@@ -29,6 +29,7 @@ from dimos.ar.replication.interaction import (
 )
 from dimos.ar.robot.agent_control import ARAgentControlSpec
 from dimos.ar.robot.capabilities import NAV_GOAL, CapabilityName, CapabilitySet
+from dimos.ar.spatial import Matrix
 from dimos.ar.websocket.protocol import encode_text, navigation_payload
 from dimos.utils.logging_config import setup_logger
 
@@ -70,6 +71,16 @@ class InteractionController:
         self._sent_revision = -1
         self._native_sequences: dict[str, int] = {}
         self._closed = False
+        self._spatial_generation = 0
+
+    def frame_changed(self) -> None:
+        self._spatial_generation += 1
+        self._ports.previews().cancel_all()
+        self._state.invalidate_preview()
+
+    def rebase_shared_frame(self, matrix: Matrix, *, shared_frame_id: str) -> None:
+        self.frame_changed()
+        self._state.rebase_shared_frame(matrix, shared_frame_id=shared_frame_id)
 
     @property
     def state(self) -> InteractionCoordinator:
@@ -559,15 +570,17 @@ class InteractionController:
             return
         if request.epoch is None or request.lease_id is None or request.target_revision is None:
             return
+        generation = self._spatial_generation
         body = await self._ports.prepare_outbound(navigation_payload(frame))
-        if not self._closed and self._state.set_preview(
+        if (not self._closed and generation == self._spatial_generation
+                and self._state.set_preview(
             body,
             epoch=request.epoch,
             lease_id=request.lease_id,
             target_revision=request.target_revision,
             source_position=request.position,
             source_orientation=request.orientation,
-        ):
+        )):
             self.broadcast()
 
     def observe_manipulation_snapshot(self, snapshot: dict[str, Any]) -> None:

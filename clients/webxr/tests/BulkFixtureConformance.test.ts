@@ -64,3 +64,23 @@ it("reuses cached asset identity without splitting unchanged trajectories again"
   expect(hit.records).toBeNull();
   expect(measured).toBe(before);
 });
+
+it("both peers retain the creation frame in route metadata and asset identity", async () => {
+  for (const driver of [nativeDriver(), await browserDriver()]) {
+    driver.text({ type: "bulk_hello_request" });
+    const references: string[] = [];
+    for (const shared_frame_id of ["session-map", "vps-map"]) {
+      driver.send({ type: "interaction_state", shared_frame_id, active_goal: {
+        type: "nav_goal", shared_frame_id, pose: [1, 2, 0, 0], ts: 1,
+        path_poses: [[0, 0, 0, 0], [1, 2, 0, 0]] } });
+      const control = driver.controls.at(-1)!.active_goal;
+      references.push(control.route_ref.id);
+      const metadata = driver.records.find(record => record.id === control.route_ref.id && record.part === 0)!.data.metadata;
+      expect(metadata.shared_frame_id).toBe(shared_frame_id);
+      expect(control.path_poses).toBeUndefined();
+    }
+    expect(references[0]).not.toBe(references[1]);
+  }
+  expect(() => fixtureAsset("route", { path_poses: [[1, 2, 0, 0]] },
+    { maximumPartSize: 100, measure: text => text.length })).toThrow(/shared frame/);
+});

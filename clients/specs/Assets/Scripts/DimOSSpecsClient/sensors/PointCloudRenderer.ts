@@ -1,4 +1,4 @@
-import { type ClientTrackingOrigin, odomToClientTrackingPoint } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import { type ClientTrackingOrigin, mapToClientTrackingPoint } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 
 import { LidarFrameSampler } from "DimOSARClient.lspkg/Scripts/DimOSARClient/sensors/LidarRendering";
 import { type LidarDisplayMode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/sensors/LidarDisplay";
@@ -9,7 +9,7 @@ const DOT_MATERIAL = requireAsset("../../../Materials/LidarDot.mat") as Material
 const MAX_POINTS = 4000;
 
 export function composeLidarPoint(point: Readonly<Vec3>, origin: ReadonlyFacts<ClientTrackingOrigin>): Vec3 {
-  return clientTrackingToSpecsPoint(odomToClientTrackingPoint(point, origin));
+  return clientTrackingToSpecsPoint(mapToClientTrackingPoint(point, origin));
 }
 
 @component
@@ -25,7 +25,6 @@ export class PointCloudRenderer extends BaseScriptComponent {
   private positionOrigin: ReadonlyFacts<ClientTrackingOrigin> | null = null;
   private readonly sampler = new LidarFrameSampler<ReadonlyFacts<ClientTrackingOrigin>>(composeLidarPoint,
     { maximum: MAX_POINTS, minimum: 250, default: 1500 });
-  private diagnosticScale = 1;
   private diagnosticRobot: Readonly<Vec3> | null = null;
 
   onAwake(): void {
@@ -46,11 +45,10 @@ export class PointCloudRenderer extends BaseScriptComponent {
 
   apply(input: { points: readonly Readonly<Vec3>[] | null; origin: ReadonlyFacts<ClientTrackingOrigin> | null;
     mode?: LidarDisplayMode; robot?: Readonly<Vec3> | null; baseHeightM?: number; orientation?: Readonly<Quat>;
-    bounds?: Readonly<Vec3>; pointLimit?: number; obstacleRangeM?: number; odomScaleCorrectionFactor?: number; viewportHeight?: number }): void {
+    bounds?: Readonly<Vec3>; pointLimit?: number; obstacleRangeM?: number; viewportHeight?: number }): void {
     const mode = input.mode ?? "full", points = input.points, origin = input.origin;
     if (!origin || !points?.length || mode === "off") { this.hide(); return; }
     if (!this.visual || !this.builder) throw new Error("PointCloudRenderer is not initialized");
-    this.diagnosticScale = input.odomScaleCorrectionFactor ?? 1;
     this.diagnosticRobot = input.robot ?? null;
     const frame = this.sampler.sample({ ...input, points, origin, mode,
       pointLimit: input.pointLimit ?? this.maxPoints });
@@ -83,15 +81,14 @@ export class PointCloudRenderer extends BaseScriptComponent {
     const transform = this.getSceneObject().getTransform();
     const matrix = transform.getWorldTransform();
     return { points: this.positionPoints?.length ?? 0, renderedPoints: this.positions.length,
-      odomScaleCorrectionFactor: this.diagnosticScale, origin: this.positionOrigin,
+      origin: this.positionOrigin,
       samples: this.positions.slice(0, 3).map((world, index) => {
         const renderedWorld = matrix.multiplyPoint(new vec3(...world));
         const screen = camera.worldSpaceToScreenSpace(renderedWorld);
         const rawIndex = Math.floor(index * (this.positionPoints?.length ?? 0) / Math.max(1, this.positions.length));
         const raw = this.positionPoints?.[rawIndex];
-        const correctedDistanceM = raw && this.diagnosticRobot ? Math.hypot(raw[0] - this.diagnosticRobot[0], raw[1] - this.diagnosticRobot[1]) : null;
-        return { odom: raw, worldCm: world, correctedPlanarDistanceM: correctedDistanceM,
-          nativePlanarDistanceM: correctedDistanceM === null ? null : correctedDistanceM / this.diagnosticScale,
+        const planarDistanceM = raw && this.diagnosticRobot ? Math.hypot(raw[0] - this.diagnosticRobot[0], raw[1] - this.diagnosticRobot[1]) : null;
+        return { map: raw, worldCm: world, planarDistanceM,
           renderedWorldCm: [renderedWorld.x, renderedWorld.y, renderedWorld.z], screen: [screen.x, screen.y] };
       }) };
   }

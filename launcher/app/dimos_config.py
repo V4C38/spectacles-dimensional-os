@@ -22,6 +22,11 @@ def write_runtime_config(armodule: dict[str, Any]) -> Path:
     if not isinstance(data, dict):
         raise TypeError("DimOS configuration must contain a JSON object")
     data["armodule"] = armodule
+    localization = armodule.get("localization") or {}
+    if "native_map_file" in localization:
+        native = dict(data.get("go2relocalization") or {})
+        native["map_file"] = localization["native_map_file"] or None
+        data["go2relocalization"] = native
     with tempfile.NamedTemporaryFile(mode="w", prefix="dimos-ar-run-", suffix=".json", delete=False) as stream:
         target = Path(stream.name)
         try:

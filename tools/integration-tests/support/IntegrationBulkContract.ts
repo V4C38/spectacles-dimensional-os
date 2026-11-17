@@ -13,7 +13,8 @@ export function runBulkContract(driver: BulkContractDriver) {
   // Deliberately independent packet bytes instead of the shared packet builder.
   const packet = new Uint8Array([65, 82, 66, 50, 7, 0, 0, 0, 0, 0, 0, 0, ...payload]);
   driver.text({ type: "bulk_hello_request" });
-  driver.send({ type: "localization_observations_request", purpose: "map" });
+  driver.send({ type: "localization_observations_request", purpose: "headset",
+    capture_policy: "any_angle", observation_count: 1, result_timeout_s: 15 });
   const captureId = driver.controls.at(-1)!.capture_id;
   driver.text({ type: "bulk_upload_begin", upload_id: 7, capture_id: captureId, total_bytes: 3 });
   driver.binary(packet);

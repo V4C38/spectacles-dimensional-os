@@ -67,7 +67,7 @@ export class IntegrationV2Fixture implements BindableWebSocketTransport {
     }
     const message = this.prepare(value);
     if (message.type === "hello") Object.assign(message, {
-      protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
+      shared_frame_id: "fixture-map", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
     });
     if (message.type === "localization_observations_request") {
       this.captureId = `fixture-capture-${++this.serial}`;
@@ -157,7 +157,7 @@ export class IntegrationV2Fixture implements BindableWebSocketTransport {
   }
   lidar(data: Uint8Array): void {
     const id = ++this.serial;
-    this.bulk({ type: "bulk_binary_begin", kind: "lidar", epoch: "fixture-epoch", id, total_bytes: data.length });
+    this.bulk({ type: "bulk_binary_begin", kind: "lidar", shared_frame_id: "fixture-map", epoch: "fixture-epoch", id, total_bytes: data.length });
     for (let offset = 0; offset < data.length; offset += 16372) {
       const payload = data.subarray(offset, offset + 16372), packet = new Uint8Array(payload.length + 12), header = new DataView(packet.buffer);
       header.setUint32(0, 0x32425241, true); header.setUint32(4, id, true); header.setUint32(8, offset, true);
@@ -196,6 +196,7 @@ export class IntegrationV2Fixture implements BindableWebSocketTransport {
   }
   private prepare(value: Value): Value {
     const { target: _currentTarget, ...message } = value;
+    if (["pose", "nav_goal", "interaction_state", "agent_skill", "presence_state", "manipulation_state"].includes(String(message.type))) message.shared_frame_id ??= "fixture-map";
     if (message.model) { message.model_ref = this.asset("model", message.model); delete message.model; }
     if (message.plan) { message.plan_ref = this.asset("trajectory", message.plan); delete message.plan; }
     if (message.type === "manipulation_result" && message.trajectory) { message.plan_ref = this.asset("trajectory", message); delete message.trajectory; }

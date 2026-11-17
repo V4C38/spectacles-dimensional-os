@@ -70,17 +70,19 @@ class Socket {
   result(position = [0, 0, 0]) {
     const packet = this.uploaded.at(-1)!;
     const ts = Math.max(...decodeLocalizationObservations(packet).observations.map(observation => observation.ts_capture));
-    this.receive({ ...alignment, position, ts });
+    this.receive({ ...alignment, position, ts, tracking_reference_id: this.commands("localization_tracking").at(-1).tracking_reference_id });
   }
   close() { this.readyState = 3; }
   open() { this.readyState = 1; this.onopen?.(new Event("open")); }
   receive(message: object) {
+    if (["pose", "nav_goal", "interaction_state", "agent_skill", "presence_state", "manipulation_state"].includes(String((message as {type?: string}).type))) message = { ...message, shared_frame_id: "fixture-map" };
     const goal = message as { type?: string; preview?: boolean };
     if (goal.type === "nav_goal") {
       this.interaction = { ...this.interaction, revision: this.interaction.revision + 1,
         [goal.preview ? "preview" : "active_goal"]: message };
       message = this.interaction;
     }
+    if (["pose", "nav_goal", "interaction_state", "agent_skill", "presence_state", "manipulation_state"].includes(String((message as {type?: string}).type))) message = { ...message, shared_frame_id: "fixture-map" };
     this.onmessage?.({ data: JSON.stringify(message) + "\n" } as MessageEvent);
     if ((message as { type?: string }).type === "hello") this.receive(this.interaction);
     this.afterReceive();
@@ -95,8 +97,8 @@ const hello: Hello = {
   resume_token: "fixture-resume",
   odom_reference_id: "fixture-odom",
   localization: { providers: ["fiducial_marker"] },
-  type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "webxr", time_sync: { ts_client: 10, ts_server: 10 },
-  robot: { odom_scale_correction_factor: 1, display_name: "Go2", body_bounds_m: [0.7, 0.5, 0.55], footprint_m: [0.7, 0.3], base_height_m: 0.33 },
+  type: "hello", shared_frame_id: "fixture-map", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "webxr", time_sync: { ts_client: 10, ts_server: 10 },
+  robot: { display_name: "Go2", body_bounds_m: [0.7, 0.5, 0.55], footprint_m: [0.7, 0.3], base_height_m: 0.33 },
   capabilities: {
     manipulation: { available: false, reason: "No arm" },
     object_detection: { available: false, reason: "No detector" },
@@ -111,11 +113,11 @@ const state: State = {
   nav: { state: "idle", outcome: null }, agent: { idle: true },
 };
 const pose = { position: [0, 0.5, 0], orientation: [0, 0, 0, 1] } as const;
-const alignment = { type: "localization_result", position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 10 };
+const alignment = { type: "localization_result", position: [0, 0, 0], orientation: [0, 0, 0, 1], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 10 };
 const request = { result_timeout_s: 15, type: "localization_observations_request", capture_id: "fixture-capture", capture_policy: "any_angle", observation_count: 1 };
 const cleanup: (() => void)[] = [];
 afterEach(() => { cleanup.splice(0).forEach(dispose => dispose()); });
-function fixture(recognition: RecognitionPort | null = null, odomScale = 1, synthesis: SynthesisPort | null = null) {
+function fixture(recognition: RecognitionPort | null = null, synthesis: SynthesisPort | null = null) {
   localStorage.clear();
   let now = 10;
   const sockets: Socket[] = [];
@@ -143,13 +145,14 @@ function fixture(recognition: RecognitionPort | null = null, odomScale = 1, synt
     const socket = sockets[sockets.length - 1];
     socket.open();
     expect(client.ui.snapshot().connectionText).toBe("Connecting…");
-    socket.receive({ ...hello, capabilities, robot: { ...hello.robot, odom_scale_correction_factor: odomScale } }); socket.receive(state);
+    socket.receive({ ...hello, capabilities, robot: { ...hello.robot,  } }); socket.receive(state);
     socket.receive({ type: "pose", position: [2, 0, 0.33], orientation: [0, 0, 0, 1], ts: 10 });
     return socket;
   }
   return { client, camera, sockets, tick, connect, advance: (delta: number) => { now += delta; } };
 }
 function submitAlignment(client: DimOSWebXRClient, timestamp: number) {
+  client.episode.tick();
   client.session.onTransportText(JSON.stringify({ ...request, capture_id: `fixture-${timestamp}` }) + "\n");
   client.session.submitLocalizationObservations([{
     ts_capture: timestamp, jpeg: new Uint8Array([1]),
@@ -378,18 +381,18 @@ it("sends each emergency stop once immediately and keeps feedback pressed for 35
   f.client.emergencyStop(); expect(socket.commands("estop_request")).toHaveLength(2);
 });
 
-it("retires stale localization responses while retaining a dismissable alignment", () => {
+it("retires tracking-reset origins and stale results while keeping review dismissable", () => {
   const f = fixture(); const socket = f.connect(); submitAlignment(f.client, 9); socket.result();
-  const saved = f.client.originStore.T_odom_client;
+  expect(f.client.originStore.hasTrackingOrigin).toBe(true);
   f.client.recoverUnknownTrackingReset();
-  expect(f.client.originStore.T_odom_client).toEqual(saved);
+  expect(f.client.originStore.T_map_tracking).toBeNull();
   socket.receive({ ...alignment, position: [9, 0, 0], ts: 99 });
-  expect(f.client.originStore.T_odom_client).toEqual(saved);
+  expect(f.client.originStore.T_map_tracking).toBeNull();
   f.client.ui.requestAlignmentReview("reference-reset");
   expect(f.client.ui.snapshot().alignmentReview?.pending).toBe(true);
   f.client.ui.dismissAlignmentReview();
   expect(f.client.ui.snapshot().alignmentReview?.pending).toBe(false);
-  expect(f.client.originStore.T_odom_client).toEqual(saved);
+  expect(f.client.originStore.T_map_tracking).toBeNull();
 });
 
 it("keeps per-mode sensor ranges and applies point limits locally", () => {
@@ -409,8 +412,8 @@ it("keeps per-mode sensor ranges and applies point limits locally", () => {
 });
 
 
-it("uses the advertised XY heuristic only for native sensor clearance", () => {
-  const f = fixture(null, 1.25); const socket = f.connect();
+it("uses metric shared-map coordinates directly for sensor clearance", () => {
+  const f = fixture(); const socket = f.connect();
   submitAlignment(f.client, 9); socket.result();
   f.client.ui.nextSetup();
   socket.receive({ type: "pose", position: [5, -2.5, 0.33], orientation: [0, 0, 0, 1], ts: 10 });
@@ -419,7 +422,7 @@ it("uses the advertised XY heuristic only for native sensor clearance", () => {
   wire.setUint32(0, LIDAR_FOURCC, true); wire.setFloat64(4, 10, true); wire.setUint32(12, 1, true);
   wire.setFloat32(16, 6, true); wire.setFloat32(20, -2.5, true); wire.setFloat32(24, 0.4, true);
   socket.bulk!.lidar(new Uint8Array(data)); f.tick();
-  expect(f.client.lidar.object.geometry.getAttribute("color").getW(0)).toBeCloseTo(0.15625);
+  expect(f.client.lidar.object.geometry.getAttribute("color").getW(0)).toBeCloseTo(0);
   expect(f.client.lidar.object.geometry.getAttribute("position").getZ(0)).toBeCloseTo(-6);
 });
 
@@ -440,7 +443,7 @@ it("restarts a partial capture through its episode owner after tracking resumes"
 
 it("speaks distinct identical agent-message events once each", () => {
   const spoken: string[] = [];
-  const f = fixture(null, 1, { speak(text, done) { spoken.push(text); done(); }, stop() {} });
+  const f = fixture(null, { speak(text, done) { spoken.push(text); done(); }, stop() {} });
   const socket = f.connect();
   f.client.ui.flow.finish(); f.client.ui.setOperatingMode("agent"); f.client.setRobotSelected(true); f.tick();
   socket.receive({ type: "agent_message", text: "Done" }); f.tick(); f.tick();
@@ -451,7 +454,7 @@ it("speaks distinct identical agent-message events once each", () => {
 
 it("uses one activity derivation for the UI badge and robot through idle, recognition and synthesis", () => {
   const recognition: RecognitionPort = { start(_text, _error, _end, started) { started(); }, stop() {} };
-  const f = fixture(recognition, 1, { speak() {}, stop() {} }); const socket = f.connect();
+  const f = fixture(recognition, { speak() {}, stop() {} }); const socket = f.connect();
   const feedback = vi.spyOn(f.client.robot, "feedback");
   f.client.ui.flow.finish(); f.client.ui.setOperatingMode("agent"); f.client.ui.menuOpen = true;
   f.client.setRobotSelected(true); f.tick();
@@ -508,4 +511,20 @@ it("excludes the arm handle from ray picking while another client owns control",
   expect(intersections()).toHaveLength(0);
   socket.receive({ ...shared, revision: 101, authority: null }); f.tick();
   expect(intersections().length).toBeGreaterThan(0);
+});
+
+it("restores its baseline in the adopted map when recovery setup is dismissed", () => {
+  const f = fixture(), socket = f.connect();
+  submitAlignment(f.client, 9); socket.result([1, 2, 3]);
+  f.client.ui.flow.finish();
+  f.client.ui.requestAlignmentReview("recovery");
+  f.client.realign();
+  socket.receive({ type: "localization_context", shared_frame_id: "vps", odom_reference_id: "fixture-odom", revision: 1,
+    rebase: { previous_shared_frame_id: "fixture-map", position: [4, -3, .2], orientation: [0, 0, Math.SQRT1_2, Math.SQRT1_2] } });
+  f.client.ui.flow.finish(); f.tick();
+  const restored = f.client.originStore.T_map_tracking;
+  expect(restored?.shared_frame_id).toBe("vps");
+  expect(restored?.position[0]).toBeCloseTo(2);
+  expect(restored?.position[1]).toBeCloseTo(-2);
+  expect(restored?.position[2]).toBeCloseTo(3.2);
 });

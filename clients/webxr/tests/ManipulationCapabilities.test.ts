@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { WebXRManipulationController } from "../src/manipulation/WebXRManipulationController";
 vi.mock("../src/manipulation/ManipulationRenderer", () => ({ ManipulationRenderer: class {} }));
-const origin = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
+const origin = { position: [0, 0, 0], orientation: [0, 0, 0, 1], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 };
 function fixture(navigation: boolean, manipulation: boolean) {
   const state = { available: true, model: { revision: "cached-arm" } };
   const capabilities = { navigation: { available: navigation },

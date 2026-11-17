@@ -19,7 +19,6 @@ from dimos.ar.localization.types import (
     CapturePolicy,
     Intrinsics,
     LocalizationProviderType,
-    LocalizationResult,
     Observation,
 )
 from dimos.ar.manipulation.protocol import ManipulationRequest, decode_request
@@ -568,6 +567,7 @@ class HelloBody:
     navigation_inputs: dict[str, Capability]
     odom_reference_id: str
     localization: LocalizationMetadata
+    shared_frame_id: str
     nav_goal_preview: bool = False
     server_info: dict[str, str] | None = None
     source: dict[str, Any] | None = None
@@ -582,6 +582,7 @@ class Hello:
     navigation_inputs: dict[str, Capability]
     odom_reference_id: str
     localization: LocalizationMetadata
+    shared_frame_id: str
     bulk_url: str
     bulk_token: str
     bulk_epoch: str
@@ -627,6 +628,7 @@ def encode_hello(hello: Hello) -> str:
             **({"source": hello.source} if hello.source else {}),
             "localization": hello.localization,
             "odom_reference_id": hello.odom_reference_id,
+            "shared_frame_id": hello.shared_frame_id,
             "time_sync": {
                 "ts_client": hello.time_sync.ts_client,
                 "ts_server": hello.time_sync.ts_server,
@@ -636,7 +638,6 @@ def encode_hello(hello: Hello) -> str:
                 "body_bounds_m": list(hello.robot.body_bounds_m),
                 "footprint_m": list(hello.robot.footprint_m),
                 "base_height_m": hello.robot.base_height_m,
-                "odom_scale_correction_factor": hello.robot.odom_scale_correction_factor,
             },
             "capabilities": capabilities,
             **({"server_info": hello.server_info} if hello.server_info is not None else {}),
@@ -748,25 +749,17 @@ def encode_agent_message(text: str) -> str:
     return encode_text({"type": "agent_message", "text": stripped})
 
 
-def encode_agent_skill(*, name: str, args: dict[str, Any]) -> str:
+def encode_agent_skill(
+    *, name: str, args: dict[str, Any], shared_frame_id: str | None = None
+) -> str:
     if not isinstance(name, str) or not name.strip():
         raise ValueError("agent_skill.name must be non-blank")
     if not isinstance(args, dict):
         raise TypeError("agent_skill.args must be a JSON object")
-    return encode_text({"type": "agent_skill", "name": name, "args": args})
-
-
-def encode_localization_result(result: LocalizationResult) -> str:
-    """Encode a rigid metric origin; robot odometry was corrected before localization."""
-    return encode_text(
-        {
-            "type": "localization_result",
-            "position": list(result.position),
-            "orientation": list(result.orientation),
-            "confidence": result.confidence,
-            "ts": result.ts_server,
-        }
-    )
+    body: dict[str, Any] = {"type": "agent_skill", "name": name, "args": args}
+    if shared_frame_id is not None:
+        body["shared_frame_id"] = shared_frame_id
+    return encode_text(body)
 
 
 def encode_pose(
@@ -774,10 +767,12 @@ def encode_pose(
     position: tuple[float, float, float],
     orientation: tuple[float, float, float, float],
     ts: float,
+    shared_frame_id: str = "",
 ) -> str:
     return encode_text(
         {
             "type": "pose",
+            "shared_frame_id": shared_frame_id,
             "position": list(position),
             "orientation": list(orientation),
             "ts": ts,
@@ -809,6 +804,7 @@ def navigation_payload(nav_goal: NavGoalFrame) -> dict[str, Any]:
     """Nested route facts carried by the revisioned interaction snapshot."""
     body: dict[str, Any] = {
         "type": "nav_goal",
+        "shared_frame_id": nav_goal.shared_frame_id,
         "path_poses": [list(point) for point in nav_goal.path_poses],
         "ts": nav_goal.ts,
     }

@@ -8,6 +8,7 @@ import json
 import math
 from typing import Any
 
+from dimos.ar.spatial import Matrix, transform_point, transform_pose
 from dimos.ar.websocket.bulk import TokenBucket
 
 INTERVAL_S = 0.2
@@ -65,7 +66,7 @@ def decode_cues(data: dict[str, Any]) -> dict[str, Any]:
             "height": number(panel.get("height"), 0.001, 10),
         }
     context = {}
-    for key in ("map_code", "odom_reference_id"):
+    for key in ("shared_frame_id", "odom_reference_id"):
         value = data.get(key)
         if not isinstance(value, str) or not 1 <= len(value) <= 128:
             raise ValueError("invalid presence context")
@@ -97,6 +98,26 @@ class PresenceRelay:
             self.remove(client_id)
             return
         self._samples[client_id] = (message.cues, now)
+        self._dirty = True
+
+    def rebase_shared_frame(self, matrix: Matrix) -> None:
+        """Re-express passive cues without renewing their receive timestamps."""
+        context = self._context()
+        if context is None:
+            self._samples.clear()
+            self._dirty = True
+            return
+        for key, (sample, received) in self._samples.items():
+            pointers = [
+                {**pointer, **{field: list(transform_point(matrix, pointer[field]))
+                              for field in ("start", "control", "end")}}
+                for pointer in sample["pointers"]
+            ]
+            panel = sample["panel"]
+            if panel is not None:
+                position, orientation = transform_pose(matrix, panel["position"], panel["orientation"])
+                panel = {**panel, "position": list(position), "orientation": list(orientation)}
+            self._samples[key] = ({**context, "pointers": pointers, "panel": panel}, received)
         self._dirty = True
 
     def remove(self, client_id: str) -> None:

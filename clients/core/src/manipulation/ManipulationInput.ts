@@ -1,5 +1,5 @@
 import type { ReadonlyFacts } from "../ClientContracts";
-import { type ClientTrackingOrigin, clientTrackingToOdomPose, odomToClientTrackingPose } from "../localization/ClientTracking";
+import { type ClientTrackingOrigin, clientTrackingToMapPose, mapToClientTrackingPose } from "../localization/ClientTracking";
 
 import type { ManipulationPose } from "./ManipulationTypes";
 import { composePose, inversePose } from "./ModelKinematics";
@@ -25,7 +25,7 @@ export class ManipulationGesture {
 
   rebase(previous: ReadonlyFacts<ClientTrackingOrigin>, next: ReadonlyFacts<ClientTrackingOrigin>): void {
     if (!this.displayed || !this.input) return;
-    this.displayed = odomToClientTrackingPose(clientTrackingToOdomPose(this.displayed, previous), next);
+    this.displayed = mapToClientTrackingPose(clientTrackingToMapPose(this.displayed, previous), next);
     this.offset = composePose(inversePose(this.input), this.displayed);
   }
 

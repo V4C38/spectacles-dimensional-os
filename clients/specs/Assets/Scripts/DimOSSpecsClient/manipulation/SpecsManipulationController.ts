@@ -5,7 +5,7 @@ import { InteractorInputType } from "SpectaclesInteractionKit.lspkg/Core/Interac
 import { ManipulationInputCapture, ManipulationPressEdges, ManipulationGesture } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationInput";
 import type { ManipulationPose as MutableManipulationPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationTypes";
 import { specsToClientTrackingPose } from "../utilities/SpecsCoordinates";
-import { sameTrackingReference, type ClientTrackingOrigin as MutableClientTrackingOrigin, clientTrackingToOdomPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import { sameTrackingReference, type ClientTrackingOrigin as MutableClientTrackingOrigin, clientTrackingToMapPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 
 
 import { ManipulationController } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ManipulationController";
@@ -118,7 +118,7 @@ export class SpecsManipulationController {
   hold(pose: ManipulationPose): void {
     const origin = this.origin() ?? (this.core.interaction.retainingFeedback ? this.lastOrigin : null); if (!origin) { this.end(); return; }
     const target = this.gesture.hold(pose, getTime());
-    if (target) this.core.interaction.aim(clientTrackingToOdomPose(target, origin));
+    if (target) this.core.interaction.aim(clientTrackingToMapPose(target, origin));
   }
   end(): void { this.gesture.end(); this.core.interaction.end(); }
   interrupt(): void { this.gesture.end(); this.core.interaction.interrupt(); }
@@ -130,7 +130,7 @@ export class SpecsManipulationController {
     const retained = supported && this.core.interaction.retainingFeedback;
     const origin = this.origin() ?? (retained ? this.lastOrigin : null);
     if (!supported || (!enabled && !retained) || !sameTrackingReference(origin, this.lastOrigin)) this.suspend();
-    if (origin && this.lastOrigin && origin !== this.lastOrigin && sameTrackingReference(origin, this.lastOrigin)) this.gesture.rebase(this.lastOrigin, origin);
+    if (origin && this.lastOrigin && origin !== this.lastOrigin && origin.shared_frame_id === this.lastOrigin.shared_frame_id && sameTrackingReference(origin, this.lastOrigin)) this.gesture.rebase(this.lastOrigin, origin);
     this.lastOrigin = origin;
     const active = supported && (enabled || retained) && !!origin && this.core.interaction.available;
     this.core.tick(active);

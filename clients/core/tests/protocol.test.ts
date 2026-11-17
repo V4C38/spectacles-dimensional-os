@@ -1,4 +1,4 @@
-import { helloAt, stateFrame, navigationSnapshot } from "./support/SessionFixture";
+import { LOCALIZATION_REFERENCE, helloAt, stateFrame, navigationSnapshot } from "./support/SessionFixture";
 import { describe, it, expect } from "vitest";
 import {
   LIDAR_FOURCC,
@@ -78,7 +78,7 @@ const TYPESCRIPT_LOCA_ONE = hexToBytes(
 );
 
 const LOCALIZATION_RESULT_FIXTURE = {
-  type: "localization_result",
+  type: "localization_result", ...LOCALIZATION_REFERENCE,
   position: [1.0, 2.0, 3.0],
   orientation: [0.0, 0.0, 0.0, 1.0],
   confidence: 0.8,
@@ -669,13 +669,10 @@ it("decodes optional localization result deadlines and rejects invalid values", 
   }
 });
 
-it("accepts the required robot XY heuristic", () => {
-  expect((decodeOutbound(JSON.stringify(HELLO_FIXTURE)) as import("../src/ClientContracts").Hello).robot).toEqual(HELLO_FIXTURE.robot);
-  const hello = { ...HELLO_FIXTURE, robot: { ...HELLO_FIXTURE.robot, odom_scale_correction_factor: 1.25 } };
-  expect((decodeOutbound(JSON.stringify(hello)) as import("../src/ClientContracts").Hello).robot).toEqual(hello.robot);
-  for (const scale of [0, -1, null, true, "1.25"]) {
-    expect(() => decodeOutbound(JSON.stringify({ ...hello, robot: { ...hello.robot, odom_scale_correction_factor: scale } }))).toThrow();
-  }
+it("describes the robot using physical metric dimensions", () => {
+  const decoded = decodeOutbound(JSON.stringify(HELLO_FIXTURE)) as import("../src/ClientContracts").Hello;
+  expect(decoded.robot).toEqual(HELLO_FIXTURE.robot);
+  expect(decoded.robot).not.toHaveProperty("odom_scale_correction_factor");
 });
 
 it("rejects zero quaternions consistently in navigation, telemetry and camera observations", () => {
@@ -720,11 +717,11 @@ it("decodes bounded playback progress and rejects invalid progress", () => {
 it("preserves the validated finishing tail in native and shared interaction snapshots", () => {
   const tail = { generation: 4, group_id: "arm", target_revision: 3, status: "finishing",
     position: [0.1, 0.2, 0.3], orientation: [0, 0, 0, 1], speed_scale: 0.5, joints: { joint: 0.2 } };
-  const native = { type: "manipulation_state", available: false, following_tail: tail };
+  const native = { type: "manipulation_state", shared_frame_id: "fixture-map", available: false, following_tail: tail };
   const shared = {
     targets: [],
     motion_busy: false,
-    type: "interaction_state", epoch: "robot", revision: 5, mode: "manual",
+    type: "interaction_state", shared_frame_id: "fixture-map", epoch: "robot", revision: 5, mode: "manual",
     authority: null, target: null, preview: null, active_goal: null, following_tail: tail };
   for (const snapshot of [native, shared]) {
     expect((decodeOutbound(JSON.stringify(snapshot)) as any).following_tail).toEqual(tail);
@@ -737,7 +734,7 @@ it("preserves the validated finishing tail in native and shared interaction snap
 
 it("validates revision-bound observational arm evaluations", () => {
   const evaluation = { group_id: "arm", target_revision: 2, joints: { slide: 0.3 }, pose: null };
-  const message = { type: "manipulation_state", available: false, evaluation };
+  const message = { type: "manipulation_state", shared_frame_id: "fixture-map", available: false, evaluation };
   expect((decodeOutbound(JSON.stringify(message)) as any).evaluation).toEqual(evaluation);
   for (const invalid of [{ group_id: "" }, { target_revision: -1 }, { target_revision: 1.5 },
     { joints: { slide: null } }, { joints: null }, { pose: { position: [0,0,0], orientation: [0,0,0,0] } }]) {
@@ -747,7 +744,7 @@ it("validates revision-bound observational arm evaluations", () => {
 
 
 it.each([
-  "localization", "resume_token", "odom_reference_id", "robot.odom_scale_correction_factor",
+  "localization", "resume_token", "odom_reference_id", "shared_frame_id",
   "capabilities.manipulation", "capabilities.object_detection", "capabilities.navigation.nav_goal.preview",
 ])("requires current hello metadata: %s", field => {
   const hello = structuredClone(HELLO_FIXTURE) as any;
@@ -767,12 +764,11 @@ it("rejects standalone navigation publications", () => {
 });
 
 
-it("limits mapless localization status to source-bound robot telemetry deferral", () => {
-  const status = { type: "localization_status", odom_reference_id: "odom", scope: "robot",
+it("requires a shared frame identity for every localization status", () => {
+  const status = { type: "localization_status", shared_frame_id: "map", odom_reference_id: "odom", scope: "robot",
     status: "deferred", reason: "robot_pose_unavailable" };
   expect(decodeOutbound(JSON.stringify(status))).toEqual(status);
-  for (const changes of [{ odom_reference_id: "" }, { scope: "headset" },
-    { status: "failed" }, { reason: "headset_localization_failed" }, { episode_id: "episode" }]) {
+  for (const changes of [{ odom_reference_id: "" }, { shared_frame_id: "" }, { shared_frame_id: undefined }]) {
     expect(() => decodeOutbound(JSON.stringify({ ...status, ...changes }))).toThrow();
   }
 });

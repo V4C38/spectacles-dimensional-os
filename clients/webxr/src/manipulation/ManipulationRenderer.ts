@@ -14,7 +14,7 @@ import { ROBOT_LABEL_STYLE, WORLD_DASH_STYLE } from "@dimos-ar-client/presentati
 import { webxrToClientTrackingPoint, clientTrackingToWebxrPose } from "../utilities/WebXRCoordinates";
 
 
-import { type ClientTrackingOrigin as MutableClientTrackingOrigin, odomToClientTrackingPose } from "@dimos-ar-client/localization/ClientTracking";
+import { type ClientTrackingOrigin as MutableClientTrackingOrigin, mapToClientTrackingPose } from "@dimos-ar-client/localization/ClientTracking";
 
 
 import type { ManipulationPlan as MutableManipulationPlan, ManipulationPose as MutableManipulationPose, ManipulationState as MutableManipulationState } from "@dimos-ar-client/manipulation/ManipulationTypes";
@@ -260,7 +260,7 @@ export class ManipulationRenderer {
       measured, proposed: preview, observedValues: all } = frame;
     const dragging = intent.dragging;
     const playing = frame.playback.playing;
-    const base = clientTrackingToWebxrPose(odomToClientTrackingPose(rootPose, origin));
+    const base = clientTrackingToWebxrPose(mapToClientTrackingPose(rootPose, origin));
     this.basePosition.fromArray(base.position);
     this.baseMarker.position.copy(this.basePosition);
     this.controlsView.baseLabel.setFeedback(robotTitle, intent.activity,
@@ -331,7 +331,7 @@ export class ManipulationRenderer {
     if (pathKey !== this.pathKey) {
       this.pathKey = pathKey;
       const points = frame.path.points.map(position => clientTrackingToWebxrPose(
-        odomToClientTrackingPose({ position, orientation: [0, 0, 0, 1] }, origin)).position);
+        mapToClientTrackingPose({ position, orientation: [0, 0, 0, 1] }, origin)).position);
       this.pathStroke.setSegments(points.slice(0, -1).flatMap((point, i) => [point, points[i + 1]]), true);
     }
     const targetMaterial = this.handle.visual.material as THREE.ShaderMaterial;
@@ -413,7 +413,7 @@ export class ManipulationRenderer {
       return;
     }
     const converted = clientTrackingToWebxrPose(
-      odomToClientTrackingPose(pose, origin),
+      mapToClientTrackingPose(pose, origin),
     );
     object.position.fromArray(converted.position);
     object.quaternion.fromArray(converted.orientation);

@@ -5,6 +5,7 @@ from dimos.ar.navigation.native_planner import ARReplanningAStarPlanner
 from dimos.ar.robot.capabilities import blueprint_has_object_detection
 from dimos.ar.robot.profiles.profile import RobotName
 from dimos.core.coordination.blueprints import Blueprint, autoconnect
+from dimos.mapping.relocalization.go2.module import Go2Relocalization
 from dimos.navigation.go2.replanning_a_star.module import ReplanningAStarPlanner
 from dimos.protocol.service.system_configurator.clock_sync import ClockSyncConfigurator
 
@@ -36,6 +37,7 @@ def _correlated_navigation(blueprint: Blueprint) -> Blueprint:
 _unitree_go2_ar_base = (
     autoconnect(
         _correlated_navigation(unitree_go2),
+        Go2Relocalization.blueprint(),
         ARModule.blueprint(
             robot=RobotName.UNITREE_GO2,
             object_detection=blueprint_has_object_detection(unitree_go2),
@@ -77,6 +79,7 @@ else:
 _unitree_go2_ar_agentic_base = (
     autoconnect(
         _correlated_navigation(_guarded_agentic),
+        Go2Relocalization.blueprint(),
         ARModule.blueprint(
             robot=RobotName.UNITREE_GO2,
             agent=True,

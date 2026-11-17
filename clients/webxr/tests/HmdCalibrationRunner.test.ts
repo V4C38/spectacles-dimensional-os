@@ -50,7 +50,7 @@ describe("evaluateCalibration", () => {
     };
     const missingOrigin = evaluateCalibration(HMD_PROFILES.quest3, [blank, blank, blank, blank]);
     expect(missingOrigin.accepted).toBe(false);
-    expect(missingOrigin.reasons.some((reason) => reason.includes("T_odom_client"))).toBe(true);
+    expect(missingOrigin.reasons.some((reason) => reason.includes("T_map_tracking"))).toBe(true);
   });
 });
 

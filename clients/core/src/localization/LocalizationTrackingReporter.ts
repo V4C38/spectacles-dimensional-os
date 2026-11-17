@@ -22,7 +22,7 @@ export class LocalizationTrackingReporter {
     this.origins.beginTrackingReference(this.reference);
   }
   publish(active: boolean, force = false): void {
-    if (!this.origins.mapContext || this.session.view().connection !== "ready") return;
+    if (!this.origins.sharedFrameContext || this.session.view().connection !== "ready") return;
     this.origins.beginTrackingReference(this.reference);
     try {
       if (active) this.travel.sample(this.tracking.trackingPosition?.() ?? this.tracking.cameraOptical().position, this.clock.now());
@@ -30,7 +30,7 @@ export class LocalizationTrackingReporter {
       active = false;
     }
     if (!active) this.travel.pause();
-    const alignment = this.origins.mapAlignment?.id ?? null;
+    const alignment = this.origins.alignmentId;
     const now = this.clock.now();
     if (!force && active === this.reportedActive && alignment === this.reportedAlignment && now - this.lastReport < 1) return;
     const message: LocalizationTracking = { type: "localization_tracking", tracking_reference_id: this.reference,

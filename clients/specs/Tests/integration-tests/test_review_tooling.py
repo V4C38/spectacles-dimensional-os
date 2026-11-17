@@ -139,6 +139,29 @@ class ReviewEvidenceTests(unittest.TestCase):
             self.assertEqual(path, output / "setup-connect.jpg")
             self.assertEqual(path.read_bytes(), b"jpeg")
 
+    def test_native_timeout_switches_subsequent_captures_to_jpeg(self) -> None:
+        class TimedOutMcp:
+            def __init__(self, artifacts: Path) -> None:
+                self.artifacts = artifacts
+                self.png_calls = 0
+                self.jpeg_calls = 0
+            async def editor(self, _code: str) -> None:
+                self.png_calls += 1
+                raise review.ReviewError("Execution timed out.")
+            async def call(self, name: str, _args: dict) -> None:
+                self.jpeg_calls += 1
+                self_name = self.jpeg_calls
+                (self.artifacts / f"mcp/screenshots/{self_name}.jpg").write_bytes(b"jpeg")
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(review, "_prefer_jpeg_capture", False):
+            output = Path(directory)
+            mcp = TimedOutMcp(output)
+            first = asyncio.run(review.capture(mcp, output, "first"))
+            second = asyncio.run(review.capture(mcp, output, "second"))
+            self.assertEqual(mcp.png_calls, 1)
+            self.assertEqual(mcp.jpeg_calls, 2)
+            self.assertEqual(first.read_bytes(), b"jpeg")
+            self.assertEqual(second.read_bytes(), b"jpeg")
+
     def test_nested_clad_images_keep_their_actual_format(self) -> None:
         content = {"content": [{"type": "text", "text": json.dumps([
             {"type": "image", "mimeType": "image/jpeg", "data": base64.b64encode(b"jpeg").decode()},

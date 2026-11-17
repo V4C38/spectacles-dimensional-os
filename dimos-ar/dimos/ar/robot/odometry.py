@@ -11,7 +11,6 @@ from uuid import uuid4
 
 import numpy as np
 
-from dimos.ar.robot.odometry_correction import correct_odom_pose
 from dimos.ar.timing_diagnostics import TimingSummary
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
@@ -60,9 +59,7 @@ class PoseSample:
 class PoseBuffer:
     """Interpolate the robot pose in ``odom`` at a past ``ts_server``.
 
-    ARModule inserts the same XY-corrected robot poses used by outbound telemetry.
-    Outbound LiDAR and paths use this same fixed heuristic; native costmaps stay
-    unchanged and goals invert it at ingress. Samples use the producer timestamp in the
+    Samples preserve native metric positions and use the producer timestamp in the
     server clock domain, not module-delivery time. This is a receipt timestamp
     for Go2 WebRTC, not a hardware exposure timestamp. The WebSocket layer converts ``ts_capture`` to
     ``ts_server`` before building domain ``Observation``s, then localizers call
@@ -312,17 +309,16 @@ class AcceptedOdometry:
     position: tuple[float, float, float]
     orientation: tuple[float, float, float, float]
     frame_id: str
-    corrected: PoseSample
+    sample: PoseSample
 
 
 
 class RobotOdometry:
-    def __init__(self, *, factor: float, recording: bool = False) -> None:
+    def __init__(self, *, recording: bool = False) -> None:
         self.history = PoseBuffer()
         self.clock = RobotSourceClock(recording=recording)
         self.generation = 0
         self.reference_id = uuid4().hex
-        self._factor = factor
         self._source_frame: str | None = None
         self._latest: AcceptedOdometry | None = None
         self._timing = TimingSummary(
@@ -389,9 +385,7 @@ class RobotOdometry:
             ],
         )
         try:
-            sample = self.history.push(
-                correct_odom_pose(native, factor=self._factor), ts_server=timestamp
-            )
+            sample = self.history.push(native, ts_server=timestamp)
         except ValueError:
             return None
         self._source_frame = msg.frame_id
@@ -399,7 +393,7 @@ class RobotOdometry:
             position=(native.x, native.y, native.z),
             orientation=sample.orientation,
             frame_id=msg.frame_id,
-            corrected=sample,
+            sample=sample,
         )
         return self._latest
 

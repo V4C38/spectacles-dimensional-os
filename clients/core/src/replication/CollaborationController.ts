@@ -1,6 +1,6 @@
 import type { InteractionCredentials, InteractionKind, InteractionPose, InteractionResult, InteractionState, InteractionSettings, InteractionTarget, InteractionSnapshot, InteractionDomain, ReadonlyFacts } from "../ClientContracts";
 
-import { lerpVec3, slerpQuat, poseCoordinatesEqual, type ReadonlyPose } from "../localization/ClientTracking";
+import { composePose, lerpVec3, slerpQuat, poseCoordinatesEqual, type ReadonlyPose } from "../localization/ClientTracking";
 
 export const TARGET_SEND_INTERVAL_S = 0.05;
 export const AUTHORITY_RENEW_INTERVAL_S = 0.1;
@@ -272,6 +272,15 @@ export class CollaborationController {
     }
     this.flush();
   }
+  /** Rebase retained map-space input without changing its interaction lease. */
+  rebase(transform: ReadonlyPose): void {
+    if (this.local?.queued) this.local.queued = composePose(transform, this.local.queued);
+    if (this.local?.deferred?.pose) this.local.deferred.pose = composePose(transform, this.local.deferred.pose);
+    if (this.settling) this.settling.pose = composePose(transform, this.settling.pose);
+    this.presentation.rebase(transform);
+    if (this.state) this.state = { ...this.state, targets: this.state.targets.map(target => ({ ...target, ...composePose(transform, target) })), preview: null, active_goal: null };
+    this.routes = { preview: null, active_goal: null };
+  }
   reset(): void {
     this.settling = null;
     this.clearLocal();
@@ -427,6 +436,10 @@ class TargetPresentation {
     return clone(before.pose);
   }
 
+  rebase(transform: ReadonlyPose): void {
+    if (this.prediction) this.prediction = composePose(transform, this.prediction);
+    for (const history of this.histories.values()) for (const sample of history.samples) sample.pose = composePose(transform, sample.pose);
+  }
   reset(): void {
     this.prediction = null;
     this.histories.clear();

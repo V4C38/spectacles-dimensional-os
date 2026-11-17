@@ -210,7 +210,7 @@ export class ReviewScenario extends BaseScriptComponent {
     if (!session.wantConnected) session.start();
     session.onTransportOpen();
     const request = [...this.sent].reverse().find(row => row.type === "hello_request");
-    this.wire({ resume_token: "fixture-resume", type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "native-integration", odom_reference_id: "native-fixture-odom", time_sync: { ts_client: request.ts_client, ts_server: getTime() },
+    this.wire({ resume_token: "fixture-resume", type: "hello", shared_frame_id: "fixture-map", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch", client_id: "native-integration", odom_reference_id: "native-fixture-odom", time_sync: { ts_client: request.ts_client, ts_server: getTime() },
       robot: { ...CATALOG.fixtures.robot, ...(capabilities.manipulation?.available ? { display_name: "OpenYAM" } : {}) }, capabilities, localization: { providers } });
     this.peer.reset();
     this.state("idle", null);
@@ -222,7 +222,7 @@ export class ReviewScenario extends BaseScriptComponent {
       ...(policy === "robot_los_preferred" ? { wait_timeout_s: 0.2 } : {}) });
   }
   acceptLocalization(ts = this.captureTs): void {
-    this.wire({ type: "localization_result", position: this.origin, orientation: [0, 0, 0, 1], confidence: 1, ts });
+    this.wire({ type: "localization_result", alignment_id: "native-alignment", shared_frame_id: "fixture-map", odom_reference_id: "native-fixture-odom", tracking_reference_id: [...this.sent].reverse().find(row => row.type === "localization_tracking")?.tracking_reference_id, position: this.origin, orientation: [0, 0, 0, 1], confidence: 1, ts });
   }
   count(type: string, predicate: (row: any) => boolean = () => true): number { return this.sent.filter(row => row.type === type && predicate(row)).length; }
   world(odom: readonly number[]): vec3 { const p = clientTrackingToSpecsPoint(odom.map((v, i) => v - this.origin[i]) as [
@@ -260,7 +260,12 @@ export class ReviewScenario extends BaseScriptComponent {
   }
   runtime(): void {
     this.ready();
-    this.root.clientTrackingOriginStore.restore({ position: this.origin, orientation: [0, 0, 0, 1], confidence: 1, ts: getTime() });
+    this.root.episode.tick();
+    const tracking = [...this.sent].reverse().find(row => row.type === "localization_tracking");
+    this.root.clientTrackingOriginStore.restore({ alignment_id: "native-alignment", shared_frame_id: "fixture-map",
+      odom_reference_id: "native-fixture-odom", tracking_reference_id: tracking?.tracking_reference_id,
+      position: this.origin, orientation: [0, 0, 0, 1], confidence: 1, ts: getTime() });
+    if (!this.root.clientTrackingOriginStore.hasTrackingOrigin) throw new Error("Native fixture tracking reference was not restored");
     if (!this.root.uiPresenter.isSetupCompleted()) {
       this.root.uiPresenter.setupWizardController.flow.finish();
       this.root.uiPresenter.finishWizard();

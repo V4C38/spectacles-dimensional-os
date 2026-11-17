@@ -1,5 +1,5 @@
 import type { Quat, Vec3, YawPose, InteractionAuthorityPort, NavGoal, ReadonlyFacts } from "../ClientContracts";
-import { type ClientTrackingOrigin, clientTrackingToOdomPose, odomToClientTrackingYawPose, odomToClientTrackingPose, sameTrackingReference } from "../localization/ClientTracking";
+import { type ClientTrackingOrigin, clientTrackingToMapPose, mapToClientTrackingYawPose, mapToClientTrackingPose, sameTrackingReference } from "../localization/ClientTracking";
 
 import type { ARModuleSessionState, ARModuleSession } from "../websocket/ARModuleSession";
 
@@ -88,7 +88,10 @@ export class NavigationGoalLifecycle {
     if (!origin || !view.hasTrackingOrigin || view.connection !== "ready" || view.capabilities?.navigation.nav_goal.available !== true) {
       this.reset(); return;
     }
-    if (!sameTrackingReference(this.origin, origin)) this.route = null;
+    if (!sameTrackingReference(this.origin, origin) || this.origin?.shared_frame_id !== origin.shared_frame_id) {
+      this.route = null;
+      this.routeGoal = null;
+    }
     this.origin = origin;
     const frame = view.nav_goal;
     const freshGoal = this.isFreshGoal(frame, view);
@@ -141,7 +144,7 @@ export class NavigationGoalLifecycle {
       if (frame.pose) {
         if (!sameYawPose(frame.pose, this.routeGoal)) this.route = null;
         this.routeGoal = frame.pose;
-        const p = odomToClientTrackingYawPose(frame.pose, origin);
+        const p = mapToClientTrackingYawPose(frame.pose, origin);
         this.pose = { position: [p[0], p[1], p[2]], orientation: [0, 0, Math.sin(p[3] / 2), Math.cos(p[3] / 2)] };
         this.phase = "accepted";
       }
@@ -160,7 +163,7 @@ export class NavigationGoalLifecycle {
 
   send(now: number, pose: NavigationPose): boolean {
     if (!this.origin || now - this.lastSentAt < GOAL_SEND_INTERVAL_S || this.lastSent && distance(this.lastSent, pose.position) < GOAL_SEND_MIN_DISTANCE_M) return false;
-    try { this.commands.sendGoal(clientTrackingToOdomPose(pose, this.origin)); } catch { return false; }
+    try { this.commands.sendGoal(clientTrackingToMapPose(pose, this.origin)); } catch { return false; }
     this.submitted(now, pose, false);
     return true;
   }
@@ -345,6 +348,7 @@ export class NavigationPreviewCoordinator {
     const view = this.session.view();
     if (view.connection !== "ready") { this.reset(); return; }
     if (view.capabilities?.navigation.nav_goal.preview !== true) { this.clear(); return; }
+    if (this.origin?.shared_frame_id !== origin?.shared_frame_id) this.reset();
     const costmap = view.state?.nav_preview_costmap_ts ?? null;
     if (origin !== this.origin) this.queued = true;
     // Costmap changes queue a refresh without retiring a correlated request.
@@ -386,7 +390,7 @@ export class NavigationPreviewCoordinator {
 
   tick(now: number): void {
     const shared = this.session.collaboration.snapshot();
-    const canonical = shared.rawTarget && this.origin ? odomToClientTrackingPose(shared.rawTarget, this.origin) : null;
+    const canonical = shared.rawTarget && this.origin ? mapToClientTrackingPose(shared.rawTarget, this.origin) : null;
     const mayRefresh = now - this.lastSend >= PREVIEW_INTERVAL_S;
     const pendingAimObsolete = canonical && this.pending && changed(this.pending.aim, canonical);
     if (shared.ownsAuthority && pendingAimObsolete && mayRefresh) {
@@ -412,9 +416,9 @@ export class NavigationPreviewCoordinator {
         (this.lastAim && !changed(this.lastAim, desired) && !this.queued)) return;
     if (!shared.ownsAuthority || !shared.rawTarget || !canonical) return;
     const requestAim = canonical;
-    const odom = shared.rawTarget;
+    const target = shared.rawTarget;
     const id = `${this.prefix}-${++this.sequence}`;
-    try { requestNavPreview(this.session, { ...odom, preview_id: id }); }
+    try { requestNavPreview(this.session, { ...target, preview_id: id }); }
     catch { return; }
     this.pending = { id, aim: requestAim, deadline: now + PREVIEW_DEADLINE_S };
     this.lastAim = requestAim;
@@ -461,7 +465,7 @@ export class NavigationInteraction {
     const goal = this.goals.snapshot(), placement = this.placement.snapshot();
     const shared = this.collaboration.snapshot();
     const remote = shared.target && this.origin && !shared.ownsAuthority && !shared.pending
-      ? odomToClientTrackingPose(shared.target, this.origin) : null;
+      ? mapToClientTrackingPose(shared.target, this.origin) : null;
     const remoteDraft = remote && shared.phase === "draft" && shared.planning ? {
       ownerId: `remote:${shared.authority!.client_id}`, position: remote.position, orientation: remote.orientation,
       held: shared.authority!.held, firstGesture: false,
@@ -482,9 +486,9 @@ export class NavigationInteraction {
     this.previews.apply(origin);
     const available = view.connection === "ready" && view.hasTrackingOrigin && view.capabilities?.navigation.available === true && view.capabilities.navigation.nav_goal.available === true && origin !== null;
     if (!available || !sameTrackingReference(this.origin, origin)) this.cancelDrag();
-    else if (this.origin && origin && this.origin !== origin) {
+    else if (this.origin && origin && this.origin !== origin && this.origin.shared_frame_id === origin.shared_frame_id) {
       const previous = this.origin;
-      const convert = (pose: NavigationPose) => odomToClientTrackingPose(clientTrackingToOdomPose(pose, previous), origin);
+      const convert = (pose: NavigationPose) => mapToClientTrackingPose(clientTrackingToMapPose(pose, previous), origin);
       this.placement.rebase(convert, _now);
       if (this.direct) {
         const baseline = convert({ position: this.direct.start, orientation: this.direct.heading });
@@ -506,7 +510,7 @@ export class NavigationInteraction {
   tick(now: number, visibleDeltaS = 0): void {
     this.goals.tick(visibleDeltaS);
     const draft = this.placement.snapshot().draft;
-    if (draft && this.origin) this.collaboration.update(clientTrackingToOdomPose(draft, this.origin));
+    if (draft && this.origin) this.collaboration.update(clientTrackingToMapPose(draft, this.origin));
     if (draft && this.collaboration.snapshot().ownsAuthority) this.previews.aim(draft.position, draft.orientation);
     this.previews.tick(now);
   }
@@ -543,14 +547,14 @@ export class NavigationInteraction {
     if (!streamWhileDragging) {
       if (!this.selected) return false;
       if (placed && !placed.blocked && !this.collaboration.begin("navigation_planning", sourceId,
-        clientTrackingToOdomPose({ position: placed.position, orientation: this.goals.snapshot().pose?.orientation ?? [0, 0, 0, 1] }, this.origin))) return false;
+        clientTrackingToMapPose({ position: placed.position, orientation: this.goals.snapshot().pose?.orientation ?? [0, 0, 0, 1] }, this.origin))) return false;
       return this.placement.press(sourceId, now, placed, this.goals.snapshot().pose?.orientation ?? [0, 0, 0, 1]);
     }
     if (this.placement.snapshot().draft) return false;
     if (!placed || placed.blocked) return false;
     if (!this.direct) {
       const previousPose = this.goals.snapshot().pose;
-      if (!this.collaboration.begin("live", sourceId, clientTrackingToOdomPose({
+      if (!this.collaboration.begin("live", sourceId, clientTrackingToMapPose({
         position: placed.position, orientation: previousPose?.orientation ?? [0, 0, 0, 1] }, this.origin), {}, shared.mode === "agent")) return false;
       this.placement.clear(); this.previews.clear();
       if (shared.mode === "agent") this.goals.reset();
@@ -565,7 +569,7 @@ export class NavigationInteraction {
     if (this.dragging || Math.hypot(dx, dy) > DRAG_THRESHOLD_M) {
       this.direct.heading = this.heading.update(placed.position, now);
       this.direct.pose = { position: [...placed.position], orientation: this.direct.heading };
-      this.collaboration.update(clientTrackingToOdomPose(this.direct.pose, this.origin));
+      this.collaboration.update(clientTrackingToMapPose(this.direct.pose, this.origin));
       this.goals.send(now, this.direct.pose);
     }
     return this.dragging;
@@ -577,19 +581,19 @@ export class NavigationInteraction {
       if (pose) {
         if (this.origin) {
           this.goals.submitted(now, pose);
-          this.collaboration.confirm(clientTrackingToOdomPose(pose, this.origin), ["navigation_planning"]);
+          this.collaboration.confirm(clientTrackingToMapPose(pose, this.origin), ["navigation_planning"]);
         } else this.collaboration.cancel(["navigation_planning"]);
         this.previews.clear();
       }
       else { const draft = this.placement.snapshot().draft; if (draft) {
-        if (this.origin) this.collaboration.release(clientTrackingToOdomPose(draft, this.origin), ["navigation_planning"]);
+        if (this.origin) this.collaboration.release(clientTrackingToMapPose(draft, this.origin), ["navigation_planning"]);
         this.previews.aim(draft.position, draft.orientation); this.previews.tick(now);
       } else this.collaboration.cancel(["live", "navigation_planning"]); }
     } else if (this.dragging && placed && !placed.blocked) {
       const finalPose = { position: placed.position, orientation: this.direct!.heading };
       if (this.origin) {
         this.goals.submitted(now, finalPose);
-        this.collaboration.release(clientTrackingToOdomPose(finalPose, this.origin), ["live"]);
+        this.collaboration.release(clientTrackingToMapPose(finalPose, this.origin), ["live"]);
       } else this.collaboration.cancel(["live"]);
     }
     if (this.directSource && (!this.dragging || !placed || placed.blocked))

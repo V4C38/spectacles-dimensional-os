@@ -1,6 +1,6 @@
 import type { ReadonlyFacts } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 import type { RoundedRectangle } from "SpectaclesUIKit.lspkg/Scripts/Visuals/RoundedRectangle/RoundedRectangle";
-import { composePlaceArMarker, type PlaceArMarkerArgs } from "DimOSARClient.lspkg/Scripts/DimOSARClient/agent/MarkerSkills";
+import { composePlaceArMarker, rebasePlaceArMarker, type PlaceArMarkerArgs } from "DimOSARClient.lspkg/Scripts/DimOSARClient/agent/MarkerSkills";
 import type { ClientTrackingOrigin as MutableClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 import type { Vec3 } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 import { clientTrackingToSpecsPoint } from "../utilities/SpecsCoordinates";
@@ -53,6 +53,10 @@ export class ARMarkerPresenter {
     placeMarker(root, composed.position);
     this._entries.set(args.id, { root, args, progress: 0 });
     return { ok: true };
+  }
+
+  rebase(transform: { position: Readonly<Vec3>; orientation: readonly [number, number, number, number] }): void {
+    for (const entry of this._entries.values()) entry.args = rebasePlaceArMarker(entry.args, transform);
   }
 
   public recompose(origin: ClientTrackingOrigin): void {

@@ -41,7 +41,7 @@ Record full-resolution video frames (1280×960 at 30 fps where supported) using 
 environment camera, after granting permission. Retain the browser's exact camera label,
 model, OS build, browser version, JPEG dimensions, capture timestamp, and viewer pose at
 that timestamp in the same `local-floor` reference space. Reject the avatar camera.
-Use surveyed fiducial corners in odom meters and an independently surveyed `T_odom_client`.
+Use surveyed fiducial corners in shared-map metres and an independently surveyed `T_map_tracking`.
 Do not use the transform being fitted as the survey reference.
 
 Collect at least four distinct training views and four **independent held-out views**
@@ -81,7 +81,7 @@ python -m pytest tools/test_calibrate.py
 ```
 
 The utility jointly fits `fx/fy/cx/cy` and `T_viewer_optical` against training views only.
-It then independently solves PnP on held-out observations, composes `T_odom_client`, and
+It then independently solves PnP on held-out observations, composes `T_map_tracking`, and
 checks **maximum 2 px reprojection, 5 cm origin, and 5° heading errors**. It rejects sparse,
 reused, non-finite and unconstrained data. Numerical initialization is not calibration data.
 A rejected output has `accepted: false` and the command exits unsuccessfully.

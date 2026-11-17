@@ -186,6 +186,7 @@ class WebSocketServer:
         | None = None,
     ) -> None:
         self._presence = PresenceRelay(presence_context)
+        self._spatial_context = presence_context
         self._sessions: dict[str, LogicalSession] = {}
         self._sockets: dict[ws_server.ServerConnection, ControlConnection] = {}
         self._admissions: dict[ws_server.ServerConnection, HandshakeAdmission] = {}
@@ -231,7 +232,7 @@ class WebSocketServer:
         )
         self._bridge_scheduled = False
         self._bridge_task: asyncio.Task[None] | None = None
-        self._bridge_binary: dict[str | None, bytes] = {}
+        self._bridge_binary: dict[str | None, tuple[str, bytes]] = {}
         self._bulk_preparations: set[asyncio.Task[None]] = set()
         self._closed = False
 
@@ -461,6 +462,7 @@ class WebSocketServer:
                             break
                         if len(line.encode()) > CONTROL_RECORD_MAX_BYTES:
                             raise ControlBudgetError("control record exceeds byte budget")
+                        self._validate_spatial_context(line)
                         inbound = decode_inbound(line)
                         within_budget = connection.ingress.take()
                         if not within_budget and not isinstance(inbound, EstopRequest):
@@ -704,6 +706,7 @@ class WebSocketServer:
                 source=body.source,
                 localization=body.localization,
                 odom_reference_id=body.odom_reference_id,
+                shared_frame_id=body.shared_frame_id,
                 bulk_url="/ws/bulk" if req is not None and req.path == "/ws" else "/bulk",
                 bulk_token=token,
                 bulk_epoch=self.bulk.epoch,
@@ -1020,6 +1023,26 @@ class WebSocketServer:
         if asyncio.iscoroutine(result):
             await result
 
+    def _validate_spatial_context(self, line: str) -> None:
+        payload = json.loads(line)
+        if not isinstance(payload, dict):
+            return  # The protocol decoder reports malformed messages.
+        kind = payload.get("type")
+        spatial = kind in {"client_pose", "client_presence", "nav_goal_request"} or (
+            kind in {"interaction_request", "manipulation_request"}
+            and any(key in payload for key in ("position", "orientation", "pose", "aim"))
+        )
+        if spatial:
+            context = self._spatial_context()
+            if context is not None and payload.get("shared_frame_id") != context["shared_frame_id"]:
+                raise ValueError("spatial request uses a retired shared frame")
+
+    def rebase_shared_frame(self, transform: Any, context: dict[str, str]) -> None:
+        """Retire queued projections; feature owners retain their native execution state."""
+        self._presence.rebase_shared_frame(transform)
+        with self._bridge_lock:
+            self._bridge_binary.clear()
+
     async def _dispatch_inbound(
         self,
         inbound: Inbound,
@@ -1150,6 +1173,12 @@ class WebSocketServer:
         if self._closed:
             return
         frame_type = peek_frame_type(text) or "unknown"
+        if frame_type == "interaction_state":
+            context = self._spatial_context()
+            if context is not None:
+                body = json.loads(text)
+                body["shared_frame_id"] = context["shared_frame_id"]
+                text = encode_text(body)
         if frame_type == "localization_observations_request":
             # Capture identity belongs to the event-loop connection owner. Native
             # producers may enqueue ordinary bridge frames from worker threads.
@@ -1216,7 +1245,7 @@ class WebSocketServer:
                     (websocket, _kind), text = self._bridge_latest.popitem(last=False)
                 elif self._bridge_binary:
                     client_id, data = self._bridge_binary.popitem()
-                    self._queue_bulk_binary(client_id, data)
+                    self._queue_bulk_binary(client_id, data[1], shared_frame_id=data[0])
                     continue
                 else:
                     self._bridge_scheduled = False
@@ -1273,29 +1302,35 @@ class WebSocketServer:
 
         asyncio.run_coroutine_threadsafe(close_connections(), self._loop)
 
-    def schedule_broadcast_binary(self, data: bytes) -> None:
-        self._post_binary(None, data)
+    def schedule_broadcast_binary(self, data: bytes, *, shared_frame_id: str = "") -> None:
+        self._post_binary(None, data, shared_frame_id=shared_frame_id)
 
-    def schedule_send_binary_to_client(self, client_id: str, data: bytes) -> None:
-        self._post_binary(client_id, data)
+    def schedule_send_binary_to_client(
+        self, client_id: str, data: bytes, *, shared_frame_id: str = ""
+    ) -> None:
+        self._post_binary(client_id, data, shared_frame_id=shared_frame_id)
 
-    def _post_binary(self, client_id: str | None, data: bytes) -> None:
+    def _post_binary(
+        self, client_id: str | None, data: bytes, *, shared_frame_id: str
+    ) -> None:
         if self._closed or len(data) > 65_536:
             return
         with self._bridge_lock:
-            self._bridge_binary[client_id] = data
+            self._bridge_binary[client_id] = (shared_frame_id, data)
             if not self._bridge_scheduled:
                 self._bridge_scheduled = True
                 self._loop.call_soon_threadsafe(self._start_bridge)
 
-    def _queue_bulk_binary(self, client_id: str | None, data: bytes) -> None:
+    def _queue_bulk_binary(
+        self, client_id: str | None, data: bytes, *, shared_frame_id: str
+    ) -> None:
         if client_id is None:
             for peer in self._peers():
-                peer.lidar(data)
+                peer.lidar(data, shared_frame_id=shared_frame_id)
         else:
             connection = self._connection(client_id)
             if connection is not None and connection.bulk_peer is not None:
-                connection.bulk_peer.lidar(data)
+                connection.bulk_peer.lidar(data, shared_frame_id=shared_frame_id)
 
     def schedule_send_to(self, websocket: ws_server.ServerConnection, text: str) -> None:
         self._post_text(websocket, text)

@@ -1,5 +1,5 @@
 import type { PresenceCues, PresencePanel, PresencePointer, PresenceState, ReadonlyFacts, Vec3, Quat } from "../ClientContracts";
-import { clientTrackingToOdomPoint, clientTrackingToOdomPose, odomToClientTrackingPoint, odomToClientTrackingPose, lerpVec3, slerpQuat, type ClientTrackingOriginStore } from "../localization/ClientTracking";
+import { clientTrackingToMapPoint, clientTrackingToMapPose, mapToClientTrackingPoint, mapToClientTrackingPose, lerpVec3, slerpQuat, type ClientTrackingOriginStore } from "../localization/ClientTracking";
 
 export const PRESENCE_INTERVAL_S = 0.2;
 export const PRESENCE_STALE_S = 2;
@@ -22,18 +22,18 @@ export class PresenceController {
     const now = this.port.now();
     if (!this.port.ready() || now - this.sampledAt < PRESENCE_INTERVAL_S - 1e-6) return;
     this.sampledAt = now;
-    const origin = this.origins.T_odom_client, context = this.origins.mapContext;
+    const origin = this.origins.T_map_tracking, context = this.origins.sharedFrameContext;
     if (!context) return;
-    const cues = active && origin ? transformCues(read(), p => clientTrackingToOdomPoint(p, origin),
-      p => clientTrackingToOdomPose(p, origin)) : EMPTY;
-    const text = JSON.stringify({ type: "client_presence", map_code: context.map_code, odom_reference_id: context.odom_reference_id, ...roundCues(cues) }) + "\n";
+    const cues = active && origin ? transformCues(read(), p => clientTrackingToMapPoint(p, origin),
+      p => clientTrackingToMapPose(p, origin)) : EMPTY;
+    const text = JSON.stringify({ type: "client_presence", shared_frame_id: context.shared_frame_id, odom_reference_id: context.odom_reference_id, ...roundCues(cues) }) + "\n";
     if (text === this.sent && (cues.pointers.length === 0 && !cues.panel || now - this.sentAt < 1)) return;
     this.port.send(text); this.sent = text; this.sentAt = now;
   }
   apply(state: ReadonlyFacts<PresenceState>): void {
     const now = this.port.now();
     if (!this.origins.acceptsContext(state)) { this.remote.clear(); return; }
-    const context = JSON.stringify([state.map_code, state.odom_reference_id]);
+    const context = JSON.stringify([state.shared_frame_id, state.odom_reference_id]);
     if (context !== this.context) this.remote.clear();
     this.context = context; this.receivedAt = now;
     const seen = new Set<string>();
@@ -47,13 +47,13 @@ export class PresenceController {
     for (const id of this.remote.keys()) if (!seen.has(id)) this.remote.delete(id);
   }
   snapshot(): Remote[] {
-    const origin = this.origins.T_odom_client, context = this.origins.mapContext, now = this.port.now();
-    if (!this.port.ready() || !origin || !context || this.context !== JSON.stringify([context.map_code, context.odom_reference_id]) || now - this.receivedAt >= PRESENCE_STALE_S) return [];
+    const origin = this.origins.T_map_tracking, context = this.origins.sharedFrameContext, now = this.port.now();
+    if (!this.port.ready() || !origin || !context || this.context !== JSON.stringify([context.shared_frame_id, context.odom_reference_id]) || now - this.receivedAt >= PRESENCE_STALE_S) return [];
     const result: Remote[] = [];
     for (const [client_id, value] of this.remote) {
       if (now >= value.expires) { this.remote.delete(client_id); continue; }
       result.push({ client_id, cues: transformCues(interpolate(value.from, value.to, (now - value.at) / PRESENCE_INTERVAL_S),
-        p => odomToClientTrackingPoint(p, origin), p => odomToClientTrackingPose(p, origin)) });
+        p => mapToClientTrackingPoint(p, origin), p => mapToClientTrackingPose(p, origin)) });
     }
     return result;
   }
@@ -108,5 +108,5 @@ export function decodePresenceState(data: Record<string, unknown>): PresenceStat
     return { client_id: string(c.client_id), age_s: number(c.age_s, 0, 2), pointers, panel };
   });
   if (new Set(clients.map(c => c.client_id)).size !== clients.length) throw new Error("Duplicate presence client");
-  return { type: "presence_state", map_code: string(data.map_code), odom_reference_id: string(data.odom_reference_id), clients };
+  return { type: "presence_state", shared_frame_id: string(data.shared_frame_id), odom_reference_id: string(data.odom_reference_id), clients };
 }

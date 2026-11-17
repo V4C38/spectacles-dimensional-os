@@ -1,6 +1,5 @@
-import { FakeClock, FakeTransport, helloAt, stateFrame } from "./support/SessionFixture";
+import { createTrackingOriginStore, FakeClock, FakeTransport, helloAt, stateFrame } from "./support/SessionFixture";
 import { describe, expect, it } from "vitest";
-import { ClientTrackingOriginStore } from "../src/localization/ClientTracking";
 import { LIDAR_PRESETS, lidarModeFromSettings, nextLidarMode, requestLidarSettings } from "../src/sensors/LidarDisplay";
 import { ARModuleSession } from "../src/websocket/ARModuleSession";
 import type { Capabilities, LidarSettings } from "../src/ClientContracts";
@@ -13,7 +12,7 @@ function makeSession(): { session: ARModuleSession; transport: FakeTransport; cl
   const session = new ARModuleSession({
     transport,
     clock,
-    clientTrackingOriginStore: new ClientTrackingOriginStore(),
+    clientTrackingOriginStore: createTrackingOriginStore(),
     config: { helloTimeoutS: 1, reconnectDelayS: 0.5 },
   });
   return { session, transport, clock };

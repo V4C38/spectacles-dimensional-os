@@ -23,6 +23,7 @@ from dimos.ar.manipulation.protocol import (
     rejection_result,
     spatial_error_code,
 )
+from dimos.ar.spatial import FrameSnapshot, transform_pose
 from dimos.ar.timing_diagnostics import TimingSummary
 from dimos.ar.websocket.protocol import encode_text
 
@@ -76,6 +77,7 @@ class ManipulationService:
         on_result: Callable[[ManipulationRequest, dict[str, Any]], None] | None = None,
         control_state: Callable[[], tuple[str, int]] | None = None,
         prepare_outbound: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+        frames: Callable[[], FrameSnapshot] | None = None,
     ) -> None:
         self._advisory_timing = TimingSummary("AR advisory IK timing")
         self._advisory_started: dict[tuple[str, str], float] = {}
@@ -87,6 +89,7 @@ class ManipulationService:
         self._on_result = on_result
         self._control_state = control_state
         self._prepare_outbound = prepare_outbound or _unchanged
+        self._frames = frames
         self._heartbeat: asyncio.Task[None] | None = None
         self._assets: dict[str, tuple[str, dict[str, Any]]] = {}
         self._latest_snapshot: dict[str, Any] | None = None
@@ -110,6 +113,44 @@ class ManipulationService:
         self._snapshot_generation = 0
         self._shared_following: dict[str, SharedFollowing] = {}
 
+    def frame_changed(self) -> None:
+        """Retire projected presentation while admitted native targets keep their coordinates."""
+        self._snapshot_generation += 1
+        self._latest_snapshot = None
+
+    def _native_body(self, body: dict[str, Any]) -> dict[str, Any]:
+        if self._frames is None or "position" not in body or "orientation" not in body:
+            return body
+        position, orientation = transform_pose(
+            self._frames().T_odom_map, body["position"], body["orientation"]
+        )
+        return {**body, "position": list(position), "orientation": list(orientation)}
+
+    def _map_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Project the protocol's spatial fields, preserving joint/model-local coordinates."""
+        if self._frames is None:
+            return dict(payload)
+        frame = self._frames()
+
+        def project(value: dict[str, Any]) -> dict[str, Any]:
+            result = dict(value)
+            if "position" in result and "orientation" in result:
+                position, orientation = transform_pose(
+                    frame.T_map_odom, result["position"], result["orientation"]
+                )
+                result.update(position=list(position), orientation=list(orientation))
+            for field in ("root_pose", "pose", "sample_pose", "following_goal",
+                          "following_tail", "evaluation", "plan"):
+                if isinstance(result.get(field), dict):
+                    result[field] = project(result[field])
+            if isinstance(result.get("observations"), dict):
+                result["observations"] = {
+                    key: project(observation) for key, observation in result["observations"].items()
+                }
+            return result
+
+        return {**project(payload), "shared_frame_id": frame.shared_frame_id}
+
     def start(self) -> None:
         self._poll = asyncio.create_task(self._poll_state())
         if self._control_state is not None:
@@ -119,9 +160,9 @@ class ManipulationService:
         if self._closed or client_id not in self._clients:
             return
         state = self._shared_following.setdefault(client_id, SharedFollowing())
-        sample = state.next_sample(group, body)
+        sample = state.next_sample(group, self._native_body(body))
         if sample is not None:
-            self.submit(sample, client_id)
+            self._submit_native(sample, client_id)
 
     def suspend(self, client_id: str, deadline: float) -> None:
         state = self._shared_following.get(client_id)
@@ -141,6 +182,14 @@ class ManipulationService:
             )
 
     def submit(self, request: ManipulationRequest, client_id: str, clock_offset: float = 0) -> None:
+        # Freeze the native endpoint at admission, before queueing or asynchronous RPC work.
+        self._submit_native(
+            replace(request, payload=self._native_body(request.payload)), client_id, clock_offset
+        )
+
+    def _submit_native(
+        self, request: ManipulationRequest, client_id: str, clock_offset: float = 0
+    ) -> None:
         if self._closed or client_id not in self._clients:
             return
         if request.action == "gripper":
@@ -283,8 +332,14 @@ class ManipulationService:
             "infeasible",
             "feasible",
         }:
+            result = self._map_payload(self._result_payload(request, result))
+            generation = self._snapshot_generation
             result = await self._prepare_outbound({**result, "type": "manipulation_result"})
-            self._reply(client_id, request, result, following=following)
+            if generation != self._snapshot_generation:
+                # Native command receipts remain authoritative; old projected previews do not.
+                for field in ("pose", "sample_pose", "trajectory", "plan", "plan_ref"):
+                    result.pop(field, None)
+            self._reply(client_id, request, result, following=following, projected=True)
 
     async def _state_call(self, method: str, *args: Any, timeout: float = 2.0) -> Any:
         # Invalidate snapshots captured before admission and while the command
@@ -297,25 +352,12 @@ class ManipulationService:
 
     def _reply(
         self, client_id: str, request: ManipulationRequest, result: dict[str, Any],
-        *, following: SharedFollowing | None = None,
+        *, following: SharedFollowing | None = None, projected: bool = False,
     ) -> None:
         if request.action == "evaluate" and result.get("status") != "feasible":
             self._advisory_timing.record(counts={"failures": 1}, maxima={})
-        if request.action in {"evaluate", "update"}:
-            position, orientation = (
-                request.payload.get("position"),
-                request.payload.get("orientation"),
-            )
-            if position is not None and orientation is not None:
-                result["sample_pose"] = {
-                    "position": list(position),
-                    "orientation": list(orientation),
-                }
-            revision = request.payload.get(
-                "advisory_target_revision", request.payload.get("target_revision")
-            )
-            if revision is not None:
-                result["target_revision"] = revision
+        if not projected:
+            result = self._map_payload(self._result_payload(request, result))
         if request.action == "gripper":
             key = (client_id, request.request_id)
             self._gripper_inflight.discard(key)
@@ -336,7 +378,9 @@ class ManipulationService:
                 state.bind(lease, result["token"])
                 pending = state.target
                 if pending is not None:
-                    self.follow_shared(client_id, *pending)
+                    sample = state.next_sample(*pending)
+                    if sample is not None:
+                        self._submit_native(sample, client_id)
         if self._on_result is not None:
             self._on_result(request, result)
         if client_id in self._clients and not self._closed:
@@ -352,6 +396,28 @@ class ManipulationService:
                     }
                 ),
             )
+
+    @staticmethod
+    def _result_payload(
+        request: ManipulationRequest, result: dict[str, Any]
+    ) -> dict[str, Any]:
+        result = dict(result)
+        if request.action in {"evaluate", "update"}:
+            position, orientation = (
+                request.payload.get("position"),
+                request.payload.get("orientation"),
+            )
+            if position is not None and orientation is not None:
+                result["sample_pose"] = {
+                    "position": list(position),
+                    "orientation": list(orientation),
+                }
+            revision = request.payload.get(
+                "advisory_target_revision", request.payload.get("target_revision")
+            )
+            if revision is not None:
+                result["target_revision"] = revision
+        return result
 
     async def _heartbeat_loop(self) -> None:
         while not self._closed:
@@ -400,6 +466,7 @@ class ManipulationService:
             try:
                 snapshot = await self._rpc.call("ar_manipulation_snapshot")
                 snapshot = await self._materialize(snapshot)
+                snapshot = self._map_payload(snapshot)
                 prepared = await self._prepare_outbound({**snapshot, "type": "manipulation_state"})
                 if generation == self._snapshot_generation:
                     self._latest_snapshot = prepared
@@ -415,7 +482,10 @@ class ManipulationService:
                     logger.exception("Manipulation observation failed")
                     self._broadcast(
                         encode_text(
-                            {"type": "manipulation_state", "available": False, "message": str(exc)}
+                            self._map_payload({
+                                "type": "manipulation_state", "available": False,
+                                "message": str(exc),
+                            })
                         )
                     )
             if self._advisory_started:

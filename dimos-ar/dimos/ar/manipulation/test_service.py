@@ -9,6 +9,159 @@ from dimos.ar.manipulation.protocol import ManipulationRequest
 from dimos.ar.manipulation.service import ManipulationService
 
 
+def shared_frame(position=(10.0, 20.0, 0.0), yaw=90.0):
+    import numpy as np
+    from scipy.spatial.transform import Rotation
+
+    from dimos.ar.spatial import FrameSnapshot, frozen_matrix
+
+    transform = np.eye(4)
+    transform[:3, :3] = Rotation.from_euler("z", yaw, degrees=True).as_matrix()
+    transform[:3, 3] = position
+    return FrameSnapshot("vps:room", "odom", 1, frozen_matrix(transform), frozen_matrix(np.eye(4)))
+
+
+def test_manipulation_projection_covers_global_poses_without_changing_native_assets():
+    from copy import deepcopy
+
+    frame = shared_frame()
+    service = ManipulationService(object(), lambda *_: None, lambda _: None, frames=lambda: frame)
+    pose = {"position": [1, 0, 0], "orientation": [0, 0, 0, 1]}
+    payload = {
+        "root_pose": pose,
+        "observations": {"arm": {"pose": pose, "joints": {"j1": 0.5}}},
+        "following_goal": pose,
+        "following_tail": {**pose, "joints": {"j1": 0.5}},
+        "evaluation": {"pose": pose},
+        "plan": {"pose": pose, "trajectory": [{"positions": [0.5]}]},
+        "model": {"links": [{"position": [1, 0, 0], "orientation": [0, 0, 0, 1]}]},
+    }
+    original = deepcopy(payload)
+    projected = service._map_payload(payload)
+    assert projected["shared_frame_id"] == frame.shared_frame_id
+    for value in (projected["root_pose"], projected["observations"]["arm"]["pose"],
+                  projected["following_goal"], projected["following_tail"],
+                  projected["evaluation"]["pose"], projected["plan"]["pose"]):
+        assert value["position"] == pytest.approx([10, 21, 0])
+        assert value["orientation"] == pytest.approx([0, 0, 2 ** -0.5, 2 ** -0.5])
+    assert projected["model"] == original["model"]
+    assert projected["plan"]["trajectory"] == original["plan"]["trajectory"]
+    assert payload == original
+    assert service._native_body(projected["root_pose"])["position"] == pytest.approx([1, 0, 0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("available", [True, False])
+async def test_published_manipulation_state_identifies_its_projected_shared_frame(available):
+    frame = shared_frame()
+    published = []
+    received = asyncio.Event()
+
+    class Runtime:
+        def ar_manipulation_snapshot(self):
+            if not available:
+                raise RuntimeError("native feedback unavailable")
+            return {
+                "available": True,
+                "root_pose": {"position": [1, 0, 0], "orientation": [0, 0, 0, 1]},
+            }
+
+    def broadcast(text):
+        published.append(json.loads(text))
+        received.set()
+
+    service = ManipulationService(
+        Runtime(), lambda *_: None, broadcast, frames=lambda: frame,
+    )
+    service.start()
+    try:
+        await asyncio.wait_for(received.wait(), 1)
+        assert published[0]["type"] == "manipulation_state"
+        assert published[0]["shared_frame_id"] == "vps:room"
+        assert published[0]["available"] is available
+        if available:
+            assert published[0]["root_pose"]["position"] == pytest.approx([10, 21, 0])
+    finally:
+        service._quiescent = True
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_map_change_during_native_command_preserves_admitted_endpoint_and_projects_receipt():
+    entered, release = threading.Event(), threading.Event()
+    calls, packets = [], []
+    frame = shared_frame()
+
+    class Runtime:
+        def ar_manipulation_command(self, client, body):
+            calls.append(body)
+            entered.set()
+            assert release.wait(3)
+            return {"status": "feasible", "pose": {
+                "position": body["position"], "orientation": body["orientation"],
+            }}
+
+    service = ManipulationService(
+        Runtime(), lambda _, packet: packets.append(json.loads(packet)), lambda _: None,
+        frames=lambda: frame,
+    )
+    service._quiescent = True
+    service.connect("a")
+    try:
+        service.submit(ManipulationRequest("evaluate", "evaluate", "arm", {
+            "position": [10, 21, 0], "orientation": [0, 0, 2 ** -0.5, 2 ** -0.5],
+            "target_revision": 3,
+        }), "a")
+        assert await asyncio.to_thread(entered.wait, 1)
+        frame = shared_frame((30, 40, 0), 0)
+        service.frame_changed()
+        release.set()
+        await asyncio.gather(*tuple(service._tasks))
+        assert len(calls) == 1
+        assert calls[0]["position"] == pytest.approx([1, 0, 0])
+        assert calls[0]["orientation"] == pytest.approx([0, 0, 0, 1])
+        assert packets[0]["pose"]["position"] == pytest.approx([31, 40, 0])
+        assert packets[0]["sample_pose"]["position"] == pytest.approx([31, 40, 0])
+        assert packets[0]["target_revision"] == 3
+    finally:
+        release.set()
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_pending_following_target_is_converted_once_across_late_acquire_and_map_change():
+    frame = shared_frame()
+    calls = []
+
+    class Runtime:
+        def ar_manipulation_command(self, client, body):
+            calls.append(body)
+            return {"status": "following"}
+
+        def ar_manipulation_evaluate_following(self, *_args):
+            return {"status": "following"}
+
+    service = ManipulationService(Runtime(), lambda *_: None, lambda _: None, frames=lambda: frame)
+    service._quiescent = True
+    service.connect("a")
+    try:
+        service.follow_shared("a", "arm", {
+            "position": [10, 21, 0], "orientation": [0, 0, 2 ** -0.5, 2 ** -0.5],
+            "authority_lease": "lease", "ts": 0,
+        })
+        frame = shared_frame((30, 40, 0), 0)
+        service.frame_changed()
+        service._reply("a", ManipulationRequest("acquire", "acquire", "arm", {
+            "authority_lease": "lease",
+        }), {"token": "token"})
+        await asyncio.gather(*tuple(service._tasks))
+        assert len(calls) == 1
+        assert calls[0]["position"] == pytest.approx([1, 0, 0])
+        assert calls[0]["orientation"] == pytest.approx([0, 0, 0, 1])
+    finally:
+        await service.close()
+
+
 @pytest.mark.parametrize("status", ["feasible", "infeasible"])
 @pytest.mark.parametrize("action", ["evaluate", "update"])
 def test_advisory_outcomes_identify_the_attempted_pose_and_source_revision(status, action):
@@ -142,9 +295,9 @@ async def test_acquire_receipt_started_before_suspend_cannot_restore_following_c
         release.set()
         await asyncio.gather(*tuple(service._tasks))
         assert service._shared_following["a"].token is None
-        service.submit = Mock()
+        service._submit_native = Mock()
         service.follow_shared("a", "arm", {"authority_lease": "lease"})
-        service.submit.assert_not_called()
+        service._submit_native.assert_not_called()
     finally:
         release.set()
         await service.close()
@@ -926,44 +1079,44 @@ async def test_shared_follow_cache_requires_fresh_ack_after_suspend_and_disconne
     native = SimpleNamespace(ar_manipulation_suspend=lambda *_: None)
     service = ManipulationService(native, lambda *_: None, lambda _: None)
     service._quiescent = True
-    service.submit = Mock()
+    service._submit_native = Mock()
     service.connect("a")
     body = {"authority_lease": "lease", "sequence": 12, "ts": 0}
     try:
         service.follow_shared("a", "arm", body)
-        service.submit.assert_not_called()
+        service._submit_native.assert_not_called()
         service._reply(
             "a",
             ManipulationRequest("grab", "acquire", "arm", {"authority_lease": "lease"}),
             {"status": "acquired", "token": "token"},
         )
-        first, client = service.submit.call_args.args
+        first, client = service._submit_native.call_args.args
         assert client == "a"
         assert first.payload["token"] == "token"
         assert first.payload["sequence"] == 1
         service.suspend("a", time.monotonic() + 1)
         await asyncio.gather(*tuple(service._tasks))
         service.connect("a")
-        service.submit.reset_mock()
+        service._submit_native.reset_mock()
         service.follow_shared("a", "arm", body)
-        service.submit.assert_not_called()
+        service._submit_native.assert_not_called()
         service._reply(
             "a", ManipulationRequest("resume", "acquire", "arm", {"authority_lease": "lease"}),
             {"status": "acquired", "token": "resumed-token"},
         )
-        assert service.submit.call_args.args[0].payload["sequence"] == 1
-        assert service.submit.call_args.args[0].payload["token"] == "resumed-token"
+        assert service._submit_native.call_args.args[0].payload["sequence"] == 1
+        assert service._submit_native.call_args.args[0].payload["token"] == "resumed-token"
         service.disconnect("a")
         service.connect("a")
-        service.submit.reset_mock()
+        service._submit_native.reset_mock()
         service.follow_shared("a", "arm", body)
-        service.submit.assert_not_called()
+        service._submit_native.assert_not_called()
         service._reply(
             "a",
             ManipulationRequest("grab-new", "acquire", "arm", {"authority_lease": "lease"}),
             {"status": "acquired", "token": "new-token"},
         )
-        fresh = service.submit.call_args.args[0]
+        fresh = service._submit_native.call_args.args[0]
         assert fresh.payload["token"] == "new-token"
         assert fresh.payload["sequence"] == 1
     finally:
@@ -976,7 +1129,7 @@ async def test_late_acquisition_ack_cannot_restore_a_disconnected_follow_token()
 
     service = ManipulationService(object(), lambda *_: None, lambda _: None)
     service._quiescent = True
-    service.submit = Mock()
+    service._submit_native = Mock()
     body = {"authority_lease": "old-lease", "sequence": 1, "ts": 0}
     service.connect("a")
     service.follow_shared("a", "arm", body)
@@ -989,6 +1142,6 @@ async def test_late_acquisition_ack_cannot_restore_a_disconnected_follow_token()
     try:
         service.connect("a")
         service.follow_shared("a", "arm", body)
-        service.submit.assert_not_called()
+        service._submit_native.assert_not_called()
     finally:
         await service.close()

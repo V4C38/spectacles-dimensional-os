@@ -1,7 +1,6 @@
-import { FakeClock, FakeTransport, helloAt, stateFrame } from "./support/SessionFixture";
+import { createTrackingOriginStore, FakeClock, FakeTransport, helloAt, stateFrame } from "./support/SessionFixture";
 import { describe, expect, it } from "vitest";
 import { requestUserMessage } from "../src/agent/AgentTransport";
-import { ClientTrackingOriginStore } from "../src/localization/ClientTracking";
 import { ARModuleSession } from "../src/websocket/ARModuleSession";
 import type { Capabilities } from "../src/ClientContracts";
 
@@ -16,7 +15,7 @@ function readySession(capabilities?: Partial<Capabilities>): {
   const session = new ARModuleSession({
     transport,
     clock,
-    clientTrackingOriginStore: new ClientTrackingOriginStore(),
+    clientTrackingOriginStore: createTrackingOriginStore(),
     config: { helloTimeoutS: 1, reconnectDelayS: 0.5 },
   });
   session.start();
@@ -43,7 +42,7 @@ describe("requestUserMessage", () => {
     const session = new ARModuleSession({
       transport: new FakeTransport(),
       clock: new FakeClock(),
-      clientTrackingOriginStore: new ClientTrackingOriginStore(),
+      clientTrackingOriginStore: createTrackingOriginStore(),
       config: { helloTimeoutS: 1, reconnectDelayS: 0.5 },
     });
     expect(() => requestUserMessage(session, "go")).toThrow(/ready session/);

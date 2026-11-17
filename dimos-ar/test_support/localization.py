@@ -1,14 +1,9 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from weakref import WeakKeyDictionary
 
-from dimos.ar.localization.policy import LocalizationPolicy
-from dimos.ar.localization.runner import LocalizationCoordinator
-from dimos.ar.localization.types import Intrinsics, LocalizedPose, Observation
-from dimos.ar.robot.odometry import PoseBuffer
+from dimos.ar.localization.types import Intrinsics, Observation
 from dimos.msgs.geometry_msgs.Pose import Pose
-from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 
 
@@ -28,45 +23,6 @@ def _observation(ts_server: float = 10.0) -> Observation:
         camera_pose=Pose(0.0, 0.0, 0.0),
         ts_server=ts_server,
     )
-
-
-class _FixedLocalizer:
-    def __init__(self, result: LocalizedPose | None) -> None:
-        self.result = result
-        self.calls: list[list[Observation]] = []
-
-
-def _coordinator(
-    *,
-    marker: _FixedLocalizer | None = None,
-) -> LocalizationCoordinator:
-    class Marker:
-        def snapshot(self):
-            return self
-
-        def localize(self, observations):
-            marker.calls.append(list(observations))
-            return marker.result
-
-    return LocalizationCoordinator(
-        marker=Marker() if marker is not None else None,
-        clock=lambda: 3.0,
-    )
-
-
-_histories: WeakKeyDictionary[LocalizationPolicy, PoseBuffer] = WeakKeyDictionary()
-
-
-def _advance(policy: LocalizationPolicy, x: float, y: float):
-    if policy not in _histories:
-        history = PoseBuffer()
-        _histories[policy] = history
-        policy._travel = lambda: history.latest().travel_m if history.latest() else 0.0
-    history = _histories[policy]
-    latest = history.latest()
-    timestamp = latest.ts_server + 0.1 if latest else 0.0
-    history.push(PoseStamped(ts=timestamp, position=[x, y, 0]))
-    return policy.on_odom()
 
 
 def _camera_info() -> CameraInfo:

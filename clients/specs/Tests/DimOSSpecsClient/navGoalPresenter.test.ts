@@ -18,7 +18,7 @@ vi.mock("../../Assets/Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer", 
 import { NavigationRouteRenderer } from "../../Assets/Scripts/DimOSSpecsClient/navigation/SpecsNavigationRenderer";
 
 const origin: ClientTrackingOrigin = {
-  position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0,
+  position: [0, 0, 0], orientation: [0, 0, 0, 1], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0,
 };
 function harness() {
   const presenter = new NavigationRouteRenderer({} as SceneObject);

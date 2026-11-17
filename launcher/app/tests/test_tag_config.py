@@ -161,3 +161,15 @@ def test_localization_defaults_are_the_packaged_backend_resource():
     project = Path(__file__).resolve().parents[3] / "dimos-ar/pyproject.toml"
     data = tomllib.loads(project.read_text())
     assert "defaults.json" in data["tool"]["setuptools"]["package-data"]["dimos.ar.localization"]
+
+
+def test_saved_map_setting_round_trips_without_replacing_vps_settings():
+    from tag_config import merge_armodule_settings, ui_from_armodule_config
+
+    existing = {"localization": {"providers": [{"type": "vps", "map_code": "visual"}]}}
+    updated = merge_armodule_settings(existing, {"native_map_file": " /maps/office.pc2.lcm "})
+    assert updated["localization"]["native_map_file"] == "/maps/office.pc2.lcm"
+    assert updated["localization"]["providers"] == existing["localization"]["providers"]
+    assert ui_from_armodule_config(updated)["native_map_file"] == "/maps/office.pc2.lcm"
+    cleared = merge_armodule_settings(updated, {"native_map_file": ""})
+    assert cleared["localization"]["native_map_file"] is None

@@ -74,7 +74,7 @@ describe("robot presentation", () => {
     const origin = {
       position: [0, 0, 0] as [number, number, number],
       orientation: [0, 0, 0, 1] as [number, number, number, number],
-      confidence: 1,
+      alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1,
       ts: 0,
     };
     robot.apply(
@@ -134,7 +134,7 @@ describe("robot presentation", () => {
 
 it("smooths robot motion with Specs position and rotation rates and snaps fresh alignment", () => {
   const robot = new WebXRRobotPresenter();
-  const origin = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 } as const;
+  const origin = { position: [0, 0, 0], orientation: [0, 0, 0, 1], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 } as const;
   const pose = { type: "pose", position: [0, 0, 0.33], orientation: [0, 0, 0, 1], ts: 0 } as const;
   const initial = view({ hasTrackingOrigin: true, pose: { ...pose, position: [...pose.position], orientation: [...pose.orientation] } });
   const aligned: ClientTrackingOrigin = { ...origin, position: [...origin.position], orientation: [...origin.orientation] };
@@ -157,7 +157,7 @@ it("smooths robot motion with Specs position and rotation rates and snaps fresh 
 
 it("adds only a translucent visual copy during a localization correction", () => {
   const robot = new WebXRRobotPresenter();
-  const origin: ClientTrackingOrigin = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
+  const origin: ClientTrackingOrigin = { position: [0, 0, 0], orientation: [0, 0, 0, 1], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 };
   const current = view({ hasTrackingOrigin: true,
     pose: { type: "pose", position: [0, 0, 0.33], orientation: [0, 0, 0, 1], ts: 0 } });
   try {
@@ -194,7 +194,7 @@ it("orients the invisible body collider with the robot and reverses the outline 
   const v = view();
   v.pose = { type: "pose", position: [1, 2, 0.33], orientation: [0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)], ts: 1 };
   v.hasTrackingOrigin = true;
-  const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
+  const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 };
   robot.apply(v, origin, true, null);
   expect(robot.collider.scale.toArray()).toEqual([0.5, 0.55, 0.7]);
   expect(robot.collider.position.y - robot.collider.scale.y / 2).toBeCloseTo(-0.33);

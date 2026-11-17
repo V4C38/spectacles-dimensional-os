@@ -2,7 +2,7 @@ import type { ManipulationAction, ManipulationPose, ManipulationResult, Manipula
 import type { InteractionAuthorityPort, ReadonlyFacts } from "../ClientContracts";
 import type { ARModuleSession, ARModuleSessionState } from "../websocket/ARModuleSession";
 import { encodeManipulation } from "./ManipulationProtocol";
-import { poseCoordinatesEqual } from "../localization/ClientTracking";
+import { composePose, poseCoordinatesEqual } from "../localization/ClientTracking";
 import { MANIPULATION_PLAN_INTERVAL_S, poseChanged, targetIsOffset, deriveManipulationSnapshot, shortManipulationStatus, type ManipulationSnapshot, type ManipulationRejection, ManipulationPreviewPlayback } from "./ManipulationPresentation";
 
 export interface ManipulationRequest {
@@ -77,6 +77,10 @@ export class ManipulationRequests {
 
   clear(): void { this.pending.clear(); }
 
+  rebase(convert: (pose: ManipulationPose) => ManipulationPose): void {
+    for (const request of this.pending.values()) if (request.pose) request.pose = convert(request.pose);
+  }
+
   diagnostics() {
     let pendingAgeS = 0;
     for (const request of this.pending.values()) if (request.action === "evaluate")
@@ -123,6 +127,15 @@ class ManipulationDraft {
     desiredGripper: null, rejection: null, valid: null,
   };
   get view(): ReadonlyFacts<DraftState> { return this.state; }
+
+  rebase(convert: (pose: ManipulationPose) => ManipulationPose): void {
+    const state = this.state;
+    if (state.target) state.target = convert(state.target);
+    if (state.rejectedTarget) state.rejectedTarget = convert(state.rejectedTarget);
+    if (state.rejection) state.rejection = { ...state.rejection, pose: convert(state.rejection.pose) };
+    if (state.valid) state.valid = { ...state.valid,
+      requested: convert(state.valid.requested), pose: convert(state.valid.pose) };
+  }
 
   private invalidatePlan(): void {
     this.state.generation++;
@@ -366,6 +379,13 @@ class ManipulationFollowSession {
   private lastSourceTs: number | null = null;
   private lostAt: number | null = null;
   get view(): ReadonlyFacts<FollowState> { return this.state; }
+
+  rebase(convert: (pose: ManipulationPose) => ManipulationPose): void {
+    const released = this.state.releasedFollow;
+    if (!released) return;
+    released.pose = convert(released.pose);
+    if (released.canonical) released.canonical = { ...released.canonical, pose: convert(released.canonical.pose) };
+  }
 
   advanceEpisode(): void { this.state.episode++; }
   begin(selected: boolean): void {
@@ -709,8 +729,23 @@ export class ManipulationInteraction {
     if (!session.collaboration) throw new Error("Manipulation requires interaction authority");
     this.requests = new ManipulationRequests(now, id => session.assetTransferDeadline?.(id));
     this.unsubscribe = session.subscribeOutbound((message) => {
+      if (message.type === "localization_context" && message.rebase) this.rebase(message.rebase);
       if (message.type === "manipulation_result") this.accept(message);
     });
+  }
+
+  private rebase(transform: ManipulationPose): void {
+    const converted = new Map<ManipulationPose, ManipulationPose>();
+    const convert = (pose: ManipulationPose): ManipulationPose => {
+      let result = converted.get(pose);
+      if (!result) { result = composePose(transform, pose); converted.set(pose, result); }
+      return result;
+    };
+    this.draft.rebase(convert);
+    this.requests.rebase(convert);
+    this.follow.rebase(convert);
+    const payload = this.deferredNative?.payload;
+    if (payload?.position && payload.orientation) Object.assign(payload, convert({ position: payload.position, orientation: payload.orientation }));
   }
 
   get dragging(): boolean {

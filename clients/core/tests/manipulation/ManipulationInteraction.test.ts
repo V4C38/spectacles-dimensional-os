@@ -88,6 +88,7 @@ function fixture() {
     authority,
     reply,
     view,
+    emit: (message: Outbound) => listener(message),
     tail: (position = pose, joints = { joint: 0.3 }) => {
       view.manipulation.following_tail = { generation: 1, group_id: "arm", status: "finishing", target_revision: 1, ...position, joints };
       authority.state.following_tail = view.manipulation.following_tail;
@@ -105,6 +106,26 @@ const pose = {
   position: [0, 0, 0.3] as [number, number, number],
   orientation: [0, 0, 0, 1] as [number, number, number, number],
 };
+
+it("rebases held and validated targets while retaining the native plan identity", () => {
+  const f = fixture();
+  f.interaction.setSelected(true);
+  expect(f.interaction.begin()).toBe(true);
+  f.interaction.aim(pose);
+  f.interaction.end();
+  f.advance(.2);
+  const request = f.sent.at(-1);
+  f.emit({ type: "localization_context", shared_frame_id: "vps", odom_reference_id: "odom", revision: 1,
+    rebase: { previous_shared_frame_id: "initial", position: [10, 20, 0], orientation: [0, 0, 0, 1] } });
+  expect(f.interaction.target?.position).toEqual([10, 20, .3]);
+  // A late native joint trajectory has no global pose. Its admitted request must
+  // provide the endpoint in the new map, while the exact plan ID survives.
+  f.emit({ type: "manipulation_result", request_id: request.request_id, action: "plan", group_id: "arm",
+    target_revision: request.target_revision, status: "planned", plan_id: "native-plan", joint_names: ["joint"],
+    trajectory: [{ time: 0, positions: [0] }, { time: 1, positions: [.3] }], duration: 1 });
+  expect(f.interaction.plan?.plan_id).toBe("native-plan");
+  expect(f.interaction.target?.position).toEqual([10, 20, .3]);
+});
 
 describe("manipulation intent", () => {
   it("edits selected targets without moving and executes only the returned plan identity", () => {

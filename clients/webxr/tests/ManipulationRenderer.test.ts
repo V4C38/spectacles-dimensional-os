@@ -12,7 +12,7 @@ const pose = {
   position: [0, 0, 0] as [number, number, number],
   orientation: [0, 0, 0, 1] as [number, number, number, number],
 };
-const origin = { ...pose, confidence: 1, ts: 0 };
+const origin = { ...pose, alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 };
 
 it("keeps the real EE placement while a visual copy catches its moving destination", () => {
   const renderer = new ManipulationRenderer();

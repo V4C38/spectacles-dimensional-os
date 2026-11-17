@@ -24,6 +24,7 @@ from dimos.ar.numeric import (
     required_identifier,
     wrapped_angle,
 )
+from dimos.ar.spatial import Matrix, transform_pose
 
 LEASE_DURATION_S = 0.5
 MAX_REQUESTS_PER_CLIENT = 128
@@ -249,6 +250,42 @@ class InteractionCoordinator:
         self.following_tail = None
         self._revision += 1
         self._tail_floor = self._revision
+
+    def invalidate_preview(self) -> None:
+        if self.preview is not None:
+            self._revision += 1
+        self.preview = None
+        self._preview_aim = None
+
+    def rebase_shared_frame(self, matrix: Matrix, *, shared_frame_id: str) -> None:
+        """Re-express retained facts, preserving authority and native action identities."""
+        for key, target in self._targets.items():
+            position, orientation = transform_pose(matrix, target.position, target.orientation)
+            self._targets[key] = replace(target, position=position, orientation=orientation)
+        self.preview = None
+        self._preview_aim = None
+        if self.active_goal is not None:
+            goal = dict(self.active_goal)
+            def project(raw: Any) -> list[float] | None:
+                if raw is None:
+                    return None
+                yaw = float(raw[3])
+                position, orientation = transform_pose(
+                    matrix, raw[:3], (0, 0, math.sin(yaw / 2), math.cos(yaw / 2))
+                )
+                return [*position, quaternion_yaw(orientation)]
+            goal["pose"] = project(goal.get("pose"))
+            goal["path_poses"] = []
+            goal.pop("path_ref", None)
+            goal["shared_frame_id"] = shared_frame_id
+            self.active_goal = goal
+        if self.following_tail is not None:
+            tail = dict(self.following_tail)
+            if "position" in tail and "orientation" in tail:
+                position, orientation = transform_pose(matrix, tail["position"], tail["orientation"])
+                tail.update(position=list(position), orientation=list(orientation))
+            self.following_tail = tail
+        self._revision += 1
 
     def reset(self) -> None:
         self._takeover = None

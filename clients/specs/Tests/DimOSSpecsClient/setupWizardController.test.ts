@@ -281,10 +281,10 @@ it("keeps the success height stable when session packets arrive during celebrati
 
 it("restores the runtime localization baseline when Back aborts re-setup", () => {
   const { controller, view } = harness();
-  const origin = { position: [1, 2, 3], orientation: [0, 0, 0, 1], confidence: 1, ts: 1 };
+  const origin = { position: [1, 2, 3], orientation: [0, 0, 0, 1], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 1 };
   const restore = vi.fn();
   (view as any).hello = { odom_reference_id: "same-odom", robot: { display_name: "Robot" } };
-  (controller as any).deps.clientTrackingOriginStore = { T_odom_client: origin, clear: vi.fn(), restore };
+  (controller as any).deps.clientTrackingOriginStore = { T_map_tracking: origin, clear: vi.fn(), restore };
   controller.start(true);
   mocks.previous();
   expect(restore).toHaveBeenCalledWith(origin);
@@ -295,7 +295,7 @@ it.each(["pause", "new-reference"])("does not restore a baseline after %s", reas
   const restore = vi.fn();
   (view as any).hello = { odom_reference_id: "old-odom", robot: { display_name: "Robot" } };
   (controller as any).deps.clientTrackingOriginStore = {
-    T_odom_client: { position: [1, 2, 3], orientation: [0, 0, 0, 1], confidence: 1, ts: 1 }, clear: vi.fn(), restore,
+    T_map_tracking: { position: [1, 2, 3], orientation: [0, 0, 0, 1], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 1 }, clear: vi.fn(), restore,
   };
   controller.start(true);
   if (reason === "pause") controller.invalidateBaseline();
@@ -393,4 +393,28 @@ it("retires PIN lookup and all button callbacks when disposed", async () => {
   complete({ ip: "192.168.1.42", port: 8787 }); await Promise.resolve();
   h.events.forEach(event => event.fire()); mocks.next(); mocks.submit();
   expect(h.session.start).not.toHaveBeenCalled(); expect(h.finished).not.toHaveBeenCalled();
+});
+
+it("restores the rebased baseline when Back closes setup after VPS adoption", async () => {
+  const { ClientTrackingOriginStore } = await import("DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking");
+  const origins = new ClientTrackingOriginStore();
+  origins.beginTrackingReference("tracking");
+  origins.setSharedFrameContext({ type: "localization_context", shared_frame_id: "session", odom_reference_id: "odom", revision: 0 });
+  origins.setFromLocalizationResult({ type: "localization_result", alignment_id: "alignment", shared_frame_id: "session",
+    odom_reference_id: "odom", tracking_reference_id: "tracking", position: [1, 2, 3], orientation: [0, 0, 0, 1], confidence: 1, ts: 1 });
+  const { controller, view } = harness();
+  (view as any).hello = { odom_reference_id: "odom", shared_frame_id: "session", robot: { display_name: "Robot" } };
+  (controller as any).deps.clientTrackingOriginStore = origins;
+  controller.start(true);
+  const context = { type: "localization_context" as const, shared_frame_id: "vps", odom_reference_id: "odom", revision: 1,
+    rebase: { previous_shared_frame_id: "session", position: [4, -3, .2] as [number, number, number],
+      orientation: [0, 0, Math.SQRT1_2, Math.SQRT1_2] as [number, number, number, number] } };
+  origins.setSharedFrameContext(context);
+  controller.rebaseBaseline(context);
+  (view as any).hello = { odom_reference_id: "odom", shared_frame_id: "vps", robot: { display_name: "Robot" } };
+  mocks.previous();
+  expect(origins.T_map_tracking?.shared_frame_id).toBe("vps");
+  expect(origins.T_map_tracking?.position[0]).toBeCloseTo(2);
+  expect(origins.T_map_tracking?.position[1]).toBeCloseTo(-2);
+  expect(origins.T_map_tracking?.position[2]).toBeCloseTo(3.2);
 });

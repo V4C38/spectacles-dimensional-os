@@ -9,11 +9,11 @@ import pytest
 
 from dimos.ar.replication.interaction import InteractionRequest
 from dimos.ar.websocket.protocol import decode_inbound
-from test_support.module import _module_with_policy
+from test_support.module import _module_with_localization
 
 
 def fixture():
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     owner = module._interaction_controller.state
     owner.connect("human")
     owner.connect("other")
@@ -126,7 +126,7 @@ async def test_takeover_rejects_other_human_ownership_and_true_operation_stop():
 
 
 def test_agent_capability_unavailable_rejects_selection_and_takeover():
-    module = _module_with_policy([], agent_available=False)
+    module = _module_with_localization([], agent_available=False)
     owner = module._interaction_controller.state
     owner.connect("human")
     module._agent_control = Mock()
@@ -212,7 +212,7 @@ async def test_stop_dispatches_before_a_hung_resume_and_waits_for_its_actual_lat
 
     from dimos.ar.async_execution import NativeRPC
 
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     controller = module._interaction_controller
     controller.state.connect("human")
     entered, release, stopped = threading.Event(), threading.Event(), threading.Event()

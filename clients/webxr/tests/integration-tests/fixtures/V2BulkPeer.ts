@@ -61,11 +61,12 @@ export class V2BulkPeer {
     peer.send(text);
   }
   lidar(data: Buffer): void {
-    this.bulk({ type: "bulk_binary_begin", kind: "lidar", epoch: "fixture-epoch", id: 1, total_bytes: data.length });
+    this.bulk({ type: "bulk_binary_begin", kind: "lidar", shared_frame_id: "fixture-map", epoch: "fixture-epoch", id: 1, total_bytes: data.length });
     for (const packet of fixtureBinaryPackets(data)) this.socket!.send(Buffer.from(packet));
   }
   private prepare(message: Value): Value {
     const result = { ...message };
+    if (["pose", "nav_goal", "interaction_state", "agent_skill", "presence_state", "manipulation_state"].includes(String(result.type))) result.shared_frame_id ??= "fixture-map";
     if (result.model) { result.model_ref = this.asset("model", result.model); delete result.model; }
     if (result.plan) { result.plan_ref = this.asset("trajectory", result.plan); delete result.plan; }
     if (result.type === "manipulation_result" && result.trajectory) { result.plan_ref = this.asset("trajectory", result); delete result.trajectory; }

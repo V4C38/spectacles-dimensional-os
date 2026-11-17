@@ -84,7 +84,7 @@ Run one with `dimos run dimos-ar.<name>`, or pick it in the launcher.
 | --- | --- | --- |
 | `unitree-go2-ar` | Unitree Go2 | Navigation, LiDAR and localization |
 | `unitree-go2-ar-agentic` | Unitree Go2 | Same, plus the LLM agent |
-| `openyam-ar-planner` | OpenYAM | Planning, execution and gripper (`--simulation=mock` without hardware) |
+| `openyam-ar-planner` | OpenYAM | Planning, execution and gripper |
 
 </details>
 
@@ -158,7 +158,7 @@ These are external DimOS blueprints. The namespace is the package name.
 ```sh
 dimos run dimos-ar.unitree-go2-ar
 dimos run dimos-ar.unitree-go2-ar-agentic
-dimos --simulation=mock run dimos-ar.openyam-ar-planner
+dimos run dimos-ar.openyam-ar-planner
 ```
 
 A real Go2 takes `--robot-ip`. Agent mode needs an `OPENAI_API_KEY`.
@@ -167,17 +167,21 @@ A real Go2 takes `--robot-ip`. Agent mode needs an `OPENAI_API_KEY`.
 
 ## Localization (Alignment)
 
-The headset and the robot each track their own position, in their own coordinate frame. **Localization** finds the transform between the two, so robot poses, routes and LiDAR line up with the real room, and goals you place land where you see them.
+Headset tracking, robot odometry and arm kinematics use different coordinate systems. **Localization** aligns them in one shared **map** frame, so robot poses, routes and LiDAR line up with the real room, and goals you place land where you see them.
 
 <p align="center">
-  <img src="assets/localization_concept.svg" alt="Two headsets each aligned into the robot odom frame, so a placed goal is shared" width="800" />
+  <img src="assets/localization_concept.svg" alt="Two headset tracking frames, robot odometry frame and robot body frame aligned with the shared map" width="800" />
+  <br />
+  <sub>Shared map, robot odometry frame and headset tracking frame.</sub>
 </p>
 
 <p align="center">
-  <img src="assets/localization_exchange.svg" alt="The headset sends a camera image and ARModule returns the pose. A dotted line shows ARModule can also request an image." width="800" />
+  <img src="assets/localization_exchange.svg" alt="ARModule aligns the headset tracking frame and robot odometry frame with the shared map, using headset and DimOS observations." width="800" />
+  <br />
+  <sub>ARModule localizes headset and robot; DimOS executes.</sub>
 </p>
 
-> ⓘ **Policy.** A fiducial marker and VPS can both be on. A visible marker takes precedence; VPS takes over when the marker is out of view.
+> ⓘ **Policy.** AprilTag and VPS can work together. Tag localization succeeds without VPS; later VPS registration can adopt the scanned map once.
 
 <details>
 <summary><strong>Fiducial marker on the robot</strong></summary>
@@ -185,15 +189,21 @@ The headset and the robot each track their own position, in their own coordinate
 <br>
 
 <p align="center">
-  <img src="assets/localization_fiducial.svg" alt="One headset solving its transform into the robot odom frame from a mounted fiducial marker" width="800" />
+  <img src="assets/localization_fiducial.svg" alt="AprilTag alignment for a mobile robot and a fixed arm, including the arm base and end-effector frames" width="1000" />
+  <br />
+  <sub>AprilTag alignment: mobile robot and fixed arm.</sub>
 </p>
 
-A marker fixed on the robot. The mount is `marker_id`, `size_m` (black-square edge) and `position` / `orientation` in the robot base frame. Prints are in [`assets/markers/`](assets/markers/).
+The shared map initially matches odom. A tag fixed to the robot aligns the headset tracking frame with that map. A mobile robot’s body frame moves within odom; a stationary arm has a fixed `base` frame and a moving `gripper_tip` frame, computed from joint feedback.
 
-Set them in the launcher, or as `armodule.fiducial_marker_mounts` in `~/.config/dimos/config`. Go2 defaults to marker 0 at 56 mm.
+Configure `marker_id`, `size_m` (black-square edge) and the marker’s `position` / `orientation` relative to the robot base. Prints are in [`assets/markers/`](assets/markers/).
+
+Set them in the launcher, or as `armodule.fiducial_marker_mounts` in `~/.config/dimos/config`. Go2 defaults to marker 0 with a 56 mm black-square edge (70 mm full print). OpenYAM’s CLI blueprint requires an explicit localization provider and marker mount; the launcher supplies its preset.
 
 <p align="center">
   <img src="assets/specs_dimos_go2tagmount.jpg" alt="Default fiducial marker mount on Unitree Go2" width="400" />
+  <br />
+  <sub>Default Go2 marker mount.</sub>
 </p>
 
 </details>
@@ -205,9 +215,13 @@ Set them in the launcher, or as `armodule.fiducial_marker_mounts` in `~/.config/
 
 <p align="center">
   <img src="assets/localization_vps.svg" alt="Headset and robot camera localizing against the same scanned VPS map" width="800" />
+  <br />
+  <sub>Headset and robot align with map (VPS).</sub>
 </p>
 
-Headset and robot each localize in a pre-scanned map. The two poses give the alignment.
+VPS registers camera observations against a scanned visual map. Its first connected registration can adopt that map as the shared reference; existing content stays in place physically. Later fixes update alignment beneath that reference.
+
+For a saved DimOS LiDAR map on Go2, set **Saved LiDAR map** in the launcher. It sets `armodule.localization.native_map_file` and `go2relocalization.map_file`; configure both when using the CLI. DimOS registers odometry in that map; ARModule connects it to the shared map. LiDAR and VPS maps have separate origins until registered.
 
 | Provider | Status |
 | --- | --- |
@@ -215,7 +229,7 @@ Headset and robot each localize in a pre-scanned map. The two poses give the ali
 
 MultiSet takes a **client ID**, **client secret** and **map code**.
 
-Set them in the launcher, or as `MULTISET_CLIENT_ID`, `MULTISET_CLIENT_SECRET` and `armodule.localization` (`type: vps`, `map_code`) in `~/.config/dimos/config`.
+Set them in the launcher, or export `MULTISET_CLIENT_ID` and `MULTISET_CLIENT_SECRET` and add `{"type":"vps","map_code":"…"}` to `armodule.localization.providers` in `~/.config/dimos/config`.
 
 </details>
 
@@ -244,7 +258,7 @@ The package lives in [`dimos-ar/dimos/ar/`](dimos-ar/dimos/ar/). After the modul
 | [`module.py`](dimos-ar/dimos/ar/module.py) | DimOS composition and In/Out surface |
 | `websocket/` | Client sessions, control and bulk transport |
 | `replication/` | Shared state across clients and who holds editing control |
-| `localization/` | Fiducial marker and VPS alignment |
+| `localization/` | Shared-map alignment: AprilTag, VPS and native-map registration |
 | `navigation/` | Goals, route previews, joystick |
 | `manipulation/` | Arm planning and execution |
 | `sensors/` | LiDAR and sensor presentation |
@@ -262,7 +276,7 @@ SPECS and WebXR implement the protocol and provide the UI.
 
 [ClientCore](clients/core/src/) is the shared TypeScript layer: protocol, sessions, localization, navigation and manipulation. WebXR imports its source directly; SPECS uses the exported `DimOSARClient.lspkg`. Each client adds only its own input and rendering.
 
-> ⓘ **Colocated Multiplayer.** Several clients can be connected at the same time, including a mix of SPECS and WebXR. They share goals, routes and arm targets in the robot frame.
+> ⓘ **Colocated Multiplayer.** Several clients can be connected at the same time, including a mix of SPECS and WebXR. They share goals, routes and arm targets in the shared map frame.
 
 <details>
 <summary><strong>SPECS</strong></summary>

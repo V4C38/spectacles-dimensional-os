@@ -3,12 +3,12 @@ import { PresenceController, decodePresenceState } from "../../src/replication/P
 import { ClientTrackingOriginStore } from "../../src/localization/ClientTracking";
 import type { PresenceCues, PresenceState } from "../../src/ClientContracts";
 import { decodeOutbound } from "../../src/websocket/protocol";
-const context = { map_code: "office", odom_reference_id: "odom" };
+const context = { shared_frame_id: "office", odom_reference_id: "odom" };
 const cues = (x = 1): PresenceCues => ({ pointers: [{ id: 0, start: [0,0,0], control: [x/2,0,0], end: [x,0,0], opacity: .4, cursor: true }],
   panel: { position: [1,2,3], orientation: [0,0,0,1], width: .5, height: .3 } });
 function fixture() {
-  const origins = new ClientTrackingOriginStore(); origins.setMapContext(context);
-  origins.setFromLocalizationResult({ type: "localization_result", position: [10,0,0], orientation: [0,0,0,1], confidence: 1, ts: 0 });
+  const origins = new ClientTrackingOriginStore(); origins.beginTrackingReference("tracking"); origins.setSharedFrameContext({ type: "localization_context", ...context, revision: 0 });
+  origins.setFromLocalizationResult({ type: "localization_result", ...context, alignment_id: "alignment", tracking_reference_id: "tracking", position: [10,0,0], orientation: [0,0,0,1], confidence: 1, ts: 0 });
   const clock = { now: 0, ready: true }, sent: string[] = [];
   const core = new PresenceController({ ready: () => clock.ready, now: () => clock.now, clientId: () => "self", send: t => sent.push(t) }, origins);
   const state = (x = 1, age_s = 0): PresenceState => ({ type: "presence_state", ...context, clients: [{ client_id: "peer", age_s, ...cues(x) }] });
@@ -30,7 +30,7 @@ it("sends one clear on suspension and no repeated hidden-state traffic", () => {
   expect(f.sent).toHaveLength(2); expect(JSON.parse(f.sent[1])).toMatchObject({ pointers: [], panel: null });
   f.clock.ready = false; f.clock.now = 4; f.core.publish(() => cues()); expect(f.sent).toHaveLength(2);
 });
-it("interpolates in odom then projects using the current origin and removes hidden pointers immediately", () => {
+it("interpolates in the shared map then projects using the current origin and removes hidden pointers immediately", () => {
   const f = fixture(); f.core.apply(f.state(10)); expect(f.core.snapshot()[0].cues.pointers[0].end[0]).toBe(0);
   f.clock.now = .2; f.core.apply(f.state(12)); f.clock.now = .3;
   expect(f.core.snapshot()[0].cues.pointers[0].end[0]).toBeCloseTo(1);
@@ -42,7 +42,7 @@ it("uses source age rather than aggregate refresh time, filters self and clears 
   const f = fixture(); const state = f.state(10, 1.8); state.clients.push({ ...state.clients[0], client_id: "self" });
   f.core.apply(state); expect(f.core.snapshot()).toHaveLength(1);
   f.clock.now = .21; expect(f.core.snapshot()).toEqual([]);
-  f.core.apply(f.state()); f.origins.setMapContext({ ...context, map_code: "other" }); expect(f.core.snapshot()).toEqual([]);
+  f.core.apply(f.state()); f.origins.setSharedFrameContext({ type: "localization_context", ...context, shared_frame_id: "other", revision: 1 }); expect(f.core.snapshot()).toEqual([]);
   f.core.reset(); expect(f.core.snapshot()).toEqual([]);
 });
 it("strictly decodes optional cues and rejects malformed arrays, dimensions, quaternions and identities", () => {
@@ -54,13 +54,13 @@ it("strictly decodes optional cues and rejects malformed arrays, dimensions, qua
   for (const state of bad) expect(() => decodePresenceState(state)).toThrow();
 });
 
-// Runtime server messages carry fields beyond the structural MapContext type.
+// Runtime server messages carry fields beyond the structural SharedFrameContext type.
 it("keeps the outbound presence discriminator after adopting a decoded server context", () => {
   const f = fixture();
-  const decoded = decodeOutbound(JSON.stringify({ type: "localization_context", ...context, reset: true }));
+  const decoded = decodeOutbound(JSON.stringify({ type: "localization_context", ...context, revision: 1 }));
   if (decoded.type !== "localization_context") throw new Error("Expected localization context");
-  f.origins.setMapContext(decoded);
-  expect(f.origins.mapContext).toEqual(context);
+  f.origins.setSharedFrameContext(decoded);
+  expect(f.origins.sharedFrameContext).toMatchObject(context);
   f.core.publish(() => cues());
   expect(JSON.parse(f.sent[0])).toMatchObject({ type: "client_presence", ...context });
   expect(JSON.parse(f.sent[0]).pointers[0].end).toEqual([11, 0, 0]);

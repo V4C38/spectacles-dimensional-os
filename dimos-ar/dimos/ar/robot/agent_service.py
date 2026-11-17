@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 import math
 import threading
 import time
@@ -10,7 +11,12 @@ from langchain_core.messages import AIMessage
 from langchain_core.messages.base import BaseMessage
 
 from dimos.ar.numeric import finite_number
-from dimos.ar.robot.odometry_correction import correct_odom_xy, uncorrect_odom_xy
+from dimos.ar.spatial import (
+    FrameSnapshot,
+    Matrix,
+    transform_point,
+    transform_pose,
+)
 from dimos.ar.websocket.protocol import ClientPose, encode_agent_message, encode_agent_skill
 
 CLIENT_POSE_STALE_S = 2.0
@@ -18,15 +24,17 @@ MARKER_ID_MAX_LEN = 64
 
 
 class ARAgentService:
+    """Own agent context and map markers; expose native odom coordinates to tools."""
+
     def __init__(
         self,
         *,
-        factor: float,
+        frames: Callable[[], FrameSnapshot],
         connection_count: Callable[[], int],
         broadcast: Callable[[str], None],
         clock: Callable[[], float] = time.time,
     ) -> None:
-        self._factor = factor
+        self._frames = frames
         self._connection_count = connection_count
         self._broadcast = broadcast
         self._clock = clock
@@ -65,8 +73,15 @@ class ARAgentService:
             return frozenset(self._markers)
 
     def set_pose(self, pose: ClientPose, *, client_id: str) -> None:
+        # Keep the observation in native odometry at admission. Agent tools run
+        # on worker threads and must not pair an old map pose with a newer root.
+        position, orientation = transform_pose(
+            self._frames().T_odom_map, pose.position, pose.orientation
+        )
         with self._lock:
-            self._poses[client_id] = (pose, self._clock())
+            self._poses[client_id] = (
+                replace(pose, position=position, orientation=orientation), self._clock()
+            )
 
     def begin_turn(self, client_id: str) -> bool:
         """Pin wearer context before publishing to the native shared agent."""
@@ -95,14 +110,33 @@ class ARAgentService:
     def marker_snapshot(self) -> tuple[str, ...]:
         with self._lock:
             return tuple(
-                encode_agent_skill(name="ar_place_marker", args=dict(args))
+                self._marker_message(args)
                 for args in self._markers.values()
             )
+
+    @staticmethod
+    def _marker_message(marker: dict[str, Any]) -> str:
+        return encode_agent_skill(
+            name="ar_place_marker",
+            args={key: value for key, value in marker.items() if key != "shared_frame_id"},
+            shared_frame_id=marker["shared_frame_id"],
+        )
 
     def reset(self) -> None:
         with self._lock:
             self._poses.clear()
             self._markers.clear()
+
+    def rebase_shared_frame(self, matrix: Matrix) -> None:
+        """Change spatial representation without changing agent actor/lifecycle."""
+        with self._lock:
+            shared_frame_id = self._frames().shared_frame_id
+            for marker in self._markers.values():
+                if marker["shared_frame_id"] == shared_frame_id:
+                    continue
+                position = transform_point(matrix, (marker["x"], marker["y"], marker["z"]))
+                marker.update(zip(("x", "y", "z"), position, strict=True))
+                marker["shared_frame_id"] = shared_frame_id
 
     def forward(self, message: BaseMessage) -> None:
         text = _textual_ai_message(message)
@@ -125,6 +159,7 @@ class ARAgentService:
             return pose if 0 <= self._clock() - received_at <= CLIENT_POSE_STALE_S else None
 
     def place(self, id: str, x: float, y: float, z: float, title: str = "") -> str:
+        """Project a native odom point into the shared map without changing its units."""
         marker_id, error = _validate_marker_id(id)
         if error is not None:
             return error
@@ -135,18 +170,26 @@ class ARAgentService:
             return "No AR client connected"
         if self._fresh_pose() is None:
             return "No client pose"
-        corrected_x, corrected_y = correct_odom_xy(x, y, factor=self._factor)
+        frame = self._frames()
+        position = transform_point(frame.T_map_odom, (x, y, z))
         args: dict[str, Any] = {
             "id": marker_id,
-            "x": corrected_x,
-            "y": corrected_y,
-            "z": float(z),
+            "shared_frame_id": frame.shared_frame_id,
+            "x": position[0],
+            "y": position[1],
+            "z": position[2],
         }
         if title:
             args["title"] = title
         with self._lock:
+            current = self._frames()
+            if current.revision != frame.revision or current.shared_frame_id != frame.shared_frame_id:
+                position = transform_point(current.T_map_odom, (x, y, z))
+                args.update(zip(("x", "y", "z"), position, strict=True))
+                args["shared_frame_id"] = current.shared_frame_id
             self._markers[marker_id] = args
-        self._broadcast(encode_agent_skill(name="ar_place_marker", args=args))
+            payload = self._marker_message(args)
+        self._broadcast(payload)
         return "ok"
 
     def remove(self, id: str) -> str:
@@ -164,16 +207,15 @@ class ARAgentService:
         return "ok"
 
     def client_pose(self) -> str:
+        """Return the admitted native-odom optical observation and viewing ray."""
         pose = self._fresh_pose()
         if pose is None:
             return "No client pose"
-        native_xy = uncorrect_odom_xy(*pose.position[:2], factor=self._factor)
         look = _look_dir_optical_z(pose.orientation)
-        look_xy = uncorrect_odom_xy(*look[:2], factor=self._factor)
-        length = math.hypot(*look_xy, look[2])
-        native_look = (look_xy[0] / length, look_xy[1] / length, look[2] / length)
+        length = math.hypot(*look)
+        native_look = tuple(value / length for value in look)
         return (
-            f"position={[*native_xy, pose.position[2]]} "
+            f"position={list(pose.position)} "
             f"orientation={list(pose.orientation)} "
             f"look_dir={list(native_look)}"
         )

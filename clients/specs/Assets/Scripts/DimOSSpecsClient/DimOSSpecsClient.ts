@@ -175,7 +175,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     this.episode = episode;
 
     const parent = this.getSceneObject();
-    this.manipulation = new SpecsManipulationController(session, () => clientTrackingOriginStore.T_odom_client,
+    this.manipulation = new SpecsManipulationController(session, () => clientTrackingOriginStore.T_map_tracking,
       parent, this.cameraObject, () => this.selection.toggle(), () => this.emergencyStop(), () => this.uiPresenter?.realign());
     this.lasers = new CursorLaserPresenter(parent, readSikLaserPointers);
     this.presence = new SpecsPresenceRenderer(parent);
@@ -214,9 +214,10 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       this.manipulation?.suspend();
       this.lasers?.reset();
       this.uiPresenter.invalidateSetupBaseline();
+      this.episode?.resetTrackingReference();
       if (!this.uiPresenter.isSetupCompleted()) return;
       this.selection.clear(); this.navigationInput?.reset(); this.speechController?.reset();
-      this.episode?.reset(); this.session?.restartPreservingTrackingOrigin();
+      this.session?.restartPreservingTrackingOrigin();
       this.uiPresenter.requestAlignmentReview("Tracking origin reset");
     });
     this.navigationController = navigationController;
@@ -340,12 +341,16 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     });
     this.unsubscribeOutbound = session.subscribeOutbound((message) => {
       this.alignmentWarning.observe(message);
+      if (message.type === "localization_context" && message.rebase) {
+        this.annotations?.rebase(message.rebase);
+        this.uiPresenter.rebaseLocalizationBaseline(message);
+      }
       if (message.type !== "agent_skill") {
         return;
       }
       try {
         if (message.name === "ar_place_marker") {
-          const origin = clientTrackingOriginStore.T_odom_client;
+          const origin = clientTrackingOriginStore.T_map_tracking;
           if (!origin) {
             return;
           }

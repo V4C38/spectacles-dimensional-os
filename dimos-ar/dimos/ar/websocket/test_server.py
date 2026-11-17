@@ -149,8 +149,6 @@ async def test_estop_is_processed_on_same_socket_while_localization_waits(
 ) -> None:
     from types import SimpleNamespace
 
-    from dimos.ar.localization.policy import LocalizationPolicy
-    from dimos.ar.localization.runner import LocalizationOutcome, LocalizationRunner
     from dimos.ar.module import ARModule
     from dimos.ar.robot.odometry import RobotOdometry
     import dimos.ar.websocket.server as server_module
@@ -162,32 +160,32 @@ async def test_estop_is_processed_on_same_socket_while_localization_waits(
     stopped = threading.Event()
     callback_threads = []
     module = object.__new__(ARModule)
-    module._map_localization = None
-    module._policy = LocalizationPolicy(["fiducial_marker"])
-    module._odometry = RobotOdometry(factor=1.0)
+    jobs = set()
+    module._odometry = RobotOdometry()
     module._replay_mode = False
 
     async def localize(_observations, **_kwargs):
         entered.set()
         await asyncio.to_thread(release.wait, 3)
-        return LocalizationOutcome()
 
     async def close():
-        pass
+        for task in tuple(jobs):
+            task.cancel()
+        await asyncio.gather(*jobs, return_exceptions=True)
+
+    def observations(values, _client):
+        task = asyncio.create_task(localize(values))
+        jobs.add(task)
+        task.add_done_callback(jobs.discard)
+
+    module._localization = SimpleNamespace(observations=observations)
 
     def connected(_socket, client_id):
         callback_threads.append(threading.get_ident())
-        module._policy.on_hello(client_id)
-        module._localization_runner = LocalizationRunner(
-            coordinator=SimpleNamespace(run=localize, close=close),
-            policy=module._policy,
-            on_outcome=lambda *_args: None,
-            on_prompt=lambda _client: None,
-        )
 
     def disconnected(_socket, client_id):
-        module._localization_runner.cancel(client_id)
-        module._policy.on_disconnect(client_id)
+        for task in tuple(jobs):
+            task.cancel()
 
     h = ServerHarness(
         on_connect=connected,
@@ -207,9 +205,8 @@ async def test_estop_is_processed_on_same_socket_while_localization_waits(
             assert callback_threads == [h._thread.ident]
     finally:
         release.set()
-        if hasattr(module, "_localization_runner"):
-            future = asyncio.run_coroutine_threadsafe(module._localization_runner.close(), h.loop)
-            await asyncio.wrap_future(future)
+        future = asyncio.run_coroutine_threadsafe(close(), h.loop)
+        await asyncio.wrap_future(future)
         h.stop()
 
 
@@ -965,15 +962,15 @@ async def test_expired_resume_claim_does_not_keep_a_logical_session_alive():
         ([], []),
         (["fiducial_marker"], ["fiducial_marker"]),
         (["vps"], ["vps"]),
-        (["vps", "fiducial_marker"], ["fiducial_marker", "vps"]),
+        (["vps", "fiducial_marker"], ["vps", "fiducial_marker"]),
     ],
 )
 async def test_hello_serializes_configured_provider_inventory(
     harness, monkeypatch, providers, expected
 ):
-    from test_support.module import _module_with_policy
+    from test_support.module import _module_with_localization
 
-    module = _module_with_policy(providers)
+    module = _module_with_localization(providers)
     monkeypatch.setattr(harness._server, "_hello_supplier", module._hello_body)
     async with websockets.connect(f"ws://127.0.0.1:{harness.port}/ws") as socket:
         hello = await _send_hello_request(socket)

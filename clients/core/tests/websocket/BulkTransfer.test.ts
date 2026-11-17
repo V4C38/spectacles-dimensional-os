@@ -10,7 +10,7 @@ function fixture() {
   const original = peer.sendText.bind(peer);
   peer.sendText = text => { requests.push(JSON.parse(text)); original(text); };
   const bulk = new BulkTransfer({ now: () => now }, () => {}, () => {}, reason => failures.push(reason));
-  bulk.connect(peer, { client_id: "a", bulk_token: "token", bulk_epoch: "fixture-epoch" });
+  bulk.connect(peer, { client_id: "a", bulk_token: "token", bulk_epoch: "fixture-epoch", shared_frame_id: "fixture-map" });
   const ref = { epoch: "fixture-epoch", id: "robot-model", revision: "hash" };
   return { peer, bulk, failures, uploaded, requests, ref, spend: (seconds: number) => { now += seconds; },
     advance: (seconds: number) => { now += seconds; bulk.tick(); } };
@@ -18,7 +18,7 @@ function fixture() {
 describe("paired v2 bulk records", () => {
   it("assembles typed model records incrementally and reuses the same cached object", () => {
     const f = fixture();
-    const message = { type: "manipulation_state", available: true, model_ref: f.ref };
+    const message = { type: "manipulation_state", shared_frame_id: "fixture-map", available: true, model_ref: f.ref };
     expect(f.bulk.hydrate(message)).toMatchObject({ pending: true, value: { available: false } });
     f.peer.receive({ type: "bulk_record", ...f.ref, kind: "model", part: 0, parts: 3, data: { metadata: { gripper_joints: {}, revision: "robot", root: "base", asset_url: null } } });
     f.peer.receive({ type: "bulk_record", ...f.ref, kind: "model", part: 1, parts: 3, data: { links: [{ name: "base", bounds: null }] } });
@@ -31,7 +31,7 @@ describe("paired v2 bulk records", () => {
   });
   it("caps record processing per display tick while leaving a bounded queue", () => {
     const f = fixture();
-    for (let part = 0; part < 9; part++) f.peer.receive({ type: "bulk_record", ...f.ref, kind: "route", part, parts: 9, data: part === 0 ? { metadata: { type: "nav_goal", ts: 1, pose: [1,0,0,0] } } : { points: [[part,0,0,0]] } });
+    for (let part = 0; part < 9; part++) f.peer.receive({ type: "bulk_record", ...f.ref, kind: "route", part, parts: 9, data: part === 0 ? { metadata: { shared_frame_id: "fixture-map", type: "nav_goal", ts: 1, pose: [1,0,0,0] } } : { points: [[part,0,0,0]] } });
     f.bulk.tick(); expect(f.bulk.diagnostics().records).toBe(4);
     expect(f.bulk.diagnostics().queuedBytes).toBeGreaterThan(0);
     f.bulk.tick(); f.bulk.tick(); expect(f.bulk.diagnostics().records).toBe(9);
@@ -42,7 +42,7 @@ describe("paired v2 bulk records", () => {
       targets: [],
       motion_busy: false,
       following_tail: null,
-      type: "interaction_state", authority: { client_id: "other" }, preview: { type: "nav_goal", preview: true, route_ref: f.ref }, active_goal: null };
+      type: "interaction_state", shared_frame_id: "fixture-map", authority: { client_id: "other" }, preview: { type: "nav_goal", preview: true, route_ref: f.ref }, active_goal: null };
     const hydrated = f.bulk.hydrate(value);
     expect(hydrated.pending).toBe(true); expect(hydrated.value.authority).toEqual(value.authority); expect(hydrated.value.preview).toBeNull();
   });
@@ -87,7 +87,7 @@ describe("paired v2 bulk records", () => {
     for (let part = 0; part < 4; part++) {
       if (part) f.advance(2);
       f.peer.receive({ type: "bulk_record", ...f.ref, kind: "route", part, parts: 4,
-        data: part === 0 ? { metadata: { ts: 1, pose: [0, 0, 0, 0] } } : { points: [[part, 0, 0, 0]] } });
+        data: part === 0 ? { metadata: { shared_frame_id: "fixture-map", ts: 1, pose: [0, 0, 0, 0] } } : { points: [[part, 0, 0, 0]] } });
       f.bulk.tick(); f.bulk.hydrate(message);
     }
     expect(f.bulk.hydrate(message).pending).toBe(false);
@@ -98,7 +98,7 @@ describe("paired v2 bulk records", () => {
     const f = fixture(), message = { route_ref: f.ref };
     f.bulk.hydrate(message);
     f.peer.receive({ type: "bulk_record", ...f.ref, kind: "route", part: 0, parts: 2,
-      data: { metadata: { ts: 1, pose: [0, 0, 0, 0] } } });
+      data: { metadata: { shared_frame_id: "fixture-map", ts: 1, pose: [0, 0, 0, 0] } } });
     f.bulk.tick();
     f.peer.receive({ type: "bulk_error", ...f.ref, kind: "route", code: "asset_unavailable" });
     f.peer.receive({ type: "bulk_record", ...f.ref, kind: "route", part: 1, parts: 2, data: { points: [[1, 0, 0, 0]] } });
@@ -170,7 +170,7 @@ describe("paired v2 bulk records", () => {
     const f = fixture(), bytes = new Uint8Array(100000);
     f.bulk.uploadLocalization(bytes, "capture");
     f.peer.receive({ type: "bulk_record", ...f.ref, kind: "route", part: 0, parts: 1,
-      data: { metadata: { ts: 1, pose: [0, 0, 0, 0] }, points: [[1, 0, 0, 0]], padding: "x".repeat(1100) } });
+      data: { metadata: { shared_frame_id: "fixture-map", ts: 1, pose: [0, 0, 0, 0] }, points: [[1, 0, 0, 0]], padding: "x".repeat(1100) } });
     const parse = JSON.parse;
     const parsing = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
       if (String(text).includes('"bulk_record"')) f.spend(0.003);
@@ -196,7 +196,7 @@ describe("paired v2 bulk records", () => {
       const ref = { ...f.ref, id: `large-route-${asset}` };
       for (let part = 0; part < 1025; part++) {
         f.peer.receive({ type: "bulk_record", ...ref, kind: "route", part, parts: 1025,
-          data: part === 0 ? { metadata: { ts: asset, pose: [0, 0, 0, 0] }, padding } : { points: [], padding } });
+          data: part === 0 ? { metadata: { shared_frame_id: "fixture-map", ts: asset, pose: [0, 0, 0, 0] }, padding } : { points: [], padding } });
         f.bulk.tick();
         expect(f.bulk.diagnostics().cacheBytes).toBeLessThanOrEqual(BULK_CACHE_BYTES);
       }
@@ -228,7 +228,7 @@ describe("paired v2 bulk records", () => {
   });
   it("clears all cached references on a new paired control generation", () => {
     const f = fixture();
-    f.peer.receive({ type: "bulk_record", ...f.ref, kind: "route", part: 0, parts: 1, data: { metadata: { type: "nav_goal", ts: 1, pose: [1,0,0,0] }, points: [[0,0,0,0],[1,0,0,0]] } });
+    f.peer.receive({ type: "bulk_record", ...f.ref, kind: "route", part: 0, parts: 1, data: { metadata: { shared_frame_id: "fixture-map", type: "nav_goal", ts: 1, pose: [1,0,0,0] }, points: [[0,0,0,0],[1,0,0,0]] } });
     f.bulk.tick(); expect(f.bulk.hydrate({ type: "nav_goal", route_ref: f.ref }).pending).toBe(false);
     f.bulk.reset(); expect(f.bulk.diagnostics().assets).toBe(0);
   });
@@ -276,7 +276,7 @@ function articulatedModel() {
 }
 
 function modelState(model: unknown) {
-  return { type: "manipulation_state", available: true, ts: 0, model, groups: [], observations: {} };
+  return { type: "manipulation_state", shared_frame_id: "fixture-map", available: true, ts: 0, model, groups: [], observations: {} };
 }
 
 it.each(["disconnected link", "zero movable axis", "unknown mimic", "cyclic mimic", "root parent"])(

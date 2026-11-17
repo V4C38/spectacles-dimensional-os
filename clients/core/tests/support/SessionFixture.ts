@@ -1,3 +1,4 @@
+import { ClientTrackingOriginStore } from "../../src/localization/ClientTracking";
 import { PairedBulk } from "./PairedBulk";
 import type { ClientClock, WebSocketTransport, Capabilities, Hello, State } from "../../src/ClientContracts";
 
@@ -38,12 +39,12 @@ export function helloAt(tsClient: number, capabilities?: Partial<Capabilities>):
   return {
     resume_token: "fixture-resume",
     odom_reference_id: "fixture-odom",
+    shared_frame_id: "fixture-map",
     localization: { providers: ["fiducial_marker"] },
     type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
     client_id: "c3f1a9",
     time_sync: { ts_client: tsClient, ts_server: 100 },
     robot: {
-      odom_scale_correction_factor: 1,
       display_name: "Unitree Go2",
       body_bounds_m: [0.7, 0.5, 0.55],
       footprint_m: [0.7, 0.5],
@@ -79,8 +80,20 @@ export function stateFrame(): State { return {
 /** Fixture server publication: navigation domain facts ride one revisioned snapshot. */
 export function navigationSnapshot(current: import("../../src/ClientContracts").InteractionState | null,
   goal: import("../../src/ClientContracts").NavGoal) {
-  const state = current ?? { type: "interaction_state" as const, epoch: "fixture-navigation", revision: 0,
+  const state = current ?? { type: "interaction_state" as const, shared_frame_id: "fixture-map", epoch: "fixture-navigation", revision: 0,
     mode: "manual" as const, authority: null, targets: [], motion_busy: false, following_tail: null,
     preview: null, active_goal: null };
-  return { ...state, revision: state.revision + 1, [goal.preview ? "preview" : "active_goal"]: goal };
+  return { ...state, shared_frame_id: "fixture-map", revision: state.revision + 1, [goal.preview ? "preview" : "active_goal"]: goal };
+}
+
+export const LOCALIZATION_REFERENCE = {
+  alignment_id: "fixture-alignment", shared_frame_id: "fixture-map",
+  odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking",
+};
+
+export function createTrackingOriginStore(): ClientTrackingOriginStore {
+  const store = new ClientTrackingOriginStore();
+  store.beginTrackingReference(LOCALIZATION_REFERENCE.tracking_reference_id);
+  store.setSharedFrameContext({ type: "localization_context", ...LOCALIZATION_REFERENCE, revision: 0 });
+  return store;
 }

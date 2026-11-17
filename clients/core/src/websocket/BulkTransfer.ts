@@ -49,7 +49,7 @@ function metadata(entry: Entry): void {
     name(raw.plan_id); finite(raw.duration);
     if (!Array.isArray(raw.joint_names) || !raw.joint_names.length || raw.joint_names.length > 256 || new Set(raw.joint_names).size !== raw.joint_names.length || Number(raw.duration) < 0) throw new Error("Invalid bulk trajectory metadata");
     raw.joint_names.forEach(name);
-  } else if (entry.kind === "route") { finite(raw.ts); if (raw.pose !== undefined && raw.pose !== null) vector(raw.pose, 4); }
+  } else if (entry.kind === "route") { name(raw.shared_frame_id); finite(raw.ts); if (raw.pose !== undefined && raw.pose !== null) vector(raw.pose, 4); }
   freeze(raw);
 }
 function item(entry: Entry, value: unknown): void {
@@ -67,6 +67,7 @@ function item(entry: Entry, value: unknown): void {
 /** Bounded incremental records; large assets never pass through a second JSON stringify/parse. */
 export class BulkTransfer {
   private epoch = "";
+  private sharedFrame = "";
   private ready = false;
   private port: BindableWebSocketTransport | null = null;
   private records: (string | Uint8Array)[] = [];
@@ -80,15 +81,15 @@ export class BulkTransfer {
   private uploadSerial = 0;
   private upload: { id: number; kind: "localization" | "speech"; data: Uint8Array; offset: number; started: number; admitted: boolean } | null = null;
   private lastUploadResult: BulkUploadResult | null = null;
-  private download: { id: number; bytes: Uint8Array; offset: number; started: number } | null = null;
+  private download: { id: number; bytes: Uint8Array; offset: number; started: number; shared_frame_id: string } | null = null;
   private deadline = 0;
   private generation = 0;
   private lastProgressAt = 0;
   private counters = { receivedBytes: 0, sentBytes: 0, records: 0, maxQueueBytes: 0, maxCacheBytes: 0, maxWorkMs: 0, dropped: 0, misses: 0 };
   constructor(private readonly clock: ClientClock, private readonly changed: () => void, private readonly lidar: (bytes: Uint8Array) => void,
     private readonly failed: (reason: string) => void) {}
-  connect(port: BindableWebSocketTransport, hello: { client_id: string; bulk_token: string; bulk_epoch: string }): void {
-    this.reset(); this.port = port; this.epoch = hello.bulk_epoch; this.deadline = this.clock.now() + 5;
+  connect(port: BindableWebSocketTransport, hello: { client_id: string; bulk_token: string; bulk_epoch: string; shared_frame_id: string }): void {
+    this.reset(); this.port = port; this.epoch = hello.bulk_epoch; this.sharedFrame = hello.shared_frame_id; this.deadline = this.clock.now() + 5;
     const generation = this.generation;
     port.bind({ onTransportOpen: () => {
       if (generation === this.generation) this.send({ type: "bulk_hello_request", protocol_version: 2, client_id: hello.client_id, token: hello.bulk_token });
@@ -106,6 +107,16 @@ export class BulkTransfer {
     this.records = []; this.queueBytes = 0; this.entries.clear(); this.wanted.clear(); this.unavailable.clear(); this.ignored.clear(); this.pins.clear(); this.cacheBytes = 0;
     this.upload = this.download = null; this.deadline = 0;
     this.lastUploadResult = null; this.lastProgressAt = 0;
+  }
+  setSharedFrame(sharedFrame: string): void {
+    if (sharedFrame === this.sharedFrame) return;
+    this.sharedFrame = sharedFrame;
+    this.cancelUpload("localization");
+    this.download = null;
+    for (const [id, entry] of this.entries) if (entry.kind === "route") {
+      this.removeEntry(id); this.ignore(id);
+    }
+    for (const [id, wanted] of this.wanted) if (wanted.kind === "route") this.wanted.delete(id);
   }
   diagnostics() { return { ...this.counters, queuedBytes: this.queueBytes, cacheBytes: this.cacheBytes, assets: this.entries.size,
     pendingAssets: this.wanted.size, unavailableAssets: this.unavailable.size, lastProgressAt: this.lastProgressAt, ready: this.ready }; }
@@ -266,8 +277,9 @@ export class BulkTransfer {
       this.upload = null; this.changed(); return;
     }
     if (raw.type === "bulk_binary_begin") {
+      if (raw.shared_frame_id !== this.sharedFrame) { this.download = null; return; }
       if (raw.epoch !== this.epoch || raw.kind !== "lidar" || !Number.isSafeInteger(raw.id) || !Number.isSafeInteger(raw.total_bytes) || Number(raw.total_bytes) < 16 || Number(raw.total_bytes) > 65536) throw new Error("Invalid LiDAR bulk header");
-      this.download = { id: Number(raw.id), bytes: new Uint8Array(Number(raw.total_bytes)), offset: 0, started: this.clock.now() }; return;
+      this.download = { id: Number(raw.id), bytes: new Uint8Array(Number(raw.total_bytes)), offset: 0, started: this.clock.now(), shared_frame_id: String(raw.shared_frame_id) }; return;
     }
     if (raw.type !== "bulk_record") throw new Error("Unknown bulk frame");
     const ref = reference(raw); if (ref.epoch !== this.epoch) throw new Error("Bulk record epoch mismatch");
@@ -290,6 +302,7 @@ export class BulkTransfer {
     if (data.metadata !== undefined) {
       if (entry.next !== 0) throw new Error("Late bulk metadata");
       entry.metadata = object(data.metadata);
+      if (entry.kind === "route" && entry.metadata.shared_frame_id !== this.sharedFrame) { this.removeEntry(id); this.ignore(id); return; }
       metadata(entry);
     }
     const first = entry.kind === "model" ? data.links : data.points;
@@ -319,7 +332,8 @@ export class BulkTransfer {
     try {
       if (!this.ready || data.byteLength < 12 || data.byteLength > BULK_RECORD_BYTES) throw new Error("Invalid bulk binary frame");
       const header = new DataView(data.buffer, data.byteOffset, data.byteLength), download = this.download;
-      if (!download || header.getUint32(0, true) !== BINARY_MAGIC || header.getUint32(4, true) !== download.id || header.getUint32(8, true) !== download.offset || download.offset + data.byteLength - 12 > download.bytes.length) throw new Error("Invalid bulk binary ordering");
+      if (!download || header.getUint32(4, true) !== download.id || download.shared_frame_id !== this.sharedFrame) return;
+      if (header.getUint32(0, true) !== BINARY_MAGIC || header.getUint32(4, true) !== download.id || header.getUint32(8, true) !== download.offset || download.offset + data.byteLength - 12 > download.bytes.length) throw new Error("Invalid bulk binary ordering");
       download.bytes.set(data.subarray(12), download.offset); download.offset += data.byteLength - 12;
       if (download.offset === download.bytes.length) { this.download = null; this.lidar(download.bytes); }
     } catch (error) { this.fail(error instanceof Error ? error.message : String(error)); }
@@ -344,6 +358,10 @@ export class BulkTransfer {
     const entry = this.entries.get(id);
     if (entry) { this.cacheBytes -= entry.bytes; this.entries.delete(id); }
   }
+  private ignore(id: string): void {
+    this.ignored.add(id);
+    while (this.ignored.size > 64) this.ignored.delete(this.ignored.values().next().value!);
+  }
   private markUnavailable(id: string, reason: string): void {
     this.removeEntry(id); this.wanted.delete(id); this.unavailable.set(id, reason);
     while (this.unavailable.size > 64) this.unavailable.delete(this.unavailable.keys().next().value!);
@@ -353,8 +371,7 @@ export class BulkTransfer {
     while (this.cacheBytes + bytes > BULK_CACHE_BYTES || this.entries.size + Number(newEntry) > 32) {
       const victim = [...this.entries.keys()].find(candidate => candidate !== id && ![...this.pins.values()].includes(candidate));
       if (victim === undefined) return false;
-      this.removeEntry(victim); this.ignored.add(victim); this.counters.dropped++;
-      while (this.ignored.size > 64) this.ignored.delete(this.ignored.values().next().value!);
+      this.removeEntry(victim); this.ignore(victim); this.counters.dropped++;
     }
     return true;
   }

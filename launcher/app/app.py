@@ -158,6 +158,7 @@ class SettingsBody(BaseModel):
     vps: bool = False
     vps_vendor: Literal["multiset"] = "multiset"
     map_code: str | None = None
+    native_map_file: str | None = None
     mounts: list[MountBody] | None = None
     dimos_log_level: str | None = Field(
         default=None, json_schema_extra={"enum": [*sorted(LOG_LEVELS), None]}
@@ -192,6 +193,7 @@ def settings_payload(profile_id: str | None = None) -> dict[str, Any]:
         "vps": ui["vps"],
         "vps_vendor": ui["vps_vendor"],
         "map_code": ui["map_code"],
+        "native_map_file": ui["native_map_file"],
         "mounts": ui["mounts"],
         **{key: ui[key] for key in LOCALIZATION_POLICY_DEFAULTS},
         "defaults": {
@@ -458,7 +460,7 @@ async def api_settings_put(body: SettingsBody) -> dict[str, Any]:
         if body.profile_id:
             robot_profiles.update(body.profile_id, settings=settings)
         elif body.model_fields_set & {
-            "fiducial_marker", "vps", "vps_vendor", "map_code", "mounts",
+            "fiducial_marker", "vps", "vps_vendor", "map_code", "native_map_file", "mounts",
             *LOCALIZATION_POLICY_DEFAULTS,
         }:
             raise ValueError("Calibration settings require a robot profile")

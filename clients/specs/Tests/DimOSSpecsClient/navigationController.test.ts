@@ -1,7 +1,7 @@
 import { immediateAuthority } from "../../../core/tests/support/ImmediateAuthority";
 import { setMockTime } from "../setup/lens-globals";
 import { describe, expect, it, vi } from "vitest";
-import { clientTrackingToOdomPose, rotateVecByQuat, odomToClientTrackingYawPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import { clientTrackingToMapPose, rotateVecByQuat, mapToClientTrackingYawPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 import { clientTrackingToSpecsYawPose } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
 import { specsNavigationPoseInTracking, SpecsNavigationInput, SpecsNavigationController } from "../../Assets/Scripts/DimOSSpecsClient/navigation/SpecsNavigationController";
 
@@ -12,16 +12,16 @@ describe("navigation marker terminal heading", () => {
       const origin = {
         position: [2, -1, 0.2] as [number, number, number],
         orientation: [0, 0, Math.sin(0.37 / 2), Math.cos(0.37 / 2)] as [number, number, number, number],
-        confidence: 1, ts: 1,
+        alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 1,
       };
       const rotation = new quat(Math.cos(yaw / 2), 0, Math.sin(yaw / 2), 0);
-      const goal = clientTrackingToOdomPose(specsNavigationPoseInTracking(new vec3(25, 10, -100), rotation), origin);
+      const goal = clientTrackingToMapPose(specsNavigationPoseInTracking(new vec3(25, 10, -100), rotation), origin);
       // Lens arrow (cos(yaw), 0, -sin(yaw)) maps to tracking
       // (sin(yaw), -cos(yaw), 0), then rotates by the odom origin.
       const actual = rotateVecByQuat(goal.orientation, [1, 0, 0]);
       const expected = rotateVecByQuat(origin.orientation, [Math.sin(yaw), -Math.cos(yaw), 0]);
       actual.forEach((n, i) => expect(n).toBeCloseTo(expected[i], 6));
-      const echoed = clientTrackingToSpecsYawPose(odomToClientTrackingYawPose([
+      const echoed = clientTrackingToSpecsYawPose(mapToClientTrackingYawPose([
         goal.position[0], goal.position[1], goal.position[2],
         Math.atan2(actual[1], actual[0]),
       ], origin));
@@ -41,7 +41,7 @@ it("removes invalid floor probes independently and cancels only their draft owne
   let hits = [{ position: new vec3(0, 0, -100), normal: new vec3(0, 1, 0) }];
   const view: any = { connection: "ready", hasTrackingOrigin: true, nav: null, nav_goal: null,
     capabilities: { navigation: { available: true, nav_goal: { preview: false, available: true } } }, state: null };
-  const origin: any = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
+  const origin: any = { position: [0, 0, 0], orientation: [0, 0, 0, 1], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 };
   const controller = new SpecsNavigationController({ session: { collaboration: immediateAuthority({ now: () => getTime() }).collaboration, view: () => view, sendText: vi.fn() } as any,
     deviceTracking: { worldOptions: {}, raycastWorldMesh: () => hits } as any,
     robotPresenter: { floorPose: () => null, deadzoneRadiusCm: () => null, floorWorldY: () => 0 } as any,
@@ -80,7 +80,7 @@ it.each([false, true])("streams marker drags across frames with selection %s acr
   const options: any = {};
   const view: any = { connection: "ready", hasTrackingOrigin: true, nav: null, nav_goal: null,
     capabilities: { navigation: { available: true, nav_goal: { preview: false, available: true } } }, state: null };
-  const origin: any = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
+  const origin: any = { position: [0, 0, 0], orientation: [0, 0, 0, 1], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 };
   const sendText = vi.fn();
   const authority = immediateAuthority({ now: () => getTime() });
   const controller = new SpecsNavigationController({ session: { collaboration: authority.collaboration, view: () => view, sendText } as any,
@@ -147,7 +147,7 @@ it("keeps direct dragging continuous across scanned robot surfaces without allow
   let hit = { position: new vec3(0, 0, -100), normal: new vec3(0, 1, 0) };
   const view: any = { connection: "ready", hasTrackingOrigin: true, nav: null, nav_goal: null,
     capabilities: { estop: { available: true }, navigation: { available: true, nav_goal: { preview: false, available: true } } }, state: null };
-  const origin: any = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
+  const origin: any = { position: [0, 0, 0], orientation: [0, 0, 0, 1], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 };
   const controller = new SpecsNavigationController({ session: { collaboration: immediateAuthority({ now: () => getTime() }).collaboration, view: () => view, sendText: vi.fn() } as any,
     deviceTracking: { worldOptions: {}, raycastWorldMesh: () => [hit] } as any,
     robotPresenter: { floorPose: () => ({ position: new vec3(0, 0, -100), rotation: quat.quatIdentity() }),
@@ -196,7 +196,7 @@ it("keeps an edge grab anchored instead of dragging the circle center to the pin
     deviceTracking: { worldOptions: {}, raycastWorldMesh: () => [] } as any,
     robotPresenter: { floorPose: () => ({ position: new vec3(0, 0, -100), rotation: quat.quatIdentity() }) } as any,
     parent: {} as any, cameraObject: { getTransform: () => ({ getWorldPosition: () => new vec3(0, 100, 0) }) } as any, navGoalMarkerPrefab: {} as any });
-  const origin: any = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
+  const origin: any = { position: [0, 0, 0], orientation: [0, 0, 0, 1], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 };
   controller.applyView(view, origin); const from = new vec3(0, 100, 0);
   for (let i = 0; i < 60; i++) { setMockTime(i / 60); controller.hold("left", from, new vec3(.15, -1, -1), true); }
   expect(controller.interaction.isDragging()).toBe(false);
@@ -214,7 +214,7 @@ it("does not place an attached marker at world zero while the robot floor is sti
     deviceTracking: { worldOptions: {}, raycastWorldMesh: () => [] } as any,
     robotPresenter: { floorPose: () => floor, floorWorldY: () => floor?.position.y ?? null } as any,
     parent: {} as any, cameraObject: { getTransform: () => ({ getWorldPosition: () => new vec3(0, 100, 0) }) } as any, navGoalMarkerPrefab: {} as any });
-  const origin: any = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
+  const origin: any = { position: [0, 0, 0], orientation: [0, 0, 0, 1], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 };
   controller.applyView(view, origin); expect(controller.isArmed()).toBe(false);
   floor = { position: new vec3(0, 8, -100), rotation: quat.quatIdentity() };
   controller.applyView(view, origin); expect(controller.isArmed()).toBe(true);
@@ -232,7 +232,7 @@ it("reports transport failure from navigation cancellation", () => {
   view = { connection: "ready", hasTrackingOrigin: true,
     capabilities: { navigation: { available: true, nav_goal: { preview: false, available: true } }, estop: { available: true } },
     nav: { state: "following_path" }, nav_goal: null };
-  controller.interaction.applyView(view, { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 }, null, 0);
+  controller.interaction.applyView(view, { position: [0, 0, 0], orientation: [0, 0, 0, 1], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 }, null, 0);
   // No authored scene is needed to verify command success propagation.
   (controller as any).render = () => {};
   expect(controller.interaction.snapshot().goalActive).toBe(true);

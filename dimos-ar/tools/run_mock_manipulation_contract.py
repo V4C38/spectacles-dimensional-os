@@ -35,7 +35,7 @@ def isolated_environment(directory: Path, inherited: dict[str, str]) -> dict[str
         "OPENAI_API_KEY", "MULTISET_CLIENT_ID", "MULTISET_CLIENT_SECRET",
     }
     result = {key: value for key, value in inherited.items()
-              if key not in excluded and "__" not in key}
+              if key not in excluded and "__" not in key and not key.startswith("ZENOH_")}
     result.update(XDG_CONFIG_HOME=str(directory / "config"), LISTEN_HOST="127.0.0.1",
                   PYTHONUNBUFFERED="1", SIMULATION="mock")
     return result
@@ -52,8 +52,15 @@ def runtime_command(python: Path, config: Path) -> list[str]:
 def write_configuration(directory: Path, port: int) -> Path:
     path = directory / "config" / "dimos" / "config"
     path.parent.mkdir(parents=True)
+    # A private discovery bus keeps worker RPCs apart from other local DimOS runs.
+    # Disabling LAN scouting alone still discovers unrelated loopback peers.
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_DGRAM)) as listener:
+        listener.bind(("127.0.0.1", 0))
+        scout_port = int(listener.getsockname()[1])
     path.write_text(json.dumps({
-        "g": {"simulation": "mock", "listen_host": "127.0.0.1", "viewer": "none"},
+        "g": {"simulation": "mock", "listen_host": "127.0.0.1", "viewer": "none",
+              "zenoh_scout_addr": f"224.0.0.224:{scout_port}",
+              "zenoh_connect": "", "zenoh_scouting": False},
         "armodule": {"port": port, "ip_relay_url": None, "localization": {"providers": []}},
     }), encoding="utf-8")
     return path

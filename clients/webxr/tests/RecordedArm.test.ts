@@ -23,7 +23,7 @@ it("keeps the recorded model at measured EOF poses while stale feedback disables
     view: () => ({ connection: "ready", manipulation: recorded, manipulationError: null,
       hello: { time_sync: { ts_client: 100, ts_server: 100 }, source: { read_only: true }, robot: { display_name: "Recorded arm" } },
       capabilities: { manipulation: { available: true }, localization: { available: false } } }) };
-  const controller = new WebXRManipulationController(session as never, () => ({ ...pose, confidence: 1, ts: 0 }), () => 100);
+  const controller = new WebXRManipulationController(session as never, () => ({ ...pose, alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 }), () => 100);
   try {
     controller.tick(true); controller.tick(true);
     expect(controller.interaction.snapshot().fresh).toBe(false);

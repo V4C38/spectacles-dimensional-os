@@ -4,12 +4,7 @@ import numpy as np
 import pytest
 
 from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, CapabilityName
-from dimos.ar.robot.profiles.unitree_go2 import ODOM_SCALE_CORRECTION_FACTOR, UNITREE_GO2_PROFILE
-
-
-def test_unitree_go2_odom_scale_correction_factor() -> None:
-    assert ODOM_SCALE_CORRECTION_FACTOR == 1.25
-    assert UNITREE_GO2_PROFILE.odom_scale_correction_factor == ODOM_SCALE_CORRECTION_FACTOR
+from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 
 
 def test_unitree_go2_hello_geometry() -> None:

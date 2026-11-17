@@ -14,7 +14,7 @@ it("renders LiDAR before UI without writing depth that can occlude panels", () =
 
 
 
-const origin = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 } as import("@dimos-ar-client/localization/ClientTracking").ClientTrackingOrigin;
+const origin = { position: [0, 0, 0], orientation: [0, 0, 0, 1], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 } as import("@dimos-ar-client/localization/ClientTracking").ClientTrackingOrigin;
 it("uses reusable capped buffers, round sprites, stable height colors and red-transparent obstacle distance", () => {
   const lidar = new WebXRLidarRenderer();
   const points: import("@dimos-ar-client/ClientContracts").Vec3[] = [[0, 0, 0.1], [0.5, 0, 0.33], [0, 0, 2]];
@@ -52,30 +52,12 @@ it("fades to zero at 60 cm from rotated body bounds and restores opaque Full col
   lidar.apply({ points, origin, mode: "full" }); expect(colors.getW(3)).toBe(1); lidar.dispose();
 });
 
-it("draws corrected coordinates once and keeps obstacle fade in native metres", () => {
+it("renders metric map positions once and measures obstacle clearance directly", () => {
   const lidar = new WebXRLidarRenderer();
-  const robot: [number, number, number] = [5, -2.5, 0.33];
-  const points: [number, number, number][] = [[6, -2.5, 0.4]];
-  lidar.apply({ points, origin, mode: "obstacles", robot, baseHeightM: 0.33, orientation: [0, 0, 0, 1], bounds: [1, 0.4, 0.5], pointLimit: 4000, obstacleRangeM: 0.6, odomScaleCorrectionFactor: 1.25 });
-  const positions = lidar.object.geometry.getAttribute("position");
-  const colors = lidar.object.geometry.getAttribute("color");
-  // 0.8 native metres from center, 0.3 from a 1m body, halfway through a 0.6m halo.
-  expect(colors.getW(0)).toBeCloseTo(0.5);
-  expect(positions.getZ(0)).toBeCloseTo(-6);
-  lidar.apply({ points, origin, mode: "obstacles", robot, baseHeightM: 0.33, orientation: [0, 0, 0, 1], bounds: [1, 0.4, 0.5], pointLimit: 4000, obstacleRangeM: 0.6, odomScaleCorrectionFactor: 1 });
-  expect(colors.getW(0)).toBeLessThan(0.5);
-  lidar.dispose();
-});
-
-import { LIDAR_PRESENTATION_TRACE, LIDAR_TRACE_POINT } from "../../core/tests/support/LidarPresentationTrace";
-it.each(LIDAR_PRESENTATION_TRACE)("shared cloud contract with scale $scale", trace => {
-  const lidar = new WebXRLidarRenderer();
-  lidar.apply({ points: [LIDAR_TRACE_POINT], origin, mode: "obstacles", robot: [0, 0, 0.33],
-    orientation: [0, 0, 0, 1], bounds: [1, 0.4, 0.5], obstacleRangeM: 0.6,
-    odomScaleCorrectionFactor: trace.scale });
-  const geometry = lidar.object.geometry;
-  expect(geometry.getAttribute("color").getW(0)).toBeCloseTo(trace.expectedAlpha, 5);
-  expect(geometry.getAttribute("position").getZ(0)).toBeCloseTo(-1);
+  lidar.apply({ points: [[5.8, -2.5, 0.4]], origin, mode: "obstacles", robot: [5, -2.5, .33],
+    orientation: [0, 0, 0, 1], bounds: [1, .4, .5], obstacleRangeM: .6 });
+  expect(lidar.object.geometry.getAttribute("color").getW(0)).toBeCloseTo(.5);
+  expect(lidar.object.geometry.getAttribute("position").getZ(0)).toBeCloseTo(-5.8);
   lidar.dispose();
 });
 

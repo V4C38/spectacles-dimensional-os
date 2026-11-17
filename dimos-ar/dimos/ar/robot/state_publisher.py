@@ -9,13 +9,13 @@ import time
 from typing import TYPE_CHECKING, Protocol
 
 from dimos.ar.robot.odometry import PoseSample
-from dimos.ar.robot.odometry_correction import correct_odom_points
 from dimos.ar.sensors.lidar_filter import (
     DEFAULT_TARGET_POINTS,
     LidarFilterSettings,
     prepare_lidar_points,
 )
 from dimos.ar.sensors.lidar_settings import LidarSettings
+from dimos.ar.spatial import FrameSnapshot, transform_pose
 from dimos.ar.timing_diagnostics import TimingSummary
 from dimos.ar.websocket.protocol import encode_lidar_binary, encode_pose
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
@@ -33,9 +33,9 @@ DEFAULT_LIDAR_MAX_HZ = 2.0
 class _BroadcastSink(Protocol):
     def schedule_broadcast_text(self, text: str) -> None: ...
 
-    def schedule_broadcast_binary(self, data: bytes) -> None: ...
+    def schedule_broadcast_binary(self, data: bytes, *, shared_frame_id: str) -> None: ...
 
-    def schedule_send_binary_to_client(self, client_id: str, data: bytes) -> None: ...
+    def schedule_send_binary_to_client(self, client_id: str, data: bytes, *, shared_frame_id: str) -> None: ...
 
 
 class RobotStatePublisher:
@@ -45,7 +45,7 @@ class RobotStatePublisher:
         self,
         ws_server: WebSocketServer | _BroadcastSink,
         *,
-        odom_scale_correction_factor: float,
+        frames: Callable[[], FrameSnapshot],
         robot_position: Callable[[], tuple[float, float, float] | None],
         pose_max_hz: float = DEFAULT_POSE_MAX_HZ,
         lidar_max_hz: float = DEFAULT_LIDAR_MAX_HZ,
@@ -55,7 +55,7 @@ class RobotStatePublisher:
     ) -> None:
         self._ws = ws_server
         self._subscriptions = subscriptions
-        self._odom_scale_correction_factor = odom_scale_correction_factor
+        self._frames = frames
         self._pose_max_hz = pose_max_hz
         self._lidar_max_hz = lidar_max_hz
         self._lidar_voxel_size_m = lidar_voxel_size_m
@@ -67,7 +67,7 @@ class RobotStatePublisher:
         self._lidar_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ar-lidar")
         self._lidar_task: asyncio.Task[None] | None = None
         self._lidar_pending: tuple[PointCloud2, LidarSettings, tuple[float, float, float] | None,
-                                  dict[str, LidarSettings] | None, int] | None = None
+                                  dict[str, LidarSettings] | None, int, FrameSnapshot] | None = None
         self._source_generation = 0
         self._closed = False
 
@@ -77,7 +77,7 @@ class RobotStatePublisher:
         self._lidar_pending = (
             msg, lidar, self._robot_position(),
             dict(self._subscriptions()) if self._subscriptions is not None else None,
-            self._source_generation,
+            self._source_generation, self._frames(),
         )
         if self._lidar_task is None or self._lidar_task.done():
             self._lidar_task = asyncio.create_task(self._drain_lidar())
@@ -99,12 +99,12 @@ class RobotStatePublisher:
             pending, self._lidar_pending = self._lidar_pending, None
             if pending is None:
                 return
-            msg, settings, position, subscriptions, generation = pending
+            msg, settings, position, subscriptions, generation, frame = pending
             loop = asyncio.get_running_loop()
             future = loop.run_in_executor(
                 self._lidar_executor,
                 partial(self.publish_lidar, msg, lidar=settings,
-                        _snapshot=(position, subscriptions, generation)),
+                        _snapshot=(position, subscriptions, generation), _frame=frame),
             )
             future.add_done_callback(lambda done: None if done.cancelled() else done.exception())
             # Actual work remains exclusive after cancellation: no replacement
@@ -129,18 +129,23 @@ class RobotStatePublisher:
         if not _is_finite_pose(sample.position, sample.orientation):
             return
         self._pose_last_emit_mono = time.monotonic()
+        frame = self._frames()
+        position, orientation = transform_pose(frame.T_map_odom, sample.position, sample.orientation)
         self._ws.schedule_broadcast_text(
-            encode_pose(position=sample.position, orientation=sample.orientation, ts=sample.ts_server)
+            encode_pose(position=position, orientation=orientation, ts=sample.ts_server,
+                        shared_frame_id=frame.shared_frame_id)
         )
 
     def publish_lidar(
         self, msg: PointCloud2, *, lidar: LidarSettings,
         _snapshot: tuple[tuple[float, float, float] | None, dict[str, LidarSettings] | None, int] | None = None,
+        _frame: FrameSnapshot | None = None,
     ) -> None:
         if not lidar.enabled:
             return
         if not self._allow_emit(self._lidar_last_emit_mono, self._lidar_max_hz):
             return
+        frame = self._frames() if _frame is None else _frame
         robot_position = self._robot_position() if _snapshot is None else _snapshot[0]
         if robot_position is None:
             return
@@ -169,17 +174,20 @@ class RobotStatePublisher:
                 ),
                 robot_position=robot_position,
             )
-            corrected = correct_odom_points(prepared, factor=self._odom_scale_correction_factor)
-            output = [tuple(point) for point in corrected]
+            projected = prepared @ frame.T_map_odom[:3, :3].T + frame.T_map_odom[:3, 3]
+            output = [tuple(point) for point in projected]
             output_count = max(output_count, len(output))
             payload = encode_lidar_binary(ts=msg.ts, points=output)
-            if self._closed or (_snapshot is not None and _snapshot[2] != self._source_generation):
+            current = self._frames()
+            if (self._closed or (_snapshot is not None and _snapshot[2] != self._source_generation)
+                    or current.shared_frame_id != frame.shared_frame_id
+                    or current.revision != frame.revision):
                 return
             if subscriptions is None:
-                self._ws.schedule_broadcast_binary(payload)
+                self._ws.schedule_broadcast_binary(payload, shared_frame_id=frame.shared_frame_id)
             else:
                 for client_id in clients:
-                    self._ws.schedule_send_binary_to_client(client_id, payload)
+                    self._ws.schedule_send_binary_to_client(client_id, payload, shared_frame_id=frame.shared_frame_id)
         self._lidar_last_emit_mono = time.monotonic()
         processing_ms = (time.monotonic() - started) * 1000
         self._lidar_timing.record(

@@ -3,20 +3,17 @@ from __future__ import annotations
 import asyncio
 import math
 import threading
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from dimos.ar.async_execution import BoundedWorker
-from dimos.ar.localization.policy import LocalizationPolicy
-from dimos.ar.localization.runner import LocalizationOutcome, LocalizationRunner
 from dimos.ar.localization.vps.robot_observation_buffer import (
     RobotObservationBuffer,
 )
 from dimos.ar.robot.odometry import PoseBuffer
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from test_support.localization import _advance, _camera_info, _image, _observation
+from test_support.localization import _camera_info, _image
 
 
 def _pose(ts: float, *, x: float = 0, yaw: float = 0) -> PoseStamped:
@@ -113,62 +110,6 @@ async def test_cancelled_cpu_work_keeps_actual_worker_admission_bounded() -> Non
         worker.close()
 
 
-@pytest.mark.parametrize("failure", ["timeout", "exception", "disconnect", "replacement"])
-async def test_runner_bounds_episode_and_discards_retired_results(failure: str) -> None:
-    policy = LocalizationPolicy(["fiducial_marker"])
-    policy.on_hello("client")
-    work = policy.on_observations("client", [_observation()])
-    release = asyncio.Event()
-    started = asyncio.Event()
-    outcomes = []
-
-    async def run(_observations, **_kwargs):
-        started.set()
-        await release.wait()
-        if failure == "exception":
-            raise ValueError("provider failed")
-        return LocalizationOutcome()
-
-    async def close():
-        pass
-
-    runner = LocalizationRunner(
-        coordinator=SimpleNamespace(run=run, close=close),
-        policy=policy,
-        on_outcome=lambda *args: outcomes.append(args),
-        on_prompt=lambda _client: None,
-        timeout_s=0.05,
-    )
-    try:
-        runner.submit(work)
-        await started.wait()
-        runner.submit(work)
-        assert len(runner._tasks) == 1
-        assert policy.on_observations("client", [_observation()]) is None
-        if failure == "disconnect":
-            runner.cancel("client")
-            policy.on_disconnect("client")
-        elif failure == "replacement":
-            runner.cancel("client")
-            policy.on_start_request("client")
-        elif failure == "timeout":
-            await asyncio.sleep(0.07)
-        release.set()
-        await asyncio.gather(*tuple(runner._jobs), return_exceptions=True)
-        assert len(outcomes) == (1 if failure in ("timeout", "exception") else 0)
-    finally:
-        await runner.close()
-
-
-def test_success_uses_capture_travel_not_http_completion_travel() -> None:
-    policy = LocalizationPolicy(["fiducial_marker"])
-    policy.on_hello("client")
-    _advance(policy, 0, 0)
-    _advance(policy, 0.8, 0)
-    policy.on_success("client", capture_travel_m=0)
-    assert _advance(policy, 0.8, 0) == ["client"]
-
-
 def test_exact_pose_remains_usable_beside_a_history_gap() -> None:
     history = PoseBuffer()
     history.push(_pose(10))
@@ -201,24 +142,6 @@ async def test_camera_stream_drops_replaceable_work_while_native_worker_is_busy(
     finally:
         release.set()
         worker.close()
-
-
-async def test_map_workflow_closes_shared_resources_after_jobs():
-    from unittest.mock import AsyncMock
-
-    order = []
-    coordinator = SimpleNamespace(close=AsyncMock(side_effect=lambda: order.append("worker")))
-    vps = SimpleNamespace(close=AsyncMock(side_effect=lambda: order.append("vps")))
-    mapping = SimpleNamespace(close=AsyncMock(side_effect=lambda: order.append("map")))
-    runner = LocalizationRunner(
-        coordinator=coordinator, policy=LocalizationPolicy(["vps"]),
-        map_localization=mapping, vps=vps,
-        on_outcome=lambda *_args: None, on_prompt=lambda _client: None,
-    )
-    await runner.close()
-    assert order == ["map", "vps", "worker"]
-    coordinator.close.assert_awaited_once()
-    vps.close.assert_awaited_once()
 
 
 async def test_closing_worker_rejects_queued_replacement_after_cancelled_native_error():

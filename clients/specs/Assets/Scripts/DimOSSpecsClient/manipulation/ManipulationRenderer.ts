@@ -6,7 +6,7 @@ import { AdaptiveStrokeRenderer, WorldMeshRenderer, sphereMesh } from "../presen
 
 import { ViewerNotificationPresenter } from "../presentation/ViewerNotificationPresenter";
 import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable";
-import { type ClientTrackingOrigin as MutableClientTrackingOrigin, odomToClientTrackingPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import { type ClientTrackingOrigin as MutableClientTrackingOrigin, mapToClientTrackingPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 
 import { ManipulationFramePresenter } from "DimOSARClient.lspkg/Scripts/DimOSARClient/manipulation/ArmPresentation";
 
@@ -396,7 +396,7 @@ export class ManipulationRenderer {
         this.edges.set(link.name, { stroke });
       }
     }
-    const world = (pose: ManipulationPose): ManipulationPose => clientTrackingToSpecsPose(odomToClientTrackingPose(pose, origin));
+    const world = (pose: ManipulationPose): ManipulationPose => clientTrackingToSpecsPose(mapToClientTrackingPose(pose, origin));
     this.meshFade.beginFrame(now, `${model.revision}:${interaction.groupId}`);
     const opacityElapsed = this.opacityCadence.sample(now);
     const sampleOpacity = opacityElapsed !== null;
@@ -533,7 +533,7 @@ export class ManipulationRenderer {
     this.path.style(WORLD_DASH_STYLE.widthM * 65, frame.pathOpacity, [1, 1, 1], frame.path.startDistanceM * 100);
   }
   private place(object: SceneObject, pose: ManipulationPose, origin: ClientTrackingOrigin): void {
-    const p = clientTrackingToSpecsPose(odomToClientTrackingPose(pose, origin));
+    const p = clientTrackingToSpecsPose(mapToClientTrackingPose(pose, origin));
     const previous = this.placements.get(object);
     if (previous && p.position.every((v, i) => v === previous.position[i]) &&
       p.orientation.every((v, i) => v === previous.orientation[i])) return;

@@ -30,6 +30,9 @@ export function fixtureBinaryPackets(bytes: Uint8Array, id = 1): Uint8Array[] {
 export function fixtureAsset(kind: string, value: FixtureValue,
   policy: { maximumPartSize: number; measure: (text: string) => number },
   existing?: { has(id: string): boolean }) {
+  if (kind === "route" && (typeof value.shared_frame_id !== "string" || !value.shared_frame_id)) {
+    throw new Error("Projected fixture routes require their shared frame identity");
+  }
   const text = JSON.stringify(value);
   let hash = 2166136261;
   for (let index = 0; index < text.length; index++) hash = Math.imul(hash ^ text.charCodeAt(index), 16777619);

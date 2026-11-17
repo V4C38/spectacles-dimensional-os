@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from dataclasses import dataclass
 import logging
 import threading
 import time
@@ -22,7 +23,7 @@ from dimos.ar.navigation.types import (
     NavOutcome,
     NavState,
 )
-from dimos.ar.robot.odometry_correction import correct_odom_path, uncorrect_odom_pose
+from dimos.ar.spatial import FrameSnapshot, transform_pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.nav_msgs.Path import Path
@@ -171,15 +172,26 @@ class NavigationControlService:
         self._rpc.close()
 
 
+_NativePose = tuple[float, float, float, float, float, float, float]
+
+
+@dataclass(frozen=True)
+class _NativePath:
+    ts: float
+    poses: tuple[_NativePose, ...]
+
+
 class NavGoalCoordinator:
-    def __init__(self, *, odom_scale_correction_factor: float) -> None:
-        self._odom_scale_correction_factor = odom_scale_correction_factor
+    def __init__(self, *, frames: Callable[[], FrameSnapshot]) -> None:
+        self._frames = frames
         self._lock = threading.Lock()
         self._following_path = False
         self._outcome: NavOutcome | None = None
         self._retired_at = 0.0
         self._requested_goal_ts: float | None = None
         self._native_goal_ts: float | None = None
+        self._native_path: _NativePath | None = None
+        self._native_goal_pose: _NativePose | None = None
 
     def nav_state(self) -> NavState:
         with self._lock:
@@ -190,42 +202,71 @@ class NavGoalCoordinator:
             return NavState(state="idle", outcome=None)
 
     def submit_goal(self, msg: NavGoalRequest) -> PoseStamped:
-        client_pose = PoseStamped(
-            ts=time.time(),
-            frame_id="odom",
-            position=list(msg.position),
-            orientation=list(msg.orientation),
+        snapshot = self._frames()
+        position, orientation = transform_pose(
+            snapshot.T_odom_map, msg.position, msg.orientation
         )
-        goal = uncorrect_odom_pose(client_pose, factor=self._odom_scale_correction_factor)
+        # Freeze the native target at admission. Later map corrections only
+        # change its presentation, never its identity or native execution.
+        goal = PoseStamped(
+            ts=time.time(), frame_id="odom", position=position, orientation=orientation
+        )
         with self._lock:
             self._outcome = None
             self._retired_at = time.time()
             self._requested_goal_ts = float(goal.ts)
+            self._native_path = None
+            self._native_goal_pose = (*position, *orientation)
         return goal
 
     def on_path(self, msg: Path) -> tuple[NavGoalFrame | None, bool]:
-        corrected = correct_odom_path(msg, factor=self._odom_scale_correction_factor)
+        snapshot = self._frames()
         with self._lock:
-            if self._retired_at and (not corrected.ts or corrected.ts <= self._retired_at):
+            if self._retired_at and (not msg.ts or msg.ts <= self._retired_at):
                 return None, False
-            if not corrected.poses:
-                return NavGoalFrame(
-                    pose=None,
-                    path_poses=[],
-                    ts=corrected.ts or time.time(),
-                ), False
+            self._native_path = _NativePath(
+                ts=msg.ts or time.time(),
+                poses=tuple(
+                    (pose.x, pose.y, pose.z, pose.orientation.x, pose.orientation.y,
+                     pose.orientation.z, pose.orientation.w)
+                    for pose in msg.poses
+                ),
+            )
+            frame = self._project_path(self._native_path, snapshot)
+            if not msg.poses:
+                return frame, False
             was_following = self._following_path
             was_resolved = self._outcome is not None
             self._following_path = True
             self._outcome = None
-            path_poses = [(pose.x, pose.y, pose.z, pose.yaw) for pose in corrected.poses]
-            nav_goal_frame = NavGoalFrame(
-                pose=path_poses[-1],
-                path_poses=path_poses,
-                ts=corrected.ts,
+            return frame, not was_following or was_resolved
+
+    def refresh_projection(self) -> NavGoalFrame | None:
+        """Reproject accepted native geometry without changing execution state."""
+        snapshot = self._frames()
+        with self._lock:
+            if self._native_path is not None:
+                return self._project_path(self._native_path, snapshot)
+            if self._native_goal_pose is None or self._requested_goal_ts is None:
+                return None
+            return NavGoalFrame(
+                pose=self._project_pose(self._native_goal_pose, snapshot), path_poses=[],
+                ts=self._requested_goal_ts, shared_frame_id=snapshot.shared_frame_id,
             )
-            state_changed = not was_following or was_resolved
-            return nav_goal_frame, state_changed
+
+    @staticmethod
+    def _project_path(path: _NativePath, snapshot: FrameSnapshot) -> NavGoalFrame:
+        poses = [NavGoalCoordinator._project_pose(native, snapshot) for native in path.poses]
+        return NavGoalFrame(
+            pose=poses[-1] if poses else None, path_poses=poses,
+            ts=path.ts, shared_frame_id=snapshot.shared_frame_id,
+        )
+
+    @staticmethod
+    def _project_pose(native: _NativePose, snapshot: FrameSnapshot) -> tuple[float, float, float, float]:
+        position, orientation = transform_pose(snapshot.T_map_odom, native[:3], native[3:])
+        projected = PoseStamped(position=position, orientation=orientation)
+        return (*position, projected.yaw)
 
     def accepts_path(self, timestamp: float) -> bool:
         with self._lock:
@@ -249,6 +290,8 @@ class NavGoalCoordinator:
             }:
                 return False
             self._requested_goal_ts = self._native_goal_ts = None
+            self._native_path = None
+            self._native_goal_pose = None
             self._outcome = "succeeded" if phase == "succeeded" else "failed"
             self._following_path = False
             self._retired_at = time.time()
@@ -260,6 +303,8 @@ class NavGoalCoordinator:
             self._following_path = False
             self._outcome = None
             self._requested_goal_ts = self._native_goal_ts = None
+            self._native_path = None
+            self._native_goal_pose = None
             self._retired_at = time.time()
             return changed
 

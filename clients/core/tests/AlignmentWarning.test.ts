@@ -23,7 +23,7 @@ it("suppresses VPS warnings while pending, then handles failure, timeout and suc
   warning.observe({ type: "localization_result" } as any);
   warning.update(10, true, "idle", view);
   expect(view.clear).toHaveBeenLastCalledWith("alignment:weak");
-  warning.observe({ type: "localization_status", status: "failed" } as any);
+  warning.observe({ type: "localization_status", shared_frame_id: "fixture-map", status: "failed" } as any);
   warning.update(10, true, "idle", view);
   expect(view.show).toHaveBeenCalledTimes(2);
 });

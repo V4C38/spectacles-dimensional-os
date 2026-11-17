@@ -69,7 +69,7 @@ async def test_playback_preserves_producer_timing_despite_delayed_camera_deliver
     module = object.__new__(RecordedARModule)
     module._last_samples = {}
     module._recording_epoch = 100
-    module._odometry = RobotOdometry(factor=1)
+    module._odometry = RobotOdometry()
     module._odometry.clock = RobotSourceClock()
     paired = []
     async def odom(sample):

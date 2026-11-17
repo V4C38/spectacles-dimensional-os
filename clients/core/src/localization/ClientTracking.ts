@@ -1,151 +1,111 @@
-import type { LocalizationResult, LocalizationMapTransform, MapAlignment, MapContext, Quat, Vec3, YawPose, CaptureGeometry, ReadonlyFacts } from "../ClientContracts";
+import type { LocalizationResult, LocalizationContext, SharedFrameContext, Quat, Vec3, YawPose, CaptureGeometry, ReadonlyFacts } from "../ClientContracts";
 
-
-/** `T_odom_client` — this client's tracking origin in `odom`. */
-export interface ClientTrackingOrigin {
+/** This client's tracking origin expressed in the shared map. */
+export interface ClientTrackingOrigin extends SharedFrameContext {
+  alignment_id: string;
+  tracking_reference_id: string;
   position: Vec3;
   orientation: Quat;
   confidence: number;
   ts: number;
-  mapAlignment?: MapAlignment;
-  mapTransform?: LocalizationMapTransform;
 }
 
+/** One accepted map alignment; native odometry composition stays on the server. */
 export class ClientTrackingOriginStore {
   private current: ReadonlyFacts<ClientTrackingOrigin> | null = null;
-  private alignment: ReadonlyFacts<MapAlignment> | null = null;
-  private transform: ReadonlyFacts<LocalizationMapTransform> | null = null;
-  private context: ReadonlyFacts<MapContext> | null = null;
+  private context: ReadonlyFacts<LocalizationContext> | null = null;
   private trackingReference = "";
 
-  get mapAlignment(): ReadonlyFacts<MapAlignment> | null { return this.alignment; }
-  get mapContext(): ReadonlyFacts<MapContext> | null { return this.context; }
+  get alignmentId(): string | null { return this.current?.alignment_id ?? null; }
+  get sharedFrameContext(): ReadonlyFacts<LocalizationContext> | null { return this.context; }
   beginTrackingReference(reference: string): void {
-    if (this.trackingReference && this.trackingReference !== reference) { const context = this.context; this.clear(); this.context = context; }
+    if (this.trackingReference && this.trackingReference !== reference) this.current = null;
     this.trackingReference = reference;
   }
-  acceptsContext(context: ReadonlyFacts<MapContext>): boolean {
-    return this.context !== null && this.context.map_code === context.map_code && this.context.odom_reference_id === context.odom_reference_id;
+  acceptsContext(context: ReadonlyFacts<SharedFrameContext>): boolean {
+    return this.context !== null && this.context.shared_frame_id === context.shared_frame_id && this.context.odom_reference_id === context.odom_reference_id;
   }
-  setMapContext(context: ReadonlyFacts<MapContext>, reset = false): void {
-    if (reset || (this.context !== null && !this.acceptsContext(context)) ||
-        (this.alignment !== null && (this.alignment.map_code !== context.map_code || this.alignment.odom_reference_id !== context.odom_reference_id))) this.clear();
-    this.context = { map_code: context.map_code, odom_reference_id: context.odom_reference_id };
+  setSharedFrameContext(context: ReadonlyFacts<LocalizationContext>): boolean {
+    if (this.context && this.acceptsContext(context) && context.revision <= this.context.revision && !context.reset) return false;
+    const previous = this.context;
+    const rebase = context.rebase;
+    const canRebase = !context.reset && this.current && previous && rebase &&
+      previous.odom_reference_id === context.odom_reference_id && previous.shared_frame_id === rebase.previous_shared_frame_id;
+    if (canRebase && this.current) {
+      const pose = composePose(rebase, this.current);
+      this.current = { ...this.current, ...pose, shared_frame_id: context.shared_frame_id };
+    } else if (context.reset || previous && !this.acceptsContext(context)) this.current = null;
+    this.context = { ...context };
+    return true;
   }
-  applyMapTransform(transform: ReadonlyFacts<LocalizationMapTransform>): void {
-    if (!this.acceptsContext(transform) || (this.transform !== null && transform.revision <= this.transform.revision)) return;
-    this.transform = { ...transform };
-    this.recompose();
+  acceptsAlignment(result: ReadonlyFacts<LocalizationResult>): boolean {
+    return this.acceptsContext(result) && result.tracking_reference_id === this.trackingReference;
   }
-  private recompose(): void {
-    if (!this.alignment || !this.transform) return;
-    const q = normalizeQuat(this.transform.orientation), b = normalizeQuat(this.alignment.orientation);
-    const p = rotateVecByQuat(q, this.alignment.position), a = this.transform.position;
-    this.current = {
-      position: [a[0] + p[0], a[1] + p[1], a[2] + p[2]],
-      orientation: normalizeQuat(multiplyRotation(q, b)),
-      confidence: Math.min(this.alignment.confidence, this.transform.confidence), ts: this.alignment.ts,
-      mapAlignment: this.alignment, mapTransform: this.transform,
-    };
-  }
-
   setFromLocalizationResult(result: ReadonlyFacts<LocalizationResult>): ReadonlyFacts<ClientTrackingOrigin> {
-    const position = requireVec3(result.position, "position");
-    const orientation = requireQuat(result.orientation);
-    const confidence = result.confidence;
-    const ts = result.ts;
-    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
-      throw new Error("Field 'confidence' must be in [0, 1]");
-    }
-    if (!Number.isFinite(ts)) {
-      throw new Error("Field 'ts' must be finite");
-    }
-    if (result.map_alignment && result.map_transform) {
-      if (!this.acceptsContext(result.map_alignment) || !this.acceptsContext(result.map_transform) ||
-          result.map_alignment.tracking_reference_id !== this.trackingReference) throw new Error("Map alignment reference changed");
-      this.alignment = result.map_alignment;
-      if (!this.transform || result.map_transform.revision > this.transform.revision) this.transform = result.map_transform;
-      this.recompose();
-      return this.current!;
-    }
-    this.alignment = null;
-    this.transform = null;
+    if (!this.acceptsAlignment(result)) throw new Error("Localization reference changed");
+    if (!Number.isFinite(result.confidence) || result.confidence < 0 || result.confidence > 1 || !Number.isFinite(result.ts)) throw new Error("Invalid localization estimate");
     this.current = {
-      position: [position[0], position[1], position[2]],
-      orientation: [orientation[0], orientation[1], orientation[2], orientation[3]],
-      confidence,
-      ts,
+      alignment_id: result.alignment_id, shared_frame_id: result.shared_frame_id,
+      odom_reference_id: result.odom_reference_id, tracking_reference_id: result.tracking_reference_id,
+      position: requireVec3(result.position, "position"), orientation: requireQuat(result.orientation),
+      confidence: result.confidence, ts: result.ts,
     };
     return this.current;
   }
-
-  /** Restore a retained estimate without declaring it a newly observed localization result. */
+  /** Reconnect restore is valid only after hello established this exact shared frame. */
   restore(origin: ReadonlyFacts<ClientTrackingOrigin>): void {
-    if (origin.mapAlignment && origin.mapAlignment.tracking_reference_id !== this.trackingReference) { this.clear(); return; }
-    this.alignment = origin.mapAlignment ?? null;
-    this.transform = origin.mapTransform ?? null;
-    if (this.alignment) this.context = { map_code: this.alignment.map_code, odom_reference_id: this.alignment.odom_reference_id };
+    if (!this.acceptsContext(origin) || origin.tracking_reference_id !== this.trackingReference) return;
     this.current = { ...origin, position: requireVec3(origin.position, "position"), orientation: requireQuat(origin.orientation) };
   }
-
-  clear(): void {
-    this.alignment = null;
-    this.transform = null;
-    this.context = null;
-    this.current = null;
-  }
-
-  get T_odom_client(): ReadonlyFacts<ClientTrackingOrigin> | null {
-    return this.current;
-  }
-
-  get hasTrackingOrigin(): boolean {
-    return this.current !== null;
-  }
+  /** UI alignment changes retire the estimate without losing the connected session context. */
+  clear(): void { this.current = null; }
+  /** Connection/source retirement also invalidates its shared-frame context. */
+  resetContext(): void { this.context = null; this.current = null; }
+  get T_map_tracking(): ReadonlyFacts<ClientTrackingOrigin> | null { return this.current; }
+  get hasTrackingOrigin(): boolean { return this.current !== null; }
 }
 
-/** Corrections within one reference preserve interaction ownership. */
 export function sameTrackingReference(a: ReadonlyFacts<ClientTrackingOrigin> | null, b: ReadonlyFacts<ClientTrackingOrigin> | null): boolean {
-  return !!a && !!b && a.mapAlignment?.tracking_reference_id === b.mapAlignment?.tracking_reference_id &&
-    a.mapAlignment?.odom_reference_id === b.mapAlignment?.odom_reference_id && a.mapAlignment?.map_code === b.mapAlignment?.map_code;
+  return !!a && !!b && a.tracking_reference_id === b.tracking_reference_id &&
+    a.odom_reference_id === b.odom_reference_id;
 }
 
 export type PositionOrientation = { position: Vec3; orientation: Quat };
 export type ReadonlyPose = ReadonlyFacts<PositionOrientation>;
 
-export function odomToClientTrackingPoint(
+export function mapToClientTrackingPoint(
   point: Readonly<Vec3>,
   origin: ReadonlyFacts<ClientTrackingOrigin>,
 ): Vec3 {
-  return relativePointInOdom(point, origin);
+  return relativePointInMap(point, origin);
 }
 
-export function clientTrackingToOdomPoint(
+export function clientTrackingToMapPoint(
   point: Readonly<Vec3>,
   origin: ReadonlyFacts<ClientTrackingOrigin>,
 ): Vec3 {
   return applyOriginPoint(point, origin);
 }
 
-export function odomToClientTrackingPose(
+export function mapToClientTrackingPose(
   pose: ReadonlyPose,
   origin: ReadonlyFacts<ClientTrackingOrigin>,
 ): PositionOrientation {
-  return relativePoseInOdom(pose, origin);
+  return relativePoseInMap(pose, origin);
 }
 
-export function clientTrackingToOdomPose(
+export function clientTrackingToMapPose(
   pose: ReadonlyPose,
   origin: ReadonlyFacts<ClientTrackingOrigin>,
 ): PositionOrientation {
   return applyOriginPose(pose, origin);
 }
 
-export function odomToClientTrackingYawPose(
+export function mapToClientTrackingYawPose(
   pose: Readonly<YawPose>,
   origin: ReadonlyFacts<ClientTrackingOrigin>,
 ): YawPose {
-  const relative = relativePoseInOdom(poseFromYaw(pose), origin);
+  const relative = relativePoseInMap(poseFromYaw(pose), origin);
   return [
     relative.position[0],
     relative.position[1],
@@ -154,7 +114,7 @@ export function odomToClientTrackingYawPose(
   ];
 }
 
-function relativePoseInOdom(
+function relativePoseInMap(
   pose: ReadonlyPose,
   origin: ReadonlyFacts<ClientTrackingOrigin>,
 ): PositionOrientation {
@@ -176,7 +136,7 @@ function applyOriginPose(
   };
 }
 
-function relativePointInOdom(point: Readonly<Vec3>, origin: ReadonlyFacts<ClientTrackingOrigin>): Vec3 {
+function relativePointInMap(point: Readonly<Vec3>, origin: ReadonlyFacts<ClientTrackingOrigin>): Vec3 {
   const qInv = quatConjugate(requireOrigin(origin));
   return rotateVecByQuat(qInv, sub(requireVec3(point, "position"), origin.position));
 }

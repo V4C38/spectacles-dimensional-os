@@ -5,7 +5,7 @@
 // agent before granting a manual navigation lease; cancel_acquire retires it.
 import { utf8Bytes, validatedBulkArray } from "./BulkTransfer";
 import { decodeManipulation, decodeFollowingTail } from "../manipulation/ManipulationProtocol";
-import { type InteractionState, type InteractionResult, type InteractionAuthority, type InteractionTarget, type InteractionCredentials, CAPABILITY_NAMES, type Capabilities, type Capability, type CapturePolicy, type DistortionModel, type Intrinsics, type Lidar, type LidarSettings, type LocalizationObservation, type LocalizationObservations, type LocalizationObservationsRequest, type LocalizationResult, type MapAlignment, type MapContext, type LocalizationMapTransform, type LocalizationStatus, type NavGoal, type NavState, type Outbound, type Pose, type Quat, type RobotDescription, type State, type TimeSync, type Vec3, type YawPose, type Hello, type HelloRequest, type AgentMessage, type AgentSkill, type NavigationCapability } from "../ClientContracts";
+import { type InteractionState, type InteractionResult, type InteractionAuthority, type InteractionTarget, type InteractionCredentials, CAPABILITY_NAMES, type Capabilities, type Capability, type CapturePolicy, type DistortionModel, type Intrinsics, type Lidar, type LidarSettings, type LocalizationObservation, type LocalizationObservations, type LocalizationObservationsRequest, type LocalizationResult, type SharedFrameContext, type LocalizationStatus, type NavGoal, type NavState, type Outbound, type Pose, type Quat, type RobotDescription, type State, type TimeSync, type Vec3, type YawPose, type Hello, type HelloRequest, type AgentMessage, type AgentSkill, type NavigationCapability } from "../ClientContracts";
 
 
 export const LOCALIZATION_OBSERVATIONS_FOURCC = 0x4c4f4341;
@@ -221,11 +221,16 @@ export function decodeOutboundObject(data: Record<string, unknown>): Exclude<Out
       return decodeLocalizationObservationsRequest(data);
     case "localization_result":
       return decodeLocalizationResult(data);
-    case "localization_context":
-      return { type: "localization_context", ...decodeMapContext(data),
-        ...(data.reset === undefined ? {} : { reset: requireBoolean(data, "reset") }) };
-    case "localization_map_transform":
-      return decodeMapTransform(data);
+    case "localization_context": {
+      const revision = requireInteger(data, "revision");
+      if (revision < 0) throw new Error("Invalid shared frame revision");
+      const rebase = data.rebase === undefined ? undefined : asObject(data.rebase, "rebase");
+      return { type: "localization_context", ...decodeSharedFrameContext(data), revision,
+        ...(data.map_code === undefined ? {} : { map_code: boundedString(data, "map_code") }),
+        ...(data.reset === undefined ? {} : { reset: requireBoolean(data, "reset") }),
+        ...(rebase === undefined ? {} : { rebase: { previous_shared_frame_id: boundedString(rebase, "previous_shared_frame_id"),
+          position: requireVec3(rebase, "position"), orientation: requireQuat(rebase, "orientation") } }) };
+    }
     case "localization_status":
       return decodeLocalizationStatus(data);
     case "pose":
@@ -507,7 +512,8 @@ function decodeHello(data: Record<string, unknown>): Hello {
     bulk_epoch: requireString(data, "bulk_epoch"),
     client_id: requireString(data, "client_id"),
     resume_token: requireString(data, "resume_token"),
-    odom_reference_id: requireString(data, "odom_reference_id"),
+    odom_reference_id: boundedString(data, "odom_reference_id"),
+    shared_frame_id: boundedString(data, "shared_frame_id"),
     ...(data.server_info === undefined ? {} : { server_info: decodeServerInfo(asObject(data.server_info, "server_info")) }),
     time_sync,
     robot: decodeRobot(asObject(requireKey(data, "robot"), "robot")),
@@ -538,16 +544,11 @@ function decodeServerInfo(data: Record<string, unknown>): { robot_ip?: string; d
 
 function decodeRobot(data: Record<string, unknown>): RobotDescription {
   const footprint = requireNumberArray(data, "footprint_m", 2);
-  const scale = finiteField(data, "odom_scale_correction_factor");
-  if (scale <= 0) {
-    throw new Error("robot.odom_scale_correction_factor must be finite and positive");
-  }
   return {
     display_name: requireString(data, "display_name"),
     body_bounds_m: requireVec3(data, "body_bounds_m"),
     footprint_m: [footprint[0], footprint[1]],
     base_height_m: finiteField(data, "base_height_m"),
-    odom_scale_correction_factor: scale,
   };
 }
 
@@ -679,8 +680,7 @@ function decodeNavState(data: Record<string, unknown>): NavState {
 function decodeLocalizationObservationsRequest(
   data: Record<string, unknown>,
 ): LocalizationObservationsRequest {
-  // Mixed-mode robot/tag batches can also align directly in odom after a VPS
-  // miss; episode purpose does not imply that a map anchor already exists.
+  // Capture purpose selects the measurement workflow, not the shared map identity.
   const capturePolicy = requireString(data, "capture_policy");
   if (!isCapturePolicy(capturePolicy)) {
     throw new Error("capture_policy must be robot_los_required, robot_los_preferred, or any_angle");
@@ -735,24 +735,8 @@ function boundedString(data: Record<string, unknown>, key: string, maxLength = 1
   if (!value.length || value.length > maxLength) throw new Error(`invalid ${key}`);
   return value;
 }
-function decodeMapContext(data: Record<string, unknown>): MapContext {
-  return { map_code: boundedString(data, "map_code"), odom_reference_id: boundedString(data, "odom_reference_id") };
-}
-function mapPose(data: Record<string, unknown>) {
-  const confidence = finiteField(data, "confidence");
-  if (confidence < 0 || confidence > 1) throw new Error("invalid map confidence");
-  return { position: requireVec3(data, "position"), orientation: requireQuat(data, "orientation"), confidence, ts: finiteField(data, "ts") };
-}
-function decodeMapTransform(data: Record<string, unknown>): LocalizationMapTransform {
-  const revision = requireInteger(data, "revision");
-  if (revision < 0) throw new Error("invalid map revision");
-  return { type: "localization_map_transform", ...decodeMapContext(data), ...mapPose(data), revision };
-}
-function decodeMapAlignment(data: Record<string, unknown>): MapAlignment {
-  const travel = finiteField(data, "travel_m");
-  if (travel < 0) throw new Error("invalid alignment travel");
-  return { ...decodeMapContext(data), ...mapPose(data), id: boundedString(data, "id"),
-    tracking_reference_id: boundedString(data, "tracking_reference_id"), travel_m: travel };
+function decodeSharedFrameContext(data: Record<string, unknown>): SharedFrameContext {
+  return { shared_frame_id: boundedString(data, "shared_frame_id"), odom_reference_id: boundedString(data, "odom_reference_id") };
 }
 function decodeLocalizationStatus(data: Record<string, unknown>): LocalizationStatus {
   const scope = requireString(data, "scope"), status = requireString(data, "status");
@@ -760,13 +744,8 @@ function decodeLocalizationStatus(data: Record<string, unknown>): LocalizationSt
   if (status !== "succeeded" && status !== "failed" && status !== "deferred") throw new Error("invalid localization status");
   const retry = data.retry_after_s === undefined ? undefined : finiteField(data, "retry_after_s");
   if (retry !== undefined && retry < 0) throw new Error("invalid retry delay");
-  const context = data.map_code === undefined
-    ? { odom_reference_id: boundedString(data, "odom_reference_id") }
-    : decodeMapContext(data);
-  if (data.map_code === undefined && (scope !== "robot" || status !== "deferred" ||
-      !["robot_pose_unavailable", "robot_pose_available"].includes(String(data.reason)) ||
-      data.episode_id !== undefined)) throw new Error("Localization status requires map context");
-  return { type: "localization_status", ...context, scope, status,
+  return { type: "localization_status", ...decodeSharedFrameContext(data), scope, status,
+    ...(data.map_code === undefined ? {} : { map_code: boundedString(data, "map_code") }),
     ...(retry === undefined ? {} : { retry_after_s: retry }),
     reason: requireString(data, "reason"),
     ...(data.episode_id === undefined ? {} : { episode_id: boundedString(data, "episode_id") }),
@@ -774,24 +753,11 @@ function decodeLocalizationStatus(data: Record<string, unknown>): LocalizationSt
 }
 
 function decodeLocalizationResult(data: Record<string, unknown>): LocalizationResult {
-  if ((data.map_alignment === undefined) !== (data.map_transform === undefined)) throw new Error("Map alignment requires its transform snapshot");
-  // Rigid metric T_odom_client. The server corrects robot odometry before
-  // localization; measured client positions and marker mounts are never scaled.
   const confidence = finiteField(data, "confidence");
-  if (confidence < 0 || confidence > 1) {
-    throw new Error("Field 'confidence' must be in [0, 1]");
-  }
-  return {
-    type: "localization_result",
-    ...(data.map_alignment === undefined ? {} : {
-      map_alignment: decodeMapAlignment(asObject(data.map_alignment, "map_alignment")),
-      map_transform: decodeMapTransform(asObject(data.map_transform, "map_transform")),
-    }),
-    position: requireVec3(data, "position"),
-    orientation: requireQuat(data, "orientation"),
-    confidence,
-    ts: finiteField(data, "ts"),
-  };
+  if (confidence < 0 || confidence > 1) throw new Error("Invalid localization confidence");
+  return { type: "localization_result", ...decodeSharedFrameContext(data),
+    alignment_id: boundedString(data, "alignment_id"), tracking_reference_id: boundedString(data, "tracking_reference_id"),
+    position: requireVec3(data, "position"), orientation: requireQuat(data, "orientation"), confidence, ts: finiteField(data, "ts") };
 }
 
 function decodePose(data: Record<string, unknown>): Pose {

@@ -30,14 +30,6 @@ class RobotDescription:
     body_bounds_m: tuple[float, float, float]
     footprint_m: tuple[float, float]
     base_height_m: float
-    odom_scale_correction_factor: float = 1.0
-
-    def __post_init__(self) -> None:
-        if (
-            not math.isfinite(self.odom_scale_correction_factor)
-            or self.odom_scale_correction_factor <= 0
-        ):
-            raise ValueError("odom_scale_correction_factor must be finite and positive")
 
 
 @dataclass(frozen=True)
@@ -75,7 +67,6 @@ class RobotProfile:
     body_bounds_m: tuple[float, float, float]
     footprint_m: tuple[float, float]
     base_height_m: float
-    odom_scale_correction_factor: float
     fiducial_dictionary: str | None
     fiducial_marker_mounts: tuple[FiducialMarkerMount, ...]
     T_base_camera_optical: NDArray[np.float64] | None
@@ -92,14 +83,6 @@ class RobotProfile:
         if not math.isfinite(self.base_height_m) or self.base_height_m < 0.0:
             raise ValueError(
                 f"base_height_m must be finite and non-negative, got {self.base_height_m}"
-            )
-        if (
-            not math.isfinite(self.odom_scale_correction_factor)
-            or self.odom_scale_correction_factor <= 0.0
-        ):
-            raise ValueError(
-                "odom_scale_correction_factor must be finite and positive, "
-                f"got {self.odom_scale_correction_factor}"
             )
         if self.fiducial_marker_mounts and not self.fiducial_dictionary:
             raise ValueError("fiducial_dictionary is required when fiducial_marker_mounts is set")
@@ -146,7 +129,6 @@ class RobotProfile:
             body_bounds_m=self.body_bounds_m,
             footprint_m=self.footprint_m,
             base_height_m=self.base_height_m,
-            odom_scale_correction_factor=self.odom_scale_correction_factor,
         )
 
 
@@ -157,7 +139,6 @@ def get_profile(name: RobotName) -> RobotProfile:
             body_bounds_m=(0.15, 0.15, 0.12),
             footprint_m=(0.15, 0.15),
             base_height_m=0,
-            odom_scale_correction_factor=1,
             fiducial_dictionary=None,
             fiducial_marker_mounts=(),
             T_base_camera_optical=None,

@@ -31,19 +31,18 @@ it("keeps native minimum and browser zero-point limits explicit", () => {
   expect(new LidarFrameSampler(project, { maximum: 4000, minimum: 250, default: 1500 }).sample(input).positions).toHaveLength(2);
 });
 
-it("invalidates only colors for rotated bounds and native odometry scale corrections", () => {
+it("invalidates only colors when the metric body bounds rotate", () => {
   const sampler = new LidarFrameSampler((p: Readonly<Vec3>) => [...p] as Vec3,
     { maximum: 4000, minimum: 0, default: 4000 });
-  const input = { points: [[6, -2.5, 0.4]] as Vec3[], origin: {}, mode: "obstacles" as const,
-    robot: [5, -2.5, .33] as Vec3, bounds: [1, .4, .5] as Vec3, odomScaleCorrectionFactor: 1.25 };
-  const corrected = sampler.sample(input);
-  expect(corrected.colors[0][3]).toBeCloseTo(.5);
-  const native = sampler.sample({ ...input, odomScaleCorrectionFactor: 1 });
-  expect(native.positions).toBe(corrected.positions);
-  expect(native.colors[0][3]).toBeLessThan(corrected.colors[0][3]);
-  expect(native.positionsChanged).toBe(false);
+  const input = { points: [[5.8, -2.5, 0.4]] as Vec3[], origin: {}, mode: "obstacles" as const,
+    robot: [5, -2.5, .33] as Vec3, bounds: [1, .4, .5] as Vec3 };
+  const aligned = sampler.sample(input);
+  expect(aligned.colors[0][3]).toBeCloseTo(.5);
   const rotated = sampler.sample({ ...input, orientation: [0, 0, Math.SQRT1_2, Math.SQRT1_2] });
+  expect(rotated.positions).toBe(aligned.positions);
+  expect(rotated.positionsChanged).toBe(false);
   expect(rotated.colorsChanged).toBe(true);
+  expect(rotated.colors[0][3]).toBeLessThan(aligned.colors[0][3]);
   sampler.clear();
   expect(sampler.sample(input).positionsChanged).toBe(true);
 });

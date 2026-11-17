@@ -97,7 +97,8 @@ export class ReviewScenario extends BaseScriptComponent {
     this.wire({ type: "state", server: { connected_clients: 1 },
       lidar: { enabled: false, min_height_m: -10, max_height_m: 10, max_range_m: 5 },
       nav: { state: "idle", outcome: null }, agent: { idle: true } });
-    root.clientTrackingOriginStore.setFromLocalizationResult({ position: origin, orientation: [0, 0, 0, 1], confidence: 1, ts: getTime() });
+    root.episode.tick();
+    root.clientTrackingOriginStore.setFromLocalizationResult({ alignment_id: "probe", shared_frame_id: "fixture-map", odom_reference_id: "native-overlap-odom", tracking_reference_id: [...this.sent].reverse().find(row => row.type === "localization_tracking")?.tracking_reference_id, position: origin, orientation: [0, 0, 0, 1], confidence: 1, ts: getTime() });
     this.wire({ type: "pose", position: CATALOG.fixtures.pose, orientation: [0, 0, 0, 1], ts: getTime() });
     root.uiPresenter.setupWizardController.flow.finish();
     root.uiPresenter.setupWizardController.hide();
@@ -170,7 +171,7 @@ export class ReviewScenario extends BaseScriptComponent {
       if (!ready) throw new Error(`Overlap fixture initialization failed: ${JSON.stringify({
         setupCompleted: root.uiPresenter.isSetupCompleted(), connection: view.connection,
         tracking: view.hasTrackingOrigin, capabilities: view.capabilities?.navigation,
-        origin: root.clientTrackingOriginStore.T_odom_client, pose,
+        origin: root.clientTrackingOriginStore.T_map_tracking, pose,
       })}`);
       this.initial = pose.position;
       this.wish = this.initial; this.scene("overlapping-marker-ready");

@@ -117,7 +117,9 @@ it("consumes UI selection, cancels drags on input loss, invalidates resets, and 
   app.onSqueezeEnd({ target: controller });
   expect((app as unknown as { panelGrip: boolean }).panelGrip).toBe(false);
   panel.visible = false;
-  client.originStore.setFromLocalizationResult({ type: "localization_result", position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 10 });
+  client.originStore.beginTrackingReference("fixture-tracking");
+  client.originStore.setSharedFrameContext({ type: "localization_context", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", revision: 0 });
+  client.originStore.setFromLocalizationResult({ type: "localization_result", position: [0, 0, 0], orientation: [0, 0, 0, 1], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 10 });
   const worldSurface = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial());
   worldSurface.position.z = -2;
   registerRayTarget(worldSurface);
@@ -136,14 +138,14 @@ it("consumes UI selection, cancels drags on input loss, invalidates resets, and 
   input.intersectionsForController.set(left, [{ object: floor, point: new THREE.Vector3(0, 0, -1), distance: 1 }]);
   app.onSelectStart({ target: left }); expect(hold).toHaveBeenCalledTimes(2);
   app.onSelectEnd({ target: left }); expect(release).toHaveBeenCalledOnce();
-  const aligned = client.originStore.setFromLocalizationResult({ type: "localization_result", position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 10 });
+  const aligned = client.originStore.setFromLocalizationResult({ type: "localization_result", position: [0, 0, 0], orientation: [0, 0, 0, 1], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 10 });
   client.ui.flow.finish();
   const beforeFocus = invalidated.mock.calls.length;
   const beforeSuspend = lost.mock.calls.length;
   session.visibilityState = "hidden"; session.dispatchEvent(new Event("visibilitychange"));
   app.update(10.1, frame);
   expect(lost.mock.calls.length - beforeSuspend).toBe(1);
-  expect(client.originStore.T_odom_client).toBe(aligned);
+  expect(client.originStore.T_map_tracking).toBe(aligned);
   session.visibilityState = "visible"; session.dispatchEvent(new Event("visibilitychange"));
   app.update(10.2, frame);
   expect(client.ui.setupCompleted).toBe(true);
@@ -161,13 +163,13 @@ it("consumes UI selection, cancels drags on input loss, invalidates resets, and 
   expect(getOffset).toHaveBeenCalledWith(inverse);
   expect(setReferenceSpace).toHaveBeenCalledWith(compensated);
   app.update(10.3, frame);
-  expect(client.originStore.T_odom_client).toBe(aligned);
+  expect(client.originStore.T_map_tracking).toBe(aligned);
   expect(client.ui.setupCompleted).toBe(true);
   expect(invalidated).toHaveBeenCalledTimes(beforeFocus);
   const resets = invalidated.mock.calls.length;
   reference.dispatchEvent(new Event("reset")); expect(invalidated).toHaveBeenCalledTimes(resets);
   // An uncompensated reset starts a new tracking reference and retires the old fix.
-  expect(client.originStore.T_odom_client).toBeNull();
+  expect(client.originStore.T_map_tracking).toBeNull();
   app.onXRSessionEnded();
   const afterEnd = invalidated.mock.calls.length;
   reference.dispatchEvent(new Event("reset")); session.dispatchEvent(new Event("visibilitychange"));

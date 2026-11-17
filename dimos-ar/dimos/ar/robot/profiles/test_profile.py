@@ -58,7 +58,6 @@ def _profile(**overrides: object) -> RobotProfile:
         "body_bounds_m": (1.0, 1.0, 1.0),
         "footprint_m": (1.0, 1.0),
         "base_height_m": 0.3,
-        "odom_scale_correction_factor": 1.0,
         "fiducial_dictionary": None,
         "fiducial_marker_mounts": (),
         "T_base_camera_optical": None,
@@ -66,13 +65,6 @@ def _profile(**overrides: object) -> RobotProfile:
     }
     values.update(overrides)
     return RobotProfile(**values)  # type: ignore[arg-type]
-
-
-def test_robot_profile_rejects_non_positive_scale_factor() -> None:
-    with pytest.raises(ValueError, match="odom_scale_correction_factor"):
-        _profile(odom_scale_correction_factor=0.0)
-    with pytest.raises(ValueError, match="odom_scale_correction_factor"):
-        _profile(odom_scale_correction_factor=-1.25)
 
 
 def test_robot_profile_rejects_mounts_without_dictionary() -> None:

@@ -5,6 +5,17 @@ import pytest
 from dimos.ar.blueprints import unitree_go2_ar, unitree_go2_ar_agentic
 from dimos.ar.module import ARModule
 from dimos.ar.robot.profiles.profile import RobotName
+from dimos.mapping.relocalization.go2.module import Go2Relocalization
+
+
+@pytest.mark.parametrize("blueprint", [unitree_go2_ar, unitree_go2_ar_agentic])
+def test_go2_blueprints_include_one_optional_native_relocalizer(blueprint) -> None:
+    if blueprint is None:
+        pytest.skip("Go2 blueprint is not installed")
+    atoms = [atom for atom in blueprint.active_blueprints if atom.module is Go2Relocalization]
+    assert len(atoms) == 1
+    assert atoms[0].kwargs.get("map_file") is None
+    assert {stream.name for stream in atoms[0].streams} >= {"tf", "merged_map", "lidar"}
 
 
 @pytest.mark.parametrize("blueprint", [unitree_go2_ar, unitree_go2_ar_agentic])

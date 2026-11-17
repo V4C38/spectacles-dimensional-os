@@ -1,6 +1,6 @@
 import type { ARModuleSessionState } from "../websocket/ARModuleSession";
 import type { ReadonlyFacts, Vec3 } from "../ClientContracts";
-import { odomToClientTrackingPose, type ClientTrackingOrigin } from "../localization/ClientTracking";
+import { mapToClientTrackingPose, type ClientTrackingOrigin } from "../localization/ClientTracking";
 
 export type ClientNotification = {
   key?: string;
@@ -71,7 +71,7 @@ export class AlignmentWarning {
   observe(message: import("../ClientContracts").Outbound): void {
     if (message.type === "localization_context") { this.failed = this.pending = false; }
     if (message.type === "localization_observations_request") { this.pending = true; this.failed = false; }
-    if (message.type === "localization_result" || message.type === "localization_map_transform") { this.failed = this.pending = false; }
+    if (message.type === "localization_result") { this.failed = this.pending = false; }
     if (message.type === "localization_status") {
       if (message.status === "failed") { this.failed = true; this.pending = false; }
       if (message.status === "deferred") this.pending = false;
@@ -98,6 +98,6 @@ export function alignmentDistance(
 ): number | null {
   const pose = view.pose ?? view.manipulation?.root_pose;
   if (!origin || !pose || !viewer || !view.hasTrackingOrigin) return null;
-  const robot = odomToClientTrackingPose(pose, origin).position;
+  const robot = mapToClientTrackingPose(pose, origin).position;
   return Math.hypot(robot[0] - viewer[0], robot[1] - viewer[1], robot[2] - viewer[2]);
 }

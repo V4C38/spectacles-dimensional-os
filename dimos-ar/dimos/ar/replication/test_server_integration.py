@@ -14,8 +14,9 @@ import pytest
 import websockets
 
 from dimos.ar.navigation.control import NavGoalCoordinator
+from dimos.ar.spatial import FrameSnapshot
 from dimos.ar.websocket.server import WebSocketServer
-from test_support.module import _module_with_policy
+from test_support.module import _module_with_localization
 from test_support.websocket import ServerHarness, _sample_hello
 
 
@@ -42,9 +43,9 @@ async def connect(url):
 @pytest.fixture
 def runtime():
     h = ServerHarness()
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     goals, stops = [], []
-    module._nav_goal_coordinator = NavGoalCoordinator(odom_scale_correction_factor=1.0)
+    module._nav_goal_coordinator = NavGoalCoordinator(frames=lambda: FrameSnapshot.initial("test"))
     module.goal_request = SimpleNamespace(transport=object(), publish=goals.append)
     module.stop_movement = SimpleNamespace(transport=object(), publish=stops.append)
     h._thread.start()

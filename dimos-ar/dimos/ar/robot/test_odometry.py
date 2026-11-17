@@ -18,7 +18,7 @@ def test_timing_includes_rejected_stale_odom(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(timing_diagnostics.time, "monotonic", lambda: now[0])
     logger = Mock()
     monkeypatch.setattr(timing_diagnostics, "logger", logger)
-    odometry = RobotOdometry(factor=1)
+    odometry = RobotOdometry()
     assert odometry.accept(_pose(100), received_at=100) is not None
     now[0] += 30
     assert odometry.accept(_pose(127), received_at=130) is None
@@ -27,11 +27,11 @@ def test_timing_includes_rejected_stale_odom(monkeypatch: pytest.MonkeyPatch) ->
     assert fields["stale"] == 1
     assert fields["source_age_max_ms"] == 3000
     assert fields["arrival_gap_max_ms"] == 30000
-    assert odometry.latest().corrected.ts_server == 100
+    assert odometry.latest().sample.ts_server == 100
 
 
 def test_admission_rejects_duplicate_and_small_backward_updates_without_mutation() -> None:
-    odometry = RobotOdometry(factor=1.25)
+    odometry = RobotOdometry()
     first = odometry.accept(_pose(100), received_at=100)
     assert first is not None
     assert odometry.accept(_pose(100, 10), received_at=100) is None
@@ -40,13 +40,13 @@ def test_admission_rejects_duplicate_and_small_backward_updates_without_mutation
     assert odometry.travel() == 0
     next_pose = odometry.accept(_pose(100.1, 1), received_at=100.1)
     assert next_pose.position == (1, 0, 0.33)
-    assert next_pose.corrected.position == (1.25, 0, 0.33)
-    assert odometry.travel() == 1.25
+    assert next_pose.sample.position == (1, 0, 0.33)
+    assert odometry.travel() == 1
 
 
 @pytest.mark.parametrize("timestamp,frame", [(98, "world"), (0, "world"), (100.1, "replacement")])
 def test_source_retirement_changes_epoch_and_clears_all_accepted_state(timestamp, frame) -> None:
-    odometry = RobotOdometry(factor=1)
+    odometry = RobotOdometry()
     odometry.accept(_pose(100), received_at=100)
     reference = odometry.reference_id
     with pytest.raises(RobotSourceChangedError):
@@ -59,14 +59,43 @@ def test_source_retirement_changes_epoch_and_clears_all_accepted_state(timestamp
 
 
 def test_replay_retains_one_epoch_and_snapshots_do_not_share_mutable_messages() -> None:
-    odometry = RobotOdometry(factor=1.25, recording=True)
+    odometry = RobotOdometry(recording=True)
     incoming = _pose(5, 2)
     first = odometry.accept(incoming, received_at=100)
-    assert first.corrected.ts_server == 100
+    assert first.sample.ts_server == 100
     incoming.position.x = 999
     assert first.position[0] == 2
-    assert first.corrected.position[0] == 2.5
+    assert first.sample.position[0] == 2
     second = odometry.accept(_pose(6, 3), received_at=101.5)
-    assert second.corrected.ts_server == 101
-    assert second.corrected.position[0] == 3.75
-    assert odometry.travel() == 1.25
+    assert second.sample.ts_server == 101
+    assert second.sample.position[0] == 3
+    assert odometry.travel() == 1
+
+
+def test_admission_preserves_native_metres_and_heading_from_nonzero_origin() -> None:
+    odometry = RobotOdometry()
+    half = 2**-0.5
+    first = PoseStamped(
+        ts=100,
+        frame_id="world",
+        position=[10, -4, 0.33],
+        orientation=[0, 0, half, half],
+    )
+    second = PoseStamped(
+        ts=100.1,
+        frame_id="world",
+        position=[10, -3, 0.33],
+        orientation=[0, 0, half, half],
+    )
+    assert odometry.accept(first, received_at=100) is not None
+    accepted = odometry.accept(second, received_at=100.1)
+    assert accepted is not None
+    assert accepted.position == (10, -3, 0.33)
+    assert accepted.sample.position == accepted.position
+    assert accepted.sample.orientation == pytest.approx((0, 0, half, half))
+    assert accepted.sample.frame_id == "odom"
+    assert accepted.frame_id == "world"
+    assert odometry.travel() == 1
+    # Source messages remain native observations, independently owned by their producer.
+    assert first.x == 10 and first.y == -4
+    assert second.x == 10 and second.y == -3

@@ -1,15 +1,14 @@
+import { createTrackingOriginStore, FakeClock, FakeTransport, helloAt, stateFrame } from "../support/SessionFixture";
 import { describe, expect, it } from "vitest";
-import { ClientTrackingOriginStore } from "../../src/localization/ClientTracking";
 import { ARModuleSession } from "../../src/websocket/ARModuleSession";
-import { FakeClock, FakeTransport, helloAt, stateFrame } from "../support/SessionFixture";
 import type { InteractionState, NavGoal } from "../../src/ClientContracts";
 
 function fixture() {
   const transport = new FakeTransport(), clock = new FakeClock();
-  const session = new ARModuleSession({ transport, clock, clientTrackingOriginStore: new ClientTrackingOriginStore() });
+  const session = new ARModuleSession({ transport, clock, clientTrackingOriginStore: createTrackingOriginStore() });
   session.start(); session.onTransportOpen();
   session.onTransportText(JSON.stringify(helloAt(0)) + "\n" + JSON.stringify(stateFrame()) + "\n"); session.tick();
-  const base: InteractionState = { type: "interaction_state", epoch: "robot", revision: 0, mode: "manual",
+  const base: InteractionState = { type: "interaction_state", shared_frame_id: "fixture-map", epoch: "robot", revision: 0, mode: "manual",
     authority: null, targets: [], following_tail: null, motion_busy: false, preview: null, active_goal: null };
   const send = (value: object) => { session.onTransportText(JSON.stringify(value) + "\n"); session.tick(); };
   const ref = (id: string) => ({ epoch: "fixture-epoch", id, revision: id });
@@ -17,7 +16,7 @@ function fixture() {
   const pending = (x: number) => ({ type: "nav_goal", ts: x, pose: [x,0,0,0], route_ref: ref(String(x)) });
   const finish = (x: number) => {
     transport.bulk.receive({ type: "bulk_record", ...ref(String(x)), kind: "route", part: 0, parts: 2,
-      data: { metadata: { ts: x, pose: [x,0,0,0] } } });
+      data: { metadata: { shared_frame_id: "fixture-map", ts: x, pose: [x,0,0,0] } } });
     transport.bulk.receive({ type: "bulk_record", ...ref(String(x)), kind: "route", part: 1, parts: 2,
       data: { points: [[0,0,0,0], [x,0,0,0]] } });
     session.tick();

@@ -7,7 +7,7 @@ from dimos.ar.replication.presence import ClientPresence, PresenceRelay, decode_
 from dimos.ar.websocket.bulk import TokenBucket
 from dimos.ar.websocket.protocol import decode_hello_request, decode_inbound
 
-CONTEXT = {"map_code": "office", "odom_reference_id": "odom"}
+CONTEXT = {"shared_frame_id": "office", "odom_reference_id": "odom"}
 
 
 def cues() -> dict[str, Any]:
@@ -48,7 +48,7 @@ def test_codec_and_optional_negotiation() -> None:
     [
         ("pointers", [None]),
         ("pointers", [cues()["pointers"][0]] * 3),
-        ("map_code", ""),
+        ("shared_frame_id", ""),
         ("odom_reference_id", "x" * 129),
     ],
 )
@@ -144,3 +144,23 @@ async def test_real_sockets_filter_identity_keep_controls_live_and_clear_disconn
                 await asyncio.wait_for(legacy.recv(), 0.1)
     finally:
         harness.stop()
+
+
+def test_frame_rebase_preserves_physical_dimensions_and_sample_expiry() -> None:
+    import numpy as np
+
+    context = dict(CONTEXT)
+    relay = PresenceRelay(lambda: context)
+    relay.receive("a", ClientPresence(cues()), now=10)
+    context["shared_frame_id"] = "vps:office"
+    matrix = np.eye(4)
+    matrix[:3, 3] = [10, 20, 0]
+    relay.rebase_shared_frame(matrix)
+    snapshot = relay.snapshot(10.3)
+    assert snapshot["shared_frame_id"] == "vps:office"
+    sample = snapshot["clients"][0]
+    assert sample["pointers"][0]["end"] == [11, 20, 0]
+    assert sample["panel"]["position"] == [11, 22, 3]
+    assert sample["panel"]["width"] == 0.5
+    assert sample["age_s"] == 0.3
+    assert relay.snapshot(12.1)["clients"] == []

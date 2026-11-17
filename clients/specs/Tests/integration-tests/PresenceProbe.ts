@@ -37,8 +37,8 @@ export class ReviewScenario extends BaseScriptComponent {
       const root = findProductionRoot(); if (!root) throw new Error("Production root missing");
       root.updateEvent.enabled = false; root.uiPresenter.setupWizardController.invalidatePending();
       root.uiPresenter.setupWizardPanel.enabled = false; root.uiPresenter.mainUIFrame.enabled = false;
-      const origins = new ClientTrackingOriginStore(), context = { map_code: "presence-probe", odom_reference_id: "probe" };
-      origins.setMapContext(context); origins.setFromLocalizationResult({ type: "localization_result", position: [0,0,0], orientation: [0,0,0,1], ts: 0, confidence: 1 });
+      const origins = new ClientTrackingOriginStore(), context = { shared_frame_id: "presence-probe", odom_reference_id: "probe" };
+      origins.beginTrackingReference("probe-tracking"); origins.setSharedFrameContext({ type: "localization_context", revision: 0, ...context }); origins.setFromLocalizationResult({ type: "localization_result", ...context, alignment_id: "probe", tracking_reference_id: "probe-tracking", position: [0,0,0], orientation: [0,0,0,1], ts: 0, confidence: 1 });
       this.core = new PresenceController({ ready: () => true, clientId: () => "self", now: () => this.now, send: () => {} }, origins);
       this.renderer = new SpecsPresenceRenderer(this.getSceneObject());
       const camera = root.cameraObject.getTransform(), q = camera.getWorldRotation();

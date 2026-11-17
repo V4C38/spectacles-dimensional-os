@@ -1,7 +1,7 @@
 import type { ReadonlyFacts } from "@dimos-ar-client/ClientContracts";
 import * as THREE from "three";
 import type { ClientTrackingOrigin as MutableClientTrackingOrigin } from "@dimos-ar-client/localization/ClientTracking";
-import { composePlaceArMarker, type PlaceArMarkerArgs } from "@dimos-ar-client/agent/MarkerSkills";
+import { composePlaceArMarker, rebasePlaceArMarker, type PlaceArMarkerArgs } from "@dimos-ar-client/agent/MarkerSkills";
 import { Text } from "troika-three-text";
 import type { Vec3 } from "@dimos-ar-client/ClientContracts";
 import { disposeTextResources, syncText, UI_FONT_REGULAR, UI_FONT_SEMIBOLD } from "./SceneResources";
@@ -50,6 +50,10 @@ export class WebXRARMarkerPresenter {
     this.object.remove(entry.object);
     disposeGroup(entry.object);
     this.markers.delete(id);
+  }
+
+  rebase(transform: { position: Readonly<Vec3>; orientation: readonly [number, number, number, number] }): void {
+    for (const entry of this.markers.values()) entry.args = rebasePlaceArMarker(entry.args, transform);
   }
 
   recompose(origin: ClientTrackingOrigin): void {

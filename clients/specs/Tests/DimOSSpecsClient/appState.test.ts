@@ -7,7 +7,6 @@ import type { ClientTrackingOrigin } from "DimOSARClient.lspkg/Scripts/DimOSARCl
 import type { Hello, Pose, RobotDescription } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 
 const GO2: RobotDescription = {
-  odom_scale_correction_factor: 1,
   display_name: "Unitree Go2",
   body_bounds_m: [0.7, 0.5, 0.55],
   footprint_m: [0.7, 0.5],
@@ -22,7 +21,7 @@ const POSE: Pose = {
 const ORIGIN: ClientTrackingOrigin = {
   position: [0, 0, 0],
   orientation: [0, 0, 0, 1],
-  confidence: 1,
+  alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1,
   ts: 0,
 };
 

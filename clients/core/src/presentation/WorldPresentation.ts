@@ -141,9 +141,9 @@ export class MarkerCorrectionTrail {
     if (!origin) { this.reset(); return null; }
     const prior = this.origin;
     if (prior && this.previous) {
-      const a = prior.mapAlignment, b = origin.mapAlignment;
-      if (a?.map_code !== b?.map_code || a?.odom_reference_id !== b?.odom_reference_id ||
-          a?.tracking_reference_id !== b?.tracking_reference_id) this.start = null;
+      const a = prior, b = origin;
+      if (a.shared_frame_id !== b.shared_frame_id || a.odom_reference_id !== b.odom_reference_id ||
+          a.tracking_reference_id !== b.tracking_reference_id) this.start = null;
       else if (origin.position.some((v, i) => Math.abs(v - prior.position[i]) > 1e-6) ||
           Math.abs(origin.orientation.reduce((dot, v, i) => dot + v * prior.orientation[i], 0)) < 1 - 1e-10) {
         this.start = this.previous;

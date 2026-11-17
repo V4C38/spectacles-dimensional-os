@@ -11,13 +11,15 @@ export class InteractionPeer {
   activeGoal: any = null;
   joystickStops = 0;
 
-  constructor(readonly epoch: string, private readonly clientId: string) {}
+  constructor(readonly epoch: string, private readonly clientId: string,
+    readonly sharedFrameId = "fixture-map") {}
 
   snapshot(extra: object = {}) {
     return {
       motion_busy: false,
       following_tail: null,
-      type: "interaction_state", epoch: this.epoch, revision: ++this.revision,
+      type: "interaction_state", shared_frame_id: this.sharedFrameId,
+      epoch: this.epoch, revision: ++this.revision,
       mode: this.mode, authority: this.authority,
       targets: this.target ? [this.target] : [], preview: this.preview,
       active_goal: this.activeGoal, ...extra };

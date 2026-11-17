@@ -1,3 +1,4 @@
+import type { LocalizationContext, ReadonlyFacts } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 import type { ClientTrackingOriginStore } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 import type { LocalizationCaptureEpisode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/LocalizationCaptureEpisode";
 import { OperatingModeController, localizationCaptureStatus, deriveSessionLinkPhase, sessionLinkTransitionLog, type SessionLinkPhase } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
@@ -207,7 +208,7 @@ export class UIPresenter extends BaseScriptComponent {
 
   public applyRoomPresentation(view: ARModuleSessionState): void {
     const deps = this.requireDeps();
-    const origin = deps.clientTrackingOriginStore.T_odom_client;
+    const origin = deps.clientTrackingOriginStore.T_map_tracking;
     const input = deriveRobotMarkerApplyInput({
       setupCompleted: this.setupCompleted,
       view,
@@ -289,11 +290,12 @@ export class UIPresenter extends BaseScriptComponent {
     this.mainMenuView?.setFrameFollowEnabled(false);
     this.closeMenu();
   }
+  rebaseLocalizationBaseline(context: ReadonlyFacts<LocalizationContext>): void { this.setupWizardController?.rebaseBaseline(context); }
+
   realign(): void {
     const deps = this.requireDeps();
     if (this.setupCompleted && !this.isAlignmentReviewPending() &&
-        deps.session.view().connection === "ready" && deps.session.view().hasTrackingOrigin &&
-        deps.clientTrackingOriginStore.mapAlignment) {
+        deps.session.view().connection === "ready" && deps.session.view().hasTrackingOrigin) {
       deps.episode.requestCorrection();
       this.closeMenu();
       return;

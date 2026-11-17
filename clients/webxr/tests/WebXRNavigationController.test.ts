@@ -27,11 +27,10 @@ const hello: Hello = {
   resume_token: "fixture-resume",
   odom_reference_id: "fixture-odom",
   localization: { providers: ["fiducial_marker"] },
-  type: "hello", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
+  type: "hello", shared_frame_id: "fixture-map", protocol_version: 2, bulk_url: "/bulk", bulk_token: "fixture-token", bulk_epoch: "fixture-epoch",
   client_id: "c",
   time_sync: { ts_client: 0, ts_server: 0 },
   robot: {
-    odom_scale_correction_factor: 1,
     display_name: "Go2",
     body_bounds_m: [0.7, 0.5, 0.55],
     footprint_m: [0.7, 0.3],
@@ -72,7 +71,7 @@ describe("WebXRNavigationController", () => {
     const origin = {
       position: [0, 0, 0] as [number, number, number],
       orientation: [0, 0, 0, 1] as [number, number, number, number],
-      confidence: 1,
+      alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1,
       ts: 0,
     };
     const floor = {
@@ -130,7 +129,7 @@ describe("WebXRNavigationController", () => {
     const origin = {
       position: [0, 0, 0] as [number, number, number],
       orientation: [0, 0, 0, 1] as [number, number, number, number],
-      confidence: 1,
+      alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1,
       ts: 0,
     };
     navigation.applyView(
@@ -154,7 +153,7 @@ describe("WebXRNavigationController", () => {
     const commits = vi.fn();
     const authority = immediateAuthority({ onCommit: commits });
     const navigation = new WebXRNavigationController({ collaboration: authority.collaboration, view: () => view(), sendText, requestEstop: vi.fn(), requestNavigationCancellation: vi.fn() } as never);
-    const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
+    const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 };
     navigation.applyView(view(), origin, { position: [0, 0, 0], orientation: [0, 0, 0, 1] }, 1);
     navigation.setSelected(true);
     const hit = (z: number) => [{ position: [0, 0, z] as [number, number, number], normal: [0, 1, 0] as [number, number, number] }];
@@ -179,7 +178,7 @@ describe("WebXRNavigationController", () => {
   it("smooths the dragged heading so it turns over several centimetres of travel", () => {
     const sendText = vi.fn();
     const navigation = new WebXRNavigationController({ collaboration: immediateAuthority().collaboration, view: () => view(), sendText, requestEstop: vi.fn(), requestNavigationCancellation: vi.fn() } as never);
-    const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
+    const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 };
     navigation.applyView(view(), origin, { position: [0, 0, 0], orientation: [0, 0, 0, 1] }, 1);
     const floorHit = (x: number) => [{ position: [x, 0, -0.5] as [number, number, number], normal: [0, 1, 0] as [number, number, number] }];
     const yaw = () => {
@@ -209,7 +208,7 @@ function fixture(previewSupported = false) {
   const commits = vi.fn();
   const authority = immediateAuthority({ onCommit: commits });
   const navigation = new WebXRNavigationController({ collaboration: authority.collaboration, view: () => current, sendText, requestEstop: vi.fn(), requestNavigationCancellation: vi.fn() } as never);
-  const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
+  const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 };
   const floor = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number] };
   navigation.applyView(current, origin, floor, 0);
   const hit = (x = 1, z = -2) => [{ position: [x, 0, z] as [number, number, number], normal: [0, 1, 0] as [number, number, number] }];

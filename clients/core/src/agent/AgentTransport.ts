@@ -1,4 +1,4 @@
-import { clientTrackingToOdomPose, type ClientTrackingOriginStore } from "../localization/ClientTracking";
+import { clientTrackingToMapPose, type ClientTrackingOriginStore } from "../localization/ClientTracking";
 
 import { requireCapability, type ARModuleSession } from "../websocket/ARModuleSession";
 import type { CameraTrackingSource, ClientClock } from "../ClientContracts";
@@ -8,11 +8,11 @@ export class ClientPosePublisher {
   private lastSentAt = -Infinity;
   constructor(private readonly session: Pick<ARModuleSession, "view" | "sendText">, private readonly origins: ClientTrackingOriginStore, private readonly tracking: CameraTrackingSource, private readonly clock: ClientClock) {}
   tick(): void {
-    const now = this.clock.now(), origin = this.origins.T_odom_client, view = this.session.view();
+    const now = this.clock.now(), origin = this.origins.T_map_tracking, view = this.session.view();
     if (now - this.lastSentAt < 0.1 || !origin || view.connection !== "ready" || view.capabilities?.agent.available !== true) return;
     let optical: ReturnType<CameraTrackingSource["cameraOptical"]>;
     try { optical = this.tracking.cameraOptical(); } catch { return; }
-    const pose = clientTrackingToOdomPose(optical, origin);
+    const pose = clientTrackingToMapPose(optical, origin);
     this.session.sendText(encodeClientPose({ ...pose, ts: now })); this.lastSentAt = now;
   }
 }

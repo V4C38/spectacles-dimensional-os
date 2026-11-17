@@ -14,7 +14,7 @@ import { GlassSurface, buttonSurfaceBacking, tintButtonBacking } from "../presen
 
 
 
-import { type ClientTrackingOrigin as MutableClientTrackingOrigin, odomToClientTrackingYawPose } from "@dimos-ar-client/localization/ClientTracking";
+import { type ClientTrackingOrigin as MutableClientTrackingOrigin, mapToClientTrackingYawPose } from "@dimos-ar-client/localization/ClientTracking";
 
 
 import { clientTrackingToWebxrPoint } from "../utilities/WebXRCoordinates";
@@ -420,7 +420,7 @@ export class WebXRRouteRenderer {
       return;
     }
     const converted: Vec3[] = path.map((pose) => {
-      const tracking = odomToClientTrackingYawPose(pose, origin);
+      const tracking = mapToClientTrackingYawPose(pose, origin);
       return clientTrackingToWebxrPoint([tracking[0], tracking[1], tracking[2]]);
     });
     const solid = style.executing === true && !style.preview;

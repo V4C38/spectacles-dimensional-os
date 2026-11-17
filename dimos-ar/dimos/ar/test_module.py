@@ -15,8 +15,6 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 import numpy as np
 import pytest
 
-from dimos.ar.localization.policy import EpisodeWork
-from dimos.ar.localization.runner import LocalizationOutcome
 from dimos.ar.localization.types import Intrinsics
 from dimos.ar.manipulation.protocol import ManipulationRequest
 from dimos.ar.module import (
@@ -47,7 +45,7 @@ from test_support.module import (
     _arm_grab,
     _arm_module_with_two_clients,
     _FakeWs,
-    _module_with_policy,
+    _module_with_localization,
     _release_arm_grab,
 )
 
@@ -58,7 +56,6 @@ def _anvil_openyam_profile() -> RobotProfile:
         body_bounds_m=(0.40, 0.40, 0.80),
         footprint_m=(0.30, 0.30),
         base_height_m=0.0,
-        odom_scale_correction_factor=1.0,
         fiducial_dictionary=None,
         fiducial_marker_mounts=(),
         T_base_camera_optical=None,
@@ -194,7 +191,7 @@ def test_localization_only_config_defaults_to_go2() -> None:
 
 
 def test_hello_includes_estop_capability() -> None:
-    module = _module_with_policy(["fiducial_marker"])
+    module = _module_with_localization(["fiducial_marker"])
     hello = module._hello_body("c1")
     assert hello.capabilities[CapabilityName.ESTOP].available is True
     assert hello.capabilities[CapabilityName.ESTOP].reason is None
@@ -215,7 +212,7 @@ def test_hello_lidar_nav_estop_follow_profile() -> None:
         supported_capabilities=frozenset(),
         supported_navigation_inputs=frozenset(),
     )
-    module = _module_with_policy(["fiducial_marker"], profile=profile)
+    module = _module_with_localization(["fiducial_marker"], profile=profile)
     hello = module._hello_body("c1")
     assert hello.capabilities[CapabilityName.LIDAR].available is False
     assert hello.capabilities[CapabilityName.LIDAR].reason is not None
@@ -227,7 +224,7 @@ def test_hello_lidar_nav_estop_follow_profile() -> None:
 
 
 def test_hello_anvil_openyam_profile_has_no_mobile_capabilities() -> None:
-    module = _module_with_policy([], profile=_anvil_openyam_profile())
+    module = _module_with_localization([], profile=_anvil_openyam_profile())
     hello = module._hello_body("c1")
     assert hello.robot.display_name == "Anvil OpenYAM"
     assert hello.capabilities[CapabilityName.LIDAR].available is False
@@ -237,28 +234,22 @@ def test_hello_anvil_openyam_profile_has_no_mobile_capabilities() -> None:
 
 
 def test_hello_localization_unavailable_without_providers() -> None:
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     hello = module._hello_body("c1")
     assert hello.capabilities[CapabilityName.LOCALIZATION].available is False
     assert hello.capabilities[CapabilityName.LOCALIZATION].reason is not None
 
 
-def test_hello_prompts_observations_request() -> None:
-    module = _module_with_policy(["fiducial_marker"])
-    now = time.time()
-    module._odometry.history.push(PoseStamped(ts=now, position=[0, 0, 0]), ts_server=now)
-    module._on_client_connect(None, "c1")  # type: ignore[arg-type]
-    assert module._ws_server.sent  # type: ignore[union-attr]
-    client_id, text = module._ws_server.sent[0]  # type: ignore[union-attr]
-    assert client_id == "c1"
-    assert "localization_observations_request" in text
-    assert "robot_los_required" in text
+def test_hello_connects_the_unified_localization_owner() -> None:
+    module = _module_with_localization(["fiducial_marker"])
+    module._on_client_connect(None, "c1")
+    module._localization.connect.assert_called_once_with("c1")
 
 
 @pytest.mark.parametrize("replay", [False, True])
 @pytest.mark.parametrize("has_pose", [False, True])
-def test_replay_hello_sends_retained_corrected_pose(replay: bool, has_pose: bool) -> None:
-    module = _module_with_policy(["fiducial_marker"])
+def test_replay_hello_sends_retained_metric_pose(replay: bool, has_pose: bool) -> None:
+    module = _module_with_localization(["fiducial_marker"])
     module._replay_mode = replay
     module._odometry.history = PoseBuffer()
     if has_pose:
@@ -279,6 +270,7 @@ def test_replay_hello_sends_retained_corrected_pose(replay: bool, has_pose: bool
             "late-client",
             {
                 "type": "pose",
+                "shared_frame_id": module._localization.frames.shared_frame_id,
                 "position": [2.5, -3.75, 0.33],
                 "orientation": [0.0, 0.0, 0.0, 1.0],
                 "ts": 10.0,
@@ -287,66 +279,52 @@ def test_replay_hello_sends_retained_corrected_pose(replay: bool, has_pose: bool
     ]
 
 
-@pytest.mark.parametrize(
-    ("replay", "provider", "expected_travel"),
-    [(True, "fiducial_marker", 2.0), (False, "fiducial_marker", None), (True, "vps", None)],
-)
-def test_marker_capture_travel_uses_replay_pose_policy(
-    replay: bool,
-    provider: str,
-    expected_travel: float | None,
-) -> None:
-    module = _module_with_policy([provider])
-    module._replay_mode = replay
-    module._odometry.history = PoseBuffer()
-    module._odometry.history.push(PoseStamped(ts=10.0, position=[0, 0, 0]), ts_server=10.0)
-    module._odometry.history.push(PoseStamped(ts=10.1, position=[2, 0, 0]), ts_server=10.1)
-    module._policy.on_hello("c1")
-    on_observations = Mock(wraps=module._policy.on_observations)
-    module._policy.on_observations = on_observations  # type: ignore[method-assign]
-    submitted: list[EpisodeWork] = []
-    module._localization_runner = SimpleNamespace(submit=submitted.append)  # type: ignore[assignment]
+def test_replay_hello_projects_metric_history_into_nonidentity_shared_map() -> None:
+    module = _module_with_localization([])
+    module._replay_mode = True
+    module._odometry.history.push(
+        PoseStamped(ts=10, position=[2, -3, 0.33], orientation=[0, 0, 0, 1]),
+        ts_server=10,
+    )
+    matrix = np.array([[0, -1, 0, 10], [1, 0, 0, 20], [0, 0, 1, 0], [0, 0, 0, 1]],
+                      dtype=np.float64)
+    module._localization.frames = replace(module._localization.frames, T_map_odom=matrix)
+    module._on_client_connect(None, "late-client")
+    poses = [json.loads(text) for _, text in module._ws_server.sent
+             if json.loads(text)["type"] == "pose"]
+    assert len(poses) == 1
+    assert poses[0]["position"] == pytest.approx([13, 22, 0.33])
+    assert poses[0]["orientation"] == pytest.approx([0, 0, 2**-0.5, 2**-0.5])
+    assert poses[0]["ts"] == 10
+    assert module._odometry.history.latest().position == (2, -3, 0.33)
+
+
+@pytest.mark.parametrize("provider", ["fiducial_marker", "vps"])
+def test_observations_use_the_same_localization_owner_for_every_provider(provider: str) -> None:
+    module = _module_with_localization([provider])
     observation = LocalizationObservation(
-        ts_capture=time.time(),
+        ts_capture=100,
         jpeg=b"jpeg",
         intrinsics=Intrinsics(600, 600, 400, 400, 800, 800, "none", ()),
         camera_position=(0, 0, 0),
         camera_orientation=(0, 0, 0, 1),
     )
-
-    if provider == "vps":
-        module._map_localization = SimpleNamespace(observations=Mock())
     module._on_localization_observations((observation,), "c1", TimeSync(0, 0))
-    if provider == "vps":
-        module._map_localization.observations.assert_called_once()
-        on_observations.assert_not_called()
-        assert not submitted
-        return
-
-    assert len(submitted) == 1
-    assert on_observations.call_args.kwargs["capture_travel_m"] == expected_travel
+    observations, client = module._localization.observations.call_args.args
+    assert client == "c1"
+    assert len(observations) == 1
+    assert observations[0].ts_server == 100
+    assert observations[0].jpeg == b"jpeg"
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("disconnected", [False, True])
-async def test_failed_localization_requests_next_batch_without_result_timeout(
-    disconnected: bool,
-) -> None:
-    module = _module_with_policy(["fiducial_marker"])
-    module._policy.on_hello("c1")
-    if disconnected:
-        module._policy.on_disconnect("c1")
-    module._complete_localization(
-        EpisodeWork(client_id="c1", observations=()), LocalizationOutcome()
-    )
-    assert module._ws_server.sent == []
-    if not disconnected:
-        prompts = module._policy.poll()
-        assert prompts == []  # Retry waits for backoff.
+def test_manual_localization_uses_the_same_owner() -> None:
+    module = _module_with_localization(["fiducial_marker"])
+    module._on_localization_start_request(None, "c1")
+    module._localization.manual.assert_called_once_with("c1")
 
 
 def test_state_snapshot_has_no_alignment() -> None:
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     text = encode_state(module._state_snapshot())
     assert "alignment" not in text
     assert '"nav"' in text
@@ -358,7 +336,7 @@ def test_vps_provider_requires_map_code() -> None:
         localization=LocalizationConfig(providers=[LocalizationProviderConfig(type="vps")]),
     )
     module._profile = UNITREE_GO2_PROFILE
-    module._odometry = RobotOdometry(factor=module._profile.odom_scale_correction_factor)
+    module._odometry = RobotOdometry()
     with pytest.raises(ValueError, match="map_code"):
         module._build_localizers()
 
@@ -371,7 +349,7 @@ def test_vps_provider_requires_camera_extrinsic() -> None:
         ),
     )
     module._profile = replace(UNITREE_GO2_PROFILE, T_base_camera_optical=None)
-    module._odometry = RobotOdometry(factor=module._profile.odom_scale_correction_factor)
+    module._odometry = RobotOdometry()
     with pytest.raises(ValueError, match="T_base_camera_optical"):
         module._build_localizers()
 
@@ -382,7 +360,7 @@ def test_nav_goal_request_noops_without_navigation() -> None:
         supported_capabilities=frozenset({CapabilityName.ESTOP}),
         supported_navigation_inputs=frozenset(),
     )
-    module = _module_with_policy([], profile=profile)
+    module = _module_with_localization([], profile=profile)
     published: list[object] = []
     module.goal_request = SimpleNamespace(transport=object(), publish=published.append)
     module._nav_goal_coordinator = SimpleNamespace(
@@ -406,7 +384,7 @@ def test_estop_request_noops_without_estop() -> None:
         supported_capabilities=frozenset(),
         supported_navigation_inputs=frozenset(),
     )
-    module = _module_with_policy([], profile=profile)
+    module = _module_with_localization([], profile=profile)
     called = False
 
     def on_estop() -> bool:
@@ -426,7 +404,7 @@ def test_estop_request_noops_without_estop() -> None:
 
 
 def test_estop_request_clears_navigation_and_publishes_stop() -> None:
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     called = False
 
     def on_estop() -> bool:
@@ -447,7 +425,7 @@ def test_estop_request_clears_navigation_and_publishes_stop() -> None:
 
 
 def test_estop_publishes_idle_state_before_native_path_has_started() -> None:
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     module._interaction_controller.state.set_active_goal(
         {"type": "nav_goal", "pose": [2, 0, 0, 0], "path_poses": [], "ts": 1}
     )
@@ -459,7 +437,7 @@ def test_estop_publishes_idle_state_before_native_path_has_started() -> None:
 
 
 def test_last_disconnect_runs_safety() -> None:
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     called = False
 
     def on_estop() -> bool:
@@ -481,7 +459,7 @@ def test_last_disconnect_runs_safety() -> None:
 
 
 def test_confirmed_disconnect_cancel_clears_old_motion_uncertainty_without_estop() -> None:
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     module._manipulation_service = Mock()
     state = module._interaction_controller.state
     state.begin_manipulation_motion("old-execute")
@@ -504,7 +482,7 @@ def test_confirmed_disconnect_cancel_clears_old_motion_uncertainty_without_estop
 
 
 def test_navigation_resume_uses_canonical_stop_identity_and_never_replays_a_goal() -> None:
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     state = module._interaction_controller.state
     state.connect("client")
     state.set_active_goal({"type": "nav_goal", "pose": [1, 0, 0, 0], "path_poses": [], "ts": 1})
@@ -526,7 +504,7 @@ def test_navigation_resume_uses_canonical_stop_identity_and_never_replays_a_goal
 async def test_navigation_resume_waits_for_native_stop_acknowledgement() -> None:
     from dimos.ar.navigation.control import NavigationControlService
 
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     entered, release = threading.Event(), threading.Event()
 
     class Native:
@@ -561,7 +539,7 @@ async def test_navigation_resume_waits_for_native_stop_acknowledgement() -> None
 
 @pytest.mark.asyncio
 async def test_old_native_resume_completion_cannot_clear_a_newer_stop() -> None:
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def resume(*_args):
@@ -587,7 +565,7 @@ async def test_old_native_resume_completion_cannot_clear_a_newer_stop() -> None:
 
 
 def test_disconnect_does_not_stop_while_clients_remain() -> None:
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     called = False
 
     def on_estop() -> bool:
@@ -613,7 +591,7 @@ def test_lidar_settings_request_noops_without_lidar() -> None:
         supported_capabilities=frozenset({CapabilityName.ESTOP}),
         supported_navigation_inputs=frozenset(),
     )
-    module = _module_with_policy([], profile=profile)
+    module = _module_with_localization([], profile=profile)
     module._on_lidar_settings_request(
         SimpleNamespace(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0),
         None,  # type: ignore[arg-type]
@@ -629,16 +607,13 @@ async def test_handle_native_status_skips_policy_without_navigation() -> None:
         supported_capabilities=frozenset({CapabilityName.ESTOP}),
         supported_navigation_inputs=frozenset(),
     )
-    module = _module_with_policy(["fiducial_marker"], profile=profile)
+    module = _module_with_localization(["fiducial_marker"], profile=profile)
     prompts: list[bool] = []
     module._nav_goal_coordinator = SimpleNamespace(
         nav_state=lambda: NavState("idle", None),
         on_native_status=lambda *_args: prompts.append(True),
     )
-    module._policy = SimpleNamespace(  # type: ignore[assignment]
-        on_goal_reached=lambda **_kwargs: prompts.append(True),
-        providers=["fiducial_marker"],
-    )
+    module._localization.on_goal_reached = lambda **_kwargs: prompts.append(True)
     await module.handle_ar_navigation_status(String('{"goal_ts":1,"phase":"succeeded"}'))
     assert prompts == []
     assert module._ws_server.broadcasts == []  # type: ignore[union-attr]
@@ -651,7 +626,7 @@ async def test_handle_path_noops_without_navigation() -> None:
         supported_capabilities=frozenset({CapabilityName.ESTOP}),
         supported_navigation_inputs=frozenset(),
     )
-    module = _module_with_policy([], profile=profile)
+    module = _module_with_localization([], profile=profile)
     called = False
 
     def on_path(_msg: Path) -> tuple[object, bool]:
@@ -675,7 +650,7 @@ async def test_handle_lidar_noops_without_lidar() -> None:
         supported_capabilities=frozenset({CapabilityName.ESTOP}),
         supported_navigation_inputs=frozenset(),
     )
-    module = _module_with_policy([], profile=profile)
+    module = _module_with_localization([], profile=profile)
     published: list[object] = []
     module._state_publisher = SimpleNamespace(  # type: ignore[assignment]
         publish_lidar=lambda msg, lidar: published.append(msg)
@@ -686,7 +661,7 @@ async def test_handle_lidar_noops_without_lidar() -> None:
 
 @pytest.mark.asyncio
 async def test_handle_camera_streams_noop_without_extrinsic() -> None:
-    module = _module_with_policy([], profile=_anvil_openyam_profile())
+    module = _module_with_localization([], profile=_anvil_openyam_profile())
     called = False
 
     def unexpected(*_args: object, **_kwargs: object) -> None:
@@ -704,10 +679,10 @@ async def test_handle_camera_streams_noop_without_extrinsic() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("profile", [_anvil_openyam_profile(), UNITREE_GO2_PROFILE])
-async def test_handle_odom_uses_corrected_robot_position_for_localization(
+async def test_handle_odom_preserves_native_metric_robot_position_for_localization(
     profile: RobotProfile,
 ) -> None:
-    module = _module_with_policy([], profile=profile)
+    module = _module_with_localization([], profile=profile)
     published: list[object] = []
     module._state_publisher = SimpleNamespace(publish_odom=published.append)
     module._robot_observations = SimpleNamespace(expire=lambda _travel: None)
@@ -722,8 +697,8 @@ async def test_handle_odom_uses_corrected_robot_position_for_localization(
     buffered = module._odometry.history.latest()
     assert buffered.position == pytest.approx(
         (
-            2.0 * profile.odom_scale_correction_factor,
-            -3.0 * profile.odom_scale_correction_factor,
+            2.0,
+            -3.0,
             0.33,
         )
     )
@@ -733,14 +708,14 @@ async def test_handle_odom_uses_corrected_robot_position_for_localization(
 
 
 def test_hello_agent_capability_follows_config() -> None:
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     hello = module._hello_body("c1")
     assert hello.capabilities[CapabilityName.AGENT].available is True
     assert hello.capabilities[CapabilityName.AGENT].reason is None
 
 
 def test_state_snapshot_includes_agent_idle() -> None:
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     text = encode_state(module._state_snapshot())
     assert '"agent"' in text
     assert '"idle":true' in text.replace(" ", "")
@@ -748,7 +723,7 @@ def test_state_snapshot_includes_agent_idle() -> None:
 
 @pytest.mark.asyncio
 async def test_handle_agent_forwards_textual_aimessage_only() -> None:
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     await module.handle_agent(HumanMessage(content="ignore me"))
     await module.handle_agent(ToolMessage(content="tool", tool_call_id="1"))
     await module.handle_agent(AIMessage(content=""))
@@ -761,7 +736,7 @@ async def test_handle_agent_forwards_textual_aimessage_only() -> None:
 
 @pytest.mark.asyncio
 async def test_handle_agent_idle_broadcasts_state_change() -> None:
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     await module.handle_agent_idle(False)
     await module.handle_agent_idle(False)
     await module.handle_agent_idle(True)
@@ -773,12 +748,12 @@ async def test_handle_agent_idle_broadcasts_state_change() -> None:
 
 def test_user_message_request_requires_capability_and_transport() -> None:
     published: list[str] = []
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     module.human_input = SimpleNamespace(transport=object(), publish=published.append)
     module._on_user_message_request(UserMessageRequest(text="go"), None, "c1")  # type: ignore[arg-type]
     assert published == []
 
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     module.human_input = SimpleNamespace(transport=None, publish=published.append)
     module._on_user_message_request(UserMessageRequest(text="go"), None, "c1")  # type: ignore[arg-type]
     assert published == []
@@ -795,7 +770,7 @@ def test_user_message_request_requires_capability_and_transport() -> None:
 def test_ar_place_marker_validates_and_requires_fresh_pose() -> None:
     from dimos.ar.websocket.protocol import ClientPose
 
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     module._ws_server.connection_count = 0  # type: ignore[union-attr]
     assert module.ar_place_marker("kitchen", 1.0, 0.0, 0.0) == "No AR client connected"
     assert module.ar_place_marker("  ", 1.0, 0.0, 0.0) == "id is blank"
@@ -822,7 +797,7 @@ def test_ar_place_marker_validates_and_requires_fresh_pose() -> None:
 def test_ar_remove_marker_and_clear_on_last_disconnect() -> None:
     from dimos.ar.websocket.protocol import ClientPose
 
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     module._ws_server.connection_count = 1  # type: ignore[union-attr]
     module._on_client_pose(
         ClientPose(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0), ts=1.0),
@@ -846,7 +821,7 @@ def test_ar_remove_marker_and_clear_on_last_disconnect() -> None:
 def test_ar_get_client_pose_empty_stale_fresh() -> None:
     from dimos.ar.websocket.protocol import ClientPose
 
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     assert module.ar_get_client_pose() == "No client pose"
     module._on_client_pose(
         ClientPose(position=(1.0, 2.0, 3.0), orientation=(0.0, 0.0, 0.0, 1.0), ts=12.5),
@@ -857,7 +832,7 @@ def test_ar_get_client_pose_empty_stale_fresh() -> None:
     assert "position" in text
     assert "orientation" in text
     assert "look_dir" in text
-    assert "[0.8, 1.6, 3.0]" in text
+    assert "[1.0, 2.0, 3.0]" in text
     assert "[0.0, 0.0, 1.0]" in text
     pose, _ = module._agent_service._poses["c1"]
     module._agent_service._poses["c1"] = (pose, time.time() - 1.1)
@@ -877,7 +852,7 @@ def test_nav_joystick_request_noops_without_nav_joystick() -> None:
         UNITREE_GO2_PROFILE,
         supported_navigation_inputs=frozenset({NAV_GOAL}),
     )
-    module = _module_with_policy([], profile=profile)
+    module = _module_with_localization([], profile=profile)
     published: list[object] = []
     module.tele_cmd_vel = SimpleNamespace(transport=object(), publish=published.append)
     module._on_nav_joystick_request(
@@ -891,7 +866,7 @@ def test_nav_joystick_request_noops_without_nav_joystick() -> None:
 
 
 def test_nav_joystick_request_publishes_tele_cmd_vel() -> None:
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     published: list[object] = []
     module.tele_cmd_vel = SimpleNamespace(transport=object(), publish=published.append)
     module._tele_cmd_vel_publisher = TeleCmdVelPublisher(
@@ -914,7 +889,7 @@ def test_nav_joystick_request_publishes_tele_cmd_vel() -> None:
 
 
 def test_estop_and_last_disconnect_cancel_tele_cmd_vel() -> None:
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     cancelled: list[bool] = []
     module._tele_cmd_vel_publisher = SimpleNamespace(cancel=lambda: cancelled.append(True))
     module.stop_movement = SimpleNamespace(transport=object(), publish=lambda _msg: None)
@@ -928,7 +903,7 @@ def test_estop_and_last_disconnect_cancel_tele_cmd_vel() -> None:
 
 @pytest.mark.parametrize("failure", ["missing_odom", "missing_map", "exception"])
 def test_preview_returns_empty_without_changing_motion_or_state(failure: str) -> None:
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     if failure != "missing_odom":
         module._odometry.accept(PoseStamped(ts=time.time(), position=[1, 2, 0]))
     module._previews._planner = Mock()
@@ -938,7 +913,7 @@ def test_preview_returns_empty_without_changing_motion_or_state(failure: str) ->
     module.goal_request = SimpleNamespace(transport=object(), publish=Mock())
     before = module._state_snapshot()
     frame = module._previews.compute(
-        NavGoalRequest((4, 6, 0), (0, 0, 0, 1), preview=True), module._odometry.latest()
+        NavGoalRequest((4, 6, 0), (0, 0, 0, 1), preview=True), module._odometry.latest(), module._localization.frames
     )
     assert frame.preview is True
     assert frame.pose is None
@@ -949,9 +924,7 @@ def test_preview_returns_empty_without_changing_motion_or_state(failure: str) ->
 
 
 async def test_preview_is_shared_off_loop_and_does_not_submit_motion() -> None:
-    module = _module_with_policy(
-        [], profile=replace(UNITREE_GO2_PROFILE, odom_scale_correction_factor=2.0)
-    )
+    module = _module_with_localization([])
     module._odometry.accept(PoseStamped(ts=time.time(), position=[1, 2, 0]))
     module._previews._tasks = {}
     module.goal_request = SimpleNamespace(transport=object(), publish=Mock())
@@ -963,8 +936,8 @@ async def test_preview_is_shared_off_loop_and_does_not_submit_motion() -> None:
         worker_threads.append(threading.get_ident())
         assert release.wait(2)
         assert start == (1, 2)
-        assert goal == (2, 3)
-        return [(1, 2, 0), (2, 3, 0)]
+        assert goal == (4, 6)
+        return [(1, 2, 0), (4, 6, 0)]
 
     module._previews._planner = SimpleNamespace(plan=plan)
     before = module._state_snapshot()
@@ -988,7 +961,7 @@ async def test_preview_is_shared_off_loop_and_does_not_submit_motion() -> None:
     response = json.loads(module._ws_server.interaction_broadcasts[-1])["preview"]
     assert response["preview"] is True
     assert response["preview_id"] == "aim"
-    assert response["path_poses"] == [[2, 4, 0.5, 0], [4, 6, 0.5, 0]]
+    assert response["path_poses"] == [[1, 2, 0.5, 0], [4, 6, 0.5, 0]]
     assert response["pose"] == [4, 6, 0.5, 0]
     assert module._ws_server.broadcasts == []
     module.goal_request.publish.assert_not_called()
@@ -996,13 +969,13 @@ async def test_preview_is_shared_off_loop_and_does_not_submit_motion() -> None:
 
 
 def test_hello_advertises_preview_support() -> None:
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     assert module._hello_body("client").nav_goal_preview is True
 
 
 @pytest.mark.asyncio
 async def test_disconnect_cancels_preview_delivery_while_worker_finishes() -> None:
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     module._previews._tasks = {}
     module._odometry.accept(PoseStamped(ts=time.time(), position=[0, 0, 0]))
     started = threading.Event()
@@ -1031,7 +1004,7 @@ async def test_disconnect_cancels_preview_delivery_while_worker_finishes() -> No
 
 
 def test_new_goal_broadcasts_cleared_state_before_planner_can_complete() -> None:
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     order: list[str] = []
     module._nav_goal_coordinator = SimpleNamespace(
         nav_state=lambda: NavState("idle", None),
@@ -1054,13 +1027,11 @@ def test_new_goal_broadcasts_cleared_state_before_planner_can_complete() -> None
 async def test_changed_robot_frame_retires_origins_and_requires_mapping_restart() -> None:
     from dimos.ar.robot.odometry import PoseBuffer
 
-    module = _module_with_policy(["vps"])
+    module = _module_with_localization(["vps"])
     module._odometry.history = PoseBuffer()
     module._odometry.history.push(PoseStamped(ts=time.time(), position=[0, 0, 0.33]))
     module._odometry.generation = 0
     module._odometry._source_frame = "world"
-    module._localization_runner = SimpleNamespace(cancel_all=Mock())
-    module._odom_map_transform = SimpleNamespace(clear=Mock())
     module._robot_observations = SimpleNamespace(clear=Mock())
     module._ws_server.schedule_disconnect_all = Mock()
     module._tele_cmd_vel_publisher = SimpleNamespace(cancel=Mock())
@@ -1072,8 +1043,7 @@ async def test_changed_robot_frame_retires_origins_and_requires_mapping_restart(
     assert module._odometry.generation == 1
     assert module._odometry.history.latest() is None
     assert stopped
-    module._localization_runner.cancel_all.assert_called_once()
-    module._odom_map_transform.clear.assert_called_once()
+    module._localization.reset.assert_called_once()
     module._robot_observations.clear.assert_called_once()
     module._ws_server.schedule_disconnect_all.assert_called_once()
     hello = module._hello_body("client")
@@ -1097,7 +1067,7 @@ async def test_robot_image_pairing_preserves_producer_time_and_encodes_off_loop(
     from dimos.ar.robot.odometry import PoseBuffer
     from test_support.localization import _camera_info
 
-    module = _module_with_policy(["vps"])
+    module = _module_with_localization(["vps"])
     module._odometry.generation = 0
     module._odometry.history = PoseBuffer()
     for t in [99.9, 100.0, 100.1]:
@@ -1126,33 +1096,28 @@ async def test_robot_image_pairing_preserves_producer_time_and_encodes_off_loop(
         module._localization_worker.close()
 
 
-def test_robot_odometry_heuristic_is_configurable_at_startup_and_advertised() -> None:
-    from pydantic import ValidationError
+def test_robot_description_uses_native_metric_units() -> None:
+    from dataclasses import asdict
 
-    assert profile_for_config(ARModuleConfig()).odom_scale_correction_factor == 1.25
-    configured = profile_for_config(ARModuleConfig(odom_scale_correction_factor=1.1))
-    assert configured.description.odom_scale_correction_factor == 1.1
-    assert configured.fiducial_marker_mounts == UNITREE_GO2_PROFILE.fiducial_marker_mounts
-    for invalid in [0, -1, float("nan"), float("inf")]:
-        with pytest.raises(ValidationError):
-            ARModuleConfig(odom_scale_correction_factor=invalid)
+    profile = profile_for_config(ARModuleConfig())
+    assert "odom_scale_correction_factor" not in asdict(profile.description)
 
 
-def test_agent_native_points_and_corrected_client_pose_round_trip() -> None:
+def test_agent_native_points_and_metric_client_pose_round_trip() -> None:
     from dimos.ar.websocket.protocol import ClientPose
 
-    module = _module_with_policy([], agent_available=True)
+    module = _module_with_localization([], agent_available=True)
     module._on_client_pose(
-        ClientPose(position=(5, -2.5, 1.5), orientation=(0, 0, 0, 1), ts=1), None, "client"
+        ClientPose(position=(4, -2, 1.5), orientation=(0, 0, 0, 1), ts=1), None, "client"
     )
     assert "position=[4.0, -2.0, 1.5]" in module.ar_get_client_pose()
     assert module.ar_place_marker("person", 4, -2, 1.5) == "ok"
     args = json.loads(module._ws_server.broadcasts[-1])["args"]
-    assert [args["x"], args["y"], args["z"]] == [5, -2.5, 1.5]
+    assert [args["x"], args["y"], args["z"]] == [4, -2, 1.5]
 
 
 async def test_duplicate_odometry_has_no_telemetry_or_localization_effects() -> None:
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     published = []
     module._state_publisher = SimpleNamespace(publish_odom=published.append)
     module._robot_observations = SimpleNamespace(expire=Mock())
@@ -1162,13 +1127,13 @@ async def test_duplicate_odometry_has_no_telemetry_or_localization_effects() -> 
         await module.handle_odom(PoseStamped(ts=timestamp, frame_id="world", position=[x, 0, 0.33]))
     assert len(published) == 1
     assert module._odometry.latest().position == (0, 0, 0.33)
-    assert module._policy.travel_m == 0
+    assert module._odometry.travel() == 0
     module._robot_observations.expire.assert_called_once_with(0)
-    module._flush_localization.assert_called_once()
+    module._localization.observations.assert_not_called()
 
 
 def test_unwired_goal_does_not_mutate_navigation() -> None:
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     module._navigation_service = None
     module._nav_goal_coordinator.submit_goal = Mock()
     module._on_nav_goal_request(
@@ -1264,7 +1229,7 @@ def test_old_disconnect_does_not_stop_a_valid_suspended_successor():
         def logical_session_count(self):
             return 1
 
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     module._ws_server = SuspendedWs()
     module._ws_server.connection_count = 0
     service = Mock()
@@ -1304,7 +1269,7 @@ def test_start_after_failed_build_preserves_the_build_error(monkeypatch):
 async def test_new_clients_keep_hardware_capability_and_observe_fault_recovery():
     from dimos.ar.navigation.control import NavigationControlService
 
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     native = Mock()
     native.ar_navigation_recover.return_value = True
     service = NavigationControlService(native, lambda: ("epoch", 1), Mock(),
@@ -1324,26 +1289,13 @@ async def test_new_clients_keep_hardware_capability_and_observe_fault_recovery()
         await service.close()
 
 
-def test_marker_only_capture_waits_for_live_telemetry_then_resumes() -> None:
-    module = _module_with_policy(["fiducial_marker"])
-    module._on_client_connect(None, "client")
-    messages = [json.loads(text) for _, text in module._ws_server.sent]
-    assert not any(message["type"] == "localization_observations_request" for message in messages)
-    assert any(message.get("reason") == "robot_pose_unavailable" for message in messages)
-    assert all("map_code" not in message for message in messages if message["type"] == "localization_status")
-    now = time.time()
-    module._odometry.history.push(PoseStamped(ts=now, position=[0, 0, 0]), ts_server=now)
-    module._send_observations_request("client")
-    messages = [json.loads(text) for _, text in module._ws_server.sent]
-    assert any(message.get("reason") == "robot_pose_available" for message in messages)
-    assert messages[-1]["type"] == "localization_observations_request"
 
 
 @pytest.mark.parametrize("blocked", ["pending", "faulted"])
 def test_navigation_recovery_blocks_both_goal_state_and_joystick_motion(blocked):
     from dimos.ar.navigation.control import NavigationControlService
 
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     service = NavigationControlService(Mock(), lambda: ("epoch", 1), Mock())
     service._stop_pending = blocked == "pending"
     service._fault = blocked == "faulted"

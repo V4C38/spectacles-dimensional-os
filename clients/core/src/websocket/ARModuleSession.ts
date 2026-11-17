@@ -306,9 +306,9 @@ export class ARModuleSession {
 
   /** Retire in-flight results from an unknown reference-space reset while retaining the last estimate. */
   restartPreservingTrackingOrigin(): void {
-    const retained = this.clientTrackingOriginStore.T_odom_client;
+    const retained = this.clientTrackingOriginStore.T_map_tracking;
     this.stop(); this.start();
-    if (retained) this.clientTrackingOriginStore.restore(retained);
+    if (retained) this.retainedOrigin = { reference: retained.odom_reference_id, origin: retained };
     this.emitView();
   }
 
@@ -411,6 +411,11 @@ export class ARModuleSession {
   sendText(text: string): void {
     if (this.phase !== "ready") {
       throw new Error("send requires a ready session");
+    }
+    if (/"type"\s*:\s*"(?:interaction_request|nav_goal_request|client_pose|client_presence|manipulation_request)"/.test(text)) {
+      const value = JSON.parse(text);
+      value.shared_frame_id ??= this.hello!.shared_frame_id;
+      text = JSON.stringify(value) + "\n";
     }
     this.control.send(text);
   }
@@ -567,18 +572,24 @@ export class ARModuleSession {
     let pendingRoutes: Readonly<{ preview?: boolean; active_goal?: boolean }> = {};
     try {
       const value = JSON.parse(line) as Record<string, unknown>;
+      if (this.phase === "ready" && (["pose", "nav_goal", "interaction_state", "client_pose", "presence_state", "manipulation_state"].includes(String(value.type)) || value.type === "agent_skill" && value.name === "ar_place_marker") &&
+          value.shared_frame_id !== this.hello?.shared_frame_id) return;
       if (value.type === "interaction_state") {
         const previous = this.collaboration.raw();
         if (previous && value.epoch === previous.epoch && Number(value.revision) <= previous.revision) return;
       }
       this.observeAssetFacts(value);
       const hydrated = this.bulk.hydrate(value);
+      const retiredResult = value.type === "manipulation_result" && value.shared_frame_id !== undefined && value.shared_frame_id !== this.hello?.shared_frame_id;
+      if (retiredResult) {
+        delete hydrated.value.pose; delete hydrated.value.sample_pose;
+      }
       pendingRoutes = hydrated.pendingRoutes;
       if (hydrated.unavailable && value.type === "manipulation_result") {
         this.retireAssetReply(String(value.request_id ?? value.preview_id ?? value.type), value); return;
       }
       if (hydrated.pending && value.type === "manipulation_result") {
-        this.assetReplies.defer(value, hydrated.deadline); return;
+        this.assetReplies.defer(value, hydrated.deadline, retiredResult); return;
       }
       message = decodeOutboundObject(hydrated.value);
       if (message.type === "interaction_state") {
@@ -604,7 +615,10 @@ export class ARModuleSession {
         this.fail("hello.time_sync.ts_client must echo hello_request.ts_client");
         return;
       }
-      if (this.retainedOrigin && message.odom_reference_id === this.retainedOrigin.reference) {
+      this.clientTrackingOriginStore.setSharedFrameContext({ type: "localization_context", revision: -1,
+        shared_frame_id: message.shared_frame_id, odom_reference_id: message.odom_reference_id });
+      if (this.retainedOrigin && message.odom_reference_id === this.retainedOrigin.reference &&
+          message.shared_frame_id === this.retainedOrigin.origin.shared_frame_id) {
         this.clientTrackingOriginStore.restore(this.retainedOrigin.origin);
         this.alignmentRequired = false;
       }
@@ -687,23 +701,28 @@ export class ARModuleSession {
       case "pose":
         this.pose = message;
         break;
-      case "localization_context":
+      case "localization_context": {
         if (message.odom_reference_id !== this.hello?.odom_reference_id) return;
+        const previous = this.clientTrackingOriginStore.sharedFrameContext;
+        if (!this.clientTrackingOriginStore.setSharedFrameContext(message)) return;
+        const changed = previous?.shared_frame_id !== message.shared_frame_id;
+        if (changed || message.reset) {
+          this.control.clear(); this.cancelLocalizationSubmission(); this.captureId = this.captureEpisodeId = null;
+          this.assetReplies.discardSpatial(changed ? message.rebase : undefined); this.presence.reset();
+          this.bulk.setSharedFrame(message.shared_frame_id);
+          this.pose = this.lidar = this.manipulation = null;
+          if (changed && message.rebase && previous?.shared_frame_id === message.rebase.previous_shared_frame_id) this.collaboration.rebase(message.rebase);
+          else this.collaboration.reset();
+          this.retainedOrigin = null;
+        }
+        if (this.hello) this.hello = { ...this.hello, shared_frame_id: message.shared_frame_id };
         if (message.reset) { this.localizationNoticeUntil = 0; this.localizationTelemetryUnavailable = false; }
-        this.clientTrackingOriginStore.setMapContext(message, message.reset);
-        if (!this.clientTrackingOriginStore.hasTrackingOrigin) this.alignmentRequired = true;
+        this.alignmentRequired = !this.clientTrackingOriginStore.hasTrackingOrigin;
         break;
-      case "localization_map_transform":
-        if (message.odom_reference_id !== this.hello?.odom_reference_id) return;
-        this.clientTrackingOriginStore.applyMapTransform(message);
-        break;
+      }
       case "localization_status":
         if (message.odom_reference_id !== this.hello?.odom_reference_id) return;
-        if (message.map_code === undefined) {
-          if (this.hello?.localization?.providers.includes("vps") || this.clientTrackingOriginStore.mapContext !== null) return;
-        } else if (!this.clientTrackingOriginStore.acceptsContext({
-          map_code: message.map_code, odom_reference_id: message.odom_reference_id,
-        })) return;
+        if (!this.clientTrackingOriginStore.acceptsContext(message)) return;
         if (message.episode_id !== undefined) {
           if (message.episode_id !== this.captureEpisodeId) return;
           if (message.ts !== undefined && !this.localizationSubmission.accept(message.ts, this.clock.now())) return;
@@ -715,6 +734,7 @@ export class ARModuleSession {
         if (message.reason === "vps_failed_using_marker") this.localizationNoticeUntil = this.clock.now() + 5;
         break;
       case "localization_result":
+        if (!this.clientTrackingOriginStore.acceptsAlignment(message)) return;
         if (!this.localizationSubmission.accept(message.ts, this.clock.now())) return;
         try {
           this.clientTrackingOriginStore.setFromLocalizationResult(message);
@@ -763,7 +783,7 @@ export class ARModuleSession {
   private reportDecodeError(error: unknown, excerpt: string, type = "unknown"): void {
     const context = error instanceof ProtocolDecodeError ? error.context : { message_type: type };
     const detail = errorMessage(error).slice(0, 1024);
-    if (["unknown", "hello", "interaction_state", "interaction_result", "state", "nav_goal", "localization_context", "localization_map_transform", "localization_status"].includes(context.message_type)) {
+    if (["unknown", "hello", "interaction_state", "interaction_result", "state", "nav_goal", "localization_context", "localization_status"].includes(context.message_type)) {
       this.collaboration.cancel(); this.fail(`Invalid critical ${context.message_type}: ${detail}`); return;
     }
     if (context.message_type.startsWith("manipulation_") && this.manipulationError !== detail) {
@@ -800,7 +820,7 @@ export class ARModuleSession {
     if (this.phase === "disconnected" || this.phase === "failed") {
       return;
     }
-    const origin = this.clientTrackingOriginStore.T_odom_client;
+    const origin = this.clientTrackingOriginStore.T_map_tracking;
     if (origin) this.alignmentRequired = true;
     if (origin && this.hello?.odom_reference_id) this.retainedOrigin = { reference: this.hello.odom_reference_id, origin };
     this.lastError = reason;
@@ -836,7 +856,7 @@ export class ARModuleSession {
     this.lidar = null;
     this.manipulationError = null;
     this.agentMessage = null;
-    this.clientTrackingOriginStore.clear();
+    this.clientTrackingOriginStore.resetContext();
     this.framer = new TextFramer();
     this.decodeReports.clear();
   }

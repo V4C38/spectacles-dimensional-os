@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Protocol
 from dimos.ar.async_execution import BoundedWorker
 from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest
 from dimos.ar.robot.odometry import AcceptedOdometry
-from dimos.ar.robot.odometry_correction import correct_odom_xy, uncorrect_odom_xy
+from dimos.ar.spatial import FrameSnapshot, transform_point, transform_pose
 from dimos.mapping.occupancy.path_resampling import smooth_resample_path
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
@@ -105,13 +105,13 @@ class NavigationPreviewService:
         self,
         planner: PreviewPlanningPort,
         *,
-        factor: float,
+        frames: Callable[[], FrameSnapshot],
         odometry: Callable[[], AcceptedOdometry | None],
         on_preview: Callable[[str, NavGoalRequest, NavGoalFrame], Awaitable[None]],
     ) -> None:
         self._closed = False
         self._planner = planner
-        self._factor = factor
+        self._frames = frames
         self._odometry = odometry
         self._on_preview = on_preview
         self._worker = BoundedWorker("ar-preview")
@@ -132,11 +132,12 @@ class NavigationPreviewService:
                 )
             return
         pose = self._odometry()
-        self._tasks[client_id] = asyncio.create_task(self._run(request, client_id, pose))
+        snapshot = self._frames()
+        self._tasks[client_id] = asyncio.create_task(self._run(request, client_id, pose, snapshot))
 
     async def _reply_busy(self, request: NavGoalRequest, client_id: str) -> None:
         try:
-            await self._on_preview(client_id, request, self._empty(request))
+            await self._on_preview(client_id, request, self._empty(request, self._frames()))
         finally:
             if self._busy_replies.get(client_id) is asyncio.current_task():
                 self._busy_replies.pop(client_id, None)
@@ -190,40 +191,52 @@ class NavigationPreviewService:
         self._worker.close()
 
     async def _run(
-        self, request: NavGoalRequest, client_id: str, pose: AcceptedOdometry | None
+        self, request: NavGoalRequest, client_id: str, pose: AcceptedOdometry | None,
+        snapshot: FrameSnapshot,
     ) -> None:
         try:
-            frame = await self._worker.run(lambda: self.compute(request, pose))
+            frame = await self._worker.run(lambda: self.compute(request, pose, snapshot))
             busy = self._busy_replies.get(client_id)
             if busy is not None:
                 busy.cancel()
                 await asyncio.gather(busy, return_exceptions=True)
+            current = self._frames()
+            if (
+                current.shared_frame_id != snapshot.shared_frame_id
+                or current.odom_reference_id != snapshot.odom_reference_id
+                or current.revision != snapshot.revision
+            ):
+                return
             await self._on_preview(client_id, request, frame)
         finally:
             if self._tasks.get(client_id) is asyncio.current_task():
                 self._tasks.pop(client_id, None)
 
-    def compute(self, request: NavGoalRequest, pose: AcceptedOdometry | None) -> NavGoalFrame:
-        empty = self._empty(request)
+    def compute(
+        self, request: NavGoalRequest, pose: AcceptedOdometry | None, snapshot: FrameSnapshot
+    ) -> NavGoalFrame:
+        empty = self._empty(request, snapshot)
         if pose is None:
             return empty
         try:
-            path = self._planner.plan(
-                pose.position[:2], uncorrect_odom_xy(*request.position[:2], factor=self._factor)
+            native_position, _native_orientation = transform_pose(
+                snapshot.T_odom_map, request.position, request.orientation
             )
+            path = self._planner.plan(pose.position[:2], native_position[:2])
             if not path:
                 return empty
             yaw = PoseStamped(
                 position=list(request.position), orientation=list(request.orientation)
             ).yaw
             poses = [
-                (*correct_odom_xy(x, y, factor=self._factor), request.position[2], yaw)
+                (*transform_point(snapshot.T_map_odom, (x, y, native_position[2])), yaw)
                 for x, y, _z in path
             ]
             return NavGoalFrame(
                 pose=poses[-1],
                 path_poses=poses,
                 ts=time.time(),
+                shared_frame_id=snapshot.shared_frame_id,
                 preview=True,
                 preview_id=request.preview_id,
             )
@@ -232,7 +245,8 @@ class NavigationPreviewService:
             return empty
 
     @staticmethod
-    def _empty(request: NavGoalRequest) -> NavGoalFrame:
+    def _empty(request: NavGoalRequest, snapshot: FrameSnapshot) -> NavGoalFrame:
         return NavGoalFrame(
-            pose=None, path_poses=[], ts=time.time(), preview=True, preview_id=request.preview_id
+            pose=None, path_poses=[], ts=time.time(), shared_frame_id=snapshot.shared_frame_id,
+            preview=True, preview_id=request.preview_id
         )

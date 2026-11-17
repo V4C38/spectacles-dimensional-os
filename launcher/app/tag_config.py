@@ -216,6 +216,7 @@ def ui_from_armodule_config(
         "vps": vps,
         "vps_vendor": "multiset",
         "map_code": map_code,
+        "native_map_file": str((section.get("localization") or {}).get("native_map_file") or ""),
         "mounts": mounts,
         **{
             key: (section.get("localization") or {}).get(key, value)
@@ -239,6 +240,8 @@ def merge_armodule_settings(
     )
     localization = dict(result.get("localization") or {})
     localization.update(patch.pop("localization"))
+    if "native_map_file" in settings:
+        localization["native_map_file"] = str(settings["native_map_file"] or "").strip() or None
     localization.update(
         {key: settings[key] for key in LOCALIZATION_POLICY_DEFAULTS if key in settings}
     )

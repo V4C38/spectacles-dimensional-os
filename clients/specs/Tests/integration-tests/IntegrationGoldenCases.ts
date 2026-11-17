@@ -178,7 +178,7 @@ export function runGoldenCase(scenario: ReviewScenario, id: string): void {
       });
       scenario.later(3.5, () => corrected && !root.robotPresenter.worldVisuals.correction.sphere.object.enabled &&
         root.robotPresenter.worldPosition().distance(before) > 20 && root.robotPresenter.worldPosition().distance(before) < 26 &&
-        root.clientTrackingOriginStore.T_odom_client.position[1] === scenario.origin[1]);
+        root.clientTrackingOriginStore.T_map_tracking.position[1] === scenario.origin[1]);
       break;
     }
     case "navigation_preview": {
@@ -313,7 +313,7 @@ export function runGoldenCase(scenario: ReviewScenario, id: string): void {
       scenario.after(.6, () => {
         updatedTitle = rendered() === original && rendered()?.text === "Doorway updated";
         place("Doorway");
-        root.annotations.recompose(root.clientTrackingOriginStore.T_odom_client);
+        root.annotations.recompose(root.clientTrackingOriginStore.T_map_tracking);
       });
       scenario.later(.9, () => root.annotations.size() === 1 && initialTitle && updatedTitle &&
         rendered() === original && rendered()?.text === "Doorway");
@@ -324,10 +324,11 @@ export function runGoldenCase(scenario: ReviewScenario, id: string): void {
       scenario.autoLocalize = true;
       scenario.after(0.2, () => scenario.press(scenario.button("Capabilities button")));
       scenario.after(0.4, () => scenario.press(menu.realign.button));
-      scenario.later(0.7, () => controller.isVisible() && controller.flow.step === "localization" && !root.clientTrackingOriginStore.hasTrackingOrigin);
+      scenario.later(0.7, () => ui.isSetupCompleted() && root.clientTrackingOriginStore.hasTrackingOrigin &&
+        scenario.count("localization_start_request") > 0);
       break;
     case "setup_restart": {
-      const baseline = root.clientTrackingOriginStore.T_odom_client;
+      const baseline = root.clientTrackingOriginStore.T_map_tracking;
       scenario.showMenu();
       scenario.after(.2, () => scenario.press(scenario.button("Global settings")));
       scenario.after(.4, () => scenario.press(scenario.button("Setup")));
@@ -336,7 +337,7 @@ export function runGoldenCase(scenario: ReviewScenario, id: string): void {
       scenario.after(2, () => scenario.press(controller.view.previous.button));
       scenario.later(2.4, () => ui.isSetupCompleted() && menu.page === "main" &&
         root.clientTrackingOriginStore.hasTrackingOrigin &&
-        root.clientTrackingOriginStore.T_odom_client.position.every((v: number,i: number) => v === baseline.position[i]));
+        root.clientTrackingOriginStore.T_map_tracking.position.every((v: number,i: number) => v === baseline.position[i]));
       break;
     }
     default: throw new Error(`Unimplemented golden case ${id}`);

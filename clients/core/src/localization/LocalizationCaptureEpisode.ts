@@ -5,7 +5,7 @@ import {
 } from "../websocket/protocol";
 import type { ARModuleSession } from "../websocket/ARModuleSession";
 
-import { type ClientTrackingOriginStore, odomToClientTrackingPose, passesGeometricGate } from "./ClientTracking";
+import { type ClientTrackingOriginStore, mapToClientTrackingPose, passesGeometricGate } from "./ClientTracking";
 
 
 
@@ -199,10 +199,16 @@ export class LocalizationCaptureEpisode {
     this.resetIdle();
   }
 
+  /** Restart setup/capture without inventing a physical tracking-reference reset. */
   reset(): void {
-    this.trackingReporter.reset();
     this.captureEnabled = false;
     this.resetIdle();
+  }
+
+  /** Call only for an actual native world-tracking reference change. */
+  resetTrackingReference(): void {
+    this.reset();
+    this.trackingReporter.reset();
   }
 
   pause(): void {
@@ -250,7 +256,7 @@ export class LocalizationCaptureEpisode {
     }
     this.runtimeMisses = 0;
     // Explicit realignment bypasses only the local geometry hint for one bounded batch.
-    this.recoveryRequestedUntil = this.clientTrackingOriginStore.hasTrackingOrigin && !this.clientTrackingOriginStore.mapContext
+    this.recoveryRequestedUntil = this.clientTrackingOriginStore.hasTrackingOrigin
       ? this.clock.now() + DELIBERATE_RECOVERY_CAPTURE_S : null;
     this.captureEnabled = true;
     if ((this.episode.phase === "idle" || this.episode.phase === "waiting_for_retry") && this.request !== null) {
@@ -333,7 +339,8 @@ export class LocalizationCaptureEpisode {
   private onRequest(request: LocalizationObservationsRequest): void {
     const previous = this.episode.request;
     const captureRequest: CaptureRequest = request === previous?.message ? previous : { message: request, gateDeadline: null };
-    this.recoveryUntil = this.recoveryRequestedUntil;
+    // Preferred capture must honor its server-owned fallback window even on manual correction.
+    this.recoveryUntil = request.capture_policy === "robot_los_required" ? this.recoveryRequestedUntil : null;
     this.recoveryRequestedUntil = null;
     let retryAt = this.episode.phase === "waiting_for_retry" || this.episode.phase === "idle" ? this.episode.retryAt : null;
     if (this.episode.phase === "awaiting_result" && !request.episode_id) retryAt = this.runtimeRetryDeadline();
@@ -403,10 +410,10 @@ export class LocalizationCaptureEpisode {
   }
 
   private geometricGatePasses(): boolean {
-    const origin = this.clientTrackingOriginStore.T_odom_client;
+    const origin = this.clientTrackingOriginStore.T_map_tracking;
     const pose = this.session.view().pose;
     if (origin === null || pose === null) return false;
-    const robot = odomToClientTrackingPose(pose, origin);
+    const robot = mapToClientTrackingPose(pose, origin);
     return passesGeometricGate(this.tracking.cameraOptical(), robot.position, this.geometry);
   }
 

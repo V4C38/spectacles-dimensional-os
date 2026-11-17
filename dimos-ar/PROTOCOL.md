@@ -8,9 +8,10 @@ clients update their protocol module in the same change.
 ## Conventions
 
 - **Version 2 interaction messages** supplement the robot telemetry and localization inventory below.
-- **Wire frame is `odom`** — the robot's drifting leg-odometry frame, in
-  DimOS's right-handed Z-up axes. ARModule performs **no axis conversion**. Each
-  client converts on receipt; clients do not share one scene convention.
+- **Wire frame is shared `map`**, identified by `shared_frame_id`, in DimOS's
+  right-handed Z-up metric axes. ARModule composes spatial frames; each client
+  performs its host axis conversion. Native sensing, planning and execution retain
+  their native frames behind this boundary.
 - **One robot per process.** Declared once in `hello`. Inbound messages do not
   echo a robot id.
 - **Capture episodes.** ARModule sends `localization_observations_request`; a
@@ -98,8 +99,9 @@ unchanged; transport must not deliberately make a fresh image stale.
 
 ## Coordinate conventions
 
-Robot poses, navigation, LiDAR, and top-level localization results use **`odom`**.
-Explicit map-alignment metadata uses the named MultiSet map frame. Both use
+Robot poses, navigation, LiDAR, presence and localization results use the same
+shared **`map`** frame. `T_A_B` maps coordinates in B into A. A localization
+result is `T_map_tracking`, not the current physical headset/camera pose. All use
 DimOS's axes:
 
 | Axis | Direction |
@@ -114,28 +116,39 @@ throughout.
 Poses are position `[x, y, z]` and orientation `[qx, qy, qz, qw]` — quaternion,
 scalar-last.
 
-### What `odom` is
+### Shared map and native frames
 
-`odom` is the selected stack's robot reference pose. Every compatible DimOS
-stack must publish `odom: PoseStamped`. On a mobile platform this pose usually
-drifts (dead reckoning from a boot origin). A fixed-base stack may publish a
-stable pose, including identity, for as long as the base does not move.
+The process starts with a unique shared session map whose transform to odom is
+identity. This is a session coordinate choice, not registration to a saved map.
+A robot-mounted AprilTag establishes headset tracking alignment through the
+capture-time robot body pose and known marker mount. The robot body is a frame,
+with orientation and camera/marker extrinsics, not only a point in odom.
 
-Two consequences for clients on a drifting stack:
+```text
+shared map
+├── headset tracking space → current headset / camera
+└── [optional native saved map] → odom → robot body → robot camera / marker
+```
 
-- Content anchored in `odom` slowly diverges from the physical room.
-- ARModule issues corrections through `localization_result` (see below). A client
-  should apply the newest one it has rather than assuming its first alignment
-  holds forever.
+`odom` is the selected robot stack's local reference. It can drift; a native saved
+map can supply its own map-to-odom correction. The optional upper registration is
+initialized to preserve the current placement when native localization attaches.
+Only the native source updates native-map-to-odom; AR localization updates its
+upper registration. Distinct native and VPS map identities are never assumed equal.
 
-Fiducial marker localization and robot-side VPS anchoring look up that pose at
-the image timestamp; Go2 receipt timestamps are an exposure-time approximation. Robot-side VPS also needs an onboard camera extrinsic
-(`T_base_camera_optical`). Declared DimOS ports for LiDAR and navigation stay
-on `ARModule`; they no-op when `hello.capabilities` reports them unavailable.
+The first accepted VPS registration may adopt the VPS map as shared root once.
+The server issues one `localization_context.rebase` and transforms retained spatial
+content exactly once. Later localization corrections update robot placement below
+that root; they do not repeatedly rebase shared content. A tag-derived headset
+alignment remains tag-derived after rebasing: it cannot become an independent VPS
+anchor by a change of coordinates.
 
-DimOS Go2 drivers currently stamp this frame as `frame_id="world"` on incoming
-messages; ARModule normalizes that to `odom` at the import boundary and uses
-`odom` everywhere on the wire and in client-facing docs.
+Robot pose, path and sensor projections are transformed at the AR boundary. Goals
+are converted back to the native planner frame on admission. A root adoption never
+resubmits an admitted native goal or changes its native identifier. Source resets,
+map changes and tracking resets are explicit reference changes, never silent frame
+renames. Image-time odometry/native registration snapshots are used for capture
+composition, rather than whichever transform is latest when a query completes.
 
 ### Axis conversion is the client's job
 
@@ -145,9 +158,9 @@ receipt and inverts the conversion on anything it sends.
 Informative example, for a left-handed Y-up client (X right, Y up, Z forward):
 
 ```text
-x_client = -y_odom
-y_client =  z_odom
-z_client =  x_odom
+x_client = -y_map
+y_client =  z_map
+z_client =  x_map
 ```
 
 Orientation must be converted with the same basis change. Each client owns
@@ -162,53 +175,13 @@ the marker arrow uses local +X forward. Tracking yaw zero therefore renders as
 Lens marker yaw +90 degrees, pointing along Lens -Z. Outgoing goals invert this
 mapping so their terminal robot heading matches the displayed arrow.
 
-### Odometry scale correction
+### Metric source calibration
 
-Go2 uses an empirical XY multiplier of **1.25** to compensate for observed
-under-reporting of motion. It is a dead-reckoning heuristic, not a calibrated
-sensor model or a complete correction for time-varying drift. Set
-`armodule.odom_scale_correction_factor` at startup to override the robot profile
-(e.g. 1.0 for a source that does not need it). The installed WebRTC adapter reads
-`rt/utlidar/robot_pose`; it does not read `sportmodestate` for this odometry port.
-No claim about the firmware estimator's internals follows from that topic name.
-
-ARModule uses one fixed mapping at the boundary:
-
-```text
-AR XY = factor * native DimOS XY
-native DimOS XY = AR XY / factor
-Z is unchanged
-```
-
-| Data | Correction |
-|------|------------|
-| Robot `pose`, active/preview paths and LiDAR world points | Fixed XY multiplier on egress |
-| Robot odometry used by marker/VPS localization | Same XY multiplier before physical mounts are composed |
-| `nav_goal_request` | Inverse XY multiplier before native planning |
-| `ar_place_marker` agent tool | Native DimOS input → corrected wire point |
-| `ar_get_client_pose` agent tool | Corrected client pose → native DimOS position/viewing ray |
-| Heights, robot body dimensions and physical camera/marker mounts | Unchanged |
-| Quaternions, joystick velocities and physical speed limits | Unchanged |
-| LiDAR filtering/downsampling ranges and obstacle halo distances | Native sensor metres |
-
-The completed `T_odom_client` is composed from the corrected robot position and
-physical camera/marker measurements; it must not be multiplied again. Clients
-render each wire point directly through that origin. **Do not multiply LiDAR
-coordinates again on the client.** Specs and WebXR receive the same corrected data.
-
-LiDAR XY is scaled about the fixed native odometry origin, independent of the
-robot's current position. Repeated voxel-map geometry therefore stays registered.
-A robot-relative per-packet translation is not equivalent and is not used.
-Native maps, costmaps, obstacle clearances, and the confirmed DimOS planner stay
-unchanged. Navigation inputs are converted back into that native frame.
-
-The displayed horizontal size of a LiDAR feature also increases by the factor;
-1.25 is explicitly an approximate AR world correction, not a claim that laser
-ranges are 25% longer. The required `hello.robot.odom_scale_correction_factor` lets portable sensor policies undo the mapping for native
-range/clearance calculations. Physical calibration still requires a survey, and
-repeated marker/VPS localization handles alignment drift that one constant cannot.
-Changing the factor requires restarting ARModule and reconnecting clients so
-origins, paths, previews and points cannot mix old/new coordinate models.
+The shared map is rigid and metric. ARModule does not apply an anisotropic XY
+multiplier to poses, LiDAR, paths or goals, and hello has no
+`odom_scale_correction_factor`. Any movement calibration belongs to the sensor
+source before mapping, localization and planning; physical ranges, dimensions and
+camera/marker mounts remain metric. Shared/native conversions are rigid transforms.
 
 ## Multiple clients and replication
 
@@ -220,12 +193,12 @@ remain local. The supported validation target is two to five simultaneous client
 `interaction_state` is a complete revisioned snapshot. It contains `epoch` (robot
 interaction reference), `revision`, `mode`, `motion_busy`, `authority`, `target` (last edited
 canonical target), `targets` (retained navigation and per-group manipulation targets),
-`preview`, and `active_goal`. Poses use odometry metres and XYZW quaternions.
+`preview`, and `active_goal`. Poses use shared-map metres and XYZW quaternions.
 Targets contain `domain`, optional `group_id`, `position`, `orientation`, `revision`,
 `phase` (`draft`, `live`, `committed`), `sample_ts`, `sequence`, `speed_scale` and
 optional `gripper`. `sample_ts` is a server monotonic interpolation sample time,
 not a headset clock or exposure timestamp. Apply each headset's current origin
-when rendering canonical odometry poses. A target's `sequence` cumulatively
+when rendering canonical shared-map poses. A target's `sequence` cumulatively
 acknowledges accepted input within its editing lease, including identical pose and
 settings updates. Identical content advances `sequence` without changing the
 content `revision` or interpolation `sample_ts`. Revision covers the complete draft:
@@ -272,6 +245,7 @@ use `live` for a direct navigation goal (`navigation_planning` for selected prev
 ```json
 {
   "type": "interaction_request",
+  "shared_frame_id": "shared-example",
   "request_id": "acquire-1",
   "action": "acquire",
   "epoch": "interaction-example",
@@ -429,6 +403,7 @@ connection, and replies with `hello`.
   "bulk_epoch": "bulk-example",
   "resume_token": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "odom_reference_id": "odom-example",
+  "shared_frame_id": "shared-example",
   "time_sync": {
     "ts_client": 1234.567,
     "ts_server": 5678.901
@@ -437,8 +412,7 @@ connection, and replies with `hello`.
     "display_name": "Unitree Go2",
     "body_bounds_m": [0.70, 0.50, 0.55],
     "footprint_m": [0.70, 0.50],
-    "base_height_m": 0.33,
-    "odom_scale_correction_factor": 1.25
+    "base_height_m": 0.33
   },
   "localization": { "providers": ["fiducial_marker", "vps"] },
   "capabilities": {
@@ -465,13 +439,13 @@ connection, and replies with `hello`.
 | `bulk_url`, `bulk_token`, `bulk_epoch` | string | Required paired-bulk route, session credential and asset epoch. |
 | `resume_token` | string | Required opaque token for bounded recovery to this backend. |
 | `odom_reference_id` | string | Required identity of the current server odometry reference. |
+| `shared_frame_id` | string | Required identity of the current shared map. |
 | `time_sync.ts_client` | float | Echo of `hello_request.ts_client`. |
 | `time_sync.ts_server` | float | Server time when `hello_request` arrived. |
 | `robot.display_name` | string | For client UI. |
-| `robot.body_bounds_m` | `[L, W, H]` | Axis-aligned envelope in `odom` axes: length X, width Y, height Z. |
+| `robot.body_bounds_m` | `[L, W, H]` | Axis-aligned envelope in robot body axes: length X, width Y, height Z. |
 | `robot.footprint_m` | `[L, W]` | Ground footprint for nav UI. |
 | `robot.base_height_m` | float | Height of the odometry pose origin above the ground, so a client can place a ground marker under a `pose`. |
-| `robot.odom_scale_correction_factor` | float | Required finite positive native-to-AR XY heuristic. Points/poses are already corrected; use it only to recover native distances. |
 | `capabilities.*.available` | bool | Feature gate for client UI. Keys are `lidar`, `navigation`, `localization`, `estop`, `agent`, `manipulation`, and `object_detection`; every key is required. |
 | `capabilities.*.reason` | string \| null | Human-readable, non-null exactly when `available` is `false`. |
 | `capabilities.navigation.nav_goal` | `{ available, reason, preview }` | Can send `nav_goal_request`. All fields are required; boolean `preview` advertises advisory planning. |
@@ -624,9 +598,9 @@ Do not wait for ACK. Unknown `name` values are ignored on the host.
 | `args` | object | Opaque JSON object. Known names with invalid args fail closed. |
 
 `ar_place_marker` args are a required `id` (non-blank, max 64, trimmed), an
-corrected wire-odom point (`x`, `y`, `z`), and an optional `title`. Omit
+shared-map point (`x`, `y`, `z`), and an optional `title`. Omit
 `title` or send `""` for an unlabeled marker. Same `id` upserts. The host
-composes the point through `T_odom_client` and instantiates the marker prefab.
+composes the point through `T_map_tracking` and instantiates the marker prefab.
 
 `ar_remove_marker` args are `{ "id": "kitchen" }`. Unknown `id` is an error on
 `ARModule`; the host destroys that prefab.
@@ -705,14 +679,17 @@ transport supplies one on every delivered capture request.
 
 ### `localization_result`
 
-The client's own pose in `odom` — its tracking origin expressed in odom
-coordinates. Apply only a result matching the currently outstanding capture batch
+The client's tracking origin expressed in the shared map (`T_map_tracking`). Apply only a result matching the currently outstanding capture batch
 in this connection and localization generation. A paused, reset, timed-out, or
 superseded capture must not change the origin or complete a later episode.
 
 ```json
 {
   "type": "localization_result",
+  "alignment_id": "alignment-example",
+  "shared_frame_id": "shared-example",
+  "odom_reference_id": "odom-example",
+  "tracking_reference_id": "tracking-example",
   "position": [1.2, -0.4, 0.0],
   "orientation": [0.0, 0.0, 0.38, 0.92],
   "confidence": 0.87,
@@ -728,7 +705,7 @@ superseded capture must not change the origin or complete a later episode.
 Sent only after a successful capture episode that started with
 `localization_observations_request` (whether ARModule prompted on its own or a
 client asked with `localization_start_request`). Never
-unsolicited — a `T_odom_map` refresh does not push a new result.
+unsolicited. A robot-map correction does not fabricate a new headset result.
 
 ClientCore registers a batch before sending it and requires its capture-derived
 `ts` (within 1 microsecond of float64 rounding), before the advertised result
@@ -746,25 +723,53 @@ A miss or exception schedules a new capture after backoff/query admission;
 images are never held through an admission wait. Polling does not depend on odometry.
 
 With VPS enabled, robot correction and headset alignment are independent. Robot
-correction becomes due after 0.75 m accumulated corrected robot travel or 30° net
+correction becomes due after 0.75 m accumulated robot travel or 30° net
 heading change. Headset map alignment refreshes after 10 m accumulated horizontal
 headset travel, without a rotation trigger. Defaults are configurable in the launcher.
 Capture-time baselines preserve movement during processing. Failed attempts do not
-reset those baselines. Fiducial-only mode retains relative odometry alignment and
-its geometric capture gate.
+reset those baselines. Fiducial-only mode retains relative tracking alignment and
+its geometric capture gate; it uses the same shared-map result as VPS.
 
-### Independent map localization
+### Unified map localization
 
-VPS deployments send `localization_context` after hello:
+Every deployment sends `localization_context` after hello, including tag-only
+sessions:
 
 ```json
-{"type":"localization_context","map_code":"<map>","odom_reference_id":"<reference>"}
+{"type":"localization_context","shared_frame_id":"shared-example","odom_reference_id":"odom-example","revision":0}
 ```
 
-This binds retained headset alignment to the current map and robot reference.
-An optional `reset: true` invalidates a retained alignment that the server cannot
-resume. Clients report tracking only after receiving this context; agent capability
-is not required. There is no standing camera policy or additional camera-info message.
+`revision` is a nonnegative integer; clients reject obsolete context revisions.
+Optional `map_code` identifies provider metadata, not the shared frame identity.
+Optional `reset: true` invalidates a retained alignment the server cannot resume.
+Every accepted result has `alignment_id`, `shared_frame_id`, `odom_reference_id`
+and `tracking_reference_id`, plus its pose, confidence and capture timestamp.
+There are no provider-specific optional `map_alignment`/`map_transform` results or
+`localization_map_transform` messages.
+
+One-time VPS root adoption includes:
+
+```json
+{"type":"localization_context","shared_frame_id":"vps-shared-example","odom_reference_id":"odom-example","revision":1,"map_code":"provider-map","rebase":{"previous_shared_frame_id":"shared-example","position":[1,2,0],"orientation":[0,0,0,1]}}
+```
+
+The rebase maps old shared coordinates into the new shared frame. Connected clients
+transform their retained tracking alignment and spatial presentation exactly once.
+Leases, native action IDs and authority epochs survive; stale spatial queues and
+asynchronous projections are invalidated. A disconnected client that missed adoption
+must relocalize rather than restore an old-frame origin. Results are accepted only
+for the current shared/odom/tracking references and outstanding capture batch.
+Pending manipulation receipts retain native joint trajectories and action IDs;
+their hydrated map poses and retained client targets receive the same rebase.
+Late receipts from a retired frame retain native facts but omit obsolete map poses.
+
+Coordinate-bearing requests carry `shared_frame_id` and are rejected before
+admission when mismatched. Projected bulk begin records and spatial asset metadata
+carry the frame identity captured with their payload; obsolete completed downloads
+cannot be installed. Nonspatial requests do not acquire spatial metadata.
+
+Clients report tracking after receiving the context; agent capability is not
+required. There is no standing camera policy or additional camera-info message.
 
 `localization_tracking` (client → server) contains `tracking_reference_id` (nonempty,
 at most 128 characters), finite nonnegative cumulative `travel_m`, boolean `active`,
@@ -774,7 +779,7 @@ and accepted fixes. Travel is measured at 10 Hz in native headset tracking coord
 with a 5 cm displacement deadband. Visibility loss or a sampling gap over 0.5 seconds
 starts a new travel segment without bridging the gap. A tracking-reference reset
 starts a new identity and counter. Plain socket reconnect preserves them.
-The server resumes only an issued fix matching map, robot reference, tracking
+The server resumes only an issued fix matching shared frame, robot reference, tracking
 reference, and a nondecreasing travel counter. Issued-fix storage retains active
 alignments and a bounded pool for reconnects.
 
@@ -794,8 +799,8 @@ Without an accepted alignment, setup tries VPS first. Two unsuccessful actual ro
 or headset VPS queries allow a marker attempt. Unavailable runtime camera/pose data,
 capture failure, or cloud admission wait allows an immediate
 a three-frame tag fallback even without an existing map anchor. That tag result is
-an ordinary `localization_result` in odometry, without `map_alignment` or
-`map_transform`; it must not be represented as a VPS registration. With no client
+the same shared-map `localization_result` as every other provider; its internal
+source remains tag and it must not be represented as an independent VPS registration. With no client
 origin the geometric gate cannot be computed, so the fallback captures directly.
 Accepted relative tag alignment retains capture-time headset/robot travel and
 heading baselines for subsequent tag-first correction. Failed corrections preserve
@@ -811,36 +816,16 @@ Send this JSON context immediately before the existing LOCA binary batch. The
 server correlates its converted timestamp to the batch within one microsecond;
 stale or superseded episode progress is ignored. The binary layout is unchanged.
 
-A successful VPS headset map-alignment `localization_result` keeps its existing
-top-level odometry pose and timestamp, and includes both `map_alignment` and
-`map_transform`. The relative tag fallback described above omits both map fields.
-`map_alignment` contains `id`, `map_code`, `odom_reference_id`,
-`tracking_reference_id`, capture-time `travel_m`, `position`, `orientation`,
-`confidence`, and server-clock `ts`. Its pose is `T_map_client`.
-`map_transform` is a complete `localization_map_transform` snapshot:
-`map_code`, `odom_reference_id`, nonnegative integer `revision`, `position`,
-`orientation`, `confidence`, and server-clock capture `ts`. Its pose is `T_odom_map`.
+All providers produce `T_map_tracking`. Robot corrections instead update
+`T_map_odom` (or its optional native-map composition) and project robot-derived
+state without asking clients to recompose provider-specific origins. A tag
+correction may update robot placement only when observed by an independently
+VPS-aligned headset. One observation never updates both independent alignments.
+Failed corrections preserve the accepted estimate; capture/reference and revision
+checks apply equally to tag, VPS and native map updates.
 
-ClientCore adopts `T_map_client` only after the existing outstanding-submission
-and result-deadline checks accept the result. It composes:
-
-```text
-T_odom_client = T_odom_map × T_map_client
-```
-
-New robot corrections broadcast `localization_map_transform` independently of
-headset capture. Ignore mismatched contexts and older/equal revisions. Use the
-newest valid robot transform when accepting a headset fix. A transform update
-cannot activate an unaccepted, cancelled, or timed-out headset fix. Recomposition
-updates the existing origin owner and all odometry-space renderers/conversions;
-it does not alter the native planner or resubmit confirmed navigation goals.
-
-A tag correction uses an active, map-aligned headset below its own refresh
-threshold: `T_odom_map = T_odom_client_from_tag × inverse(T_map_client)`.
-Existing fiducial detection/fusion quality gates apply. The same observation never
-updates both independent alignments.
-
-`localization_status` contains `map_code`, `odom_reference_id`, `scope` (`robot` or
+`localization_status` contains the current `shared_frame_id`, `odom_reference_id`,
+optional provider `map_code`, `scope` (`robot` or
 `headset`), `status` (`succeeded`, `failed`, `deferred`), and `reason`.
 Capture-related status includes `episode_id` and, after submission, its server-clock
 capture `ts`; optional nonnegative `retry_after_s` describes an admission wait.
@@ -866,7 +851,7 @@ while cloud queries are rate-limited.
 
 ### `pose`
 
-Robot pose in `odom`, at high rate.
+Robot body pose in shared `map`, at high rate.
 
 ```json
 {
@@ -881,7 +866,7 @@ Robot pose in `odom`, at high rate.
 |-------|-------|
 | `ts` | Producer odometry timestamp (`PoseStamped.ts`), seconds. Current Go2 WebRTC stamps producer receipt time in the synchronized host clock; this is not a hardware capture timestamp. |
 
-X and Y carry the odometry scale correction; Z and orientation do not. Optional
+The pose uses the shared-map projection of the native odometry sample. Optional
 fields may be added later (`speed_mps`, `yaw_rate_rad_s`); clients ignore unknown keys.
 
 ### Navigation routes in `interaction_state`
@@ -890,9 +875,9 @@ Nested boolean `preview: true` identifies an advisory path in the shared
 interaction snapshot. Omitted/false denotes active navigation. Store previews separately;
 they never replace active goal facts or change `state.nav`. Empty previews omit `pose`
 and use `path_poses: []` when the map/odometry is unavailable or planning fails.
-Preview coordinates use the same odometry correction as active paths.
+Preview coordinates use the same shared-map projection as active paths.
 
-Active navigation in `odom`: the planned route plus the terminal pose where
+Active navigation in shared `map`: the planned route plus the terminal pose where
 the robot intends to finish. Sent whenever DimOS publishes a path update.
 
 ```json
@@ -906,9 +891,8 @@ the robot intends to finish. Sent whenever DimOS publishes a path update.
 
 | Field | Notes |
 |-------|-------|
-| `pose` | Terminal pose in `odom` as `[x, y, z, yaw]` radians — maps to the last
-  `PoseStamped` on DimOS `path`. Position X/Y are scale-corrected; Z and yaw are
-  not. Today this duplicates the last `path_poses` entry; clients should treat
+| `pose` | Terminal pose in shared `map` as `[x, y, z, yaw]` radians — maps to the last
+  `PoseStamped` on DimOS `path`, projected rigidly into shared map. This duplicates the last `path_poses` entry; clients should treat
   `pose` as authoritative for the target. |
 | `path_poses` | Route polyline as `[x, y, z, yaw]` waypoints — maps to `Path.poses`.
   Same units and rounding as `pose`. Yaw comes from each DimOS path pose
@@ -934,13 +918,12 @@ or no plan exists. `pose` is omitted on clear:
 | 0 | 4 | FourCC `0x4C444152` (`"LDAR"`) |
 | 4 | 8 | `ts` float64, DimOS `PointCloud2.ts` |
 | 12 | 4 | `point_count` uint32 |
-| 16 | `point_count * 12` | Points: `[x, y, z]` float32 triplets in `odom` |
+| 16 | `point_count * 12` | Points: `[x, y, z]` float32 triplets in shared `map` |
 
-Points are pre-filtered on ARModule: height band, range, and subsampling
-toward the robot, all in native sensor metres. Their world X/Y coordinates then
-receive the same fixed correction as `pose` and `nav_goal`. Z is unchanged.
-Use hello's required scale factor to recover native horizontal distances for
-obstacle coloring; no client-side coordinate scaling is required.
+Points are pre-filtered on ARModule by height, physical range and subsampling
+toward the robot, then projected rigidly into the shared map. Physical distances
+remain metric; clients do not rescale coordinates or sensor ranges. The bulk
+envelope carries the shared frame identity captured with this point payload.
 
 ## Inbound messages (client → server)
 
@@ -1038,6 +1021,7 @@ Response: `localization_result` after a successful episode, or another
 ```json
 {
   "type": "nav_goal_request",
+  "shared_frame_id": "shared-example",
   "epoch": "interaction-example",
   "lease_id": "lease-from-grant",
   "sequence": 1,
@@ -1046,9 +1030,9 @@ Response: `localization_result` after a successful episode, or another
 }
 ```
 
-Goal in `odom`. **`position` and `orientation` are both required** — same fields
+Goal in shared `map`. **`position` and `orientation` are both required** — same fields
 as `pose`. Send them in the same coordinates you receive `pose` in; ARModule
-inverts the scale correction on ingress and submits through the native navigation
+inverts the shared-to-native rigid transform on ingress and submits through the native navigation
 RPC admission service, retaining the current authority epoch and revision.
 
 Gated on `hello.capabilities.navigation.nav_goal`.
@@ -1085,7 +1069,7 @@ a normal goal even if no preview path is available.
 Direct drive in m/s and rad/s, not a raw `[-1, 1]` stick deflection. Client
 command (`*_request`), same naming as `nav_goal_request`. ARModule publishes on
 DimOS `tele_cmd_vel: Out[Twist]`; `MovementManager` muxes with planner
-`nav_cmd_vel`. Not odom-scale-corrected.
+`nav_cmd_vel`. Body-relative physical velocity; no world-position transform applies.
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -1182,7 +1166,7 @@ Hardware validation remains necessary for that backend behavior.
 | Field | Type | Notes |
 |-------|------|-------|
 | `enabled` | bool | Required. `false` stops `lidar` frames entirely. |
-| `min_height_m` | float | Required. Lower bound of the height band, in `odom` Z. |
+| `min_height_m` | float | Required. Lower bound of the height band, in native odometry Z (before shared-map projection). |
 | `max_height_m` | float | Required. Upper bound of the height band. |
 | `max_range_m` | float | Required. Horizontal radius around the robot to keep. |
 
@@ -1209,6 +1193,7 @@ canonical `target_revision`. Following commands carry the owning `lease_id`.
 ```json
 {
   "type": "manipulation_request",
+  "shared_frame_id": "shared-example",
   "request_id": "plan-42",
   "action": "plan",
   "group_id": "arm",
@@ -1234,7 +1219,7 @@ canonical `target_revision`. Following commands carry the owning `lease_id`.
 | `resume` | None | Resume only after native stop confirmation and valid authority. |
 | `reset_joints`, `prepare_shutdown` | Optional `speed_scale` | Native reset or parking; shutdown reports explicit `quiescent`. |
 
-Poses are odometry metres and unit XYZW quaternions. Speed is in `(0,1]`;
+Poses are shared-map metres and unit XYZW quaternions. Speed is in `(0,1]`;
 gripper values are in `[0,1]`. Plan/following poses and speed, plan final
 gripper, and discrete gripper values are taken from the matching server target;
 client echoes cannot change the geometry labeled with that revision. A gripper
@@ -1304,9 +1289,9 @@ Optional `presence: true` in `hello_request` opts in; `hello.presence: true`
 confirms support. Missing flags mean disabled. Presence never acquires interaction
 leases and is independent of robot capabilities. Only opted-in sockets receive it.
 
-`client_presence` carries `map_code`, `odom_reference_id`, `pointers` (at most two),
+`client_presence` carries `shared_frame_id`, `odom_reference_id`, `pointers` (at most two),
 and `panel` (null when closed). Each pointer has a stable `id` (0 left, 1 right or
-editor pointer), `start`, `control`, `end` (quadratic beam points in odom metres),
+editor pointer), `start`, `control`, `end` (quadratic beam points in shared-map metres),
 `opacity` in [0,1], and a `cursor` visibility boolean. The optional panel contains
 `position`, scalar-last nonzero `orientation`, `width`, and `height` in metres.
 It describes the runtime main-menu background only, with no UI contents or events.
@@ -1330,12 +1315,13 @@ Remote cues are passive and never participate in input targeting.
 
 ### `client_pose`
 
-Wearer camera-optical pose in `odom`. Telemetry, not a request. Latest-wins
+Wearer camera-optical pose in shared `map`. Telemetry, not a request. Latest-wins
 on `ARModule`. Freshness is server receive time (2 s), not inbound `ts`.
 
 ```json
 {
   "type": "client_pose",
+  "shared_frame_id": "shared-example",
   "position": [1.2, -0.4, 1.6],
   "orientation": [0.0, 0.0, 0.38, 0.92],
   "ts": 12.5
@@ -1344,12 +1330,12 @@ on `ARModule`. Freshness is server receive time (2 s), not inbound `ts`.
 
 | Field | Notes |
 |-------|-------|
-| `position` | Odom metres, DimOS Z-up. Same fields as outbound robot `pose`. |
+| `position` | Shared-map metres, DimOS Z-up. Same fields as outbound robot `pose`. |
 | `orientation` | Scalar-last quaternion. Zero quaternion is rejected. |
 | `ts` | Lens `getTime()` at capture (seconds since start). Metadata only. |
 
 Send only when the session is ready, `hello.capabilities.agent` is available,
-and `T_odom_client` exists. Typical rate is 10 Hz. Last client disconnect
+and `T_map_tracking` exists. Typical rate is 10 Hz. Last client disconnect
 clears the server buffer. `ar_get_client_pose` reads this buffer; missing or
 stale returns `No client pose`.
 
@@ -1370,7 +1356,7 @@ stale returns `No client pose`.
 | `user_message_request` | `agent_skill` |
 | `client_pose` | `localization_context` |
 | `client_presence` (optional) | `presence_state` (optional) |
-| `localization_tracking` | `localization_map_transform` |
+| `localization_tracking` | `localization_context` |
 | `localization_capture_progress` | `localization_status` |
 
 **Inbound naming.** Commands use `*_request` (`nav_goal_request`,
@@ -1471,7 +1457,7 @@ Live AprilTag localization requires a robot pose within 0.25 seconds and does no
 substitute the origin when odometry is missing. Offline replay explicitly permits
 its final retained robot pose for captures newer than the complete history, so
 marker registration can continue after playback ends. This exception preserves
-the retained pose's original timestamp and corrected coordinates; empty history,
+the retained pose's original timestamp and metric coordinates; empty history,
 prehistory and internal gaps remain invalid. VPS and live-robot freshness rules
 are unchanged.
 
@@ -1493,14 +1479,17 @@ they do not expire accepted independent map alignments or impose stillness.
 A robot clock/frame reset retires pending work and connections; AR navigation
 requires restarting DimOS mapping with a fresh map.
 
-The fixed XY mapping and coordinate-model restart rules are defined under
-[odometry scale correction](#odometry-scale-correction). The read-only
-`tools/check_go2_registration.py` utility checks recorded geometry. Headset camera
+The rigid metric boundary is defined under
+[metric source calibration](#metric-source-calibration). The read-only
+`tools/check_go2_registration.py` utility is a historical recording diagnostic: it
+compares a proposed packet translation and fixed XY scaling against unchanged
+world geometry. Those comparisons can reject an unsafe correction; they do not
+qualify physical metric scale or prescribe a runtime mapping. Headset camera
 calibration procedures are in [CALIBRATION.md](../clients/webxr/CALIBRATION.md).
 
 ### Odometry reference continuity
 
-`hello.odom_reference_id` is a required opaque identifier for the current server odometry reference. It remains unchanged across client socket reconnects and changes when the server or robot odometry source restarts. Clients may restore a retained localization only when the new identifier matches the one used to localize, and the headset tracking space has not reset. Missing identifiers invalidate hello; changed identifiers require re-localization; navigation commands remain disabled during reconnect.
+`hello.odom_reference_id` is a required opaque identifier for the current server odometry reference. It remains unchanged across client socket reconnects and changes when the server or robot odometry source restarts. Clients may restore a retained localization only when both `odom_reference_id` and `shared_frame_id` match the accepted alignment and the headset tracking space has not reset. A client that missed root adoption must relocalize. Missing identifiers invalidate hello; changed identifiers require re-localization; navigation commands remain disabled during reconnect.
 
 ## Manipulation details
 
@@ -1513,7 +1502,7 @@ base `pose` and measured arm feedback remain distinct.
 Available observations carry named measured joints, original `measured_at`, tool
 pose and optional measured gripper. Model descriptors carry root/link/joint topology,
 origins, axes, bounds, mimic relationships and visual identity. Root placement is
-wire `odom`; visual FK and bundled ghosts never authorize motion. Trajectories
+wire shared `map`; visual FK and bundled ghosts never authorize motion. Trajectories
 have at most 8192 points; models at most 256 links/joints. Identifiers, finite values,
 unit quaternions, named-vector dimensions and trajectory ordering are validated.
 Following samples use hello clock conversion, strictly increasing sequences and
@@ -1759,10 +1748,10 @@ separate worker, preserving collision checks and exact Plan/Execute validation.
 
 ### Marker-only localization telemetry
 
-In fiducial-only mode, `localization_status` may omit `map_code` only for robot-scoped,
-`deferred` status reasons `robot_pose_unavailable` and `robot_pose_available`, without
-an `episode_id`. These statuses must carry the current `odom_reference_id`. Clients
-reject source mismatches and must not accept mapless statuses in VPS mode. Missing
+`localization_status` carries the current shared and odometry identities in every
+mode. Provider `map_code` is optional metadata. Robot-scoped `deferred` reasons
+`robot_pose_unavailable` and `robot_pose_available` may omit `episode_id`. Clients
+reject stale shared/odom references. Missing
 robot telemetry pauses capture requests and displays “Robot telemetry unavailable.
 Waiting to localize.” Valid telemetry automatically resumes pending captures.
 Unavailable camera/pose data and cloud admission waits are not unsuccessful VPS

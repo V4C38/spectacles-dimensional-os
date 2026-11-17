@@ -1,5 +1,5 @@
 import { integrationTestsEnabled } from "../Scripts/Integration Test Harness";
-import { odomToClientTrackingPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
+import { mapToClientTrackingPose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 import { emitReviewEvent, findProductionRoot } from "./IntegrationHost";
 import { clientTrackingToSpecsPose } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
 import { ARM_FIXTURE } from "./IntegrationArmFixture";
@@ -117,7 +117,8 @@ export class ReviewScenario extends BaseScriptComponent {
     this.peer.reset();
     this.wire({ type: "state", server: { connected_clients: 1 }, lidar: { enabled: false, min_height_m: -10, max_height_m: 10, max_range_m: 5 },
       nav: { state: "idle", outcome: null }, agent: { idle: true } });
-    this.origin = { position: [-1.4, 0, 0.55], orientation: [0, 0, 0, 1], confidence: 1, ts: getTime() };
+    root.episode.tick();
+    this.origin = { alignment_id: "probe", shared_frame_id: "fixture-map", odom_reference_id: "native-arm", tracking_reference_id: [...this.sent].reverse().find(row => row.type === "localization_tracking")?.tracking_reference_id, position: [-1.4, 0, 0.55], orientation: [0, 0, 0, 1], confidence: 1, ts: getTime() };
     root.clientTrackingOriginStore.setFromLocalizationResult(this.origin);
     this.state = { type: "manipulation_state", available: true, ts: getTime(), model: ARM_FIXTURE.model,
       root_pose: { position: [0, 0, 0], orientation: [0, 0, 0, 1] },
@@ -296,7 +297,7 @@ export class ReviewScenario extends BaseScriptComponent {
     if (this.elapsed < 3) return;
     this.elapsed = 0; this.phase++;
     if (this.phase === 0) {
-      this.emit({ type: "diagnostic", setup: root.uiPresenter.isSetupCompleted(), mode: root.uiPresenter.getOperatingMode(), connection: root.session.view().connection, error: root.session.view().lastError, origin: root.clientTrackingOriginStore.T_odom_client !== null, meshes: arm.renderer.meshes.size });
+      this.emit({ type: "diagnostic", setup: root.uiPresenter.isSetupCompleted(), mode: root.uiPresenter.getOperatingMode(), connection: root.session.view().connection, error: root.session.view().lastError, origin: root.clientTrackingOriginStore.T_map_tracking !== null, meshes: arm.renderer.meshes.size });
       this.check("manipulation_model", arm.renderer.meshes.size > 0 && arm.renderer.object.enabled);
       const presenter = arm.renderer.controls.panelPresenter;
       this.check("manipulation_native_frame", presenter.root.isEnabledInHierarchy &&
@@ -321,7 +322,7 @@ export class ReviewScenario extends BaseScriptComponent {
       const mesh = arm.renderer.meshes.values().next().value;
       this.check("manipulation_material", !!mesh && Number.isFinite(mesh.material.mainPass.opacityScale) && arm.renderer.edges.size > 0);
       this.check("manipulation_stroke_width", Math.abs(arm.renderer.path.material.mainPass.nearWidthScale - 0.75) < 0.0001);
-      this.check("manipulation_pose", handle.getTransform().getWorldPosition().distance(new vec3(...clientTrackingToSpecsPose(odomToClientTrackingPose(ARM_FIXTURE.pose as any, root.clientTrackingOriginStore.T_odom_client)).position)) < 0.01);
+      this.check("manipulation_pose", handle.getTransform().getWorldPosition().distance(new vec3(...clientTrackingToSpecsPose(mapToClientTrackingPose(ARM_FIXTURE.pose as any, root.clientTrackingOriginStore.T_map_tracking)).position)) < 0.01);
       this.check("manipulation_gripper_meshes", ["gripper", "tip_left", "tip_right"].every(link => arm.renderer.picks.get(link)?.enabled === true));
       root.selection.setSelected(true); this.scene("manipulation_target");
     } else if (this.phase === 1) {

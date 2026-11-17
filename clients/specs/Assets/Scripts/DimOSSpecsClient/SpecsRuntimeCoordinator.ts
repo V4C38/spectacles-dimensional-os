@@ -61,7 +61,7 @@ export class SpecsRuntimeCoordinator {
     this.deps.syncSelectionEligibility();
     this.deps.uiPresenter.tick(dt);
     const view = this.deps.session.view();
-    const origin = this.deps.clientTrackingOriginStore.T_odom_client;
+    const origin = this.deps.clientTrackingOriginStore.T_map_tracking;
     const setup = this.deps.uiPresenter.isSetupCompleted();
     this.deps.syncSelectionEligibility();
     const viewportHeight = (this.deps.cameraObject.getComponent("Component.Camera") as Camera)?.renderTarget?.getHeight() ?? 1024;
@@ -104,7 +104,7 @@ export class SpecsRuntimeCoordinator {
         robot: view.pose?.position, orientation: view.pose?.orientation,
         baseHeightM: view.hello?.robot.base_height_m, bounds: view.hello?.robot.body_bounds_m,
         pointLimit: prefs.pointLimit, obstacleRangeM: prefs.obstacleRangeM,
-        odomScaleCorrectionFactor: view.hello?.robot.odom_scale_correction_factor ?? 1, viewportHeight });
+        viewportHeight });
       const circles = { startCircle: this.deps.robotPresenter.floorCircleBounds(), viewportHeight };
       this.deps.activeRouteRenderer.apply({ path: this.deps.navigationController.activePath(), origin,
         pathVisible: this.deps.navigationController.isArmed() && !nav.flash,

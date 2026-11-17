@@ -1,6 +1,5 @@
-import { FakeClock, FakeTransport, helloAt, stateFrame } from "./support/SessionFixture";
+import { createTrackingOriginStore, FakeClock, FakeTransport, helloAt, stateFrame } from "./support/SessionFixture";
 import { describe, expect, it } from "vitest";
-import { ClientTrackingOriginStore } from "../src/localization/ClientTracking";
 import { requestNavGoal, requestNavJoystick } from "../src/navigation/NavigationCommands";
 
 import { ARModuleSession } from "../src/websocket/ARModuleSession";
@@ -14,7 +13,7 @@ function makeSession(): { session: ARModuleSession; transport: FakeTransport; cl
   const session = new ARModuleSession({
     transport,
     clock,
-    clientTrackingOriginStore: new ClientTrackingOriginStore(),
+    clientTrackingOriginStore: createTrackingOriginStore(),
     config: { helloTimeoutS: 1, reconnectDelayS: 0.5 },
   });
   const receive = session.onTransportText.bind(session);
@@ -39,14 +38,14 @@ function grant(session: ARModuleSession, transport: FakeTransport): void {
     targets: [],
     motion_busy: false,
     following_tail: null,
-    type: "interaction_state", epoch: "epoch", revision: 0, mode: "manual", authority: null, target: null, preview: null, active_goal: null }) + "\n");
+    type: "interaction_state", shared_frame_id: "fixture-map", epoch: "epoch", revision: 0, mode: "manual", authority: null, target: null, preview: null, active_goal: null }) + "\n");
   session.collaboration.begin("live", "test");
   const request = JSON.parse(transport.texts[transport.texts.length - 1]);
   session.onTransportText(JSON.stringify({
     targets: [],
     motion_busy: false,
     following_tail: null,
-    type: "interaction_state", epoch: "epoch", revision: 1, mode: "manual", target: null, preview: null, active_goal: null,
+    type: "interaction_state", shared_frame_id: "fixture-map", epoch: "epoch", revision: 1, mode: "manual", target: null, preview: null, active_goal: null,
     authority: { client_id: "c3f1a9", source_id: "test", acquisition_id: request.acquisition_id, lease_id: "lease", kind: "live", held: true, expires_at: 1, sequence: -1 } }) + "\n");
   session.onTransportText(JSON.stringify({ type: "interaction_result", request_id: request.request_id, epoch: "epoch", revision: 1, status: "accepted", code: "acquired", lease_id: "lease" }) + "\n");
 }
@@ -63,7 +62,7 @@ describe("requestNavGoal", () => {
     grant(session, transport);
     requestNavGoal(session, GOAL);
     expect(transport.texts[transport.texts.length - 1]).toBe(
-      '{"type":"nav_goal_request","epoch":"epoch","lease_id":"lease","sequence":1,"position":[1,2,0],"orientation":[0,0,0,1]}\n',
+      '{"type":"nav_goal_request","epoch":"epoch","lease_id":"lease","sequence":1,"position":[1,2,0],"orientation":[0,0,0,1],"shared_frame_id":"fixture-map"}\n',
     );
   });
 
@@ -160,7 +159,7 @@ function cancellationFixture() {
   const f = makeSession(); handshake(f.session, f.clock); grant(f.session, f.transport);
   const base = f.session.collaboration.raw()!;
   const goal = { type: "nav_goal", ts: 42, pose: [1, 2, 0, 0], path_poses: [] };
-  f.session.onTransportText(JSON.stringify({ ...base, revision: base.revision + 1, authority: null, active_goal: goal }) + "\n");
+  f.session.onTransportText(JSON.stringify({ ...base, shared_frame_id: "fixture-map", revision: base.revision + 1, authority: null, active_goal: goal }) + "\n");
   return { ...f, base };
 }
 
@@ -184,7 +183,7 @@ it.each(["timeout", "epoch", "rejection", "disconnect"])("bounds navigation canc
   const assertion = expect(pending).rejects.toThrow(/Navigation cancellation/);
   const request = JSON.parse(f.transport.texts.at(-1)!);
   if (kind === "timeout") { f.clock.nowS += 6; f.session.tick(); }
-  else if (kind === "epoch") f.session.onTransportText(JSON.stringify({ ...f.base, epoch: "new-source", revision: 0 }) + "\n");
+  else if (kind === "epoch") f.session.onTransportText(JSON.stringify({ ...f.base, shared_frame_id: "fixture-map", epoch: "new-source", revision: 0 }) + "\n");
   else if (kind === "disconnect") f.session.stop();
   else f.session.onTransportText(JSON.stringify({ type: "interaction_result", request_id: request.request_id, epoch: "new-source", revision: 0, status: "stale", code: "epoch_changed" }) + "\n");
   await assertion;

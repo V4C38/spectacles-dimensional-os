@@ -21,6 +21,7 @@ def test_environment_cannot_inherit_hardware_or_module_overrides(tmp_path):
         "PATH": "/bin", "SIMULATION": "physical", "CAN_PORT": "can0", "ROBOT_IP": "10.0.0.1",
         "ARMODULE__PORT": "8787", "G__SIMULATION": "physical",
         "CONTROLCOORDINATOR__HARDWARE": "physical-adapter", "PYTHONPATH": "/foreign/source",
+        "ZENOH_CONNECT": "tcp/10.0.0.1:7447", "ZENOH_SCOUT_ADDR": "224.0.0.224:7446",
         "OPENAI_API_KEY": "not-for-this-test", "DIMOS_AR_TEST_MANIPULATION_URL": "ws://foreign",
     })
     assert environment == {
@@ -43,7 +44,17 @@ def test_runtime_command_forces_mock_before_blueprint_import(tmp_path):
 
 def test_configuration_is_isolated_local_and_disables_relay_and_localization(tmp_path):
     config = json.loads(runner.write_configuration(tmp_path, 12345).read_text())
-    assert config["g"] == {"simulation": "mock", "listen_host": "127.0.0.1", "viewer": "none"}
+    scout_addr = config["g"].pop("zenoh_scout_addr")
+    group, port = scout_addr.split(":")
+    assert group == "224.0.0.224"
+    assert 1024 <= int(port) <= 65535
+    assert config["g"] == {
+        "simulation": "mock", "listen_host": "127.0.0.1", "viewer": "none",
+        "zenoh_connect": "", "zenoh_scouting": False,
+    }
+    other = tmp_path / "another-run"
+    second = json.loads(runner.write_configuration(other, 12346).read_text())
+    assert second["g"]["zenoh_scout_addr"] != scout_addr
     assert config["armodule"] == {
         "port": 12345, "ip_relay_url": None, "localization": {"providers": []},
     }

@@ -11,20 +11,14 @@ export function lidarHeightColor(t: number): Vec3 {
   return a.map((value, axis) => (value + (b[axis] - value) * mix) / 255) as Vec3;
 }
 
-/** Native sensor metres from a physical body box, undoing only the wire XY heuristic. */
-export function lidarBodyClearance(point: Readonly<Vec3>, robot: Readonly<Vec3>, orientation: Readonly<Quat>, bounds: Readonly<Vec3>, odomScaleCorrectionFactor = 1): number {
-  const scale = requireScale(odomScaleCorrectionFactor);
+/** Native sensor metres from a physical body box, without a wire-space scale heuristic. */
+export function lidarBodyClearance(point: Readonly<Vec3>, robot: Readonly<Vec3>, orientation: Readonly<Quat>, bounds: Readonly<Vec3>): number {
   const [qx, qy, qz, qw] = orientation;
   const yaw = Math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz));
-  const dx = (point[0] - robot[0]) / scale, dy = (point[1] - robot[1]) / scale;
+  const dx = point[0] - robot[0], dy = point[1] - robot[1];
   const x = dx * Math.cos(yaw) + dy * Math.sin(yaw);
   const y = -dx * Math.sin(yaw) + dy * Math.cos(yaw);
   return Math.hypot(Math.max(0, Math.abs(x) - bounds[0] / 2), Math.max(0, Math.abs(y) - bounds[1] / 2));
-}
-
-function requireScale(scale: number): number {
-  if (!Number.isFinite(scale) || scale <= 0) throw new Error("odometry scale must be finite and positive");
-  return scale;
 }
 
 export interface LidarFrameInput<Origin> {
@@ -37,7 +31,6 @@ export interface LidarFrameInput<Origin> {
   bounds?: Readonly<Vec3>;
   pointLimit?: number;
   obstacleRangeM?: number;
-  odomScaleCorrectionFactor?: number;
 }
 export type LidarPointColor = readonly [number, number, number, number];
 const HEIGHT_PALETTE = Array.from({ length: 256 }, (_, i) => lidarHeightColor(i / 255));
@@ -67,8 +60,7 @@ export class LidarFrameSampler<Origin> {
     const orientation = input.orientation ?? [0, 0, 0, 1];
     const bounds = input.bounds ?? [0.7, 0.5, 0.55];
     const clearance = input.obstacleRangeM ?? 0.6;
-    const factor = input.odomScaleCorrectionFactor ?? 1;
-    const style = input.mode === "full" ? [0, floor] : [1, clearance, factor,
+    const style = input.mode === "full" ? [0, floor] : [1, clearance,
       ...(input.robot ?? []), ...orientation, ...bounds];
     const colorsChanged = positionsChanged || style.length !== this.style.length ||
       style.some((value, i) => !Object.is(value, this.style[i]));
@@ -77,7 +69,7 @@ export class LidarFrameSampler<Origin> {
         const point = input.points[index];
         if (input.mode === "obstacles") {
           const t = input.robot ? Math.min(1,
-            lidarBodyClearance(point, input.robot, orientation as Readonly<Quat>, bounds as Readonly<Vec3>, factor) / Math.max(0.001, clearance)) : 1;
+            lidarBodyClearance(point, input.robot, orientation as Readonly<Quat>, bounds as Readonly<Vec3>) / Math.max(0.001, clearance)) : 1;
           return [1, 0, 0, 1 - t * t * (3 - 2 * t)];
         }
         const height = LIDAR_FULL_HEIGHT_RANGE_M;

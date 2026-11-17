@@ -4,10 +4,11 @@ import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from dimos.ar.localization.policy import LocalizationPolicy
 from dimos.ar.module import (
     ARModule,
     ARModuleConfig,
+    LocalizationConfig,
+    LocalizationProviderConfig,
 )
 from dimos.ar.navigation.preview import NavigationPreviewService
 from dimos.ar.navigation.types import NavState
@@ -19,6 +20,7 @@ from dimos.ar.robot.odometry import RobotOdometry
 from dimos.ar.robot.profiles.profile import RobotProfile
 from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 from dimos.ar.sensors.lidar_settings import LidarSettings
+from dimos.ar.spatial import FrameSnapshot
 
 
 class _FakeWs:
@@ -52,14 +54,17 @@ class _FakeWs:
             self.broadcasts.append(text)
 
 
-def _module_with_policy(
+def _module_with_localization(
     providers: list[str],
     *,
     profile: RobotProfile = UNITREE_GO2_PROFILE,
     agent_available: bool = False,
 ) -> ARModule:
     module = object.__new__(ARModule)
-    module.config = ARModuleConfig()
+    module.config = ARModuleConfig(localization=LocalizationConfig(providers=[
+        LocalizationProviderConfig(type=provider, map_code="test-map" if provider == "vps" else None)
+        for provider in providers
+    ]))
     module._lidar_subscriptions = {}
     module._navigation_service = SimpleNamespace(
         submit=lambda goal, _epoch, _revision: (
@@ -69,13 +74,17 @@ def _module_with_policy(
         ),
         cancel=lambda: None,
     )
-    module._map_localization = None
+    module._native_map = None
     module._pairing_log_at = 0.0
     module._pairing_rejected = 0
     module._pairing_accepted = 0
     module._waiting_for_localization_pose = set()
-    module._odometry = RobotOdometry(factor=profile.odom_scale_correction_factor)
-    module._policy = LocalizationPolicy(providers, travel=module._odometry.travel)
+    module._odometry = RobotOdometry()
+    module._localization = SimpleNamespace(
+        frames=FrameSnapshot.initial(module._odometry.reference_id),
+        connect=Mock(), disconnect=Mock(), manual=Mock(), progress=Mock(),
+        observations=Mock(), reset=Mock(), on_goal_reached=Mock(),
+    )
     module._replay_mode = False
     module._ws_server = _FakeWs()  # type: ignore[assignment]
     module._profile = profile
@@ -100,13 +109,13 @@ def _module_with_policy(
         effects=(module._clear_navigation, module._publish_stop),
     )
     module._agent_service = ARAgentService(
-        factor=profile.odom_scale_correction_factor,
+        frames=lambda: module._localization.frames,
         connection_count=lambda: module._ws_server.connection_count,
         broadcast=module._ws_server.schedule_broadcast_text,
     )
     module._previews = NavigationPreviewService(
         SimpleNamespace(plan=lambda *_args: None),
-        factor=profile.odom_scale_correction_factor,
+        frames=lambda: module._localization.frames,
         odometry=module._odometry.latest,
         on_preview=module._on_navigation_preview,
     )
@@ -115,7 +124,7 @@ def _module_with_policy(
 
 
 def _arm_module_with_two_clients() -> ARModule:
-    module = _module_with_policy([])
+    module = _module_with_localization([])
     module._capabilities = CapabilitySet.from_supported(
         frozenset(),
         localization_available=False,

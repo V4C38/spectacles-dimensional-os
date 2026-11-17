@@ -1,4 +1,4 @@
-import { odomToClientTrackingPose, rotateVecByQuat, type ClientTrackingOrigin } from "../localization/ClientTracking";
+import { mapToClientTrackingPose, rotateVecByQuat, type ClientTrackingOrigin } from "../localization/ClientTracking";
 import type { ARModuleSessionState } from "../websocket/ARModuleSession";
 import { deriveSessionLinkPhase, NO_ROBOT_CONNECTED_LABEL } from "../presentation/ControlPanelPresentation";
 import type { Pose, RobotDescription, ReadonlyFacts, Vec3, Quat } from "../ClientContracts";
@@ -96,7 +96,7 @@ export function robotTitleText(view: ARModuleSessionState): string {
 export function projectRobotPose(
   input: Extract<RobotMarkerApplyInput, { mode: "localizedOdom" }>,
 ): ReadonlyFacts<{ position: Vec3; orientation: Quat }> {
-  return odomToClientTrackingPose(input.pose, input.origin);
+  return mapToClientTrackingPose(input.pose, input.origin);
 }
 
 /** Rotated base-to-floor offset, in metres in the caller's coordinate basis. */
