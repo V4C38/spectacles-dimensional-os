@@ -16,7 +16,9 @@ def test_saved_map_setting_reaches_native_module_without_replacing_native_option
     source.parent.mkdir(parents=True)
     original = {"go2relocalization": {"map_file": "old", "relocalize_once": False}}
     source.write_text(json.dumps(original))
-    target = write_runtime_config({"localization": {"native_map_file": map_file}})
+    target = write_runtime_config(
+        {"localization": {"native_map_file": map_file}}, use_go2_localization=True
+    )
     try:
         actual = json.loads(target.read_text())
         assert actual["go2relocalization"] == {
@@ -43,6 +45,20 @@ def test_runtime_snapshot_replaces_ar_settings_and_preserves_native_config(tmp_p
         assert actual == {**original, "armodule": {"localization": {"providers": []}, "robot_display_name": "Desk"}}
         assert json.loads(source.read_text()) == original
         assert target.stat().st_mode & 0o777 == 0o600
+    finally:
+        target.unlink()
+
+
+def test_openyam_snapshot_omits_go2_section(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    source = dimos_config_path()
+    source.parent.mkdir(parents=True)
+    source.write_text(json.dumps({"go2relocalization": {"map_file": "office"}}))
+    profile = {"localization": {"native_map_file": None}}
+    target = write_runtime_config(profile)
+    try:
+        assert json.loads(target.read_text()) == {"armodule": profile}
+        assert "go2relocalization" in json.loads(source.read_text())
     finally:
         target.unlink()
 

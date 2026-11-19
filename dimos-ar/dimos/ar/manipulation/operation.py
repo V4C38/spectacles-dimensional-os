@@ -264,8 +264,8 @@ class ManipulationOperation:
             previous = operation.progress_pose
             if (
                 previous is None
-                or abs(previous[0] - distance) >= 0.002
-                or abs(previous[1] - angle) >= math.radians(0.5)
+                or previous[0] - distance >= 0.002
+                or previous[1] - angle >= math.radians(0.5)
             ):
                 operation.progress_pose = (distance, angle)
                 operation.stalled_at = now

@@ -71,6 +71,19 @@ export async function bootstrap(
   });
   await page.addInitScript((mode) => {
     const w = window as any;
+    const mediaDevices = navigator.mediaDevices;
+    const originalCapture = mediaDevices.getUserMedia.bind(mediaDevices);
+    const originalPermissionQuery = navigator.permissions.query.bind(navigator.permissions);
+    let microphoneGranted = false;
+    navigator.permissions.query = async descriptor => {
+      if (descriptor.name !== "microphone") return originalPermissionQuery(descriptor);
+      return { state: microphoneGranted ? "granted" : "prompt" } as PermissionStatus;
+    };
+    mediaDevices.getUserMedia = async constraints => {
+      if (!constraints?.audio || constraints.video) return originalCapture(constraints);
+      microphoneGranted = true;
+      return { getTracks: () => [{ stop: () => { w.integrationMicChecks = (w.integrationMicChecks ?? 0) + 1; } }] } as unknown as MediaStream;
+    };
     w.questDevice = new w.IWER.XRDevice(w.IWER.metaQuest3);
     w.questDevice.primaryInputMode = mode;
     w.questDevice.installRuntime({ forceInstall: true });
@@ -285,6 +298,9 @@ export async function bootstrap(
   });
   await page.locator("#enter").click();
   await expect(page.locator("#enter")).toHaveText("Enter AR");
+  await page.getByRole("button", { name: "Enable microphone" }).click();
+  await expect(page.getByRole("button", { name: "Microphone enabled" })).toBeDisabled();
+  expect(await page.evaluate(() => (window as any).integrationMicChecks)).toBe(1);
   await page.locator("#enter").click();
   await expect
     .poll(() => snapshot(page).then((s) => s?.wizardStep))

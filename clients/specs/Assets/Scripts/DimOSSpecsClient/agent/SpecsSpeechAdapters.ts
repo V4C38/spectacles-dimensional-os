@@ -23,12 +23,16 @@ export class SpecsRecognition implements RecognitionPort {
         options.onTranscriptionUpdateEvent.add(event => {
           if (generation !== this.generation || !this.active) return;
           onText(event.text, event.isFinal);
-          if (event.isFinal) this.end();
+          // Snap ASR keeps listening after a final fragment. Only the final
+          // fragment after release should end the native recording.
+          if (event.isFinal && this.finishingUntil !== null) this.end();
         });
         options.onTranscriptionErrorEvent.add(code => {
           if (generation !== this.generation || !this.active) return;
-          onError(code === AsrModule.AsrStatusCode.Unauthenticated ? "service-not-allowed" :
-            code === AsrModule.AsrStatusCode.NoInternet ? "network" : `native-${code}`);
+          print(`Speech recognition failed (Snap ASR status ${code})`);
+          onError(code === AsrModule.AsrStatusCode.Unauthenticated ? "sign in to Spectacles to use speech recognition" :
+            code === AsrModule.AsrStatusCode.NoInternet ? "Spectacles needs an internet connection for speech recognition" :
+            `Spectacles speech recognition failed (status ${code})`);
         });
         this.module.startTranscribing(options); onStarted();
       } catch (error) { if (generation === this.generation) onError(String(error)); }
@@ -39,13 +43,12 @@ export class SpecsRecognition implements RecognitionPort {
   // transcript first, retaining the latest interim draft if no final arrives.
   finish(): void { this.finishingUntil = getTime() + 1.1; }
   tick(): void {
-    if (this.finishingUntil !== null && getTime() >= this.finishingUntil) {
-      const end = this.ended; this.stop(); end?.();
-    }
+    if (this.finishingUntil !== null && getTime() >= this.finishingUntil) this.end();
   }
   private end(): void {
-    this.active = false; this.finishingUntil = null;
-    const end = this.ended; this.ended = null; end?.();
+    const end = this.ended;
+    this.stop();
+    end?.();
   }
   stop(): void {
     this.generation++; this.ended = null; this.finishingUntil = null;

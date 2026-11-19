@@ -318,8 +318,10 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     });
     this.tts = tts;
     let asrModule: AsrModule | null = null;
+    // This literal native dependency declares Microphone access to Lens Studio.
+    // Snap OS owns consent. Transcription starts only on a deliberate record gesture.
     try { asrModule = require("LensStudio:AsrModule") as AsrModule; }
-    catch { print("Speech recognition is unavailable in this runtime"); }
+    catch (error) { print(`Speech recognition module unavailable: ${String(error)}`); }
     const speechController = new SpecsAgentController({
       asrModule,
       session,

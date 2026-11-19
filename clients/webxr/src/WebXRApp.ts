@@ -6,6 +6,7 @@ import { DimOSWebXRClient } from "./DimOSWebXRClient";
 import { reportDiagnostic } from "./diagnostics/Diagnostics";
 import { WebXRInputController } from "./input/WebXRInputController";
 import { WebXRSessionController } from "./WebXRSessionController";
+import type { BrowserMicrophonePermission } from "./agent/BrowserMicrophonePermission";
 
 /** SDK composition only; tracking and input each have one lifecycle owner. */
 export class WebXRApp extends xb.Script {
@@ -17,10 +18,10 @@ export class WebXRApp extends xb.Script {
   private readonly presence = new PresenceRenderer();
   private environmentDepth: EnvironmentDepthRenderer | null = null;
 
-  constructor(private readonly client: DimOSWebXRClient) {
+  constructor(private readonly client: DimOSWebXRClient, microphone?: BrowserMicrophonePermission) {
     super();
     this.inputController = new WebXRInputController(client, this, {
-      session: () => this.sessions.session, tracking: () => this.sessions.tracking,
+      session: () => this.sessions.session, tracking: () => this.sessions.tracking, microphone,
     });
     this.sessions = new WebXRSessionController({
       renderer: () => xb.core.renderer.xr,

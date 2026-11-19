@@ -35,20 +35,20 @@ function launcher(initialStatus?: Promise<unknown>) {
 }
 const element = (id: string) => document.getElementById(id)!;
 
-it("shows WebXR URL or Specs PIN and keeps IP in expanded details", () => {
+it("shows host IP with the selected client connection details", () => {
   const { update } = launcher();
   const status = { host_ip: "192.168.1.2", pin: "012345", webxr_url: "https://192.168.1.2:5173" };
-  update({ ...status, client: "webxr" });
-  expect(element("connectionSummaryLabel").textContent).toBe("PIN");
-  expect(document.querySelector("#urlSummary a")!.getAttribute("href")).toBe(status.webxr_url);
-  expect(element("pinRow").classList.contains("hidden")).toBe(true);
-  for (const client of ["specs", "webxr"]) {
+  for (const client of ["webxr", "specs"]) {
     update({ ...status, client });
     expect(element("hostIpRow").classList.contains("hidden")).toBe(false);
+    expect(element("hostIpSummary").textContent).toBe(status.host_ip);
     expect(element("hostIp").textContent).toBe(status.host_ip);
-    if (client === "specs") {
-      expect(element("connectionSummaryLabel").textContent).toBe("PIN");
-      expect(element("pinSummary").textContent).toBe(status.pin);
+    expect(element("pinSummary").textContent).toBe(status.pin);
+    expect(element("pin").textContent).toBe(status.pin);
+    expect(element("webxrNetworkRow").classList.contains("hidden")).toBe(client === "specs");
+    expect(element("webxrHint").classList.contains("hidden")).toBe(client === "specs");
+    if (client === "webxr") {
+      expect(element("webxrNetwork").querySelector("a")?.getAttribute("href")).toBe(status.webxr_url);
     }
   }
 });
@@ -115,11 +115,12 @@ it("keeps a newer event status when the initial HTTP snapshot arrives late", asy
   let resolve!: (status: unknown) => void;
   const initial = new Promise(value => { resolve = value; });
   const { update } = launcher(initial);
-  update({ host_ip: "10.0.0.2", webxr_url: "https://10.0.0.2:5173" });
+  update({ client: "webxr", host_ip: "10.0.0.2", webxr_url: "https://10.0.0.2:5173" });
   resolve({ phase: "idle", host_ip: "10.0.0.1" });
   await new Promise(value => setTimeout(value, 0));
   expect(element("hostIp").textContent).toBe("10.0.0.2");
-  expect(document.querySelector("#urlSummary a")!.getAttribute("href")).toBe("https://10.0.0.2:5173");
+  expect(element("webxrNetworkRow").classList.contains("hidden")).toBe(false);
+  expect(element("webxrNetwork").querySelector("a")?.getAttribute("href")).toBe("https://10.0.0.2:5173");
 });
 
 async function configuredLauncher(inspect: (body: any) => Promise<unknown>) {

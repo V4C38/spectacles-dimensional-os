@@ -6,13 +6,14 @@ export function launcherPresentation({ status, manipulation, simulated, can, pla
   const canRequired = manipulation && !simulated && can.state !== "not_required";
   const hardwareMissing = manipulation && (!planner.ready || (canRequired && !can.ready));
   const dependenciesReady = status.check_ok === true;
+  const setupReady = dependenciesReady && (!manipulation || planner.ready);
   return {
     locked, busy, canRequired, hardwareMissing,
     startDisabled: locked || busy || !dependenciesReady || settingUp || hardwareMissing,
     installDisabled: locked || busy || settingUp,
-    dependencyText: phase === "installing" ? "installing…" : phase === "checking" ? "checking…" : dependenciesReady && !hardwareMissing ? "" : "incomplete",
-    dependencyPhase: phase === "installing" || phase === "checking" ? phase : dependenciesReady && !hardwareMissing ? "" : "needs_setup",
-    setupReady: dependenciesReady && (!manipulation || planner.ready),
+    dependencyText: phase === "installing" ? "installing…" : phase === "checking" ? "checking…" : dependenciesReady ? "" : "incomplete",
+    dependencyPhase: phase === "installing" || phase === "checking" ? phase : dependenciesReady ? "" : "needs_setup",
+    setupReady,
     stopLabel: phase === "stopping" ? "Force stop" : "Stop",
     stopDanger: locked,
   };

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from armodule import ProcessManager
+from armodule import Phase, ProcessManager
 
 
 @pytest.mark.asyncio
@@ -71,6 +71,50 @@ async def test_force_stop_bypasses_pending_grace_lock(tmp_path: Path) -> None:
         ]
     finally:
         mgr._lock.release()
+
+
+@pytest.mark.asyncio
+async def test_force_stop_clears_abandoned_stopping_phase(tmp_path: Path) -> None:
+    mgr = ProcessManager(root=tmp_path)
+    mgr.runtime.update_status(phase=Phase.STOPPING)
+
+    await mgr.stop_armodule(force=True)
+
+    assert mgr.status.phase == Phase.IDLE
+
+
+@pytest.mark.asyncio
+async def test_force_stop_reaps_worker_after_group_leader_exits(tmp_path: Path) -> None:
+    import os
+    import sys
+
+    if not Path("/proc").is_dir():
+        pytest.skip("Linux process-group inspection")
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-c",
+        "import subprocess,sys; "
+        "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(120)']); "
+        "print(p.pid,flush=True)",
+        stdout=asyncio.subprocess.PIPE, start_new_session=True,
+    )
+    assert process.stdout is not None
+    worker = int(await asyncio.wait_for(process.stdout.readline(), 2))
+    mgr = ProcessManager(root=tmp_path)
+    mgr.runtime.stopping_pids.add(process.pid)
+    try:
+        async with asyncio.timeout(2):
+            while process.returncode is None:
+                await asyncio.sleep(0.02)
+        await asyncio.wait_for(mgr.stop_armodule(force=True), 2.5)
+        await asyncio.wait_for(process.wait(), 1)
+        stat = Path(f"/proc/{worker}/stat")
+        assert not stat.exists() or stat.read_text().rsplit(")", 1)[1].split()[0] == "Z"
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        await asyncio.wait_for(process.wait(), 2)
 
 
 @pytest.mark.asyncio

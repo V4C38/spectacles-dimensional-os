@@ -86,3 +86,16 @@ def test_go2_blueprints_connect_correlated_navigation_status(blueprint) -> None:
     outgoing = next(stream for stream in planner.streams if stream.name == incoming.name)
     assert incoming.direction == "in" and outgoing.direction == "out"
     assert incoming.type == outgoing.type
+
+
+def test_go2_agentic_control_providers_match_rpc_specs() -> None:
+    if unitree_go2_ar_agentic is None:
+        pytest.skip("unitree_go2_agentic blueprint is not installed")
+
+    from dimos.ar.navigation.native_planner import ARReplanningAStarPlanner
+    from dimos.ar.robot.agent_control import ARAgentNavigationSpec, ARFollowingQuiescenceSpec
+    from dimos.ar.robot.guarded_agent import ARPersonFollowSkillContainer
+    from dimos.spec.utils import spec_annotation_compliance
+
+    assert spec_annotation_compliance(ARReplanningAStarPlanner, ARAgentNavigationSpec)
+    assert spec_annotation_compliance(ARPersonFollowSkillContainer, ARFollowingQuiescenceSpec)

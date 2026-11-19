@@ -173,10 +173,10 @@ export function deriveSessionLinkPhase(view: ARModuleSessionState): SessionLinkP
   if (view.connection === "connecting" || view.connection === "awaiting_hello") {
     return "connecting";
   }
-  if (!view.pose) {
+  if (view.robotTelemetry === "unavailable") {
     return "robotOffline";
   }
-  return "connected";
+  return view.robotTelemetry === "available" || view.pose ? "connected" : "connecting";
 }
 
 export function sessionLinkStatus(
@@ -191,7 +191,7 @@ export function sessionLinkStatus(
       };
     case "connecting":
       return {
-        text: "\n\n\nConnecting…",
+        text: view.connection === "ready" ? "\n\n\nWaiting for robot telemetry…" : "\n\n\nConnecting…",
         color: "error",
       };
     case "robotOffline":

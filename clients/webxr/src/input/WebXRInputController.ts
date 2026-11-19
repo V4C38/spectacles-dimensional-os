@@ -11,6 +11,7 @@ import type { WebXRRobotPresenter } from "../presentation/WebXRRobotPresenter";
 import type { WebXRUIPresenter } from "../presentation/WebXRUIPresenter";
 import type { CameraPreviewFrame } from "../presentation/SetupCameraPreviewView";
 import type { AgentDraftSession } from "@dimos-ar-client/agent/AgentDraftSession";
+import type { BrowserMicrophonePermission } from "../agent/BrowserMicrophonePermission";
 import type { Vec3 } from "@dimos-ar-client/ClientContracts";
 import type { JoystickAxes } from "@dimos-ar-client/navigation/NavigationCommands";
 
@@ -314,7 +315,11 @@ export class WebXRInputController {
 
   constructor(private readonly client: WebXRInputPorts,
     private readonly scene: Pick<THREE.Object3D, "add">,
-    private readonly trackingState: { session(): XRSession | null; tracking(): boolean }) {
+    private readonly trackingState: {
+      session(): XRSession | null;
+      tracking(): boolean;
+      microphone?: BrowserMicrophonePermission;
+    }) {
     this.panels = new PanelInputPresenter(client.ui, () => this.mainMenu, () => this.gestures.panelHold !== null, () => this.gestures.owner !== null);
   }
 
@@ -400,7 +405,7 @@ export class WebXRInputController {
     if (!this.session) return;
     const { position: p, orientation: q } = viewer.transform;
     const snap = this.panels.update(this.session, frame, reference, p, q, deltaS);
-    this.mainMenu?.apply(snap, this.client.speech.snapshot());
+    this.mainMenu?.apply(snap, this.client.speech.snapshot(), this.trackingState.microphone);
     this.mainMenu?.updateCameraPreview(this.client.cameraPreview(), deltaS);
     this.navigationFloor.visible = this.client.controlsEnabled() && this.client.session.view().capabilities?.navigation.available === true && this.client.robot.floorWorldY() !== null;
     this.navigationFloor.position.y = this.client.robot.floorWorldY() ?? 0;
@@ -609,7 +614,11 @@ export class WebXRInputController {
         if (y !== null) this.gestures.begin({ kind: "scroll", source: event.target, view: scroll, startY: y, offset: scroll.scrollOffset, bar: hit.object.userData.scrollbar === true });
         return;
       }
-      if (this.mainMenu.isSpeechTarget(hit?.object)) this.client.speech.beginRecording();
+      if (this.mainMenu.isSpeechTarget(hit?.object)) {
+        const microphone = this.trackingState.microphone;
+        if (microphone?.state === "needed") microphone.request();
+        else if (microphone?.state !== "requesting") this.client.speech.beginRecording();
+      }
       if (!this.mainMenu.isControl(hit?.object) && this.mainMenu.beginManipulation(ray.origin, ray.direction, event.target.getWorldQuaternion(new THREE.Quaternion()))) {
         this.panels.setupPlacement.pin();
         this.gestures.begin({ kind: "panel", source: event.target, grip: false });

@@ -264,6 +264,17 @@ def test_old_server_epoch_cannot_reconnect_and_refresh_replacement(tail_runtime)
     assert result["status"] == "rejected"
 
 
+def test_expired_heartbeat_cannot_replace_live_control_epoch(tail_runtime):
+    module, now, observation, request = tail_runtime
+    now[0] += 0.1
+    module.heartbeat("delayed", 100, time.monotonic())
+    assert module._control_epoch == "robot"
+    assert not module.session.stopped
+    refresh(module, observation)
+    module.advance()
+    assert module.command("replacement", request("acquire", revision=7, lease="b"))["token"]
+
+
 def test_real_runtime_requires_control_heartbeat_before_trusted_admission():
     from dimos.ar.manipulation.runtime import ManipulationRuntime
 

@@ -89,7 +89,7 @@ it("keeps the gripper menu across hover transitions and shows the target guide",
     r.handle.object.position.y - 0.07,
   );
   r.eeHovered = false;
-  apply(1.1);
+  apply(1.9);
   expect(r.gripperMenu.visible).toBe(true);
   expect(r.path.visible).toBe(true);
   r.pinned = true;
@@ -768,29 +768,30 @@ it("retains loaded arm meshes, handles and Preview through feedback loss", () =>
 });
 
 
-it("owns the visible handle's rejection, stale and blocked center colors", () => {
+it("keeps the end-effector marker neutral through rejection, stale feedback and blocked control", () => {
   const renderer = new ManipulationRenderer();
   const color = () => (renderer.handle.visual.material as THREE.ShaderMaterial).uniforms.uCenterColor.value.getHex();
   rejection = { revision: 1, pose, message: "IK failed" };
   applyRenderer(renderer, { selected: false, target: pose, now: 1 });
-  expect(color()).toBe(0xffcc00);
+  expect(color()).toBe(0xb3b3b3);
   applyRenderer(renderer, { selected: false, target: pose, now: 2, snapshot: { blocked: true } });
-  expect(color()).toBe(0xffcc00);
+  expect(color()).toBe(0xb3b3b3);
   rejection = null;
   applyRenderer(renderer, { selected: false, target: pose, now: 3, fresh: false });
-  expect(color()).toBe(0xffcc00);
+  expect(color()).toBe(0xb3b3b3);
   applyRenderer(renderer, { selected: false, target: pose, now: 4 });
   expect(color()).toBe(0xb3b3b3);
   renderer.dispose();
 });
 
 
-it("matches the selectable EE collider to its visual and keeps the measured marker small", () => {
+it("enlarges the selectable EE collider and keeps the measured marker small", () => {
   const renderer = new ManipulationRenderer();
   try {
     expect((renderer.handle.visual.geometry as THREE.SphereGeometry).parameters.radius).toBe(.018);
     expect((renderer.handle.collider.geometry as THREE.SphereGeometry).parameters.radius).toBe(.018);
     expect((renderer.measuredHandle.visual.geometry as THREE.SphereGeometry).parameters.radius).toBe(.012);
+    expect(renderer.handle.collider.scale.x).toBeCloseTo(1.04 * 1.15);
     expect(renderer.handle.collider.userData.rayPriority).toBe(10);
   } finally { renderer.dispose(); }
 });

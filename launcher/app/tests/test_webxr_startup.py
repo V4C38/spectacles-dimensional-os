@@ -109,9 +109,10 @@ async def test_exit_during_startup_never_launches_webxr(
 
 
 @pytest.mark.asyncio
-async def test_restart_ignores_old_readiness_and_exit(runtime) -> None:
+@pytest.mark.parametrize("blueprint", ["unitree_go2_ar", "unitree_go2_ar_agentic"])
+async def test_restart_ignores_old_readiness_and_exit(runtime, blueprint: str) -> None:
     mgr, children, spawn = runtime
-    await mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr")
+    await mgr.start_armodule(blueprint=blueprint, client="webxr")
     old_proc = mgr.runtime.backend.process
     old_ready = mgr.runtime.backend.ready
     old_task = mgr.runtime.pending_webxr_start
@@ -121,7 +122,7 @@ async def test_restart_ignores_old_readiness_and_exit(runtime) -> None:
         await mgr.runtime._stop_children_unlocked()
     assert old_task.cancelled()
 
-    await mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr")
+    await mgr.start_armodule(blueprint=blueprint, client="webxr")
     new_task = mgr.runtime.pending_webxr_start
     old_ready.set()
     # A retired reader must neither release the new gate nor change its status.
@@ -139,6 +140,7 @@ async def test_restart_ignores_old_readiness_and_exit(runtime) -> None:
     await parsed(mgr, children[1], READY)
     await asyncio.wait_for(new_task, timeout=1)
     assert spawn.await_count == 3
+    assert mgr.status.host_ip == "10.0.0.8"
 
 
 @pytest.mark.asyncio

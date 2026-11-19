@@ -78,8 +78,10 @@ class ManipulationRuntime:
         import math
 
         now = time.monotonic()
-        if not epoch or not math.isfinite(deadline) or not now < deadline <= now + 1:
+        if not epoch or not math.isfinite(deadline) or deadline > now + 1:
             raise ValueError("invalid control-plane heartbeat")
+        if deadline <= now:
+            return
         with self.lock:
             if epoch in self._retired_control_epochs:
                 return

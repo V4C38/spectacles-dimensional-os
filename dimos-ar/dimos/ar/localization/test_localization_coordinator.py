@@ -318,18 +318,32 @@ async def test_shutdown_waits_for_owned_jobs_before_closing_provider(setup):
     assert order == ["job", "vps"]
 
 
-async def test_missing_live_pose_defers_once_then_recovers(setup):
+async def test_missing_live_pose_reports_once_and_starts_headset_capture(setup):
     f = setup
     f.odometry.history.clear()
     f.service._tick()
     f.service._tick()
     unavailable = [b for _, b in f.messages if b.get("reason") == "robot_pose_unavailable"]
     assert len(unavailable) == 1
-    assert f.client.episode is None
+    episode = f.client.episode
+    assert episode is not None and episode.purpose == "robot"
     f.odometry.history.push(PoseStamped(ts=100, position=[0, 0, 0]), ts_server=100)
     f.service._tick()
-    assert f.client.episode.purpose == "robot"
+    assert f.client.episode is episode
     assert any(b.get("reason") == "robot_pose_available" for _, b in f.messages)
+
+
+async def test_missing_capture_pose_does_not_report_live_telemetry_loss(setup):
+    f = setup
+    await f.service._tag(
+        "client", f.client, f.service._request("client", f.client, "robot"), (_observation(96),)
+    )
+
+    assert results(f) == []
+    status = f.messages[-1][1]
+    assert status["reason"] == "capture_pose_unavailable"
+    assert status["episode_id"]
+    assert f.odometry.history.at_server_ts(100) is not None
 
 
 async def test_capture_travel_not_completion_travel_controls_refresh(setup):

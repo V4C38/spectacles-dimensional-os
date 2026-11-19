@@ -909,6 +909,9 @@ class RuntimeProcesses:
         if "Manipulation runtime ready" in plain:
             self.backend.manipulation_ready = True
             self._update_runtime_readiness()
+        if "PIN unavailable, enter IP" in plain:
+            self.update_status(pin=None)
+            return
         if m := _RE_PIN.search(plain):
             self.update_status(pin=m.group(1))
             return
@@ -1079,7 +1082,10 @@ class RuntimeProcesses:
             if simulation:
                 env["DIMOS_AR_SIMULATION"] = "1"
             self.backend = ProcessSession()
-            self.backend.config_path = write_runtime_config(armodule_config or {})
+            self.backend.config_path = write_runtime_config(
+                armodule_config or {},
+                use_go2_localization=blueprint_definition(blueprint).robot == "unitree_go2",
+            )
             argv = self.host.build_start_argv(
                 blueprint=blueprint,
                 robot_ip=pinned_ip,
@@ -1311,33 +1317,40 @@ class RuntimeProcesses:
 
     async def stop_armodule(self, *, force: bool = False) -> None:
         if force:
+            processes = (
+                self.backend.process,
+                self.webxr.process,
+                self.host.dependency_process,
+            )
+            groups = self.stopping_pids | {p.pid for p in processes if p is not None}
             roots = self.stopping_pids | {
-                p.pid
-                for p in (
-                    self.backend.process,
-                    self.webxr.process,
-                    self.host.dependency_process,
-                )
-                if p is not None and p.returncode is None
+                p.pid for p in processes if p is not None and p.returncode is None
             }
+            group_members: set[int] = set()
             children: dict[int, list[int]] = {}
             for entry in Path("/proc").iterdir() if Path("/proc").is_dir() else []:
                 if not entry.name.isdigit():
                     continue
                 try:
                     fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
-                    children.setdefault(int(fields[1]), []).append(int(entry.name))
+                    pid = int(entry.name)
+                    children.setdefault(int(fields[1]), []).append(pid)
+                    if int(fields[2]) in groups:
+                        group_members.add(pid)
                 except (OSError, ValueError, IndexError):
                     continue
             if not Path("/proc").is_dir():
                 process = await asyncio.create_subprocess_exec(
-                    "ps", "-axo", "pid=,ppid=", stdout=asyncio.subprocess.PIPE
+                    "ps", "-axo", "pid=,ppid=,pgid=", stdout=asyncio.subprocess.PIPE
                 )
                 output, _ = await process.communicate()
                 for line in output.decode().splitlines():
                     fields = line.split()
-                    if len(fields) == 2:
-                        children.setdefault(int(fields[1]), []).append(int(fields[0]))
+                    if len(fields) == 3:
+                        pid, parent, group = map(int, fields)
+                        children.setdefault(parent, []).append(pid)
+                        if group in groups:
+                            group_members.add(pid)
             owned: list[int] = []
 
             def collect(pid: int) -> None:
@@ -1347,7 +1360,9 @@ class RuntimeProcesses:
                 for child in children.get(pid, []):
                     collect(child)
 
-            for pid in roots:
+            # A worker can outlive its parent and be reparented while still
+            # belonging to the launcher-owned process group.
+            for pid in roots | group_members:
                 collect(pid)
             self.host._append_log("Force stopping owned runtime processes…")
             for pid in reversed(owned):
@@ -1386,7 +1401,9 @@ class RuntimeProcesses:
             if not self.host._lock.locked():
                 await self.stop_armodule()
             return
-        if self.host.status.phase == Phase.STOPPING:
+        # A canceled or failed stop can leave STOPPING published after releasing
+        # the lock. Only an active shutdown should suppress a retry.
+        if self.host.status.phase == Phase.STOPPING and self.host._lock.locked():
             return
         async with self.host._lock:
             self.update_status(phase=Phase.STOPPING)

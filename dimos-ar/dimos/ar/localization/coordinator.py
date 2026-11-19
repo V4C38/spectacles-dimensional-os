@@ -433,8 +433,6 @@ class LocalizationCoordinator:
                         "reason": "robot_pose_available" if available else "robot_pose_unavailable",
                     },
                 )
-        if not available:
-            return
         for key, client in active:
             if (
                 client.episode is None
@@ -451,7 +449,7 @@ class LocalizationCoordinator:
                     self._request(key, client, "robot")
                 elif self._vps is not None and self._vps_adopted and self._admission.delay() == 0:
                     self._request(key, client, "headset")
-        if active and self._robot_due() and self._marker is not None:
+        if available and active and self._robot_due() and self._marker is not None:
             eligible = next(
                 (
                     (key, client)
@@ -467,7 +465,7 @@ class LocalizationCoordinator:
             if eligible is not None:
                 self._request(*eligible, "robot")
                 return
-        if active:
+        if available and active:
             self._launch_robot()
 
     def _request(
@@ -545,7 +543,8 @@ class LocalizationCoordinator:
             ts, fallback_to_latest=self._allow_latest_robot_pose
         )
         if pose is None:
-            self._finish(key, "deferred", "robot_pose_unavailable")
+            self._finish(key, "deferred", "capture_pose_unavailable")
+            client.retry_at = self._clock() + 2
             return
         alignment = Alignment(
             uuid4().hex,

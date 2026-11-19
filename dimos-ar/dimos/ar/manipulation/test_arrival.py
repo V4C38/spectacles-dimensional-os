@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
+
 from dimos.ar.manipulation.operation import ActiveOperation, DeferredGripper, ManipulationOperation
 
 
@@ -48,7 +50,8 @@ def test_near_endpoint_requires_fresh_settled_feedback_and_confirmed_stop(monkey
     assert operation.id is None
 
 
-def test_final_endpoint_stall_retires_execution_without_applying_gripper(monkeypatch):
+@pytest.mark.parametrize("positions", [(0.04, 0.04), (0.044, 0.047)])
+def test_final_endpoint_stall_retires_execution_without_applying_gripper(monkeypatch, positions):
     clock = [10.0]
     monkeypatch.setattr("dimos.ar.manipulation.operation.time.monotonic", lambda: clock[0])
     monkeypatch.setattr("dimos.ar.manipulation.operation.time.time", lambda: 100.2)
@@ -78,8 +81,13 @@ def test_final_endpoint_stall_retires_execution_without_applying_gripper(monkeyp
         )
     )
     assert not operation.advance(backend, stopped=False, feedback_max_age_s=0.5)
-    clock[0] += 2.1
+    clock[0] += 1.0
     observed.joints.ts = 100.1
+    observed.end_effector_pose.position.x = positions[0]
+    assert not operation.advance(backend, stopped=False, feedback_max_age_s=0.5)
+    clock[0] += 1.1
+    observed.joints.ts = 100.2
+    observed.end_effector_pose.position.x = positions[1]
     assert operation.advance(backend, stopped=False, feedback_max_age_s=0.5)
     assert operation.failed_id == "move"
     assert operation.completed_id is None

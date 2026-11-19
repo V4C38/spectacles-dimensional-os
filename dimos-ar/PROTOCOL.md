@@ -1751,9 +1751,9 @@ separate worker, preserving collision checks and exact Plan/Execute validation.
 `localization_status` carries the current shared and odometry identities in every
 mode. Provider `map_code` is optional metadata. Robot-scoped `deferred` reasons
 `robot_pose_unavailable` and `robot_pose_available` may omit `episode_id`. Clients
-reject stale shared/odom references. Missing
-robot telemetry pauses capture requests and displays “Robot telemetry unavailable.
-Waiting to localize.” Valid telemetry automatically resumes pending captures.
+reject stale shared/odom references. Live telemetry state is independent of
+headset capture. A missing pose at the capture timestamp defers only that capture
+with the episode-scoped reason `capture_pose_unavailable`.
 Unavailable camera/pose data and cloud admission waits are not unsuccessful VPS
 queries and must not announce that VPS failed. Initial setup still tries two actual
 unsuccessful VPS queries before tag fallback, then alternates tag and VPS attempts.

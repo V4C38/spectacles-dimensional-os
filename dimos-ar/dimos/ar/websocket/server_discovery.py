@@ -53,28 +53,30 @@ class IpRelayPublisher:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=0.1 if self.pin is None else 6)
-        self._delete()
-        self.pin = None
 
     def _run(self) -> None:
-        if self._stop.is_set() or not self._create():
-            logger.warning("PIN unavailable, enter IP")
-            return
-        if self._stop.is_set():
+        unavailable = False
+        try:
+            while not self._stop.is_set():
+                if self.pin is not None and not self._refresh():
+                    self.pin = None
+                    self._key = None
+                    logger.warning("PIN unavailable, enter IP")
+                    unavailable = True
+                if self.pin is None and not self._stop.is_set():
+                    if self._create():
+                        if self._stop.is_set():
+                            return
+                        logger.info(f"PIN: {self.pin}")
+                        unavailable = False
+                    elif not unavailable:
+                        logger.warning("PIN unavailable, enter IP")
+                        unavailable = True
+                if self._stop.wait(_REFRESH_SECONDS):
+                    return
+        finally:
             self._delete()
-            return
-        logger.info(f"PIN: {self.pin}")
-        while not self._stop.wait(_REFRESH_SECONDS):
-            if self._refresh():
-                continue
             self.pin = None
-            if self._stop.is_set() or not self._create():
-                logger.warning("PIN unavailable, enter IP")
-                return
-            if self._stop.is_set():
-                self._delete()
-                return
-            logger.info(f"PIN: {self.pin}")
 
     def _create(self) -> bool:
         body = self._request("POST", "/v1/pins", {"ip": self.ip, "port": self.port})

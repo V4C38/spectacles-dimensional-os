@@ -15,8 +15,11 @@ button { color: var(--dimos-color-primaryText, #171719); background: var(--dimos
 button:hover:not(:disabled) { filter: brightness(1.1); }
 button:active:not(:disabled) { transform: scale(.985); }
 button:disabled { opacity: .45; cursor: default; }
-#status { min-height: 22px; margin: 20px 0 0; color: var(--dimos-color-muted, #aeaeb2); font-size: 13px; line-height: 1.5; }
-#status:empty { display: none; }
+#status, #microphone-status { min-height: 22px; margin: 20px 0 0; color: var(--dimos-color-muted, #aeaeb2); font-size: 13px; line-height: 1.5; }
+#status:empty, #microphone-status:empty { display: none; }
+#microphone-setup { margin-top: 12px; }
+#enable-microphone { color: var(--dimos-color-ink, #fff); background: var(--dimos-color-control, #3a3a3c); }
+#microphone-status { margin-top: 8px; }
 @media (max-width: 520px) { .landing-panel { padding: 24px; } }
 @media (prefers-reduced-motion: reduce) { select, button { transition: none; } }
 

@@ -9,6 +9,7 @@ import { HMD_OPTIONS, parseHmdId, profileForHmd } from "./localization/HmdCalibr
 
 
 import { browserRecognition, browserSynthesis } from "./agent/BrowserSpeechAdapters";
+import { BrowserMicrophonePermission } from "./agent/BrowserMicrophonePermission";
 import { DimOSWebXRClient } from "./DimOSWebXRClient";
 
 import { WebXRApp } from "./WebXRApp";
@@ -140,6 +141,20 @@ async function boot(): Promise<void> {
       }),
       synthesis: browserSynthesis(),
     });
+    const microphoneSetup = document.getElementById("microphone-setup");
+    const microphoneButton = document.getElementById("enable-microphone") as HTMLButtonElement | null;
+    const microphoneStatus = document.getElementById("microphone-status");
+    let microphoneOffered = false;
+    const renderMicrophone = () => {
+      if (!microphoneSetup || !microphoneButton || !microphoneStatus) return;
+      microphoneSetup.hidden = !microphoneOffered;
+      microphoneButton.disabled = microphone.state !== "needed";
+      microphoneButton.textContent = microphone.state === "granted" ? "Microphone enabled" : "Enable microphone";
+      microphoneStatus.textContent = microphone.error ?? (microphone.state === "requesting"
+        ? "Allow microphone access in the browser prompt…"
+        : microphone.state === "unsupported" ? "Microphone access requires a supported headset browser over HTTPS." : "");
+    };
+    const microphone = new BrowserMicrophonePermission(renderMicrophone);
     info?.bind(client.session);
     const options = new xb.Options();
     options.xrButton.enabled = false;
@@ -156,7 +171,7 @@ async function boot(): Promise<void> {
     options.hands.visualizeMeshes = true;
     options.reticles.enabled = true;
     options.reticles.defaultDistance = EMPTY_RAY_LENGTH_M;
-    const app = new WebXRApp(client);
+    const app = new WebXRApp(client, microphone);
     xb.add(app);
     const xr = navigator.xr as XRSystemWithOffer | undefined;
     const offerSession = xr?.offerSession;
@@ -173,6 +188,18 @@ async function boot(): Promise<void> {
         xr.offerSession = offerSession;
       }
     }
+    const syncMicrophone = () => {
+      const view = client.session.view();
+      const offered = view.connection === "ready" && view.capabilities?.agent.available === true;
+      if (offered !== microphoneOffered) {
+        microphoneOffered = offered;
+        if (offered) microphone.check();
+        renderMicrophone();
+      }
+    };
+    const unsubscribeMicrophone = client.session.subscribeView(syncMicrophone);
+    if (microphoneButton) microphoneButton.onclick = () => { if (microphoneOffered) microphone.request(); };
+    syncMicrophone();
     client.session.start();
     const landingTick = window.setInterval(() => {
       if (document.visibilityState !== "visible" || xb.core.renderer.xr.isPresenting) return;
@@ -198,7 +225,8 @@ async function boot(): Promise<void> {
       if (event.persisted) { app.onXRSessionEnded(); onEnded(); return; }
       xb.core.renderer.xr.removeEventListener("sessionstart", onStarted);
       xb.core.renderer.xr.removeEventListener("sessionend", onEnded);
-      window.clearInterval(landingTick); info?.dispose();
+      window.clearInterval(landingTick); info?.dispose(); unsubscribeMicrophone();
+      if (microphoneButton) microphoneButton.onclick = null;
       enter.onclick = null;
       app.dispose();
     });

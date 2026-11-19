@@ -240,7 +240,7 @@ export class ManipulationRenderer {
     this.sphere.triangles(handleGeometry.positions, handleGeometry.indices, [0.82, 0.82, 0.82, 1], undefined, handleGeometry.normals);
     this.correction = new MarkerCorrectionRenderer(this.object, this.sphere);
     const collider = this.handle.createComponent("Physics.ColliderComponent") as ColliderComponent;
-    collider.shape = Shape.createSphereShape(); (collider.shape as SphereShape).radius = handleRadiusCm;
+    collider.shape = Shape.createSphereShape(); (collider.shape as SphereShape).radius = handleRadiusCm * 1.15;
     const hit = this.handle.createComponent(Interactable.getTypeName()) as Interactable;
     hit.keepHoverOnTrigger = true; hit.useFilteredPinch = true; hit.enableInstantDrag = true;
     this.subscriptions.push(hit.onHoverEnter.add(e => this.handleHover.add(String(e.interactor.inputType))));
@@ -469,7 +469,7 @@ export class ManipulationRenderer {
     if (observed?.pose && displayedPose) {
       this.place(this.handle, displayedPose, origin); this.place(this.measured.object, observed.pose, origin);
       const p = this.handle.getTransform().getWorldPosition();
-      if (this.handleHover.size || this.actionHover.size || this.capture.owner !== null) this.hoverUntil = now + 0.3;
+      if (this.handleHover.size || this.actionHover.size || this.capture.owner !== null) this.hoverUntil = now + 1;
       this.hoverProgress += ((now < this.hoverUntil ? 1 : 0) - this.hoverProgress) * (1 - Math.exp(-14 * dt));
       this.controls.gripper.sceneObject.enabled = markerAction.available && !state.stopped && (!intent.dragging || markerAction.allowDuringGrab) && this.hoverProgress > 0.01;
       this.controls.gripper.sceneObject.getTransform().setLocalScale(new vec3(1, 1, 1).uniformScale(Math.max(0.01, this.hoverProgress)));
@@ -491,9 +491,7 @@ export class ManipulationRenderer {
     this.controls.rescan.button.inactive = intent.executing || intent.dragging || intent.resetting;
     this.activityLabel.text = intent.activity + (model.visual_signature !== OPENYAM_MESH.signature ? " · Preview mesh unavailable" : "");
     this.label.text = `Movement speed ${Math.round(interaction.speedScale * 100)}%`;
-    this.sphere.setColor(intent.blocked || interaction.rejection
-      ? [((STYLE.warningColor >> 16) & 255) / 255, ((STYLE.warningColor >> 8) & 255) / 255, (STYLE.warningColor & 255) / 255, 1]
-      : [0.82, 0.82, 0.82, 1]);
+    this.sphere.setColor([0.82, 0.82, 0.82, 1]);
     this.correction.update(this.handle.enabled ? origin : null, now);
 
     this.controls.speedLabel.text = `${Math.round(interaction.speedScale * 100)}%`;

@@ -23,7 +23,37 @@ it("lets a silence-final arrive after release instead of discarding the transcri
   adapter.finish(); expect(module.stopTranscribing).not.toHaveBeenCalled();
   options.update({ text: "go to the doorway", isFinal: true });
   expect(text).toHaveBeenCalledWith("go to the doorway", true); expect(end).toHaveBeenCalledOnce();
+  await flush(); expect(module.stopTranscribing).toHaveBeenCalledOnce();
   setMockTime(2); adapter.tick(); expect(end).toHaveBeenCalledOnce();
+});
+
+it("keeps one native recording across final fragments while the user holds the control", async () => {
+  const module = { startTranscribing: vi.fn(), stopTranscribing: vi.fn().mockResolvedValue(undefined) };
+  const adapter = new SpecsRecognition(module as unknown as AsrModule);
+  const text = vi.fn(), end = vi.fn();
+  adapter.start(text, vi.fn(), end, vi.fn()); await flush();
+  options.update({ text: "go through the doorway", isFinal: true });
+  options.update({ text: "then stop", isFinal: false });
+  expect(text.mock.calls).toEqual([["go through the doorway", true], ["then stop", false]]);
+  expect(end).not.toHaveBeenCalled();
+  expect(module.startTranscribing).toHaveBeenCalledOnce();
+  expect(module.stopTranscribing).not.toHaveBeenCalled();
+  adapter.stop(); await flush();
+  expect(module.stopTranscribing).toHaveBeenCalledOnce();
+  options.update({ text: "stale", isFinal: true });
+  expect(text).toHaveBeenCalledTimes(2);
+});
+
+it.each([
+  [2, "sign in to Spectacles to use speech recognition"],
+  [3, "Spectacles needs an internet connection for speech recognition"],
+])("reports native failure %s without presenting it as permission refusal", async (code, reason) => {
+  const module = { startTranscribing: vi.fn(), stopTranscribing: vi.fn().mockResolvedValue(undefined) };
+  const adapter = new SpecsRecognition(module as unknown as AsrModule), error = vi.fn();
+  adapter.start(vi.fn(), error, vi.fn(), vi.fn()); await flush();
+  options.error(code);
+  expect(error).toHaveBeenCalledWith(reason);
+  adapter.stop(); await flush();
 });
 
 it("serializes a fresh recording after native stop and ignores stale callbacks", async () => {

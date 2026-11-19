@@ -251,7 +251,7 @@ export class ManipulationControlsView {
       this.hoverUntil = 0;
       this.hoverProgress = 0;
     } else {
-      if (input.endEffectorHovered || input.handDragging) this.hoverUntil = now + 0.3;
+      if (input.endEffectorHovered || input.handDragging) this.hoverUntil = now + 1;
       this.hoverProgress +=
         ((now < this.hoverUntil ? 1 : 0) - this.hoverProgress) *
         (1 - Math.exp(-14 * dtOutline));

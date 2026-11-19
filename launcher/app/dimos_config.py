@@ -15,7 +15,7 @@ def dimos_config_path() -> Path:
     return base / "dimos" / "config"
 
 
-def write_runtime_config(armodule: dict[str, Any]) -> Path:
+def write_runtime_config(armodule: dict[str, Any], *, use_go2_localization: bool = False) -> Path:
     """Preserve native configuration while replacing AR settings for this run."""
     source = dimos_config_path()
     data = json.loads(source.read_text()) if source.is_file() else {}
@@ -23,7 +23,9 @@ def write_runtime_config(armodule: dict[str, Any]) -> Path:
         raise TypeError("DimOS configuration must contain a JSON object")
     data["armodule"] = armodule
     localization = armodule.get("localization") or {}
-    if "native_map_file" in localization:
+    if not use_go2_localization:
+        data.pop("go2relocalization", None)
+    elif "native_map_file" in localization:
         native = dict(data.get("go2relocalization") or {})
         native["map_file"] = localization["native_map_file"] or None
         data["go2relocalization"] = native

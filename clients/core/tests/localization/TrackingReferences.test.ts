@@ -102,9 +102,20 @@ it("publishes metric map camera poses at the shared cadence", () => {
   clock.nowS = .05; publisher.tick(); expect(sent).toHaveLength(1);
 });
 it("accepts telemetry notices only for the current frame and native source", () => {
-  const f = ready(), status = { type: "localization_status", ...context, scope: "robot", status: "deferred", reason: "robot_pose_unavailable" };
-  f.receive({ ...status, type: "localization_status", odom_reference_id: "old" }); expect(f.session.view().localizationNotice).toBeNull();
-  f.receive({ ...status, type: "localization_status" }); expect(f.session.view().localizationNotice).toContain("telemetry unavailable");
+  const f = ready(), status = { ...context, type: "localization_status", scope: "robot", status: "deferred", reason: "robot_pose_unavailable" };
+  f.receive({ ...status, reason: "robot_pose_available", odom_reference_id: "old" });
+  expect(f.session.view().robotTelemetry).toBe("waiting");
+  f.receive(status); expect(f.session.view().robotTelemetry).toBe("waiting");
+  f.receive({ ...status, reason: "robot_pose_available" });
+  expect(f.session.view().robotTelemetry).toBe("available");
+  f.receive({ ...context, revision: 1, reset: true });
+  expect(f.session.view().robotTelemetry).toBe("available");
+  f.submit("robot");
+  f.receive({ ...status, episode_id: "robot" });
+  expect(f.session.view().robotTelemetry).toBe("available");
+  f.receive(status); expect(f.session.view().localizationNotice).toContain("telemetry unavailable");
+  f.receive({ ...status, reason: "robot_pose_available" });
+  expect(f.session.view().localizationNotice).toBeNull();
 });
 
 it("preserves connected frame context and same-tracking baseline through a UI clear", () => {

@@ -68,6 +68,27 @@ for (const phase of ["checking", "installing", "starting", "running", "stopping"
   });
 }
 
+test("pending CAN setup blocks Start without marking DimOS installation incomplete", () => {
+  const view = launcherPresentation({
+    status: { phase: "ready", check_ok: true }, manipulation: true, simulated: false,
+    can: { state: "needs_setup", ready: false }, planner: { ready: true }, settingUp: false,
+  });
+  assert.equal(view.setupReady, true);
+  assert.equal(view.dependencyText, "");
+  assert.equal(view.dependencyPhase, "");
+  assert.equal(view.startDisabled, true);
+});
+
+test("DimOS install badge stays clear while the planner is pending", () => {
+  const view = launcherPresentation({
+    status: { phase: "ready", check_ok: true }, manipulation: true, simulated: true,
+    can: { ready: true }, planner: { ready: false }, settingUp: false,
+  });
+  assert.equal(view.dependencyText, "");
+  assert.equal(view.dependencyPhase, "");
+  assert.equal(view.startDisabled, true);
+});
+
 test("source request preserves explicit device and replay selection", () => {
   const value = sourceRequest({ selection: "device:can1", address: " 10.0.0.1 ", replay: " /record.db ",
     playback: "recording", streams: { camera: "front" } });
@@ -227,4 +248,30 @@ test("saved simulation never becomes the next launcher default", async () => {
   preferences.hydrate({ go2_source: "simulated", openyam_source: "simulated" });
   assert.equal(preferences.values.go2_source, "auto");
   assert.equal(preferences.values.openyam_source, "auto");
+});
+
+test("automatic CAN discovery replaces a stale interface after reconnect", async () => {
+  const { HardwareDiscovery } = await import("../static/source-selection.mjs");
+  let devices = [{ id: "can1", address: "can1" }];
+  const hardware = new HardwareDiscovery(async path => response(
+    path.startsWith("/api/discovery") ? { devices } : { ready: true },
+  ));
+  const options = { enabled: true, scope: () => "arm", changed() {} };
+  const discover = () => hardware.discover({
+    ...options, robot: "openyam", auto: () => true, progress() {}, received() {},
+  });
+  await discover();
+  await hardware.refreshCan({ ...options, interface: "can1" });
+  assert.equal(hardware.resolvedCan, "can1");
+  assert.equal(hardware.canStatus.ready, true);
+
+  devices = [];
+  await discover();
+  assert.equal(hardware.canStatus.ready, false);
+
+  devices = [{ id: "can2", address: "can2" }];
+  await discover();
+  assert.equal(hardware.resolvedCan, "can2");
+  await hardware.refreshCan({ ...options, interface: "can2" });
+  assert.equal(hardware.canStatus.ready, true);
 });

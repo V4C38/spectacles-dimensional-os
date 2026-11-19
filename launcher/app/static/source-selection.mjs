@@ -151,7 +151,14 @@ export class HardwareDiscovery {
       return this.json(`/api/discovery?robot=${robot}`, "Discovery failed");
     }, data => {
       this.discoveredRobots[replayRobot(robot)] = data.devices;
-      if (robot === "openyam" && auto() && data.devices.length === 1) this.resolvedCan = data.devices[0].address;
+      if (robot === "openyam" && auto()) {
+        const next = data.devices.length === 1 ? data.devices[0].address : "can0";
+        if (next !== this.resolvedCan) {
+          this.resolvedCan = next;
+          this.requests.cancel("can");
+          this.canStatus = { ready: false, state: "checking", message: `Checking ${next}…` };
+        }
+      }
       if (robot === "unitree_go2") this.go2DiscoveryState = {
         text: data.devices.length ? `${data.devices.length} found` : "None found",
         phase: data.devices.length ? "ready" : "needs_setup",

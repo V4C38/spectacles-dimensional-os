@@ -19,6 +19,7 @@ import { GlassSurface } from "./SurfaceMaterials";
 
 
 import type { AgentDraftSnapshot } from "@dimos-ar-client/agent/AgentDraftSession";
+import type { BrowserMicrophonePermission } from "../agent/BrowserMicrophonePermission";
 import { disposeTextResources } from "./SceneResources";
 
 import { SetupCameraPreviewView, type CameraPreviewFrame } from "./SetupCameraPreviewView";
@@ -345,7 +346,7 @@ export class MainMenuView {
 
   private lastStep: WebXRUISnapshot["wizardStep"] = "connect";
 
-  apply(snap: WebXRUISnapshot, speech?: AgentDraftSnapshot): void {
+  apply(snap: WebXRUISnapshot, speech?: AgentDraftSnapshot, microphone?: BrowserMicrophonePermission): void {
     const runtime = snap.setupCompleted && !snap.setupCelebrating;
     if (!this.manipulation && runtime !== this.runtimeScaleApplied && (this.panelProgress === 0 || (runtime && snap.menuOpen) || !snap.setupCompleted)) {
       const top = this.appearanceRoot.localToWorld(new THREE.Vector3(0, 0.5, this.plate.position.z));
@@ -439,9 +440,14 @@ export class MainMenuView {
     this.chat.visible = snap.operatingMode === "agent";
     this.manualHelp.visible = snap.operatingMode === "manual";
     this.draft = speech?.prompt ?? this.draft;
-    this.pageViews.runtime.inputLabel.setContent(this.draft || (speech?.recognitionAvailable === false ? COPY.microphoneUnavailable : speech?.status === "Listening" ? "Listening…" : COPY.hold), speech?.status === "Listening");
-    this.pageViews.runtime.inputField.setEnabled(snap.agentAvailable && speech?.recognitionAvailable === true && speech?.status !== "Transcribing…");
-    this.pageViews.runtime.inputField.setActive(speech?.status === "Listening" || speech?.status === "Starting microphone…");
+    const inputLabel = speech?.recognitionAvailable === false ? COPY.microphoneUnavailable
+      : microphone?.state === "needed" ? "Enable microphone"
+      : microphone?.state === "requesting" ? "Allow microphone access…"
+      : this.draft || (speech?.status === "Listening" ? "Listening…" : COPY.hold);
+    this.pageViews.runtime.inputLabel.setContent(inputLabel, speech?.status === "Listening");
+    this.pageViews.runtime.inputField.setEnabled(snap.agentAvailable && speech?.recognitionAvailable === true &&
+      speech.status !== "Transcribing…" && microphone?.state !== "requesting");
+    this.pageViews.runtime.inputField.setActive(speech?.status === "Listening" || speech?.status === "Starting microphone…" || microphone?.state === "requesting");
     this.pageViews.runtime.type.setEnabled(this.agentEnabled && !!this.draft.trim() && speech?.status !== "Listening" && speech?.status !== "Starting microphone…" && speech?.status !== "Transcribing…");
     this.pageViews.runtime.clear.setEnabled(!!this.draft && speech?.status !== "Listening" && speech?.status !== "Starting microphone…" && speech?.status !== "Transcribing…");
     this.pageViews.runtime.agent.setContent(speech?.response || snap.agentMessage || "", false, true);
@@ -462,7 +468,7 @@ export class MainMenuView {
       this.pageViews.runtime.estop.setSurface(snap.resumeOperation ? "primary" : "danger");
     }
     this.pageViews.runtime.estop.setEnabled(snap.estopAvailable);
-    setText(this.pageViews.runtime.hud, clip(speech?.error || snap.hudText || (snap.operatingMode === "agent" && speechStatus !== "Off" ? speechStatus ?? "" : "") || "", 100));
+    setText(this.pageViews.runtime.hud, clip((snap.operatingMode === "agent" ? microphone?.error : null) || speech?.error || snap.hudText || (snap.operatingMode === "agent" && speechStatus !== "Off" ? speechStatus ?? "" : "") || "", 100));
     this.pageViews.runtime.hud.color(toneCss(speech?.error ? "warn" : snap.hudTone ?? "muted"));
     const diagnosticsNow = performance.now() / 1000;
     if (this.details.visible && this.panel.visible && diagnosticsNow - this.diagnosticsUpdatedAt >= .2) {

@@ -1,7 +1,7 @@
-import { sourceRequest, replayPreferenceKey, LaunchConfiguration, HardwareDiscovery } from "./source-selection.mjs";
+import { sourceRequest, replayPreferenceKey, LaunchConfiguration, HardwareDiscovery } from "./source-selection.mjs?v=launcher-controls-10";
 import { logConsole } from "./log-console.mjs";
 import { settingsWriter, profilesForRobot, ProfileSettingsEditor, LauncherPreferences } from "./persistence.mjs";
-import { launcherPresentation } from "./presentation.mjs";
+import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
 (() => {
   const $ = (id) => document.getElementById(id);
 
@@ -13,7 +13,13 @@ import { launcherPresentation } from "./presentation.mjs";
       this.timer = null;
       this.onVisible = () => { if (!document.hidden) this.refreshHardware(); };
     }
-    refreshHardware() { void refreshCan(); void refreshPlanner(); }
+    refreshHardware() {
+      void refreshCan();
+      void refreshPlanner();
+      if (manipulationSelected() && !document.hidden && $("robotSource").value !== "simulated") {
+        void refreshRobotDiscovery({ quiet: true });
+      }
+    }
     publish(status) { applyStatus(status); }
     observe(status) {
       this.revision++;
@@ -55,7 +61,6 @@ import { launcherPresentation } from "./presentation.mjs";
   const stateDetail = $("stateDetail");
   const hostIp = $("hostIp");
   const pinValue = $("pin");
-  const pinSummary = $("pinSummary");
   const webxrNetwork = $("webxrNetwork");
   const webxrNetworkRow = $("webxrNetworkRow");
   const webxrHint = $("webxrHint");
@@ -552,7 +557,6 @@ import { launcherPresentation } from "./presentation.mjs";
     editor.mounts.forEach((mount, index) => {
       const card = document.createElement("details");
       card.className = "tag-card";
-      if (index === editor.mounts.length - 1) card.open = true;
 
       const summary = document.createElement("summary");
       summary.className = "tag-summary";
@@ -749,14 +753,16 @@ import { launcherPresentation } from "./presentation.mjs";
     const showInstall = needsInstall || cloning;
 
     installHint.textContent = needsInstall
-      ? "A DimOS environment is required to continue."
+      ? service.status.check_ok === true
+        ? "Install the manipulation planner dependencies to use this blueprint."
+        : "A DimOS environment is required to continue."
       : "Download DimOS into the folder below. You can keep multiple installs.";
     installHint.classList.toggle("hidden", !showInstall);
     dimosRefField.classList.toggle("hidden", !cloning);
     installBtn.textContent = cloning ? "Download & install" : "Install";
     installBtn.classList.toggle("hidden", !showInstall);
     installBtn.disabled = view.installDisabled;
-    installBanner.classList.toggle("needs-setup", needsInstall || view.hardwareMissing);
+    installBanner.classList.toggle("needs-setup", needsInstall);
 
     const versionBits = [];
     if (service.status.dimos_version) versionBits.push(`DimOS ${service.status.dimos_version}`);
@@ -787,14 +793,12 @@ import { launcherPresentation } from "./presentation.mjs";
     setText(hostIp, status.host_ip);
     const isWebxr = configuration.client === "webxr";
     $("hostIpRow").classList.remove("hidden");
-    $("pinRow").classList.toggle("hidden", isWebxr);
-    setText(pinValue, isWebxr ? null : status.pin);
-    $("connectionSummaryLabel").textContent = "PIN";
-    setText(pinSummary, status.pin);
-    setHref($("urlSummary"), status.webxr_url, "Address available after Start");
+    setText(pinValue, status.pin);
+    setText($("pinSummary"), status.pin);
+    setText($("hostIpSummary"), status.host_ip);
     webxrNetworkRow.classList.toggle("hidden", !isWebxr);
     webxrHint.classList.toggle("hidden", !isWebxr);
-    setHref(webxrNetwork, status.webxr_url);
+    setHref(webxrNetwork, status.webxr_url, "Address available after Start");
   }
 
   function applyStatus(status) {
@@ -1264,15 +1268,19 @@ import { launcherPresentation } from "./presentation.mjs";
     syncSource();
     void saveLauncherPreferences().catch(reportPreferencesError);
   });
-  function refreshRobotDiscovery() {
+  function refreshRobotDiscovery({ quiet = false } = {}) {
     return hardware.discover({
-      enabled: !configIsLocked() && !!configuration.robot, robot: configuration.robot,
+      enabled: !configIsLocked() && !hardware.requests.busy("canSetup")
+        && (!quiet || service.status.check_ok === true) && !!configuration.robot,
+      robot: configuration.robot,
       auto: () => $("robotSource").value === "auto", scope: environmentScope, changed: syncHardwareSetup,
-      progress: ({ phase, error }) => { $("discoveryStatus").textContent = phase === "checking" ? "Scanning…" : String(error); },
+      progress: ({ phase, error }) => {
+        if (!quiet) $("discoveryStatus").textContent = phase === "checking" ? "Scanning…" : String(error);
+      },
       received: data => {
         if (configuration.manipulation) void refreshCan();
         renderSourceOptions($("robotSource").value, "unavailable");
-        $("discoveryStatus").textContent = data.devices.length
+        if (!quiet) $("discoveryStatus").textContent = data.devices.length
           ? `${data.devices.length} connection(s) found`
           : "No devices found. Check the connection and try Discover again.";
       },

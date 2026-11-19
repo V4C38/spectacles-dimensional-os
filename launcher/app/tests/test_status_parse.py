@@ -81,6 +81,13 @@ def test_parse_pin_after_ready(tmp_path: Path) -> None:
     assert mgr.status.pin == "123456"
     assert mgr.snapshot()["pin"] == "123456"
 
+    mgr.runtime._parse_armodule_line("PIN unavailable, enter IP")
+    assert mgr.snapshot()["pin"] is None
+    assert mgr.status.phase == Phase.RUNNING
+
+    mgr.runtime._parse_armodule_line("PIN: 654321")
+    assert mgr.snapshot()["pin"] == "654321"
+
 
 def test_snapshot_includes_host_ip_not_spectacles(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)

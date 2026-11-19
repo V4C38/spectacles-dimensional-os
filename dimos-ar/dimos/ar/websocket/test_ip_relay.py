@@ -58,3 +58,28 @@ def test_relay_timeout_returns_no_pin(monkeypatch):
     publisher = IpRelayPublisher("https://relay.example", "10.0.0.4", 8787)
     assert publisher._create() is False
     assert publisher.pin is None
+
+
+def test_relay_retries_initial_outage_and_recovers_after_refresh_failure(monkeypatch):
+    publisher = IpRelayPublisher("https://relay.example", "10.0.0.4", 8787)
+    replies = iter([None, {"pin": "123456", "key": "first"}, None, None,
+                    {"pin": "789012", "key": "second"}, {}])
+    requests_seen = []
+    pins_during_wait = []
+
+    def request(method, path, payload=None, key=None):
+        requests_seen.append((method, path, key))
+        return next(replies)
+
+    def wait(_timeout):
+        pins_during_wait.append(publisher.pin)
+        return len(pins_during_wait) == 4
+
+    monkeypatch.setattr(publisher, "_request", request)
+    monkeypatch.setattr(publisher._stop, "wait", wait)
+    publisher._run()
+
+    assert pins_during_wait == [None, "123456", None, "789012"]
+    assert requests_seen[2] == ("PUT", "/v1/pins/123456", "first")
+    assert requests_seen[-1] == ("DELETE", "/v1/pins/789012", "second")
+    assert publisher.pin is None

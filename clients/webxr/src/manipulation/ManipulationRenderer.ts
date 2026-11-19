@@ -150,7 +150,7 @@ export class ManipulationRenderer {
     this.object.add(this.statusView.object);
     (this.handle.visual.material as THREE.Material).transparent = true;
     (this.handle.visual.material as THREE.Material).depthWrite = false;
-    this.handle.collider.scale.setScalar(1.04);
+    this.handle.collider.scale.setScalar(1.04 * 1.15);
     this.handle.visual.scale.setScalar(1.04);
     this.measuredHandle.collider.userData.interactionEnabled = false;
     this.measuredHandle.collider.raycast = () => {};
@@ -335,8 +335,8 @@ export class ManipulationRenderer {
       this.pathStroke.setSegments(points.slice(0, -1).flatMap((point, i) => [point, points[i + 1]]), true);
     }
     const targetMaterial = this.handle.visual.material as THREE.ShaderMaterial;
-    targetMaterial.uniforms.uCenterColor.value.setHex(intent.blocked || !fresh || input.rejection ? ARM_VISUAL_STYLE.warningColor : 0xb3b3b3);
-    targetMaterial.uniforms.uRimColor.value.setHex(intent.blocked || input.rejection ? ARM_VISUAL_STYLE.warningColor : 0xffffff);
+    targetMaterial.uniforms.uCenterColor.value.setHex(0xb3b3b3);
+    targetMaterial.uniforms.uRimColor.value.setHex(0xffffff);
     this.measuredHandle.object.visible = !!observed?.pose;
     if (observed?.pose)
       this.place(this.measuredHandle.object, observed.pose, origin);

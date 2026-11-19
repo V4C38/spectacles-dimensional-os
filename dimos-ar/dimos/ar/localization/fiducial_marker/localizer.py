@@ -118,7 +118,7 @@ class FiducialMarkerLocalizer(SnapshotLocalizer):
                 candidates.append(candidate)
 
         if not candidates:
-            logger.warning(
+            logger.debug(
                 "fiducial marker localization failed",
                 observations=len(observations),
                 reason=", ".join(misses) if misses else "none",
@@ -136,7 +136,7 @@ class FiducialMarkerLocalizer(SnapshotLocalizer):
         # detection from an otherwise unsuccessful batch.
         required_inliers = min(2, len(observations))
         if fusion is None or len(fusion.inlier_indices) < required_inliers:
-            logger.warning(
+            logger.debug(
                 "fiducial marker localization failed",
                 observations=len(observations),
                 candidates=len(candidates),
@@ -160,7 +160,7 @@ class FiducialMarkerLocalizer(SnapshotLocalizer):
             fusion.max_yaw_residual_rad / self._config.max_yaw_residual_rad,
         )
         confidence = max(0.0, min(1.0, 1.0 - worst_normalized_error))
-        logger.info(
+        logger.debug(
             "fiducial marker localization succeeded",
             observations=len(observations),
             inliers=len(inliers),

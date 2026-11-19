@@ -115,6 +115,7 @@ export interface ARModuleSessionState {
   readonly agentMessage: string | null;
   readonly agentMessageRevision: number;
   readonly lastError: string | null;
+  readonly robotTelemetry?: "waiting" | "available" | "unavailable";
   readonly localizationNotice?: string | null;
 }
 
@@ -242,7 +243,7 @@ export class ARModuleSession {
   private agentMessageRevision = 0;
   private lastError: string | null = null;
   private localizationNoticeUntil = 0;
-  private localizationTelemetryUnavailable = false;
+  private robotTelemetry: "waiting" | "available" | "unavailable" = "waiting";
   private readonly decodeReports = new Map<string, { at: number; suppressed: number }>();
   private manipulationError: string | null = null;
   private helloDeadline: number | null = null;
@@ -550,7 +551,8 @@ export class ARModuleSession {
       capabilities: this.hello?.capabilities ?? null,
       nav: this.state?.nav ?? null,
       agentMessage: this.agentMessage,
-      localizationNotice: this.localizationTelemetryUnavailable
+      robotTelemetry: this.robotTelemetry,
+      localizationNotice: this.robotTelemetry === "unavailable"
         ? "Robot telemetry unavailable. Waiting to localize."
         : this.clock.now() < this.localizationNoticeUntil
           ? "VPS could not localize. Look at the robot marker." : null,
@@ -700,6 +702,7 @@ export class ARModuleSession {
         break;
       case "pose":
         this.pose = message;
+        this.robotTelemetry = "available";
         break;
       case "localization_context": {
         if (message.odom_reference_id !== this.hello?.odom_reference_id) return;
@@ -716,7 +719,7 @@ export class ARModuleSession {
           this.retainedOrigin = null;
         }
         if (this.hello) this.hello = { ...this.hello, shared_frame_id: message.shared_frame_id };
-        if (message.reset) { this.localizationNoticeUntil = 0; this.localizationTelemetryUnavailable = false; }
+        if (message.reset) this.localizationNoticeUntil = 0;
         this.alignmentRequired = !this.clientTrackingOriginStore.hasTrackingOrigin;
         break;
       }
@@ -729,8 +732,12 @@ export class ARModuleSession {
           this.cancelLocalizationSubmission();
           this.captureEpisodeId = null;
         }
-        if (message.reason === "robot_pose_unavailable") this.localizationTelemetryUnavailable = true;
-        if (message.reason === "robot_pose_available") this.localizationTelemetryUnavailable = false;
+        if (message.scope === "robot" && message.episode_id === undefined) {
+          if (message.reason === "robot_pose_available") this.robotTelemetry = "available";
+          if (message.reason === "robot_pose_unavailable" && this.robotTelemetry === "available") {
+            this.robotTelemetry = "unavailable";
+          }
+        }
         if (message.reason === "vps_failed_using_marker") this.localizationNoticeUntil = this.clock.now() + 5;
         break;
       case "localization_result":
@@ -739,7 +746,6 @@ export class ARModuleSession {
         try {
           this.clientTrackingOriginStore.setFromLocalizationResult(message);
           this.alignmentRequired = false;
-          this.localizationTelemetryUnavailable = false;
           this.localizationNoticeUntil = 0;
         } catch (error) {
           this.fail(errorMessage(error));
@@ -839,7 +845,7 @@ export class ARModuleSession {
   private clearConnectionFacts(preserveInteraction = false): void {
     this.cancelSpeechTranscription("Disconnected while transcribing");
     this.localizationNoticeUntil = 0;
-    this.localizationTelemetryUnavailable = false;
+    this.robotTelemetry = "waiting";
     this.control.clear();
     this.presence.reset();
     this.captureId = null;

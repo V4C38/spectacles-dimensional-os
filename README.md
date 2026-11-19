@@ -131,6 +131,10 @@ Double-click [`Start Launcher.command`](launcher/Start%20Launcher.command), or r
 3. Pick the robot (**Go2** / **OpenYAM**), source (**Device**, **Simulated**, **Recording**) and client (**WebXR** / **SPECS**).
 4. Choose [localization](#localization-alignment), press **Start**, and connect with the displayed **PIN** or URL.
 
+Install Graphviz on the DimOS host to generate blueprint diagrams
+(`sudo apt install graphviz` on Ubuntu or `brew install graphviz` on macOS).
+Run `dot -V` in the same environment that launches DimOS to confirm it is available.
+
 Agent mode needs an `OPENAI_API_KEY`.
 
 WebXR dictation uses the browser's speech API when available, with local Whisper
@@ -161,7 +165,11 @@ dimos run dimos-ar.unitree-go2-ar-agentic
 dimos run dimos-ar.openyam-ar-planner
 ```
 
-A real Go2 takes `--robot-ip`. Agent mode needs an `OPENAI_API_KEY`.
+A real Go2 takes `--robot-ip`. Install Graphviz on the DimOS host to generate blueprint diagrams
+(`sudo apt install graphviz` on Ubuntu or `brew install graphviz` on macOS).
+Run `dot -V` in the same environment that launches DimOS to confirm it is available.
+
+Agent mode needs an `OPENAI_API_KEY`.
 
 </details>
 

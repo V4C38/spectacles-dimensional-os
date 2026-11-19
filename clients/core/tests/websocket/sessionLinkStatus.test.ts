@@ -15,6 +15,7 @@ function baseView(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessio
     nav: null,
     agentMessage: null,
     lastError: null,
+    agentMessageRevision: 0,
     ...overrides,
   };
 }
@@ -24,8 +25,10 @@ describe("deriveSessionLinkPhase", () => {
     expect(deriveSessionLinkPhase(baseView())).toBe("disconnected");
     expect(deriveSessionLinkPhase(baseView({ connection: "connecting" }))).toBe("connecting");
     expect(deriveSessionLinkPhase(baseView({ connection: "ready", hello: {} as any }))).toBe(
-      "robotOffline",
+      "connecting",
     );
+    expect(deriveSessionLinkPhase(baseView({ connection: "ready", robotTelemetry: "available" }))).toBe("connected");
+    expect(deriveSessionLinkPhase(baseView({ connection: "ready", robotTelemetry: "unavailable", pose: {} as any }))).toBe("robotOffline");
     expect(
       deriveSessionLinkPhase(baseView({ connection: "ready", hello: {} as any, pose: {} as any })),
     ).toBe("connected");
@@ -37,9 +40,9 @@ describe("sessionLinkStatus", () => {
     expect(sessionLinkStatus(baseView()).text).toContain("- Disconnected -");
     expect(sessionLinkStatus(baseView()).color).toBe("error");
     expect(sessionLinkStatus(baseView({ connection: "ready", hello: {} as any })).text).toContain(
-      "Robot not connected",
+      "Waiting for robot telemetry",
     );
-    expect(sessionLinkStatus(baseView({ connection: "ready", hello: {} as any })).color).toBe("warn");
+    expect(sessionLinkStatus(baseView({ connection: "ready", robotTelemetry: "unavailable" })).color).toBe("warn");
     expect(
       sessionLinkStatus(
         baseView({ connection: "ready", hello: { robot: { display_name: "Go2" } } as any, pose: {} as any }),
